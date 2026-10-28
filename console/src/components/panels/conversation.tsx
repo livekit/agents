@@ -16,7 +16,6 @@ import {
 import { CopyId } from "../chrome/copy";
 import { Icon } from "../chrome/icon";
 import { Orb, type OrbState } from "../chrome/orb";
-import { Disclosure, Document } from "../chrome/panel";
 import { DelegationCard } from "./delegation";
 import { tail } from "@/lib/format";
 import { elapsed, type VoiceTurn, type useCall } from "@/lib/use-call";
@@ -25,12 +24,6 @@ import type { TaskLog } from "@/lib/use-session";
 import type { Entry, TaskRow, Timing } from "@/lib/types";
 
 export type Call = ReturnType<typeof useCall>;
-
-/** How long before a card its expert's task may have been first seen: the dump lags the wire. */
-const SETTLE_SLACK_MS = 10_000;
-
-/** The one tool a delegate is reached through (delegation/tool.py). */
-const DELEGATE = "delegate";
 
 /** What the mark and its line say, from the thread, the turn in flight and the call. */
 export function stateLine(
@@ -140,7 +133,7 @@ export function ConversationPanel({
   /** What to run, under the note, one click to copy: an example that is not running. */
   command?: string;
   call: Call;
-  /** The experts' tasks in the session's database: every task on a lane that is not the agent's. */
+  /** Tasks explicitly referenced by the agent's A2A messages. */
   expertTasks: TaskRow[];
   /** What the dumps said about each task over time. */
   taskLog: Map<string, TaskLog>;
@@ -152,54 +145,18 @@ export function ConversationPanel({
   onOpenTask: (taskId: string) => void;
 }) {
   const { thread, taskOf } = useMemo(() => {
-    const cards = entries.filter(
-      (entry): entry is Extract<Entry, { kind: "delegation" }> =>
-        entry.kind === "delegation",
-    );
-    const byId = new Map(expertTasks.map((task) => [task.task_id, task]));
     const taskOf = new Map<string, TaskRow>();
-    const claimed = new Set<string>();
-    /* A card takes the task its call recorded (`lk.delegation.task_id`). */
-    for (const card of cards)
-      if (card.taskId && byId.has(card.taskId)) {
-        taskOf.set(card.id, byId.get(card.taskId)!);
-        claimed.add(card.taskId);
-      }
-    const seen = (task: TaskRow) =>
-      taskLog.get(task.task_id)?.firstSeen ?? task.updated_at * 1000;
-    /* A card the history has not settled yet (the turn in flight) takes the newest unclaimed task seen since it started. */
-    for (const card of cards) {
-      if (card.callId || card.taskId) continue;
-      const task = expertTasks
-        .filter(
-          (candidate) =>
-            !claimed.has(candidate.task_id) &&
-            seen(candidate) >= card.at - SETTLE_SLACK_MS,
-        )
-        .sort((a, b) => b.seq - a.seq)[0];
-      if (!task) continue;
-      taskOf.set(card.id, task);
-      claimed.add(task.task_id);
-    }
-    const spare = expertTasks.filter((task) => !claimed.has(task.task_id));
-    /* An expert's task no call accounts for (a call delegating right now): a card of its own, where it was first seen. */
-    const orphans: Entry[] = spare.map((task) => ({
-      kind: "delegation",
-      id: `t-${task.task_id}`,
-      at: seen(task),
-      name: "",
-      task: "",
-      taskId: task.task_id,
-      progress: [],
-    }));
-    for (const orphan of orphans)
-      taskOf.set(
-        orphan.id,
-        byId.get((orphan as Extract<Entry, { kind: "delegation" }>).taskId!)!,
-      );
+    const cards: Entry[] = expertTasks.map((task) => {
+      const id = `t-${task.task_id}`;
+      taskOf.set(id, task);
+      return {
+        kind: "delegation", id, at: taskLog.get(task.task_id)?.firstSeen ?? task.updated_at,
+        name: task.lane, task: "", taskId: task.task_id, progress: [],
+      };
+    });
     return {
       thread: merge(
-        [...entries, ...orphans].sort((a, b) => a.at - b.at),
+        [...entries, ...cards].sort((a, b) => a.at - b.at),
         voice,
       ),
       taskOf,
@@ -618,106 +575,6 @@ function ConnectingPill({ onHangUp }: { onHangUp: () => void }) {
   );
 }
 
-/** A tool's arguments as `key value` pairs, when they are a JSON object; the text as given otherwise. */
-function argumentPairs(args: string | undefined): {
-  pairs: [string, string][] | null;
-  raw: unknown;
-} {
-  if (!args) return { pairs: [], raw: undefined };
-  try {
-    const parsed = JSON.parse(args) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-      return {
-        pairs: Object.entries(parsed as Record<string, unknown>).map(
-          ([key, value]) => [
-            key,
-            typeof value === "string" ? value : JSON.stringify(value),
-          ],
-        ),
-        raw: parsed,
-      };
-    return { pairs: null, raw: parsed };
-  } catch {
-    return { pairs: null, raw: args };
-  }
-}
-
-/**
- * A tool call as one compact row: the wrench, the name and its `key value`
- * arguments, wrapping inside the measure; its output an indented quiet
- * line under it; the document behind either folds open. A `delegate` call
- * reads as what it is to the person: the expert was asked, and this is
- * what it was asked.
- */
-function ToolRow({ entry }: { entry: Extract<Entry, { kind: "tool" }> }) {
-  const isCall = entry.output === undefined;
-  const delegate = entry.name === DELEGATE;
-  const { pairs, raw } = isCall
-    ? argumentPairs(entry.args)
-    : { pairs: null, raw: entry.output };
-  const hasDocument = raw !== undefined && raw !== "";
-  const task =
-    delegate && pairs ? pairs.find(([key]) => key === "task")?.[1] : undefined;
-  return (
-    <article
-      className="grid min-w-0 gap-1 px-3 text-label data-[tool=output]:pl-[calc(var(--pad-3)+var(--pad-5))]"
-      data-entry="tool"
-      data-tool={isCall ? "call" : "output"}
-      data-delegate={delegate || undefined}
-    >
-      <div className="flex min-w-0 items-start gap-2">
-        {isCall ? (
-          <Icon
-            name={delegate ? "lanes" : "tool"}
-            size={12}
-            className="mt-px flex-none"
-          />
-        ) : null}
-        <span className="min-w-0 wrap-break-word whitespace-pre-wrap">
-          {isCall ? (
-            delegate ? (
-              <>
-                <span className="text-ink">Asked the expert</span>
-                {task ? <span className="ml-2">{task}</span> : null}
-              </>
-            ) : (
-              <>
-                <span className="font-mono text-ink">{entry.name}</span>
-                {pairs && pairs.length ? (
-                  <span className="ml-2">
-                    {pairs.map(([key, value], index) => (
-                      <span key={key}>
-                        {index ? ", " : ""}
-                        {key} <span className="text-ink">{value}</span>
-                      </span>
-                    ))}
-                  </span>
-                ) : pairs === null ? (
-                  <span className="ml-2 font-mono text-micro">
-                    {entry.args}
-                  </span>
-                ) : null}
-              </>
-            )
-          ) : (
-            <span className={entry.isError ? "text-failed-text" : undefined}>
-              {entry.output}
-            </span>
-          )}
-        </span>
-      </div>
-      {hasDocument ? (
-        <Disclosure
-          label={isCall ? (delegate ? "details" : "arguments") : "output"}
-          data={isCall ? (delegate ? "details" : "arguments") : "output"}
-        >
-          <Document value={raw} />
-        </Disclosure>
-      ) : null}
-    </article>
-  );
-}
-
 /** The time from the send to the first piece of the reply, under it. */
 function TimingLine({ timing }: { timing: Timing }) {
   if (timing.first === undefined) return null;
@@ -792,8 +649,6 @@ function EntryView({
           </div>
         </div>
       );
-    case "tool":
-      return <ToolRow entry={entry} />;
     case "delegation":
       return null;
     case "progress":
@@ -844,9 +699,6 @@ function EntryView({
             </span>
           ) : null}
           <span>{entry.text}</span>
-          {entry.meta ? (
-            <span className="wrap-break-word">{entry.meta}</span>
-          ) : null}
         </p>
       );
   }

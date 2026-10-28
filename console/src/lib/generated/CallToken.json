@@ -1,0 +1,19 @@
+{
+  "properties": {
+    "server_url": {
+      "type": "string"
+    },
+    "participant_token": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "server_url",
+    "participant_token",
+    "session_id"
+  ],
+  "type": "object"
+}

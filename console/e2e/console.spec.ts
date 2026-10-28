@@ -31,6 +31,7 @@ async function open(page: Page) {
   await page.goto("/");
   const input = page.getByLabel("Message");
   await expect(input).toBeEnabled({ timeout: 60_000 });
+  await page.getByRole("button", { name: "Admin inspector", exact: true }).click();
   return input;
 }
 
@@ -174,7 +175,7 @@ test("three turns: the slow brain's progress, a booking that asks which doctor, 
   expect(await card.locator("[data-progress]").count()).toBeGreaterThan(0);
 
   const second = await say(page, "I'd like to book a visit");
-  /* The slow brain's tool waits on the person (plan 7.4): its task ends input-required, the card
+  /* The slow brain's tool waits on the person: its task ends input-required, the card
      says so, and the front desk relays the question in its own completed turn. */
   await expect(second).toHaveAttribute("data-state", "completed");
   await expect(page.locator("[data-entry='delegation']").nth(1)).toHaveAttribute("data-delegation-state", "input-required");
@@ -267,7 +268,7 @@ test("a reload mid-reply resumes the stream through tasks/resubscribe", async ({
   /* The first progress line means the task exists and its reply is in flight. */
   await expect(page.locator("[data-entry='delegation'] [data-progress]").first()).toBeVisible({ timeout: TURN });
   await page.reload();
-  await expect(page.locator("[data-entry='status']").filter({ hasText: "resuming" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator("[data-entry='status']").filter({ hasText: /resuming/i })).toBeVisible({ timeout: 60_000 });
   await expect(page.locator("[data-entry='status'][data-state='completed']")).toBeVisible({ timeout: TURN });
   await expect(page.locator("[data-entry='agent']").last()).not.toBeEmpty();
   /* And the session came back from the registry, selected. */

@@ -3,6 +3,7 @@
 import { ExamplePicker } from "./switcher";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SessionProvider } from "@livekit/components-react";
+import { referencedTasks } from "@/lib/delegation";
 import { getSession } from "@/lib/api";
 import { useCall } from "@/lib/use-call";
 import { useConversation } from "@/lib/use-conversation";
@@ -25,15 +26,14 @@ import { TasksPanel } from "./panels/tasks";
 type Detail = { lanes: number; firstMessage: string | null };
 
 /** What a session's database says about it for the list: its lanes, and the first thing the person said. */
-function detailOf(database: DatabaseDump | undefined, agent: string): Detail {
+function detailOf(database: DatabaseDump | null | undefined, agent: string): Detail {
   if (!database) return { lanes: 0, firstMessage: null };
-  const first = database.items.find((item) => {
-    const payload = item.payload as { role?: string } | null;
-    return item.type === "message" && item.lane === agent && payload?.role === "user";
-  });
+  const first = database.items.find((item) =>
+    item.lane === agent && item.payload.type === "message" && item.payload.role === "user",
+  );
   return {
     lanes: database.lanes.length,
-    firstMessage: first ? text((first.payload as { content?: unknown }).content) : null,
+    firstMessage: first?.payload.type === "message" ? text(first.payload.content) : null,
   };
 }
 
@@ -85,17 +85,18 @@ function useSessionDetails(sessions: SessionRow[], agent: string, selected: stri
 export function Room() {
   const panel = useDrawer();
   const chat = useConversation();
-  const { dump, skew, watchError, taskLog } = useSession(chat.sessionId);
+  const [admin, setAdmin] = useState(false);
+  const { dump, skew, watchError, taskLog } = useSession(admin ? chat.sessionId : null);
   const now = useNow(skew);
   const database = dump?.database ?? null;
   const agent = chat.grant?.agent ?? "";
   const sub = chat.grant?.sub ?? "demo-user";
-  const details = useSessionDetails(chat.sessions, agent, chat.sessionId, database);
+  const details = useSessionDetails(admin ? chat.sessions : [], agent, chat.sessionId, database);
   const [splitting, setSplitting] = useState(false);
 
   /* A call with no conversation yet makes one; the page adopts it. */
   const adopt = chat.adopt;
-  const call = useCall({ sessionId: chat.sessionId, sub, agent, onSession: adopt });
+  const call = useCall({ sessionId: chat.sessionId, sub, agent, endpoint: chat.example?.endpoint ?? "", onSession: adopt });
 
   /* A selection belongs to its session: another session has its own tasks. */
   const [selection, setSelection] = useState<{ sessionId: string | null; taskId: string } | null>(null);
@@ -111,13 +112,14 @@ export function Room() {
   const openTask = useCallback(
     (taskId: string) => {
       setSelection({ sessionId: chat.sessionId, taskId });
+      setAdmin(true);
       panel.setView("tasks");
     },
     [chat.sessionId, panel],
   );
   const openStream = useCallback(() => panel.setView("stream"), [panel]);
-  /* The experts' tasks: every task on a lane that is not the agent's own. */
-  const expertTasks = useMemo(() => (database?.tasks ?? []).filter((task) => task.lane !== agent), [agent, database?.tasks]);
+  /* Only tasks explicitly referenced by the agent's A2A messages. */
+  const expertTasks = useMemo(() => referencedTasks(database?.tasks ?? [], agent), [agent, database?.tasks]);
 
   /* A session with a first message and no title gets one: the one a voice
      call just made, and any older one the list still shows by its message. */
@@ -190,13 +192,13 @@ export function Room() {
 
   const ready = Boolean(chat.card) && !chat.unreachable;
   /* Which agent this is, the same for every demo: the agent and the endpoint the grant names. */
-  const agentId = chat.grant ? `${chat.grant.agent} / ${chat.grant.endpoint.split("/").pop()}` : "";
+  const agentId = chat.card?.name ?? chat.grant?.agent ?? "";
   const streamsOk = dump?.streams.available ?? chat.config?.streams.available ?? false;
   /* What a view says when there is no database to read: one line, never a raw error. */
   const empty = !chat.sessionId
     ? ""
     : watchError && !database
-      ? "The session's database is not answering."
+      ? "The inspector could not load this conversation."
       : "Loading the session.";
   /* Booting says nothing (the composer waits, disabled); an agent that cannot be reached is told,
      and an example that is not running shows what to start, from its folder. */
@@ -218,7 +220,7 @@ export function Room() {
       case "inbox":
         return <InboxPanel inbox={database?.inbox ?? null} lanes={database?.lanes ?? []} now={now} empty={empty} />;
       case "stream":
-        return <StreamPanel taskId={selectedTask} available={streamsOk} />;
+        return <StreamPanel taskId={selectedTask} sessionId={chat.sessionId} grant={chat.grant} />;
       case "sql":
         return <SqlPanel key={chat.sessionId} sessionId={chat.sessionId} />;
       case "info":
@@ -234,6 +236,7 @@ export function Room() {
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="absolute top-4 left-4 z-10">
             <Swatches />
+            <button className="btn btnQuiet" aria-pressed={admin} onClick={() => setAdmin((value) => !value)}>Admin inspector</button>
           </div>
           <main className="min-h-0 min-w-0 flex-1" data-pane="conversation">
             <ConversationPanel
@@ -257,7 +260,7 @@ export function Room() {
             />
           </main>
           <Chips sessions={listed} selected={chat.sessionId} details={details} onSelect={select} onNew={startNew} />
-          <Drawer
+          {admin ? <Drawer
             view={panel.view}
             height={panel.height}
             disabled={{
@@ -269,7 +272,7 @@ export function Room() {
             onDragging={setSplitting}
           >
             {view}
-          </Drawer>
+          </Drawer> : null}
         </div>
       </div>
     </SessionProvider>

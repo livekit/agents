@@ -1,13 +1,4 @@
-"""The console's debug API over the threads service and agent-db, a development tool.
-
-What the web console beside it reads and writes, served on ``:7795`` from the environment of
-``examples/README.md``: the project token it talks to the agents with, the examples
-it can talk to and whether each runs, the threads of a scope started on one of them, one
-thread's database as the console draws it (lanes, items, journal, inbox, tasks) and where it
-answers for the SQL tab, a watch of it over SSE, its history and background tasks from the
-threads service, the thread's attributes, and the answer streams, relayed. Run with
-``uv run python console_api.py``.
-"""
+"""Local developer backend. Project and database credentials never leave this process."""
 
 from __future__ import annotations
 
@@ -15,8 +6,10 @@ import asyncio
 import json
 import os
 import re
+import secrets
+import sqlite3
 import time
-from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Any
 
@@ -24,14 +17,17 @@ import httpx
 import jwt
 import tomllib
 import uvicorn
+from generated.livekit_agentdb_pb2 import AgentDB
+from google.protobuf.json_format import MessageToDict, ParseDict
+from models import DatabaseDump, QueryResult
 from starlette.applications import Starlette
-from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from livekit.agents._generated.storage_threads import ThreadInfo, ThreadItem
-from livekit.agents.a2a import Credentials
+from livekit.agents.a2a import AgentThreadGrant, Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 from livekit.agents.storage.protocol import payload_to_item
 
@@ -39,20 +35,21 @@ SERVER_URL = re.sub(r"^ws", "http", os.environ["LIVEKIT_URL"]).rstrip("/")
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
 CARD_TIMEOUT = 2.0
 SUBS = ["demo-user", "demo-user-2"]
-IDLE_TTL_SECONDS = 24 * 3600  # a conversation outlives the break; anonymous threads get 15 minutes
+IDLE_TTL_SECONDS = 24 * 3600
 TOKEN_TTL = 3600
-WATCH_INTERVAL = 1.0
+ADMIN_URL = os.environ.get("CONSOLE_AGENTDB_ADMIN_URL", "").rstrip("/")
+API_TOKEN = os.environ["CONSOLE_API_TOKEN"]
+if not API_TOKEN:
+    raise ValueError("CONSOLE_API_TOKEN must be set")
+MAX_DUMP_BYTES = 64 * 1024 * 1024
 
 storage = AgentDBStorage()
 credentials = Credentials(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
 
-# the streams the relay reads, through the public API the storage uses
-STREAMS_URL = f"{storage.url}/v0/agentstore/streams"
-
 
 def storage_token() -> str:
-    """The worker's credential on agent-db, ``agent.databaseAdmin``, for the stream relay."""
-    key, secret = os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"]
+    """The backend-only credential for the existing AgentDB admin service."""
+    key, secret = credentials.api_key, credentials.api_secret
     now = int(time.time())
     claims = {"iss": key, "nbf": now - 5, "exp": now + TOKEN_TTL, "agent": {"databaseAdmin": True}}
     return jwt.encode(claims, secret, algorithm="HS256")
@@ -78,43 +75,73 @@ def dump_of(model: Any) -> Any:
     return model.model_dump(mode="json")
 
 
-async def database_dump(thread_id: str) -> dict[str, Any]:
-    """The thread's database as the console draws it."""
-    db = await storage.open(thread_id)
-    try:
-        lanes = await db.lanes()
-        items: list[Any] = []
-        inbox: list[Any] = []
-        tasks: list[Any] = []
-        for lane in lanes:
-            history = await db.history(lane.lane)
-            items += [
-                {
-                    "lane": lane.lane,
-                    "seq": seq,
-                    "id": item.id,
-                    "message_id": item.message_id,
-                    "type": (payload := history_item(item.payload))["type"],
-                    "payload": payload,
-                }
-                for seq, item in enumerate(history, 1)
-            ]
-            inbox += await db.inbox(lane.lane)
-            tasks += await db.tasks(lane.lane, limit=200)
-        events = await db.events(0, 1000)
-        return {
-            "databaseId": db.id,
-            "tip": db.tip,
-            "tables": ["lanes", "items", "events", "inbox", "tasks"],
-            "schemaVersion": 1,
-            "lanes": [dump_of(lane) for lane in lanes],
-            "items": items,
-            "events": [dump_of(event) for event in events],
-            "inbox": [dump_of(entry) for entry in inbox],
-            "tasks": [dump_of(task) for task in tasks],
-        }
-    finally:
-        db.close()
+@asynccontextmanager
+async def snapshot(thread_id: str):
+    """Export through the existing AgentDBService, retaining its credential server-side."""
+    if not ADMIN_URL:
+        raise RuntimeError("Set CONSOLE_AGENTDB_ADMIN_URL to the AgentDB admin service")
+    info = await storage.get_thread(thread_id, fresh=True)
+    request = AgentDB.DumpRequest(database_id=info.database_id)
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{ADMIN_URL}/twirp/livekit.AgentDBService/DumpDatabase",
+            headers={"Authorization": f"Bearer {storage_token()}"},
+            json=MessageToDict(request, preserving_proto_field_name=True),
+        )
+        response.raise_for_status()
+        export = ParseDict(response.json(), AgentDB.DumpResponse())
+        if not export.download_url:
+            raise ValueError("DumpDatabase returned no download URL")
+        data = bytearray()
+        async with client.stream("GET", export.download_url) as download:
+            download.raise_for_status()
+            async for chunk in download.aiter_bytes():
+                data.extend(chunk)
+                if len(data) > MAX_DUMP_BYTES:
+                    raise ValueError("Database export exceeds the console's 64 MiB limit")
+    yield bytes(data), export.tip, info
+
+
+def read_database(data: bytes, database_id: str, tip: int) -> dict[str, Any]:
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.deserialize(data)
+        db.row_factory = sqlite3.Row
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+
+        def rows(table: str) -> list[dict[str, Any]]:
+            columns = list(db.execute(f'PRAGMA table_info("{table}")'))
+            names = [r[1] for r in columns]
+            json_columns = {r[1] for r in columns if r[2].upper() == "JSONB"}
+            fields = ", ".join(
+                f'json("{name}") AS "{name}"' if name in json_columns else f'"{name}"'
+                for name in names
+            )
+            result = []
+            for row in db.execute(f'SELECT {fields} FROM "{table}" ORDER BY rowid LIMIT 1000'):
+                item = dict(row)
+                for name in json_columns:
+                    item[name] = json.loads(item[name]) if item[name] is not None else None
+                result.append(item)
+            return result
+
+        items = rows("items")
+        for item in items:
+            item["payload"] = history_item(item["payload"])
+            item["type"] = item["payload"]["type"]
+        result = DatabaseDump.model_validate(
+            {
+                "databaseId": database_id,
+                "tip": tip,
+                "tables": tables,
+                "schemaVersion": db.execute("SELECT version FROM schema_version").fetchone()[0],
+                "lanes": rows("lanes"),
+                "items": items,
+                "events": rows("events"),
+                "inbox": rows("inbox"),
+                "tasks": rows("tasks"),
+            }
+        )
+        return result.model_dump(mode="json")
 
 
 async def session_dump(thread_id: str) -> dict[str, Any]:
@@ -122,42 +149,39 @@ async def session_dump(thread_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {
         "fetchedAt": int(time.time() * 1000),
         "session": row(info),
-        "streams": {"url": STREAMS_URL, "available": True},
+        "streams": {"url": "", "available": True},
     }
     try:
-        database = await database_dump(thread_id)
-    except Exception as e:
-        out["databaseError"] = str(e)
-    else:
-        out["database"] = database
+        async with snapshot(thread_id) as (data, tip, _):
+            out["database"] = await asyncio.to_thread(read_database, data, info.database_id, tip)
+    except Exception:
+        out["databaseError"] = "The inspector could not load this conversation."
     return out
 
 
 async def config(request: Request) -> Response:
-    return JSONResponse(
-        {
-            "agentstoreUrl": storage.url,
-            "streamsUrl": STREAMS_URL,
-            "streams": {"url": STREAMS_URL, "available": True},
-            "grant": {"subs": SUBS},
-        }
-    )
+    return JSONResponse({"grant": {"subs": SUBS}, "streams": {"url": "", "available": True}})
 
 
 async def token(request: Request) -> Response:
-    """The project credential: through the node a thread grant is a stripped bearer in v0, so
-    the console, a tool of the project, talks as the project and scopes threads itself."""
+    """Only a scoped thread grant is returned to the browser."""
     sub = request.query_params.get("sub") or SUBS[0]
-    agent, endpoint = request.query_params["agent"], request.query_params["endpoint"]
+    agent, endpoint = request.query_params.get("agent"), request.query_params.get("endpoint")
+    if sub not in SUBS or not agent or not endpoint:
+        return JSONResponse(
+            {"error": "Choose a configured subject, agent and endpoint"}, status_code=400
+        )
+    grant = AgentThreadGrant(scope=sub, create=True, write=True, read=True, list=True)
     return JSONResponse(
         {
-            "token": credentials.project_token(identity=sub, ttl_seconds=TOKEN_TTL),
+            "token": credentials.thread_grant_token(grant, identity=sub, ttl_seconds=TOKEN_TTL),
             "agent": agent,
             "sub": sub,
             "endpoint": endpoint_url(agent, endpoint),
             "endpointName": endpoint,
             "expiresAt": int(time.time()) + TOKEN_TTL,
-        }
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -165,28 +189,27 @@ def endpoint_url(agent: str, endpoint: str) -> str:
     return f"{SERVER_URL}/agents/{agent}/default/{endpoint}"
 
 
-def started_on(t: ThreadInfo, agent: str, endpoint: str) -> bool:
-    """Whether the thread was started on ``agent``'s ``endpoint``."""
-    return (t.attributes.get("agent"), t.attributes.get("endpoint")) == (agent, endpoint)
-
-
 async def sessions(request: Request) -> Response:
-    """The subject's threads started on one agent's endpoint, newest first."""
+    """A scope's conversations can be continued by any configured agent."""
     sub = request.query_params.get("sub") or SUBS[0]
-    agent, endpoint = request.query_params["agent"], request.query_params["endpoint"]
-    limit = int(request.query_params.get("limit") or 50)
-    found: list[ThreadInfo] = []
-    before = request.query_params.get("before") or ""
-    while len(found) < limit:
-        page = await storage.threads.list_threads(sub, before=before, limit=limit)
-        found += [t for t in page.threads if started_on(t, agent, endpoint)]
-        if not (before := page.before):
-            break
-    return JSONResponse({"sessions": [row(t) for t in found[:limit]], "before": before})
+    if sub not in SUBS:
+        return JSONResponse({"error": "Unknown subject"}, status_code=403)
+    try:
+        limit = min(50, max(1, int(request.query_params.get("limit") or 50)))
+    except ValueError:
+        return JSONResponse({"error": "Invalid limit"}, status_code=400)
+    page = await storage.threads.list_threads(
+        sub, before=request.query_params.get("before") or "", limit=limit
+    )
+    return JSONResponse({"sessions": [row(t) for t in page.threads], "before": page.before})
 
 
 async def create_session(request: Request) -> Response:
     body = await request.json()
+    if not isinstance(body, dict) or not body.get("agent") or not body.get("endpoint"):
+        return JSONResponse({"error": "agent and endpoint are required"}, status_code=400)
+    if body.get("sub", SUBS[0]) not in SUBS:
+        return JSONResponse({"error": "Unknown subject"}, status_code=403)
     attributes = {
         "agent": str(body["agent"]),
         "endpoint": str(body["endpoint"]),
@@ -236,6 +259,13 @@ async def tasks(request: Request) -> Response:
     return JSONResponse({"tasks": [dump_of(task) for task in found]})
 
 
+async def session_info(request: Request) -> Response:
+    try:
+        return JSONResponse(row(await storage.get_thread(request.path_params["id"], fresh=True)))
+    except ThreadNotFound:
+        return JSONResponse({"error": "Unknown conversation"}, status_code=404)
+
+
 async def session(request: Request) -> Response:
     thread_id = request.path_params["id"]
     try:
@@ -244,27 +274,55 @@ async def session(request: Request) -> Response:
         return JSONResponse({"error": f"unknown thread {thread_id}"}, status_code=404)
 
 
-async def db(request: Request) -> Response:
-    """Where the thread's database answers and a token for it, so the SQL tab dials wsdb itself."""
-    thread_id = request.path_params["id"]
+def query_snapshot(data: bytes, sql: str, limit: int, tip: int) -> dict[str, Any]:
+    started = time.monotonic()
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.deserialize(data)
+        db.execute("PRAGMA query_only=ON")
+
+        # query_only enforces writes; prevent SQL from relaxing it or attaching files.
+        def authorize(action, first, *_):
+            if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_PRAGMA and first not in (
+                "table_info",
+                "table_xinfo",
+                "index_info",
+                "index_list",
+            ):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        db.set_authorizer(authorize)
+        db.set_progress_handler(lambda: int(time.monotonic() - started > 2), 1000)
+        cursor = db.execute(sql)
+        rows = cursor.fetchmany(limit + 1)
+        result = QueryResult(
+            columns=[c[0] for c in cursor.description or []],
+            rows=[
+                [{"blob": len(v)} if isinstance(v, bytes) else v for v in r] for r in rows[:limit]
+            ],
+            truncated=len(rows) > limit,
+            tip=tip,
+            ms=round((time.monotonic() - started) * 1000),
+        )
+        return result.model_dump(mode="json")
+
+
+async def query(request: Request) -> Response:
+    body = await request.json()
+    sql = body.get("sql") if isinstance(body, dict) else None
+    if not isinstance(sql, str) or not sql.strip():
+        return JSONResponse({"error": "sql is required"}, status_code=400)
     try:
-        info = await storage.get_thread(thread_id)
-    except ThreadNotFound:
-        return JSONResponse({"error": f"unknown thread {thread_id}"}, status_code=404)
-    now = int(time.time())
-    claims = {
-        "iss": credentials.api_key,
-        "nbf": now,
-        "exp": now + TOKEN_TTL,
-        "agent": {"databaseAdmin": True},
-    }
-    return JSONResponse(
-        {
-            "url": re.sub(r"^http", "ws", storage.url) + "/v0/agentstore/db",
-            "databaseId": info.database_id,
-            "token": jwt.encode(claims, credentials.api_secret, algorithm="HS256"),
-        }
-    )
+        limit = min(10_000, max(1, int(body.get("limit", 500))))
+        async with snapshot(request.path_params["id"]) as (data, tip, _):
+            result = await asyncio.to_thread(query_snapshot, data, sql, limit, tip)
+        return JSONResponse(result)
+    except (ValueError, sqlite3.Error):
+        return JSONResponse(
+            {"error": "Only a valid read query can run on the snapshot"}, status_code=400
+        )
 
 
 async def attributes(request: Request) -> Response:
@@ -285,7 +343,10 @@ async def examples(request: Request) -> Response:
         example["dir"] = str(path.parent.relative_to(EXAMPLES_DIR.parent))
         example["url"] = endpoint_url(example["agent"], example["endpoint"])
         found.append(example)
-    headers = {"Authorization": f"Bearer {credentials.project_token(ttl_seconds=60)}"}
+    headers = {
+        "Authorization": f"Bearer {credentials.project_token(ttl_seconds=60)}",
+        "A2A-Version": "1.0",
+    }
 
     async def live(client: httpx.AsyncClient, url: str) -> bool:
         try:
@@ -301,54 +362,14 @@ async def examples(request: Request) -> Response:
     )
 
 
-async def watch(request: Request) -> Response:
-    """The dump again every ``WATCH_INTERVAL``, as the Go tool did; the console diffs."""
-    thread_id = request.path_params["id"]
-
-    async def frames() -> AsyncIterator[bytes]:
-        while not await request.is_disconnected():
-            try:
-                event, body = "dump", json.dumps(await session_dump(thread_id))
-            except Exception as e:
-                event, body = "error", json.dumps({"error": str(e)})
-            yield f"event: {event}\ndata: {body}\n\n".encode()
-            await asyncio.sleep(WATCH_INTERVAL)
-
-    return StreamingResponse(
-        frames(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-    )
-
-
-async def stream(request: Request) -> Response:
-    """``/v1/streams/{id}`` relayed as is, under the project token."""
-    stream_id = request.path_params["id"]
-    url = f"{STREAMS_URL}/{stream_id}"
-    headers = {"Authorization": f"Bearer {storage_token()}"}
-    if accept := request.headers.get("accept"):
-        headers["Accept"] = accept
-    client = httpx.AsyncClient(timeout=None)
-    upstream = await client.send(
-        client.build_request("GET", url, params=request.query_params, headers=headers),
-        stream=True,
-    )
-    passed = {
-        k: v
-        for k, v in upstream.headers.items()
-        if k.lower() in ("content-type", "cache-control", "etag") or k.lower().startswith("stream-")
-    }
-    passed["X-Accel-Buffering"] = "no"
-
-    async def body() -> AsyncIterator[bytes]:
-        try:
-            async for chunk in upstream.aiter_raw():
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
-    return StreamingResponse(body(), status_code=upstream.status_code, headers=passed)
+class DeveloperAuthorization(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        supplied = request.headers.get("authorization", "")
+        if not secrets.compare_digest(supplied, f"Bearer {API_TOKEN}"):
+            return JSONResponse({"error": "Developer authorization required"}, status_code=401)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 app = Starlette(
@@ -358,16 +379,15 @@ app = Starlette(
         Route("/api/examples", examples),
         Route("/api/sessions", sessions),
         Route("/api/sessions", create_session, methods=["POST"]),
-        Route("/api/sessions/{id}", session),
+        Route("/api/admin/sessions/{id}", session),
+        Route("/api/sessions/{id}/info", session_info),
         Route("/api/sessions/{id}/attributes", attributes, methods=["POST"]),
-        Route("/api/sessions/{id}/db", db),
+        Route("/api/admin/sessions/{id}/query", query, methods=["POST"]),
         Route("/api/sessions/{id}/history", history),
         Route("/api/sessions/{id}/tasks", tasks),
-        Route("/api/sessions/{id}/watch", watch),
-        Route("/api/streams/{id}", stream),
     ]
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(DeveloperAuthorization)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("CONSOLE_API_PORT", "7795")))

@@ -11,7 +11,7 @@ import type { Lane } from "@/lib/types";
  * The session's lanes as a table: one row per agent in the session, its
  * lease as a state (held and expiring, free, or lapsed, the one thing here
  * that asks for attention), who holds or last held it, who waits, how far
- * its inbox is drained. A row opens on its state and agent stack. The
+ * its inbox is drained. A row opens on its saved state. The
  * session's id and the database's tip sit in the header.
  */
 export function LanesPanel({
@@ -91,10 +91,9 @@ export function LanesPanel({
           rowKey={(lane) => lane.lane}
           rowData={(lane) => ({ lane: lane.lane, lease: lease(lane.lease_until, now).state })}
           fold={(lane) =>
-            lane.state != null || lane.agent_stack != null ? (
+            lane.state != null ? (
               <div className="grid gap-2">
                 {lane.state != null ? <Document value={lane.state} /> : null}
-                {lane.agent_stack != null ? <Document value={lane.agent_stack} /> : null}
               </div>
             ) : null
           }

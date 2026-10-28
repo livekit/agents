@@ -4,12 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./chrome/icon";
 import { sameExample, type Example } from "@/lib/examples";
 
-/**
- * The header's name, which agent and endpoint this console talks to, and under
- * it the server the endpoint is on; a click drops every example under it by
- * name, the ones not running dimmed.
- * Picking one that is not running is fine: the stage then shows what to start.
- */
+/** The agent's name and the configured examples available to this console. */
 export function ExamplePicker({
   examples,
   selected,
@@ -42,7 +37,7 @@ export function ExamplePicker({
     };
   }, [shown]);
 
-  const name = selected ? `${selected.agent} / ${selected.endpoint}` : fallback || "Agent";
+  const name = fallback || selected?.name || "Agent";
   if (examples.length === 0) return <>{name}</>;
   return (
     <span ref={ref} className="relative inline-grid max-w-full justify-items-start group-data-[size=large]:justify-items-center" data-example-picker>
@@ -56,11 +51,6 @@ export function ExamplePicker({
         <span className="truncate">{name}</span>
         <Icon name={shown ? "disclosureUp" : "disclosureDown"} size={14} className="flex-none text-label group-hover/picker:text-ink" />
       </button>
-      {selected ? (
-        <span className="max-w-full truncate text-micro text-label" title={selected.url} data-endpoint-host>
-          {new URL(selected.url).host}
-        </span>
-      ) : null}
       {shown ? (
         <div
           className="absolute top-full left-0 z-20 mt-2 grid w-max max-w-[var(--w-info)] grid-cols-[minmax(0,1fr)] rounded-blender border border-line-weak bg-raised py-1 text-left font-ui text-[length:var(--fs-ui)] shadow-[var(--shadow)] group-data-[size=large]:left-1/2 group-data-[size=large]:-translate-x-1/2"
@@ -85,7 +75,7 @@ export function ExamplePicker({
                 }}
               >
                 <Icon name="check" size={12} className={`flex-none ${chosen ? "" : "invisible"}`} />
-                <span className="min-w-0 flex-1 truncate">{example.agent}</span>
+                <span className="min-w-0 flex-1 truncate">{example.name}</span>
                 {example.live ? null : <span className="ml-4 flex-none text-micro">not running</span>}
               </button>
             );

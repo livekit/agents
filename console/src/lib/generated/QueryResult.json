@@ -1,0 +1,36 @@
+{
+  "properties": {
+    "columns": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "rows": {
+      "items": {
+        "items": {
+          "tsType": "unknown"
+        },
+        "type": "array"
+      },
+      "type": "array"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "tip": {
+      "type": "integer"
+    },
+    "ms": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "columns",
+    "rows",
+    "truncated",
+    "tip",
+    "ms"
+  ],
+  "type": "object"
+}

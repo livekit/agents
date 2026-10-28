@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "SessionRow": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "agentName": {
+          "type": "string"
+        },
+        "sub": {
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "region": {
+          "default": "",
+          "type": "string"
+        },
+        "databaseId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "lastActive": {
+          "type": "number"
+        },
+        "expiresAt": {
+          "type": "number"
+        },
+        "idleTtlSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionId",
+        "agentName",
+        "sub",
+        "attributes",
+        "databaseId",
+        "createdAt",
+        "lastActive",
+        "expiresAt",
+        "idleTtlSeconds"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "sessions": {
+      "items": {
+        "$ref": "#/$defs/SessionRow"
+      },
+      "type": "array"
+    },
+    "before": {
+      "default": "",
+      "type": "string"
+    }
+  },
+  "required": [
+    "sessions"
+  ],
+  "type": "object"
+}

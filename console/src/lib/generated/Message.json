@@ -1,0 +1,109 @@
+{
+  "$ref": "#/$defs/Message",
+  "$defs": {
+    "Message": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "ROLE_UNSPECIFIED",
+            "ROLE_USER",
+            "ROLE_AGENT"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "referenceTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "messageId",
+        "role",
+        "parts"
+      ]
+    },
+    "Part": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "data": {
+          "tsType": "unknown"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "filename": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "raw"
+              ]
+            },
+            {
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "required": [
+                "data"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

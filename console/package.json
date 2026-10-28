@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "pnpm guard && next build --webpack",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
     "guard": "node scripts/check-tokens.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit --incremental false",
-    "check": "pnpm typecheck && pnpm lint && pnpm guard && pnpm test"
+    "check": "pnpm typecheck && pnpm lint && pnpm guard && pnpm test",
+    "test:browser": "playwright test --config playwright.contract.config.ts",
+    "schema:generate": "../.venv/bin/python scripts/schemas.py && node scripts/schemas.mjs",
+    "schema:check": "../.venv/bin/python scripts/schemas.py --check && node scripts/schemas.mjs --check"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -22,6 +25,7 @@
     "@codemirror/view": "^6.43.14",
     "@lezer/highlight": "^1.2.5",
     "@livekit/components-react": "^2.9.24",
+    "ajv": "^8.20.0",
     "livekit-client": "^2.22.3",
     "livekit-server-sdk": "^2.19.1",
     "lucide-react": "^1.40.0",
@@ -37,6 +41,7 @@
     "@types/react-dom": "^19.2.4",
     "eslint": "^9.39.2",
     "eslint-config-next": "^16.3.2",
+    "json-schema-to-typescript": "^16.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.2",
     "vitest": "^3.2.4"

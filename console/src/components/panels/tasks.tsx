@@ -79,8 +79,8 @@ export function TasksPanel({
         tip: "When the row last changed",
         width: 72,
         mono: true,
-        cell: (task) => <span title={clock(task.updated_at)}>{ago(task.updated_at, now)}</span>,
-        text: (task) => clock(task.updated_at),
+        cell: (task) => <span title={clock(task.updated_at / 1000)}>{ago(task.updated_at / 1000, now)}</span>,
+        text: (task) => clock(task.updated_at / 1000),
         sort: (a, b) => a.updated_at - b.updated_at,
       },
       {
@@ -88,7 +88,7 @@ export function TasksPanel({
         label: "status_message",
         tip: "What the task last said about itself: a progress line, a question, a reason",
         width: 160,
-        cell: (task) => text(task.status_message).replace(/\s+/g, " "),
+        cell: (task) => text(task.data.status_message).replace(/\s+/g, " "),
       },
     ],
     [now],
@@ -126,10 +126,10 @@ export function TasksPanel({
           onSelect={(task) => onSelect(task.task_id)}
           fold={(task) => (
             <div className="grid gap-2">
-              {text(task.status_message) ? <p className="m-0 whitespace-pre-wrap text-ink">{text(task.status_message)}</p> : null}
+              {text(task.data.status_message) ? <p className="m-0 whitespace-pre-wrap text-ink">{text(task.data.status_message)}</p> : null}
               <p className="m-0 meta">
                 {[
-                  `updated ${clock(task.updated_at)}`,
+                  `updated ${clock(task.updated_at / 1000)}`,
                   task.name ? `background ${task.name}` : "",
                   task.message_id ? `message ${task.message_id}` : "",
                 ]

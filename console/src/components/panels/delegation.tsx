@@ -8,20 +8,6 @@ import { stateDot } from "@/lib/state";
 import type { TaskLog } from "@/lib/use-session";
 import type { Delegation, Progress, TaskRow } from "@/lib/types";
 
-/** The A2A extension's directive on a task's status metadata, when the expert gave one. */
-function directiveOf(task: TaskRow | undefined): string | null {
-  const status = task?.status_message as { metadata?: Record<string, unknown> } | null;
-  const meta = { ...(task?.data?.metadata as Record<string, unknown> | null), ...status?.metadata };
-  for (const [key, value] of Object.entries(meta)) {
-    if (key.endsWith("/directive") && value && typeof value === "object") {
-      const kind = (value as { kind?: string; type?: string }).kind ?? (value as { type?: string }).type;
-      if (kind) return kind;
-    }
-    if (key.endsWith("/directiveType") && typeof value === "string") return value;
-  }
-  return null;
-}
-
 /** mm:ss or s.s for an elapsed span in ms. */
 function span(ms: number) {
   const seconds = Math.max(0, ms / 1000);
@@ -44,8 +30,8 @@ export function merge(entry: Delegation & { at: number }, task: TaskRow | undefi
   const answer = entry.answer ?? (terminal && artifacts ? artifacts : undefined);
   /* The final status message is the answer itself: it reads once, as the answer. */
   if (answer) progress.splice(0, progress.length, ...progress.filter((line) => line.text.trim() !== answer.trim()));
-  const request = entry.task || text((task?.data?.history as unknown[] | null)?.[0]).trim();
-  const endedAt = entry.endedAt ?? (terminal && task ? task.updated_at * 1000 : undefined);
+  const request = entry.task || text(task?.data.history?.[0]).trim();
+  const endedAt = entry.endedAt ?? (terminal && task ? task.updated_at : undefined);
   const startedAt = entry.at;
   return {
     state,
@@ -57,7 +43,6 @@ export function merge(entry: Delegation & { at: number }, task: TaskRow | undefi
     lane: task?.lane,
     /* Unknown when the start is only when the console first saw an already ended task. */
     elapsed: endedAt !== undefined && endedAt < startedAt ? undefined : (endedAt ?? now) - startedAt,
-    directive: directiveOf(task),
   };
 }
 
@@ -85,7 +70,7 @@ export function DelegationCard({
   const [opened, setOpened] = useState<boolean | null>(null);
   const [json, setJson] = useState(false);
   const open = opened ?? !view.terminal;
-  const expert = view.lane ?? entry.endpoint?.split("/").filter(Boolean).pop() ?? "expert";
+  const expert = entry.name || view.lane || "Agent";
   /* While it works, only the latest line: the rest is history once it ended. */
   const progress = view.terminal ? view.progress : view.progress.slice(-1);
 
@@ -105,16 +90,16 @@ export function DelegationCard({
         onClick={() => setOpened(!open)}
       >
         <Icon name="lanes" size={12} className="flex-none" />
-        <span className="truncate text-ink" title={entry.endpoint ?? view.lane ?? ""} data-expert={expert}>
+        <span className="truncate text-ink" title={expert} data-expert={expert}>
           {expert}
         </span>
-        <span className="flex-none text-tag" data-badge={entry.profile ?? "a2a"}>
+        <span className="flex-none text-tag" data-badge="a2a">
           A2A
         </span>
         {open ? <span className="flex-1" /> : null}
         <span className="inline-flex flex-none items-center gap-1" data-state={view.state}>
           <span className={`size-2 flex-none rounded-full ${stateDot(view.state)}`} aria-hidden="true" />
-          {view.state}
+          {view.terminal ? "Finished" : view.state === "input-required" ? "Waiting for your answer" : "Working"}
         </span>
         {view.elapsed === undefined ? null : (
           <span className="flex-none tabular-nums" data-elapsed="true">
@@ -167,11 +152,6 @@ export function DelegationCard({
           {view.answer ? (
             <p className={`m-0 min-w-0 wrap-break-word whitespace-pre-wrap ${entry.failed ? "text-failed-text" : "text-ink"}`} data-answer="true">
               {view.answer}
-            </p>
-          ) : null}
-          {view.directive ? (
-            <p className="m-0 text-attention" data-directive={view.directive}>
-              {view.directive.replace(/_/g, " ")}
             </p>
           ) : null}
           {task && json ? <Document value={task.data} /> : null}

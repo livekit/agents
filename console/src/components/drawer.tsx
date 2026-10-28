@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { InDrawer } from "./chrome/panel";
 
-/** The debug drawer's views: the session's database in the plan's words, and what the page talks to. */
+/** The debug drawer's views: the session's database in developer view, and what the page talks to. */
 export type View = "lanes" | "tasks" | "journal" | "inbox" | "stream" | "sql" | "info";
 
 export const VIEWS: { id: View; name: string; tip: string }[] = [
@@ -131,7 +131,7 @@ export function Drawer({
   }, [onDragging]);
 
   return (
-    <section className="flex min-h-0 flex-none flex-col bg-sunken data-[drawer=closed]:border-t data-[drawer=closed]:border-line-weak" data-drawer={view ?? "closed"} aria-label="Debug">
+    <section className="flex min-h-0 flex-none flex-col bg-sunken data-[drawer=closed]:border-t data-[drawer=closed]:border-line-weak" data-drawer={view ?? "closed"} aria-label="Admin inspector">
       {view ? (
         <div
           className="drawerEdge"
@@ -146,7 +146,7 @@ export function Drawer({
           onPointerCancel={onPointerUp}
         />
       ) : null}
-      <nav role="tablist" aria-label="Debug views" className="flex h-[calc(var(--h-header)+var(--pad-3))] flex-none items-stretch gap-1 border-b border-line-weak px-4" data-drawer-tabs="true">
+      <nav role="tablist" aria-label="Admin views" className="flex h-[calc(var(--h-header)+var(--pad-3))] flex-none items-stretch gap-1 border-b border-line-weak px-4" data-drawer-tabs="true">
         {VIEWS.map((item) => {
           const why = disabled[item.id];
           return (

@@ -1,5 +1,6 @@
 "use client";
 
+import { decode } from "./decode";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ConnectionState, RoomEvent, TokenSourceConfigurable, type TokenSourceFetchOptions, type TokenSourceResponseObject } from "livekit-client";
 import { useAgent, usePersistentUserChoices, useSession, useSessionMessages, type ReceivedMessage } from "@livekit/components-react";
@@ -37,13 +38,8 @@ class CallTokenSource extends TokenSourceConfigurable {
     });
     if (this.last && this.last.body === request && Date.now() - this.last.at < 20_000) return this.last.answer;
     const response = await fetch("/api/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: request });
-    const body = (await response.json().catch(() => ({}))) as {
-      server_url?: string;
-      participant_token?: string;
-      session_id?: string;
-      error?: string;
-    };
-    if (!response.ok || !body.server_url || !body.participant_token) throw new Error(body.error ?? `token: ${response.status}`);
+    if (!response.ok) throw new Error(`Call token request failed (HTTP ${response.status})`);
+    const body = decode.callToken(await response.json());
     if (body.session_id) this.onSession.current(body.session_id);
     const answer = { serverUrl: body.server_url, participantToken: body.participant_token };
     this.last = { body: request, at: Date.now(), answer };
@@ -89,7 +85,7 @@ function mergeTurns(kept: VoiceTurn[], live: VoiceTurn[]): VoiceTurn[] {
  * what a call said is snapshotted into `kept` when it ends or the next one
  * starts, and `reset` forgets everything for a new conversation.
  */
-export function useCall({ sessionId, sub, agent, onSession }: { sessionId: string | null; sub: string; agent: string; onSession: (sessionId: string) => void }) {
+export function useCall({ sessionId, sub, agent, endpoint, onSession }: { sessionId: string | null; sub: string; agent: string; endpoint: string; onSession: (sessionId: string) => void }) {
   const adopt = useRef(onSession);
   useEffect(() => {
     adopt.current = onSession;
@@ -99,7 +95,7 @@ export function useCall({ sessionId, sub, agent, onSession }: { sessionId: strin
   const { userChoices, saveAudioInputDeviceId } = usePersistentUserChoices();
   const session = useSession(tokenSource, {
     agentName: agent,
-    agentMetadata: JSON.stringify({ session_id: sessionId ?? undefined, sub }),
+    agentMetadata: JSON.stringify({ session_id: sessionId ?? undefined, sub, endpoint }),
     participantIdentity: sub,
     participantName: sub,
     agentConnectTimeoutMilliseconds: 45_000,

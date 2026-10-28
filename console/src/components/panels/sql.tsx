@@ -10,8 +10,7 @@ import { EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lin
 import { highlightCode, tags } from "@lezer/highlight";
 import { Panel } from "../chrome/panel";
 import { DataTable, type Column } from "../chrome/table";
-import { getDb } from "@/lib/api";
-import { Wsdb, type QueryResult, type Status } from "@/lib/wsdb";
+import { SnapshotDB, type QueryResult, type Status } from "@/lib/query";
 import { pretty } from "@/lib/format";
 
 type Field = { name: string; type: string; notNull: boolean; byDefault: string | null; key: number };
@@ -27,17 +26,23 @@ const COLUMNS_SQL =
   'SELECT m.name, p.name, p.type, p."notnull", p.dflt_value, p.pk FROM sqlite_master m JOIN pragma_table_info(m.name) p ' +
   "WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name, p.cid";
 const MASTER_SQL = "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL";
-const countSql = (names: string[]) => names.map((name) => `SELECT '${name}', COUNT(*) FROM "${name}"`).join(" UNION ALL ");
+const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+const countSql = (names: string[]) => names.map((name) => `SELECT '${name.replaceAll("'", "''")}', COUNT(*) FROM ${quote(name)}`).join(" UNION ALL ");
 
 /** The tables, read in three statements: their columns, their definitions and indexes, their sizes. */
-async function readSchema(db: Wsdb): Promise<Table[]> {
+async function readSchema(db: SnapshotDB): Promise<Table[]> {
   const [columns, master] = await Promise.all([db.query(COLUMNS_SQL, 10_000), db.query(MASTER_SQL, 10_000)]);
   const found = new Map<string, Table>();
-  for (const [table, name, type, notNull, byDefault, key] of columns.rows as [string, string, string, number, string | null, number][]) {
+  for (const [table, name, type, notNull, byDefault, key] of columns.rows) {
+    if (typeof table !== "string" || typeof name !== "string" || typeof type !== "string" ||
+        typeof notNull !== "number" || (byDefault !== null && typeof byDefault !== "string") || typeof key !== "number")
+      throw new Error("Invalid SQLite column description");
     if (!found.has(table)) found.set(table, { name: table, columns: [], sql: "", indexes: [], count: null });
     found.get(table)!.columns.push({ name, type: type.toLowerCase(), notNull: Boolean(notNull), byDefault, key });
   }
-  for (const [type, name, table, sql] of master.rows as [string, string, string, string][]) {
+  for (const [type, name, table, sql] of master.rows) {
+    if (typeof type !== "string" || typeof name !== "string" || typeof table !== "string" || typeof sql !== "string")
+      throw new Error("Invalid SQLite table description");
     const entry = found.get(table);
     if (entry && type === "table") entry.sql = sql;
     else if (entry && type === "index") entry.indexes.push({ name, sql });
@@ -45,7 +50,11 @@ async function readSchema(db: Wsdb): Promise<Table[]> {
   const tables = [...found.values()];
   if (tables.length) {
     const counts = await db.query(countSql(tables.map((t) => t.name)), tables.length);
-    for (const [name, count] of counts.rows as [string, number][]) found.get(name)!.count = count;
+    for (const [name, count] of counts.rows) {
+      if (typeof name !== "string" || typeof count !== "number" || !found.has(name))
+        throw new Error("Invalid SQLite row count");
+      found.get(name)!.count = count;
+    }
   }
   return tables;
 }
@@ -62,30 +71,10 @@ function storageClass(value: unknown) {
 
 /** A table's rows as the editor writes them: JSONB columns through `json()`, so they read as text. */
 function browse(table: Table) {
-  const columns = table.columns.map((c) => (c.type === "jsonb" ? `json(${c.name}) AS ${c.name}` : c.name));
-  return `SELECT ${columns.join(", ")}\nFROM ${table.name}\nLIMIT ${LIMIT}`;
+  const columns = table.columns.map((c) => (c.type === "jsonb" ? `json(${quote(c.name)}) AS ${quote(c.name)}` : quote(c.name)));
+  return `SELECT ${columns.join(", ")}\nFROM ${quote(table.name)}\nLIMIT ${LIMIT}`;
 }
 
-const WRITES = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "DROP", "ALTER", "ATTACH", "DETACH", "VACUUM", "REINDEX", "ANALYZE", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE"]);
-
-/**
- * One statement that only reads: `SELECT`, `WITH`, `VALUES`, `EXPLAIN`, or a
- * `PRAGMA` that sets nothing, and no writing keyword outside its strings and
- * comments. The token can write, so this is the tab's only guard.
- */
-export function readOnly(sql: string) {
-  const code = sql
-    .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, " ")
-    .replace(/--[^\n]*/g, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .trim()
-    .replace(/;+\s*$/, "")
-    .toUpperCase();
-  if (code.includes(";")) return false;
-  const words = code.split(/[^A-Z0-9_]+/).filter(Boolean);
-  const reads = ["SELECT", "WITH", "VALUES", "EXPLAIN"].includes(words[0]) || (words[0] === "PRAGMA" && !code.includes("="));
-  return reads && !words.some((word) => WRITES.has(word));
-}
 
 /** A cell parsed back to JSON when it is a JSON object or array as text. */
 function parsed(value: unknown): unknown {
@@ -189,16 +178,16 @@ function Structure({ table }: { table: Table }) {
   );
 }
 
-/** The socket's state: a dot, and what it means; the database id and commit on hover. */
+/** The snapshot's state: a dot, and what it means; the database id and commit on hover. */
 function Connection({ status }: { status: Status }) {
   const text =
     status.state === "open"
       ? `Connected${status.latency === null ? "" : ` · ${status.latency} ms`}`
       : status.state === "connecting"
         ? "Connecting"
-        : `Disconnected: ${status.error} Retrying in ${Math.ceil(status.retryIn / 1000)} s.`;
+        : `Disconnected: ${status.error} Refresh the inspector to retry.`;
   return (
-    <span className="flex min-w-0 items-center gap-2" title={status.state === "open" ? `wsdb, at commit ${status.tip}` : undefined} data-sql-connection={status.state}>
+    <span className="flex min-w-0 items-center gap-2" title={status.state === "open" ? `Snapshot at commit ${status.tip}` : undefined} data-sql-connection={status.state}>
       <span className="size-2 flex-none rounded-full bg-label data-[state=open]:bg-accent data-[state=closed]:bg-failed-text data-[state=connecting]:bg-attention" data-state={status.state} />
       <span className="truncate">{text}</span>
     </span>
@@ -206,7 +195,7 @@ function Connection({ status }: { status: Status }) {
 }
 
 /**
- * The conversation's database in SQL, over its own wsdb socket, whose state
+ * The conversation's database in SQL, from an authorized snapshot, whose state
  * the header shows: its tables down the side with their sizes, a click
  * browses one; a read-only statement in the editor, completed from the
  * schema, runs with Cmd+Enter; the rows come back in the data table, each
@@ -223,7 +212,7 @@ export function SqlPanel({ sessionId }: { sessionId: string | null }) {
   const [mode, setMode] = useState<"rows" | "structure">("rows");
   const [result, setResult] = useState<(QueryResult & { run: number; statement: string }) | null>(null);
   const [status, setStatus] = useState<Status>({ state: "connecting" });
-  const client = useRef<Wsdb | null>(null);
+  const client = useRef<SnapshotDB | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const runs = useRef(0);
@@ -235,7 +224,6 @@ export function SqlPanel({ sessionId }: { sessionId: string | null }) {
       const selected = state ? state.sliceDoc(state.selection.main.from, state.selection.main.to) : "";
       const statement = (text ?? (selected || state?.doc.toString()) ?? "").trim();
       if (!client.current || !statement) return;
-      if (!readOnly(statement)) return setError("Only a single read statement runs here.");
       setRunning(true);
       try {
         setResult({ ...(await client.current.query(statement, MAX_ROWS)), run: ++runs.current, statement });
@@ -276,7 +264,7 @@ export function SqlPanel({ sessionId }: { sessionId: string | null }) {
           autocompletion(),
           schemaSlot.current.of(sqlLanguage({ dialect: SQLite, upperCaseKeywords: true })),
           syntaxHighlighting(highlight),
-          placeholder("SELECT * FROM lanes"),
+          placeholder("SELECT * FROM tasks"),
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) return;
@@ -295,14 +283,15 @@ export function SqlPanel({ sessionId }: { sessionId: string | null }) {
     };
   }, []);
 
-  /* The conversation's database over its own socket, and its schema, for the side and for
+  /* The conversation's snapshot, and its schema, for the side and for
      completion; the room remounts the panel for another conversation. */
   useEffect(() => {
     if (!sessionId) return;
-    const db = new Wsdb(() => getDb(sessionId), setStatus);
+    const db = new SnapshotDB(sessionId, setStatus);
     client.current = db;
     readSchema(db)
       .then((next) => {
+        if (client.current !== db) return;
         setTables(next);
         view.current?.dispatch({
           effects: schemaSlot.current.reconfigure(

@@ -14,7 +14,7 @@ export function fold(current: Map<string, TaskLog>, dump: SessionDump, at: numbe
   let next: Map<string, TaskLog> | null = null;
   for (const task of tasks) {
     const known = current.get(task.task_id);
-    const message = text(task.status_message).trim();
+    const message = text(task.data.status_message).trim();
     if (known && (!message || known.log.some((line) => line.text === message))) continue;
     next ??= new Map(current);
     const entry = known ? { ...known, log: [...known.log] } : { firstSeen: at, log: [] };
@@ -25,8 +25,7 @@ export function fold(current: Map<string, TaskLog>, dump: SessionDump, at: numbe
 }
 
 /**
- * The selected session's database, live: the debug API pushes a dump every
- * two seconds over SSE. `skew` is the server's clock minus ours, so lease
+ * The selected conversation's admin snapshot is refreshed every two seconds. `skew` is the server's clock minus ours, so lease
  * countdowns and "ago" labels read on the server's time.
  */
 export function useSession(sessionId: string | null) {

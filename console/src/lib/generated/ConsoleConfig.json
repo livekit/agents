@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "StreamAvailability": {
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "url",
+        "available"
+      ],
+      "type": "object"
+    },
+    "Subjects": {
+      "properties": {
+        "subs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "subs"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "grant": {
+      "$ref": "#/$defs/Subjects"
+    },
+    "streams": {
+      "$ref": "#/$defs/StreamAvailability"
+    }
+  },
+  "required": [
+    "grant",
+    "streams"
+  ],
+  "type": "object"
+}

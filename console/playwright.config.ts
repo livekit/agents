@@ -5,6 +5,7 @@ const CALLER_WAV = process.env.E2E_CALLER_WAV ?? "/tmp/lk-console/caller.wav";
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "browser-contract.spec.ts",
   /* Compile the route before the first test, not inside it. */
   globalSetup: "./e2e/warm-up.ts",
   /* The suite drives one live stack with real models: one test at a time. */

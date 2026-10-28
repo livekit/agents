@@ -1,0 +1,33 @@
+{
+  "properties": {
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "sub": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "endpoint": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "endpoint"
+  ],
+  "type": "object"
+}

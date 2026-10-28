@@ -1,0 +1,31 @@
+{
+  "properties": {
+    "token": {
+      "type": "string"
+    },
+    "agent": {
+      "type": "string"
+    },
+    "sub": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "endpointName": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "token",
+    "agent",
+    "sub",
+    "endpoint",
+    "endpointName",
+    "expiresAt"
+  ],
+  "type": "object"
+}

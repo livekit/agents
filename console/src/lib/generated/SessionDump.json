@@ -1,0 +1,1276 @@
+{
+  "$defs": {
+    "AgentConfigUpdate": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "agent_config_update",
+          "default": "agent_config_update",
+          "type": "string"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tools_added": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tools_removed": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "type": "number"
+        }
+      },
+      "type": "object",
+      "required": [
+        "type"
+      ]
+    },
+    "AgentHandoff": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "agent_handoff",
+          "default": "agent_handoff",
+          "type": "string"
+        },
+        "old_agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "new_agent_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "new_agent_id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "Ask": {
+      "description": "What a task waiting on the person holds: the question and the call that takes the answer.",
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "answer_tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "AudioContent": {
+      "properties": {
+        "type": {
+          "const": "audio_content",
+          "default": "audio_content",
+          "type": "string"
+        },
+        "frame": {
+          "items": {
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "sample_rate": {
+                "type": "integer"
+              },
+              "num_channels": {
+                "type": "integer"
+              },
+              "samples_per_channel": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "data",
+              "sample_rate",
+              "num_channels",
+              "samples_per_channel"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "transcript": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "frame",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ChatMessage": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message",
+          "default": "message",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "developer",
+            "system",
+            "user",
+            "assistant"
+          ],
+          "type": "string"
+        },
+        "content": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ImageContent"
+              },
+              {
+                "$ref": "#/$defs/AudioContent"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "interrupted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "transcript_confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extra": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "metrics": {
+          "$ref": "#/$defs/MetricsReport"
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "format": "binary",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "deprecated": true
+        }
+      },
+      "required": [
+        "role",
+        "content",
+        "type"
+      ],
+      "type": "object"
+    },
+    "DatabaseDump": {
+      "properties": {
+        "databaseId": {
+          "type": "string"
+        },
+        "tip": {
+          "type": "integer"
+        },
+        "tables": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "schemaVersion": {
+          "type": "integer"
+        },
+        "lanes": {
+          "items": {
+            "$ref": "#/$defs/LaneRow"
+          },
+          "type": "array"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "type": "array"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/EventRow"
+          },
+          "type": "array"
+        },
+        "inbox": {
+          "items": {
+            "$ref": "#/$defs/InboxRow"
+          },
+          "type": "array"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "databaseId",
+        "tip",
+        "tables",
+        "schemaVersion",
+        "lanes",
+        "items",
+        "events",
+        "inbox",
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "EventRow": {
+      "description": "One journal entry: every `AgentSessionEvent`, plus `run_started` and `run_ended`, tagged with\nthe lane. Append-only, owned by the framework.",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "ts_ms": {
+          "type": "integer"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "payload": {}
+      },
+      "required": [
+        "id",
+        "ts_ms",
+        "lane",
+        "run_id",
+        "type",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "FunctionCall": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "function_call",
+          "default": "function_call",
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "extra": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "group_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "call_id",
+        "arguments",
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "FunctionCallOutput": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "function_call_output",
+          "default": "function_call_output",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "number"
+        },
+        "reply_required": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "call_id",
+        "output",
+        "is_error",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ImageContent": {
+      "description": "ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.\n\nYou may need to consult your LLM provider's documentation on supported URL types.\n\n```python\n# Pass a VideoFrame directly, which will be automatically converted to a JPEG data URL internally\nasync for event in rtc.VideoStream(video_track):\n    chat_image = ImageContent(image=event.frame)\n    # this instance is now available for your ChatContext\n\n# Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)\nfrom livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions\n\nimage_bytes = encode(\n    event.frame,\n    EncodeOptions(\n        format=\"PNG\",\n        resize_options=ResizeOptions(width=512, height=512, strategy=\"scale_aspect_fit\"),\n    ),\n)\nchat_image = ImageContent(\n    image=f\"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}\"\n)\n\n# With an external URL\nchat_image = ImageContent(image=\"https://example.com/image.jpg\")\n```",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "image_content",
+          "default": "image_content",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "properties": {
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "width",
+                "height",
+                "type",
+                "data"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "inference_width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inference_height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inference_detail": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "high",
+            "low"
+          ],
+          "type": "string"
+        },
+        "mime_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "image",
+        "type"
+      ],
+      "type": "object"
+    },
+    "InboxRow": {
+      "description": "One message received while the lane was running, under the `inbox` policy.",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "message": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "received_at": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "lane",
+        "task_id",
+        "message_id",
+        "message",
+        "received_at"
+      ],
+      "type": "object"
+    },
+    "Item": {
+      "properties": {
+        "lane": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "type": {
+          "type": "string"
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ChatMessage"
+            },
+            {
+              "$ref": "#/$defs/FunctionCall"
+            },
+            {
+              "$ref": "#/$defs/FunctionCallOutput"
+            },
+            {
+              "$ref": "#/$defs/AgentHandoff"
+            },
+            {
+              "$ref": "#/$defs/AgentConfigUpdate"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lane",
+        "id",
+        "seq",
+        "type",
+        "message_id",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "LaneRow": {
+      "description": "One lane: a registered agent's state, lease and inbox cursor.",
+      "properties": {
+        "lane": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "tsType": "unknown"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lease_holder": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lease_until": {
+          "type": "integer"
+        },
+        "waiter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drained_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lane",
+        "version",
+        "lease_holder",
+        "lease_until",
+        "waiter",
+        "drained_id"
+      ],
+      "type": "object"
+    },
+    "MetricsMetadata": {
+      "properties": {
+        "model_name": {
+          "type": "string"
+        },
+        "model_provider": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MetricsReport": {
+      "properties": {
+        "started_speaking_at": {
+          "type": "number"
+        },
+        "stopped_speaking_at": {
+          "type": "number"
+        },
+        "transcription_delay": {
+          "type": "number"
+        },
+        "end_of_turn_delay": {
+          "type": "number"
+        },
+        "on_user_turn_completed_delay": {
+          "type": "number"
+        },
+        "llm_node_ttft": {
+          "type": "number"
+        },
+        "llm_node_tps": {
+          "type": "number"
+        },
+        "llm_node_ttfs": {
+          "type": "number"
+        },
+        "tts_node_ttfb": {
+          "type": "number"
+        },
+        "playback_latency": {
+          "type": "number"
+        },
+        "e2e_latency": {
+          "type": "number"
+        },
+        "provider_request_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "llm_metadata": {
+          "$ref": "#/$defs/MetricsMetadata"
+        },
+        "tts_metadata": {
+          "$ref": "#/$defs/MetricsMetadata"
+        },
+        "stt_metadata": {
+          "$ref": "#/$defs/MetricsMetadata"
+        }
+      },
+      "type": "object"
+    },
+    "SessionRow": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "agentName": {
+          "type": "string"
+        },
+        "sub": {
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "region": {
+          "default": "",
+          "type": "string"
+        },
+        "databaseId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "lastActive": {
+          "type": "number"
+        },
+        "expiresAt": {
+          "type": "number"
+        },
+        "idleTtlSeconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sessionId",
+        "agentName",
+        "sub",
+        "attributes",
+        "databaseId",
+        "createdAt",
+        "lastActive",
+        "expiresAt",
+        "idleTtlSeconds"
+      ],
+      "type": "object"
+    },
+    "StreamAvailability": {
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "url",
+        "available"
+      ],
+      "type": "object"
+    },
+    "TaskData": {
+      "description": "The `data` column: the A2A `Task` fields a row keeps, as v1 protobuf JSON; an absent field is\nleft out.",
+      "properties": {
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "artifacts": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Artifact"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status_message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Message"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TaskRow": {
+      "description": "One A2A task of a lane. The A2A `Task` is\n`id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,\nplus the fields of `data`.",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "submitted",
+            "working",
+            "input-required",
+            "completed",
+            "failed",
+            "canceled",
+            "rejected"
+          ],
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "integer"
+        },
+        "data": {
+          "$ref": "#/$defs/TaskData"
+        },
+        "ask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ask"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "lane",
+        "seq",
+        "name",
+        "message_id",
+        "status",
+        "updated_at",
+        "data",
+        "ask"
+      ],
+      "type": "object"
+    },
+    "StreamResponse": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "statusUpdate": {
+          "$ref": "#/$defs/TaskStatusUpdateEvent"
+        },
+        "artifactUpdate": {
+          "$ref": "#/$defs/TaskArtifactUpdateEvent"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "task"
+              ]
+            },
+            {
+              "required": [
+                "message"
+              ]
+            },
+            {
+              "required": [
+                "statusUpdate"
+              ]
+            },
+            {
+              "required": [
+                "artifactUpdate"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status"
+      ]
+    },
+    "TaskStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "TASK_STATE_UNSPECIFIED",
+            "TASK_STATE_SUBMITTED",
+            "TASK_STATE_WORKING",
+            "TASK_STATE_COMPLETED",
+            "TASK_STATE_FAILED",
+            "TASK_STATE_CANCELED",
+            "TASK_STATE_INPUT_REQUIRED",
+            "TASK_STATE_REJECTED",
+            "TASK_STATE_AUTH_REQUIRED"
+          ]
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "ROLE_UNSPECIFIED",
+            "ROLE_USER",
+            "ROLE_AGENT"
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "referenceTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "messageId",
+        "role",
+        "parts"
+      ]
+    },
+    "Part": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "data": {
+          "tsType": "unknown"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "filename": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "raw"
+              ]
+            },
+            {
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "required": [
+                "data"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "parts"
+      ]
+    },
+    "TaskStatusUpdateEvent": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "contextId",
+        "status"
+      ]
+    },
+    "TaskArtifactUpdateEvent": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "contextId": {
+          "type": "string"
+        },
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "append": {
+          "type": "boolean"
+        },
+        "lastChunk": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "contextId",
+        "artifact"
+      ]
+    }
+  },
+  "properties": {
+    "fetchedAt": {
+      "type": "integer"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionRow"
+    },
+    "database": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DatabaseDump"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "databaseError": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "streams": {
+      "$ref": "#/$defs/StreamAvailability"
+    }
+  },
+  "required": [
+    "fetchedAt",
+    "session",
+    "streams"
+  ],
+  "type": "object"
+}
