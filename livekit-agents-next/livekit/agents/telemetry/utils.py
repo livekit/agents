@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
+from .. import _core
 from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
 from . import trace_types
 
@@ -14,7 +15,10 @@ if TYPE_CHECKING:
     pass
 
 
-REDACTED_EXCEPTION_MESSAGE = "exception details redacted"
+_, REDACTED_EXCEPTION_MESSAGE = _core._core_TelemetryPolicy(False, False, False).attribute_action(
+    None, "exception.message", True
+)
+assert isinstance(REDACTED_EXCEPTION_MESSAGE, str)
 
 _ALLOW_PII_ENV_VAR = "LIVEKIT_TELEMETRY_ALLOW_PII"
 _FALSY = ("0", "false", "no", "off")

@@ -18,29 +18,44 @@ from typing import Any, Protocol
 from ._generated._core_a2a import (
     AgentClient as AgentClient,
     Reply as Reply,
-    _core_RemoteInteraction as _core_RemoteInteraction,
-    _core_remote_token as _core_remote_token,
     _core_a2a_agent_card as _core_a2a_agent_card,
-    _core_Credentials as _core_Credentials,
     _core_auth_grant_allows as _core_auth_grant_allows,
+    _core_Credentials as _core_Credentials,
+    _core_remote_token as _core_remote_token,
+    _core_RemoteInteraction as _core_RemoteInteraction,
 )
 from ._generated._core_agent import *  # noqa: F401, F403
 from ._generated._core_classes import *  # noqa: F401, F403
-from ._generated._core_classes import ChatItem, StartJobFields
+from ._generated._core_classes import (
+    ChatItem,
+    StartJobFields,
+    _core_session_chat_record as _core_session_chat_record,
+)
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
 from ._generated._core_recorder import *  # noqa: F401, F403
-from ._generated._core_telemetry import *  # noqa: F401, F403
-from ._generated._core_telemetry import (
-    _core_SessionReportUpload as _core_SessionReportUpload,
-    _core_TelemetryWorker as _core_TelemetryWorker,
-    _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
-)
 from ._generated._core_storage import *  # noqa: F401, F403
 from ._generated._core_storage import _core_ContextActivation as _core_ContextActivation
-from ._generated.storage_context import ContextScope, ContextScopeWrite
+from ._generated._core_telemetry import *  # noqa: F401, F403
+from ._generated._core_telemetry import (
+    _core_EventRetention as _core_EventRetention,
+    _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
+    _core_PreparedTranscript as _core_PreparedTranscript,
+    _core_SessionReportUpload as _core_SessionReportUpload,
+    _core_TelemetryPolicy as _core_TelemetryPolicy,
+    _core_TelemetryWorker as _core_TelemetryWorker,
+)
 from ._generated._core_worker import *  # noqa: F401, F403
-from ._generated.storage_class import EventRow, InboxRow, StreamInfo, ItemRow, LaneRow, TaskPage, TaskRecord
+from ._generated.storage_class import (
+    EventRow,
+    InboxRow,
+    ItemRow,
+    LaneRow,
+    StreamInfo,
+    TaskPage,
+    TaskRecord,
+)
+from ._generated.storage_context import ContextScope, ContextScopeWrite
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.storage_turn import TurnContext, TurnResult
 from ._generated.worker_options import ServerOptions

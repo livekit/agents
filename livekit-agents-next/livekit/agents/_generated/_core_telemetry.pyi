@@ -6,7 +6,78 @@
 from __future__ import annotations
 
 from .._core import ChatItem
-from .telemetry import TelemetryWorkObservation
+from .telemetry import TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
+
+class _core_TelemetryPolicy:
+    """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
+    def __init__(self, allow_pii: bool, capture_content: bool, project_redaction: bool) -> None: ...
+    @property
+    def redacted(self) -> bool: ...
+    @property
+    def max_depth(self) -> int: ...
+    @property
+    def max_collection(self) -> int: ...
+    @property
+    def max_events(self) -> int: ...
+    @property
+    def max_record_bytes(self) -> int: ...
+    @property
+    def max_pending(self) -> int: ...
+    @property
+    def max_records(self) -> int: ...
+    @property
+    def batch_items(self) -> int: ...
+    @property
+    def schedule_delay_millis(self) -> int: ...
+    @property
+    def export_timeout_millis(self) -> int: ...
+    @property
+    def max_providers(self) -> int: ...
+    @property
+    def shutdown_timeout_seconds(self) -> float: ...
+    @property
+    def report_retained_bytes(self) -> int: ...
+    @property
+    def upload_timeout_seconds(self) -> float: ...
+    def export_action(
+        self,
+        registered: bool,
+        signal_enabled: bool,
+        job_open: bool,
+        held_count: int,
+        recording_disabled: bool,
+    ) -> TelemetryExportAction:
+        """The destination may export, hold, drop, refuse capacity or stop after recording is disabled."""
+    def is_pii_attribute(self, key: str) -> bool: ...
+    def attribute_action(
+        self,
+        parent: str | None,
+        key: str,
+        destination: bool,
+    ) -> tuple[bool, str | None]:
+        """Whether to keep the field and, if present, the replacement for its value."""
+    def keep_event(self, name: str) -> bool: ...
+    def log_body(self, safe_body: bool, body: str | None) -> str | None:
+        """A replacement body, or None to snapshot the original SDK value."""
+    def status_description(self, is_error: bool, description: str | None) -> str | None: ...
+    def value_bytes(
+        self,
+        kind: TelemetryValueKind,
+        length: int,
+        depth: int,
+        children: list[int],
+    ) -> int:
+        """Conservative retained bytes for an SDK scalar or collection. Child charges are already
+        bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
+        """
+    def record_bytes(
+        self,
+        kind: TelemetryRecordKind,
+        fields: list[int],
+        event_count: int,
+        link_count: int,
+    ) -> int:
+        """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
 
 class LoopMonitor:
     """A loop's watchdog: runtime owns thresholds, timing, admission and cleanup, while the host
@@ -33,6 +104,25 @@ class LoopMonitor:
 
 def _core_loop_monitor_thresholds_from_env() -> tuple[float, float] | None: ...
 
+class _core_EventRetention:
+    """Bounded retention of a session report's host event snapshots. The native policy retains only
+    byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
+    """
+    def __init__(self, capture_content: bool) -> None: ...
+    def claim(self, job_id: str) -> None:
+        """Bind report access to the first job that starts the session. Ownership cannot transfer."""
+    def allows_read(self, job_id: str) -> bool:
+        """Sessions started outside a job retain their existing application-owned access contract."""
+    def accepts(self, kind: str, redaction: bool) -> bool:
+        """Reject content without creation-time consent, unknown schemas and live-object events."""
+    def admit(self, retained_bytes: int, now_ns: int) -> tuple[int, bool]:
+        """Expire old entries, then admit only within the item and byte budgets. The adapter removes
+        exactly the returned prefix before appending the newly admitted snapshot.
+        """
+    def expire(self, now_ns: int) -> int: ...
+    @property
+    def diagnostics(self) -> list[tuple[str, int]]: ...
+
 class _core_SessionReportUpload:
     """Credentials for the session recording endpoint and host OTLP exporters."""
     def __init__(self, api_key: str, api_secret: str) -> None: ...
@@ -47,10 +137,6 @@ class _core_SessionReportUpload:
     ) -> tuple[bool, bool]:
         """Recording options are explicit consent for audio; transcript also requires GenAI content
         capture. Project redaction excludes both raw content formats.
-        """
-    async def transcript(self, items: list[ChatItem]) -> str:
-        """Project and serialize a native history on bounded runtime workers, with no host objects
-        or Python JSON allocation on the session loop.
         """
     async def upload(
         self,
@@ -67,6 +153,23 @@ class _core_SessionReportUpload:
         """Returns false only when the project disabled recording. Export failures are reported once
         to the caller, which decides where to surface them without failing the conversation.
         """
+
+class _core_PreparedTranscript:
+    """Incremental report preparation. Host adapters admit one item's shape before conversion and
+    append it from admitted SDK work; no whole-history extraction crosses a binding call.
+    """
+    def __init__(self) -> None: ...
+    @property
+    def input_batch_size(self) -> int:
+        """Maximum items per SDK callback before the adapter returns control to its event loop."""
+    def content_policy(self) -> tuple[bool, bool]:
+        """Which media parts belong to the transcript's native projection (image, audio)."""
+    def check_input(self, items: int, item_bytes: int) -> None:
+        """Validate host collection lengths and the shared retained-byte verdict before converting an
+        item's fields. These scalar facts cannot allocate an unbounded native item.
+        """
+    def append(self, item: ChatItem) -> None: ...
+    def finish(self) -> str: ...
 
 class _core_TelemetryWorker:
     """Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling."""

@@ -41,11 +41,6 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
         redaction_enabled: bool,
     ) -> (bool, bool);
 
-    /// Project and serialize a native history on bounded runtime workers, with no host objects
-    /// or Python JSON allocation on the session loop.
-    #[host(await)]
-    async fn transcript(&self, items: Vec<crate::ChatItem>) -> Result<String, UploadError>;
-
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
     #[host(await)]
@@ -62,4 +57,31 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
         audio_path: Option<String>,
         disabled: bool,
     ) -> Result<bool, UploadError>;
+}
+
+/// Incremental report preparation. Host adapters admit one item's shape before conversion and
+/// append it from admitted SDK work; no whole-history extraction crosses a binding call.
+#[crate::host(class(name = "_core_PreparedTranscript"))]
+pub trait PreparedTranscript: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Result<Self, UploadError>;
+
+    /// Maximum items per SDK callback before the adapter returns control to its event loop.
+    #[host(getter)]
+    fn input_batch_size(&self) -> usize;
+
+    /// Which media parts belong to the transcript's native projection (image, audio).
+    #[host(call)]
+    fn content_policy(&self) -> (bool, bool);
+
+    /// Validate host collection lengths and the shared retained-byte verdict before converting an
+    /// item's fields. These scalar facts cannot allocate an unbounded native item.
+    #[host(call)]
+    fn check_input(&self, items: usize, item_bytes: usize) -> Result<(), UploadError>;
+
+    #[host(call)]
+    fn append(&self, item: crate::ChatItem) -> Result<(), UploadError>;
+
+    #[host(call)]
+    fn finish(&self) -> Result<String, UploadError>;
 }

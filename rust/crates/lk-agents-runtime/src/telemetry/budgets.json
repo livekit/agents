@@ -1,10 +1,49 @@
 {
-  "sdk_records": {"items": 64, "bytes": 8388608, "record_bytes": 65536, "batch_items": 16},
-  "cleanup_work": {"workers": 4, "pending": 64, "observations": 64, "bytes": 8388608},
-  "sdk_destinations": {"tracer_providers": 4, "log_export_workers": 1, "metric_readers": 1},
-  "uploads": {"concurrent": 2, "transcript_bytes": 2097152, "chunk_bytes": 65536, "response_bytes": 65536, "timeout_seconds": 900, "attempts": 4},
-  "watchdogs": {"concurrent": 32, "samples_per_incident": 2, "stop_observation_seconds": 1},
-  "metrics": {"series": 1024, "labels": 8, "label_bytes": 256},
+  "session_events": {
+    "items": 1024,
+    "bytes": 1048576,
+    "record_bytes": 65536,
+    "retention_seconds": 3600
+  },
+  "sdk_records": {
+    "items": 64,
+    "bytes": 8388608,
+    "record_bytes": 65536,
+    "batch_items": 16
+  },
+  "cleanup_work": {
+    "workers": 4,
+    "pending": 64,
+    "observations": 64,
+    "bytes": 8388608
+  },
+  "sdk_destinations": {
+    "tracer_providers": 4,
+    "log_export_workers": 1,
+    "metric_readers": 1
+  },
+  "uploads": {
+    "concurrent": 2,
+    "transcript_bytes": 2097152,
+    "chunk_bytes": 65536,
+    "response_bytes": 65536,
+    "timeout_seconds": 900,
+    "attempts": 4,
+    "transcript_items": 10000,
+    "transcript_item_bytes": 65536,
+    "input_batch_items": 1,
+    "measured_concurrent_preparations": 1
+  },
+  "watchdogs": {
+    "concurrent": 32,
+    "samples_per_incident": 2,
+    "stop_observation_seconds": 1
+  },
+  "metrics": {
+    "series": 1024,
+    "labels": 8,
+    "label_bytes": 256
+  },
   "validation_workloads": [
     "8192 insert refusals at observation capacity, including disabled capacity",
     "64 queued SDK callbacks and a stalled worker; repeat cleanup deadlines without new workers",

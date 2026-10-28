@@ -1,4 +1,5 @@
 from . import loop_monitor, metrics, trace_types, utils
+from ._export import diagnostics
 from .traces import (
     DescribesOptions,
     RedactingLogExporter,
@@ -12,6 +13,7 @@ from .traces import (
 )
 
 __all__ = [
+    "diagnostics",
     "DescribesOptions",
     "RedactingSpanExporter",
     "RedactingLogExporter",

@@ -23,9 +23,16 @@ Cloud tracing and logs remain independently available.
 
 Framework SDK queues admit records by count and estimated bytes before batching. Native
 cleanup work retains capacity until settlement, including after timeout. Read
-`_core._core_TelemetryWorker().diagnostics` for nonrecursive drop/failure/cleanup counters.
-`drain_observations()` returns typed cleanup outcomes with captured work identity.
+`telemetry.diagnostics()` for nonrecursive drop/failure/cleanup counters.
 The native runtime's `telemetry/budgets.json` records the limits and validation workloads.
+Destination wrappers reject oversized records with an exporter failure and an observable drop.
+
+Session-report events retain at most 1,024 snapshots/1 MiB, with 64 KiB per event
+and one-hour expiry on access. Session creation captures content consent; project
+redaction narrows it. Events containing live objects are omitted from reports.
+A report for a session started in a job is readable only by that job.
+Job-end report creation, metric folding and console writes run on bounded native workers.
+`JobContext.make_session_report()` returns a synchronous detached snapshot.
 
 Run `uv run pytest tests/test_telemetry_destinations.py --unit` for destination isolation,
 capture consent and provider behavior. Run `cargo test -p lk-agents-runtime telemetry`

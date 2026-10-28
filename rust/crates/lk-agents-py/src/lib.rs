@@ -54,6 +54,9 @@ impl generated::Implementations for Selected {
     type McpTools = lk_agents_runtime::mcp::McpTools;
     type WorkerCli = lk_agents_worker::cli::WorkerCli;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
+    type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;
+    type EventRetention = lk_agents_runtime::telemetry::observation::EventRetention;
+    type PreparedTranscript = lk_agents_runtime::telemetry::upload::TranscriptBuilder;
     type TelemetryWorker = lk_agents_runtime::telemetry::work::SdkWorker;
     type SessionReportUpload = lk_agents_runtime::telemetry::upload::SessionReportUploader;
     type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;

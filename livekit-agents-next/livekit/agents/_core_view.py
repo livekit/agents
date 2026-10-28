@@ -19,7 +19,7 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from . import _core, llm
-from .llm.chat_context import AudioContent, ChatItem, ImageContent
+from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
 from .llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -425,11 +425,13 @@ def offered_tools(pool: Sequence[Tool | Toolset], names: Sequence[str]) -> list[
 _ITEM = TypeAdapter(ChatItem)
 
 
-def to_core_item(item: ChatItem) -> _core.ChatItem:
-    fields = item.model_dump(exclude={"type"})
+def to_core_item(item: ChatItem, *, content: Sequence[ChatContent] | None = None) -> _core.ChatItem:
+    fields = item.model_dump(exclude={"type", "content"} if item.type == "message" else {"type"})
     match item.type:
         case "message":
-            fields["content"] = [_to_core_content(c) for c in item.content]
+            fields["content"] = [
+                _to_core_content(c) for c in (item.content if content is None else content)
+            ]
             return _core.ChatItem.message(**fields)
         case "function_call":
             return _core.ChatItem.function_call(**fields)

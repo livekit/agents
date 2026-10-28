@@ -3,6 +3,7 @@
 //! are flat and log attributes are not; don't unify them, the type rejects a nested span attribute.
 
 pub mod provider;
+pub mod policy;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// OTel JS's `HrTime`.

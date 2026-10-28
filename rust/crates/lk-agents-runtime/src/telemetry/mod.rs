@@ -2,6 +2,7 @@
 
 pub mod loop_monitor;
 pub mod observation;
+pub mod policy;
 pub mod upload;
 mod upload_policy;
 pub mod work;

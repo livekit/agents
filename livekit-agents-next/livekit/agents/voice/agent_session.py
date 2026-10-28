@@ -14,6 +14,7 @@ import contextvars
 import inspect
 import time
 import weakref
+from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,8 +48,9 @@ from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
 from ..telemetry import trace_types
+from ..telemetry._export import attribute_bytes, policy
 from ..telemetry.metrics import collect_usage, record_span_metric
-from ..telemetry.traces import tracer
+from ..telemetry.traces import capture_content_enabled, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -254,7 +256,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._output = io.AgentOutput(self)
         # what a job's session report reads
         self._started_at: float | None = None
-        self._recorded_events: list[AgentEvent] = []
+        self._event_snapshots: deque[AgentEvent] = deque()
+        self._event_retention = _core._core_EventRetention(capture_content_enabled())
         self._recording_options: RecordingOptions = {
             "audio": False,
             "traces": False,
@@ -405,6 +408,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
         console = ConsoleCall.claim()
         job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
+            self._event_retention.claim(job_ctx.job.id)
         if console is not None:
             room = _core.OfflineRoom("console")
         elif not is_given(room):
@@ -1071,8 +1076,26 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
         return super().on(event, callback)
 
+    @property
+    def _recorded_events(self) -> list[AgentEvent]:
+        expired = self._event_retention.expire(time.monotonic_ns())
+        for _ in range(expired):
+            self._event_snapshots.popleft()
+        return [
+            event.model_copy(deep=True)
+            for event in self._event_snapshots
+            if self._event_retention.accepts(event.type, self._recording_options["redaction"])
+        ]
+
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
-        self._recorded_events.append(arg)
+        if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
+            charge = attribute_bytes(arg)
+            snapshot = arg.model_copy(deep=True) if charge <= policy().max_record_bytes else None
+            expired, admitted = self._event_retention.admit(charge, time.monotonic_ns())
+            for _ in range(expired):
+                self._event_snapshots.popleft()
+            if admitted and snapshot is not None:
+                self._event_snapshots.append(snapshot)
         super().emit(event, arg)
 
 

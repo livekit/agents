@@ -2,6 +2,8 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/telemetry/policy.rs
+#     rust/crates/lk-agents-abi/src/telemetry/report/records.rs
 #     rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs
 #     rust/crates/lk-agents-abi/src/telemetry/work.rs
 
@@ -9,6 +11,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
+
+TelemetryValueKind: TypeAlias = Literal["scalar", "integer", "string", "bytes", "mapping", "sequence", "unsupported"]
+
+
+TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope", "value"]
+
+
+TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity", "disabled"]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class LogRecordWire:
+    """A [`LogRecord`] as the dict `_upload_session_report` hands `logger.emit`: one integer of epoch
+    nanos, where the log handler's records carry an `HrTime` pair.
+    """
+
+    logger: str
+    body: str
+    timestamp_nanos: int
+    severity_number: int
+    severity_text: str
+    attributes: dict[str, object]
+
 
 LoopBlockSeverity: TypeAlias = Literal["warning", "error"]
 

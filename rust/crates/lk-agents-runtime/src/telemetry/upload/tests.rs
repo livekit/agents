@@ -171,8 +171,13 @@ async fn ten_thousand_item_session_reports_serialize_without_stalling_the_loop()
             ))
         })
         .collect();
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
-    let work = uploader.transcript(items);
+    let builder = TranscriptBuilder::new().unwrap();
+    let work = tokio::task::spawn_blocking(move || {
+        for item in items {
+            builder.append(item).unwrap();
+        }
+        builder.finish()
+    });
     tokio::pin!(work);
     let cadence = Duration::from_millis(20);
     let mut heartbeat = tokio::time::interval(Duration::from_millis(1));
@@ -184,7 +189,7 @@ async fn ten_thousand_item_session_reports_serialize_without_stalling_the_loop()
         tokio::select! {
             result = &mut work => {
                 worst = worst.max(tokio::time::Instant::now().duration_since(previous));
-                break result.unwrap();
+                break result.unwrap().unwrap();
             },
             _ = heartbeat.tick() => {
                 let now = tokio::time::Instant::now();
@@ -204,6 +209,7 @@ async fn ten_thousand_item_session_reports_serialize_without_stalling_the_loop()
 
 #[test]
 fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversize_content() {
+    let _serial = UPLOAD_TESTS.blocking_lock();
     use lk_agents_abi::{ChatContent, ChatContext, ChatItem, ChatMessage, Role, ToDictOptions};
     let message = |text: String| {
         ChatItem::Message(ChatMessage::new(
@@ -220,11 +226,18 @@ fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversi
             &Default::default(),
         )
         .unwrap();
-    let actual: serde_json::Value =
-        serde_json::from_str(&serialize_transcript(&items).unwrap()).unwrap();
+    let actual: serde_json::Value = {
+        let builder = TranscriptBuilder::new().unwrap();
+        for item in items {
+            builder.append(item).unwrap();
+        }
+        serde_json::from_str(&builder.finish().unwrap()).unwrap()
+    };
     assert_eq!(actual, expected);
-    let error = serialize_transcript(&[message("x".repeat(TRANSCRIPT_BYTES))]).unwrap_err();
-    assert!(error.0.contains("2 MiB"));
+    let builder = TranscriptBuilder::new().unwrap();
+    let error = builder.append(message("x".repeat(TRANSCRIPT_ITEM_BYTES))).unwrap_err();
+    assert!(error.0.contains("64 KiB"));
+    assert!(builder.finish().is_err(), "an overflow must never upload a partial transcript");
 }
 
 #[tokio::test]
@@ -287,4 +300,48 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
     let second = super::super::work::try_admit_upload(1).expect("second upload slot remains free");
     assert!(super::super::work::try_admit_upload(1).is_none());
     drop((first, second));
+}
+
+#[test]
+fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_finish() {
+    use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
+    let _serial = UPLOAD_TESTS.blocking_lock();
+    let message = || {
+        ChatItem::Message(ChatMessage::new(
+            "item",
+            Role::User,
+            vec![ChatContent::Text("x".repeat(32 * 1024))],
+            std::time::UNIX_EPOCH,
+        ))
+    };
+    let builder = TranscriptBuilder::new().unwrap();
+    let mut appended = 0;
+    loop {
+        match builder.append(message()) {
+            Ok(()) => appended += 1,
+            Err(error) => {
+                assert!(error.0.contains("2 MiB"), "{error}");
+                break;
+            }
+        }
+    }
+    assert!(appended > 1 && appended < 64);
+    assert!(builder.finish().is_err());
+    drop(builder);
+    let builder = TranscriptBuilder::new().unwrap();
+    assert_eq!(builder.finish().unwrap(), "{\"items\":[]}");
+    assert!(builder.append(message()).unwrap_err().0.contains("already finished"));
+}
+
+#[test]
+fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_output() {
+    let _serial = UPLOAD_TESTS.blocking_lock();
+    let builder = TranscriptBuilder::new().unwrap();
+    builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES).unwrap();
+    assert!(builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES + 1).is_err());
+    assert!(builder.finish().is_err());
+    drop(builder);
+    let builder = TranscriptBuilder::new().unwrap();
+    assert!(builder.check_input(TRANSCRIPT_ITEMS + 1, 0).is_err());
+    assert!(builder.finish().is_err());
 }

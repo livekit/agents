@@ -1,13 +1,16 @@
 //! Bounded recording uploads: small transcript bodies and streamed recording files, using the
 //! process telemetry admission budget. Cancelling an upload drops its async transport and file.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::telemetry::report::UploadGate;
-use lk_agents_abi::telemetry::upload::{RecordingUpload, SessionReportUpload, UploadError};
+use lk_agents_abi::telemetry::upload::{
+    PreparedTranscript, RecordingUpload, SessionReportUpload, UploadError,
+};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 use tokio::io::AsyncReadExt;
@@ -17,7 +20,8 @@ use super::upload_policy::{UploadOutcome, UploadPolicy};
 const CHUNK_BYTES: usize = 64 * 1024;
 const TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
 const RESPONSE_BYTES: usize = 64 * 1024;
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(900);
+const UPLOAD_TIMEOUT: Duration =
+    Duration::from_secs(lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS);
 
 pub struct SessionReportUploader {
     api_key: String,
@@ -52,26 +56,13 @@ impl SessionReportUpload for SessionReportUploader {
         redaction_enabled: bool,
     ) -> (bool, bool) {
         (
-            !redaction_enabled && transcript_requested && capture_content,
+            transcript_requested
+                && lk_agents_abi::telemetry::policy::content_allowed(
+                    capture_content,
+                    redaction_enabled,
+                ),
             !redaction_enabled && audio_requested,
         )
-    }
-
-    async fn transcript(&self, items: Vec<lk_agents_abi::ChatItem>) -> Result<String, UploadError> {
-        let permit = super::work::try_admit_upload(TRANSCRIPT_BYTES)
-            .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
-        let handle = crate::process::handle().map_err(upload_error)?;
-        let join = handle.spawn_blocking(move || {
-            let _permit = permit;
-            serialize_transcript(&items)
-        });
-        let (reply, answer) = tokio::sync::oneshot::channel();
-        // The supervisor observes the blocking job even if its host caller is cancelled.
-        handle.spawn(async move {
-            let result = join.await.map_err(upload_error).and_then(|result| result);
-            let _ = reply.send(result);
-        });
-        answer.await.map_err(upload_error)?
     }
 
     async fn upload(
@@ -293,48 +284,152 @@ fn retry_delay(body: &[u8]) -> Option<u64> {
     None
 }
 
-fn serialize_transcript(items: &[lk_agents_abi::ChatItem]) -> Result<String, UploadError> {
-    #[derive(serde::Serialize)]
-    struct Transcript<'a> {
-        items: TranscriptItems<'a>,
+const TRANSCRIPT_ITEMS: usize = 10_000;
+const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
+
+/// Retains only bounded JSON, rather than a second copy of every native chat item.
+pub struct TranscriptBuilder {
+    state: Mutex<TranscriptState>,
+    _permit: super::work::WorkPermit,
+}
+
+struct TranscriptState {
+    bytes: Vec<u8>,
+    items: usize,
+    input_items: usize,
+    failure: Option<String>,
+    finished: bool,
+}
+
+impl PreparedTranscript for TranscriptBuilder {
+    fn new() -> Result<Self, UploadError> {
+        let permit = super::work::try_admit_upload(TRANSCRIPT_BYTES)
+            .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
+        let mut bytes = Vec::with_capacity(TRANSCRIPT_BYTES);
+        bytes.extend_from_slice(b"{\"items\":[");
+        Ok(Self {
+            state: Mutex::new(TranscriptState {
+                bytes,
+                items: 0,
+                input_items: 0,
+                failure: None,
+                finished: false,
+            }),
+            _permit: permit,
+        })
     }
-    struct TranscriptItems<'a>(&'a [lk_agents_abi::ChatItem]);
-    impl serde::Serialize for TranscriptItems<'_> {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            use serde::ser::{Error, SerializeSeq};
-            let options =
-                lk_agents_abi::ToDictOptions { exclude_timestamp: false, ..Default::default() };
-            let mut sequence = serializer.serialize_seq(None)?;
-            for item in self.0 {
-                if let Some(item) = lk_agents_abi::item_to_dict(item, &options, &Default::default())
-                    .map_err(S::Error::custom)?
-                {
-                    sequence.serialize_element(&item)?;
-                }
-            }
-            sequence.end()
-        }
+
+    fn input_batch_size(&self) -> usize {
+        1
     }
-    struct BoundedWriter(Vec<u8>);
-    impl std::io::Write for BoundedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() > TRANSCRIPT_BYTES.saturating_sub(self.0.len()) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::FileTooLarge,
-                    "session transcript exceeds the 2 MiB upload limit",
-                ));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
+
+    fn content_policy(&self) -> (bool, bool) {
+        let options = transcript_options();
+        (!options.exclude_image, !options.exclude_audio)
     }
-    let mut output = BoundedWriter(Vec::with_capacity(TRANSCRIPT_BYTES));
-    serde_json::to_writer(&mut output, &Transcript { items: TranscriptItems(items) })
-        .map_err(upload_error)?;
-    String::from_utf8(output.0).map_err(upload_error)
+
+    fn check_input(&self, items: usize, item_bytes: usize) -> Result<(), UploadError> {
+        let failure = if items > TRANSCRIPT_ITEMS {
+            Some("session transcript exceeds the 10000 item limit")
+        } else if item_bytes > TRANSCRIPT_ITEM_BYTES {
+            Some("session transcript item exceeds the 64 KiB input limit")
+        } else {
+            None
+        };
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.finished {
+            return Err(UploadError("session transcript is already finished".into()));
+        }
+        if let Some(failure) = failure {
+            state.failure = Some(failure.into());
+            state.bytes.clear();
+        }
+        if let Some(failure) = &state.failure { Err(UploadError(failure.clone())) } else { Ok(()) }
+    }
+
+    fn append(&self, item: lk_agents_abi::ChatItem) -> Result<(), UploadError> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(failure) = &state.failure {
+            return Err(UploadError(failure.clone()));
+        }
+        if state.finished {
+            return Err(UploadError("session transcript is already finished".into()));
+        }
+        let result = append_item(&mut state, &item);
+        if let Err(error) = &result {
+            state.failure = Some(error.0.clone());
+            state.bytes.clear();
+        }
+        result
+    }
+
+    fn finish(&self) -> Result<String, UploadError> {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(failure) = &state.failure {
+            return Err(UploadError(failure.clone()));
+        }
+        if !state.finished {
+            state.bytes.extend_from_slice(b"]}");
+            state.finished = true;
+        }
+        String::from_utf8(state.bytes.clone()).map_err(upload_error)
+    }
+}
+
+fn transcript_options() -> lk_agents_abi::ToDictOptions {
+    lk_agents_abi::ToDictOptions { exclude_timestamp: false, ..Default::default() }
+}
+
+fn append_item(
+    state: &mut TranscriptState,
+    item: &lk_agents_abi::ChatItem,
+) -> Result<(), UploadError> {
+    if state.input_items >= TRANSCRIPT_ITEMS {
+        return Err(UploadError("session transcript exceeds the 10000 item limit".into()));
+    }
+    state.input_items += 1;
+    let options = transcript_options();
+    let Some(projected) =
+        lk_agents_abi::item_to_dict(item, &options, &Default::default()).map_err(upload_error)?
+    else {
+        return Ok(());
+    };
+    let mut item = BoundedWriter { bytes: Vec::new(), limit: TRANSCRIPT_ITEM_BYTES };
+    serde_json::to_writer(&mut item, &projected).map_err(upload_error)?;
+    let separator = usize::from(state.items > 0);
+    if item.bytes.len().saturating_add(separator + 2)
+        > TRANSCRIPT_BYTES.saturating_sub(state.bytes.len())
+    {
+        return Err(UploadError("session transcript exceeds the 2 MiB upload limit".into()));
+    }
+    if separator > 0 {
+        state.bytes.push(b',');
+    }
+    state.bytes.extend_from_slice(&item.bytes);
+    state.items += 1;
+    Ok(())
+}
+
+struct BoundedWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl std::io::Write for BoundedWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "session transcript item exceeds the 64 KiB input limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

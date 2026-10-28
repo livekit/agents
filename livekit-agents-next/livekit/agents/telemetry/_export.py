@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import contextvars
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import Future
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import replace
-from typing import cast
+from functools import cache
+from typing import TypeVar, cast
 
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
 from opentelemetry.sdk._logs.export import (
@@ -25,6 +27,7 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+from pydantic import BaseModel
 
 from .. import _core
 
@@ -44,7 +47,11 @@ def export_context() -> Iterator[None]:
         _exporting.reset(token)
 
 
-_MAX_RECORD_BYTES = 64 * 1024
+@cache
+def policy() -> _core._core_TelemetryPolicy:
+    return _core._core_TelemetryPolicy(False, False, False)
+
+
 _worker: _core._core_TelemetryWorker | None = None
 _worker_lock = threading.Lock()
 
@@ -58,76 +65,123 @@ def worker() -> _core._core_TelemetryWorker:
 
 
 def attribute_bytes(value: object, *, depth: int = 0) -> int:
-    """Conservative retained-byte charge, refusing unbounded host SDK payloads."""
-    if depth > 4:
-        return _MAX_RECORD_BYTES + 1
-    if value is None or isinstance(value, (bool, int, float)):
-        return 32
+    """Read bounded SDK object shape; native policy owns every retention charge."""
+    native = policy()
+    if depth > native.max_depth:
+        return native.value_bytes("unsupported", 0, depth, [])
+    if value is None or isinstance(value, (bool, float)):
+        return native.value_bytes("scalar", 0, depth, [])
+    if isinstance(value, int):
+        return native.value_bytes("integer", value.bit_length(), depth, [])
     if isinstance(value, str):
-        return 64 + len(value) * 4
+        return native.value_bytes("string", len(value), depth, [])
     if isinstance(value, bytes):
-        return 64 + len(value)
-    if isinstance(value, Mapping):
-        if len(value) > 128:
-            return _MAX_RECORD_BYTES + 1
-        total = 128
-        for key, item in value.items():
-            total += attribute_bytes(key, depth=depth + 1)
-            total += attribute_bytes(item, depth=depth + 1)
-            if total > _MAX_RECORD_BYTES:
-                break
-        return total
+        return native.value_bytes("bytes", len(value), depth, [])
+    children: list[int] = []
+    mappings: tuple[tuple[int, Iterable[tuple[object, object]]], ...] | None = None
+    if isinstance(value, BaseModel):
+        mappings = tuple(
+            (len(mapping), mapping.items())
+            for mapping in (value.__dict__, value.__pydantic_extra__, value.__pydantic_private__)
+            if mapping is not None
+        )
+    elif isinstance(value, Mapping):
+        mappings = ((len(value), value.items()),)
+    if mappings is not None:
+        length = sum(size for size, _ in mappings)
+        if length <= native.max_collection:
+            for _, entries in mappings:
+                for key, item in entries:
+                    children.extend(
+                        (
+                            attribute_bytes(key, depth=depth + 1),
+                            attribute_bytes(item, depth=depth + 1),
+                        )
+                    )
+                    if (
+                        native.value_bytes("mapping", length, depth, children)
+                        > native.max_record_bytes
+                    ):
+                        return native.value_bytes("mapping", length, depth, children)
+        return native.value_bytes("mapping", length, depth, children)
     if isinstance(value, Sequence):
-        if len(value) > 128:
-            return _MAX_RECORD_BYTES + 1
-        total = 64
-        for item in value:
-            total += attribute_bytes(item, depth=depth + 1)
-            if total > _MAX_RECORD_BYTES:
-                break
-        return total
-    return _MAX_RECORD_BYTES + 1
+        if len(value) <= native.max_collection:
+            for item in value:
+                children.append(attribute_bytes(item, depth=depth + 1))
+                if (
+                    native.value_bytes("sequence", len(value), depth, children)
+                    > native.max_record_bytes
+                ):
+                    break
+        return native.value_bytes("sequence", len(value), depth, children)
+    return native.value_bytes("unsupported", 0, depth, [])
 
 
 def scope_bytes(scope: InstrumentationScope | None) -> int:
     if scope is None:
         return 0
-    return (
-        128
-        + attribute_bytes(scope.name)
-        + attribute_bytes(scope.version)
-        + attribute_bytes(scope.schema_url)
-        + attribute_bytes(scope.attributes)
+    return policy().record_bytes(
+        "scope",
+        [
+            attribute_bytes(scope.name),
+            attribute_bytes(scope.version),
+            attribute_bytes(scope.schema_url),
+            attribute_bytes(scope.attributes),
+        ],
+        0,
+        0,
     )
 
 
 def span_bytes(span: ReadableSpan) -> int:
-    if len(span.events) > 32 or len(span.links) > 32:
-        return _MAX_RECORD_BYTES + 1
-    total = (
-        512
-        + attribute_bytes(span.name)
-        + attribute_bytes(span.attributes)
-        + attribute_bytes(span.resource.attributes)
-        + attribute_bytes(span.status.description)
-        + attribute_bytes(span.resource.schema_url)
-        + scope_bytes(span.instrumentation_scope)
-        + attribute_bytes(dict(span.context.trace_state) if span.context else None)
-        + attribute_bytes(dict(span.parent.trace_state) if span.parent else None)
-    )
-    if total > _MAX_RECORD_BYTES:
-        return total
+    native = policy()
+    if len(span.events) > native.max_events or len(span.links) > native.max_events:
+        return native.record_bytes("span", [], len(span.events), len(span.links))
+    fields = [
+        attribute_bytes(span.name),
+        attribute_bytes(span.attributes),
+        attribute_bytes(span.resource.attributes),
+        attribute_bytes(span.status.description),
+        attribute_bytes(span.resource.schema_url),
+        scope_bytes(span.instrumentation_scope),
+        attribute_bytes(dict(span.context.trace_state) if span.context else None),
+        attribute_bytes(dict(span.parent.trace_state) if span.parent else None),
+    ]
     for event in span.events:
-        total += 128 + attribute_bytes(event.name) + attribute_bytes(event.attributes)
-        if total > _MAX_RECORD_BYTES:
-            return total
-    for link in span.links:
-        total += (
-            128 + attribute_bytes(link.attributes) + attribute_bytes(dict(link.context.trace_state))
+        fields.append(
+            native.record_bytes(
+                "event", [attribute_bytes(event.name), attribute_bytes(event.attributes)], 0, 0
+            )
         )
-        if total > _MAX_RECORD_BYTES:
-            return total
-    return total
+    for link in span.links:
+        fields.append(
+            native.record_bytes(
+                "link",
+                [attribute_bytes(link.attributes), attribute_bytes(dict(link.context.trace_state))],
+                0,
+                0,
+            )
+        )
+    return native.record_bytes("span", fields, len(span.events), len(span.links))
+
+
+def log_bytes(record: ReadableLogRecord | ReadWriteLogRecord) -> int:
+    """Account the SDK log envelope once for queue and destination admission."""
+    data = record.log_record
+    return policy().record_bytes(
+        "log",
+        [
+            attribute_bytes(data.body),
+            attribute_bytes(data.attributes),
+            attribute_bytes(record.resource.attributes if record.resource else None),
+            attribute_bytes(record.resource.schema_url if record.resource else None),
+            attribute_bytes(data.severity_text),
+            attribute_bytes(data.event_name),
+            scope_bytes(record.instrumentation_scope),
+        ],
+        0,
+        0,
+    )
 
 
 def span_key(span: ReadableSpan) -> str:
@@ -173,15 +227,15 @@ class BoundedSpanProcessor(SpanProcessor):
     def __init__(self, exporter: SpanExporter, *, holds: Callable[[ReadableSpan], bool]) -> None:
         self._processor = BatchSpanProcessor(
             _ReleasingSpanExporter(exporter, holds),
-            max_queue_size=64,
-            max_export_batch_size=16,
-            schedule_delay_millis=1000,
-            export_timeout_millis=5000,
+            max_queue_size=policy().max_records,
+            max_export_batch_size=policy().batch_items,
+            schedule_delay_millis=policy().schedule_delay_millis,
+            export_timeout_millis=policy().export_timeout_millis,
         )
 
     def on_end(self, span: ReadableSpan) -> None:
         charge = span_bytes(span)
-        if charge > _MAX_RECORD_BYTES:
+        if charge > policy().max_record_bytes:
             worker().record_drop("oversize", 1)
             return
         if worker().reserve(span_key(span), charge):
@@ -196,6 +250,34 @@ class BoundedSpanProcessor(SpanProcessor):
 
     def shutdown(self) -> None:
         cast(Callable[[], None], self._processor.shutdown)()
+
+
+_ResultT = TypeVar("_ResultT")
+
+
+async def call_bounded(
+    key: str, callback: Callable[[], _ResultT], retained_bytes: int, timeout: float
+) -> _ResultT:
+    """Run host work on the native worker, retaining late callbacks after caller timeout."""
+    result: Future[_ResultT] = Future()
+    context = contextvars.copy_context()
+
+    def invoke() -> bool:
+        try:
+            result.set_result(context.run(callback))
+        except BaseException as error:
+            result.set_exception(error)
+            return False
+        return True
+
+    runtime = worker()
+    if not runtime.submit(key, invoke, retained_bytes):
+        raise RuntimeError("telemetry worker admission refused")
+    if not await runtime.wait_async(key, timeout):
+        raise TimeoutError("telemetry worker did not settle before its deadline")
+    if not result.done():
+        raise RuntimeError("telemetry callback settled without a result")
+    return result.result()
 
 
 def run_bounded(
@@ -254,35 +336,38 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
         self._lock = threading.Lock()
         self._processor = BatchLogRecordProcessor(
             _ReleasingLogExporter(exporter),
-            max_queue_size=64,
-            max_export_batch_size=16,
-            schedule_delay_millis=1000,
-            export_timeout_millis=5000,
+            max_queue_size=policy().max_records,
+            max_export_batch_size=policy().batch_items,
+            schedule_delay_millis=policy().schedule_delay_millis,
+            export_timeout_millis=policy().export_timeout_millis,
         )
 
     def on_emit(self, record: ReadWriteLogRecord) -> None:
-        data = record.log_record
-        charge = (
-            512
-            + attribute_bytes(data.body)
-            + attribute_bytes(data.attributes)
-            + attribute_bytes(record.resource.attributes if record.resource else None)
-            + attribute_bytes(record.resource.schema_url if record.resource else None)
-            + attribute_bytes(data.severity_text)
-            + attribute_bytes(data.event_name)
-            + scope_bytes(record.instrumentation_scope)
-        )
-        if charge > _MAX_RECORD_BYTES:
+        from ._redaction import _source_snapshot
+
+        data = copy(record.log_record)
+        # Admission examines the original object before copying; a refused body never crosses
+        # into the SDK queue, and an admitted body cannot grow through a caller's mutable alias.
+        if (
+            attribute_bytes(data.body) > policy().max_record_bytes
+            or attribute_bytes(data.attributes) > policy().max_record_bytes
+        ):
             worker().record_drop("oversize", 1)
             return
+        data.body = _source_snapshot(data.body)
+        attributes = _source_snapshot(data.attributes or {})
+        assert isinstance(attributes, dict)
         with self._lock:
             self._sequence += 1
             key = f"log:{id(self):x}:{self._sequence}"
-        if not worker().reserve(key, charge):
+        data.attributes = {**attributes, "lk.telemetry.export_key": key}
+        snapshot = replace(record, log_record=data)
+        charge = log_bytes(snapshot)
+        if charge > policy().max_record_bytes:
+            worker().record_drop("oversize", 1)
             return
-        snapshot = copy(data)
-        snapshot.attributes = {**(data.attributes or {}), "lk.telemetry.export_key": key}
-        self._processor.on_emit(replace(record, log_record=snapshot))
+        if worker().reserve(key, charge):
+            self._processor.on_emit(snapshot)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return self._processor.force_flush(timeout_millis)
@@ -299,13 +384,17 @@ class GuardedMetricExporter(MetricExporter):
         inner: MetricExporter,
         *,
         preferred_temporality: dict[type[object], AggregationTemporality] | None = None,
+        enabled: Callable[[], bool] = lambda: True,
     ) -> None:
         super().__init__(preferred_temporality=preferred_temporality)
         self._inner = inner
+        self._enabled = enabled
 
     def export(
         self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kwargs: object
     ) -> MetricExportResult:
+        if not self._enabled():
+            return MetricExportResult.FAILURE
         try:
             with export_context():
                 result = self._inner.export(metrics_data, timeout_millis=timeout_millis, **kwargs)
@@ -323,3 +412,8 @@ class GuardedMetricExporter(MetricExporter):
     def shutdown(self, timeout_millis: float = 30_000, **kwargs: object) -> None:
         with export_context():
             self._inner.shutdown(timeout_millis=timeout_millis, **kwargs)
+
+
+def diagnostics() -> dict[str, int]:
+    """Return process-wide export drops, failures and cleanup counters without exporting them."""
+    return dict(worker().diagnostics)

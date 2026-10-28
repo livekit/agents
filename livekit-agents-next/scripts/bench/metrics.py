@@ -45,6 +45,7 @@ class LoopLag:
             raise ValueError("period must be finite and positive")
         self.period = period_ms / 1000
         self.samples: list[int] = []
+        self.observations: list[tuple[int, int]] = []
         self.ready = asyncio.Event()
 
     async def run(self) -> None:
@@ -54,7 +55,9 @@ class LoopLag:
         while True:
             await asyncio.sleep(max(0, deadline - loop.time()))
             now = loop.time()
-            self.samples.append(max(0, int((now - deadline) * 1e9)))
+            lag = max(0, int((now - deadline) * 1e9))
+            self.samples.append(lag)
+            self.observations.append((time.monotonic_ns(), lag))
             # One observation per wake. Missed periods are represented by the lag itself.
             deadline += (max(0, int((now - deadline) / self.period)) + 1) * self.period
 

@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents.telemetry import traces
+from livekit.agents.telemetry import _context, _destination, _providers, traces
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -21,13 +21,13 @@ def test_setup_adopts_provider_installed_after_import_without_reordering(monkeyp
     provider = TracerProvider(resource=Resource({"application": "kept"}), shutdown_on_exit=False)
     processor = SimpleSpanProcessor(exporter)
     provider.add_span_processor(processor)
-    dynamic = traces._DynamicTracer("late-provider")
+    dynamic = _context._DynamicTracer("late-provider")
     old = dynamic._tracer_provider
-    monkeypatch.setattr(traces, "tracer", dynamic)
+    monkeypatch.setattr(_context, "tracer", dynamic)
     monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
-    cloud = traces._CloudTelemetry()
+    cloud = _providers._CloudTelemetry()
     monkeypatch.setattr(cloud, "_session", SimpleNamespace())
-    monkeypatch.setattr(traces, "OTLPSpanExporter", lambda **_: InMemorySpanExporter())
+    monkeypatch.setattr(_providers, "OTLPSpanExporter", lambda **_: InMemorySpanExporter())
     try:
         cloud._ensure_trace_pipeline(Resource({}), "https://unused")
         assert old is not provider
@@ -47,17 +47,17 @@ def test_setup_adopts_provider_installed_after_import_without_reordering(monkeyp
 def test_outside_job_spans_never_receive_last_job_metadata(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    processor = traces._MetadataSpanProcessor()
+    processor = _providers._MetadataSpanProcessor()
     provider.add_span_processor(processor)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    cloud = traces._CloudTelemetry()
+    cloud = _providers._CloudTelemetry()
     cloud._span_metadata_processor = processor
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
     monkeypatch.setattr(cloud, "_ensure_meter_provider", lambda *_: None)
     monkeypatch.setattr(cloud, "_admit_job", lambda _: True)
-    monkeypatch.setattr(traces, "_job_stamp_attributes", lambda: None)
+    monkeypatch.setattr(_providers, "_job_stamp_attributes", lambda: None)
     try:
         cloud.configure(room_id="last-room", job_id="last-job", observability_url="https://unused")
         with provider.get_tracer("worker").start_as_current_span("heartbeat"):
@@ -70,13 +70,13 @@ def test_outside_job_spans_never_receive_last_job_metadata(monkeypatch):
 
 
 def test_destination_redaction_never_mutates_other_exporters(monkeypatch):
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
     monkeypatch.setattr(traces.telemetry_utils, "redaction_enabled", lambda *_: False)
     redacted = InMemorySpanExporter()
     captured = InMemorySpanExporter()
     raw = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    provider.add_span_processor(traces._MetadataSpanProcessor())
+    provider.add_span_processor(_providers._MetadataSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(traces.RedactingSpanExporter(redacted)))
     provider.add_span_processor(
         SimpleSpanProcessor(traces.RedactingSpanExporter(captured, allow_pii=True))
@@ -99,7 +99,7 @@ def test_destination_redaction_never_mutates_other_exporters(monkeypatch):
 
 
 def test_capture_opt_in_applies_before_each_destination(monkeypatch):
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     monkeypatch.setattr(traces.telemetry_utils, "redaction_enabled", lambda *_: False)
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
@@ -120,14 +120,14 @@ def test_capture_opt_in_applies_before_each_destination(monkeypatch):
 def test_capture_policy_is_frozen_at_span_start(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    provider.add_span_processor(traces._MetadataSpanProcessor())
+    provider.add_span_processor(_providers._MetadataSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(traces, "_job_stamp_attributes", lambda: None)
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    monkeypatch.setattr(_providers, "_job_stamp_attributes", lambda: None)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     try:
         with provider.get_tracer("node").start_as_current_span("llm") as span:
             span.set_attribute("gen_ai.input.messages", "private")
-        monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+        monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
         destination = InMemorySpanExporter()
         traces.RedactingSpanExporter(destination, allow_pii=True).export(
             exporter.get_finished_spans()
@@ -140,13 +140,13 @@ def test_capture_policy_is_frozen_at_span_start(monkeypatch):
 def test_cloud_disabled_keeps_application_destination_active():
     application, cloud = InMemorySpanExporter(), InMemorySpanExporter()
     states = {
-        "off": traces._JobTelemetry(
+        "off": _destination._JobTelemetry(
             attributes={"job_id": "off"}, traces_enabled=False, logs_enabled=False
         )
     }
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(application))
-    provider.add_span_processor(SimpleSpanProcessor(traces._GatedSpanExporter(cloud, states)))
+    provider.add_span_processor(SimpleSpanProcessor(_destination._GatedSpanExporter(cloud, states)))
     try:
         with provider.get_tracer("tool").start_as_current_span("lookup") as span:
             span.set_attribute("job_id", "off")
@@ -161,7 +161,7 @@ def test_log_destination_redaction_uses_an_independent_sdk_record(monkeypatch):
     from opentelemetry.sdk._logs import ReadableLogRecord
     from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     destination = InMemoryLogRecordExporter()
     original = ReadableLogRecord(
         log_record=LogRecord(
@@ -170,11 +170,11 @@ def test_log_destination_redaction_uses_an_independent_sdk_record(monkeypatch):
         resource=Resource({}),
     )
     states = {
-        "on": traces._JobTelemetry(
+        "on": _destination._JobTelemetry(
             attributes={"job_id": "on"}, traces_enabled=False, logs_enabled=True
         )
     }
-    traces._GatedLogExporter(destination, states).export([original])
+    _destination._GatedLogExporter(destination, states).export([original])
     exported = destination.get_finished_logs()[0]
     assert "lk.pii.input" not in exported.log_record.attributes
     assert original.log_record.attributes["lk.pii.input"] == "private"
@@ -187,13 +187,13 @@ def test_nested_log_content_is_filtered_before_destination_export(monkeypatch):
     from opentelemetry.sdk._logs import ReadableLogRecord
     from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     exporter = InMemoryLogRecordExporter()
     original = ReadableLogRecord(
         log_record=LogRecord(
             body="session report",
             attributes={
-                "session.options": {
+                "configuration": {
                     "stt": {"lk.pii.keyterms": ["private customer"], "language": "en"},
                     "models": [{"lk.pii.prompt": "private prompt", "model": "small"}],
                 },
@@ -203,22 +203,22 @@ def test_nested_log_content_is_filtered_before_destination_export(monkeypatch):
     )
     traces.RedactingLogExporter(exporter).export([original])
     assert exporter.get_finished_logs()[0].log_record.attributes == {
-        "session.options": {
+        "configuration": {
             "stt": {"language": "en"},
             "models": [{"model": "small"}],
         }
     }
-    assert original.log_record.attributes["session.options"]["stt"]["lk.pii.keyterms"] == [
+    assert original.log_record.attributes["configuration"]["stt"]["lk.pii.keyterms"] == [
         "private customer"
     ]
 
 
 def test_explicit_noop_provider_keeps_tracing_disabled(monkeypatch):
     provider = trace.NoOpTracerProvider()
-    dynamic = traces._DynamicTracer("disabled-provider")
+    dynamic = _context._DynamicTracer("disabled-provider")
     dynamic.set_provider(provider)
-    monkeypatch.setattr(traces, "tracer", dynamic)
-    cloud = traces._CloudTelemetry()
+    monkeypatch.setattr(_context, "tracer", dynamic)
+    cloud = _providers._CloudTelemetry()
     cloud._ensure_trace_pipeline(Resource({}), "https://unused")
     with dynamic.start_as_current_span("tool") as span:
         assert not span.is_recording()
@@ -233,8 +233,8 @@ def test_existing_meter_provider_reports_reader_conflict_without_replacing_reade
 
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader], shutdown_on_exit=False)
-    monkeypatch.setattr(traces.metrics_api, "get_meter_provider", lambda: provider)
-    cloud = traces._CloudTelemetry()
+    monkeypatch.setattr(_providers.metrics_api, "get_meter_provider", lambda: provider)
+    cloud = _providers._CloudTelemetry()
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
@@ -344,7 +344,7 @@ async def test_saturated_export_has_bounded_retention_and_cleanup_keeps_its_owne
 def test_redaction_covers_links_resources_and_instrumentation_scope(monkeypatch):
     from opentelemetry.trace import Link, SpanContext
 
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
     destination, untouched = InMemorySpanExporter(), InMemorySpanExporter()
     provider = TracerProvider(
         resource=Resource({"lk.pii.tenant": "private tenant", "service.name": "application"}),
@@ -385,11 +385,11 @@ async def test_interleaved_jobs_keep_identity_captured_before_export():
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    provider.add_span_processor(traces._MetadataSpanProcessor())
+    provider.add_span_processor(_providers._MetadataSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     async def job(job_id):
-        state = traces._JobTelemetry(
+        state = _destination._JobTelemetry(
             attributes={"job_id": job_id, "room_id": f"room-{job_id}"},
             traces_enabled=True,
             logs_enabled=True,
@@ -426,11 +426,11 @@ def test_mutating_registration_metadata_cannot_reattribute_later_spans():
     from livekit.agents.job import _JobContextVar
 
     metadata = {"job_id": "created-job", "room_id": "created-room"}
-    state = traces._JobTelemetry(attributes=metadata, traces_enabled=True, logs_enabled=False)
+    state = _destination._JobTelemetry(attributes=metadata, traces_enabled=True, logs_enabled=False)
     metadata.update(job_id="another-job", room_id="another-room")
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
-    provider.add_span_processor(traces._MetadataSpanProcessor())
+    provider.add_span_processor(_providers._MetadataSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     token = _JobContextVar.set(SimpleNamespace(_telemetry_state=state))
     try:
@@ -475,7 +475,7 @@ def test_preinitialization_logs_release_their_bounded_admission_on_replay():
 
     runtime = worker()
     before = dict(runtime.diagnostics)
-    handler = traces._BufferingHandler()
+    handler = _destination._BufferingHandler()
     try:
         for index in range(256):
             handler.handle(
@@ -495,7 +495,7 @@ def test_preinitialization_logs_release_their_bounded_admission_on_replay():
 
 
 def test_unstamped_content_cannot_be_enabled_after_span_creation(monkeypatch):
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     raw, destination = InMemorySpanExporter(), InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(raw))
@@ -504,7 +504,7 @@ def test_unstamped_content_cannot_be_enabled_after_span_creation(monkeypatch):
             "lookup"
         ) as span:
             span.set_attribute("lk.pii.input", "private customer input")
-        monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+        monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
         traces.RedactingSpanExporter(destination, allow_pii=True).export(raw.get_finished_spans())
         assert "lk.pii.input" not in destination.get_finished_spans()[0].attributes
     finally:
@@ -515,14 +515,14 @@ def test_selected_provider_stamps_capture_for_standard_host_spans(monkeypatch):
     raw, destination = InMemorySpanExporter(), InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(raw))
-    dynamic = traces._DynamicTracer("selected")
-    monkeypatch.setattr(traces, "tracer", dynamic)
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
+    dynamic = _context._DynamicTracer("selected")
+    monkeypatch.setattr(_context, "tracer", dynamic)
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
     try:
         traces.set_tracer_provider(provider)
         with provider.get_tracer("standard-host-api").start_as_current_span("node") as span:
             span.set_attribute("lk.pii.input", "private prompt")
-            monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+            monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
         traces.RedactingSpanExporter(destination, allow_pii=True).export(raw.get_finished_spans())
         assert raw.get_finished_spans()[0].attributes["lk.telemetry.capture_content"] is False
         assert "lk.pii.input" not in destination.get_finished_spans()[0].attributes
@@ -623,7 +623,7 @@ def test_configuration_conflicts_are_reported_outside_the_manager_lock(monkeypat
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
-    cloud = traces._CloudTelemetry()
+    cloud = _providers._CloudTelemetry()
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
@@ -633,7 +633,7 @@ def test_configuration_conflicts_are_reported_outside_the_manager_lock(monkeypat
         cloud._observability_url = "https://original"
         monkeypatch.setattr(cloud, "_ensure_meter_provider", lambda *_: None)
     else:
-        monkeypatch.setattr(traces.metrics_api, "get_meter_provider", lambda: provider)
+        monkeypatch.setattr(_providers.metrics_api, "get_meter_provider", lambda: provider)
     observed = []
 
     class WarningHandler(logging.Handler):
@@ -672,23 +672,23 @@ def test_early_logs_keep_capture_consent_from_emission_until_replay(monkeypatch)
 
     from livekit.agents.job import _JobContextVar
 
-    monkeypatch.setattr(traces, "capture_content_enabled", lambda: False)
-    buffer = traces._BufferingHandler()
+    monkeypatch.setattr(_context, "capture_content_enabled", lambda: False)
+    buffer = _destination._BufferingHandler()
     record = logging.LogRecord(
         "application", logging.INFO, __file__, 1, "private transcript", (), None
     )
     buffer.handle(record)
     exporter = InMemoryLogRecordExporter()
     provider = LoggerProvider(shutdown_on_exit=False)
-    provider.add_log_record_processor(traces._MetadataLogProcessor())
+    provider.add_log_record_processor(_providers._MetadataLogProcessor())
     provider.add_log_record_processor(
         SimpleLogRecordProcessor(traces.RedactingLogExporter(exporter, allow_pii=True))
     )
-    handler = traces._TraceLevelLoggingHandler(logger_provider=provider)
+    handler = _destination._TraceLevelLoggingHandler(logger_provider=provider)
     token = _JobContextVar.set(
         SimpleNamespace(
             _redaction_enabled=False,
-            _telemetry_state=traces._JobTelemetry(
+            _telemetry_state=_destination._JobTelemetry(
                 attributes={"job_id": "replay-job", "room_id": "replay-room"},
                 traces_enabled=True,
                 logs_enabled=True,
@@ -696,7 +696,7 @@ def test_early_logs_keep_capture_consent_from_emission_until_replay(monkeypatch)
         )
     )
     try:
-        monkeypatch.setattr(traces, "capture_content_enabled", lambda: True)
+        monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
         buffered = list(buffer.buffer)
         assert all(item.getMessage() != "private transcript" for item in buffered)
         for retained in buffered:
@@ -729,7 +729,7 @@ def test_sdk_failure_logs_do_not_reenter_the_framework_destination():
     cloud = InMemoryLogRecordExporter()
     log_provider = LoggerProvider(shutdown_on_exit=False)
     log_provider.add_log_record_processor(SimpleLogRecordProcessor(cloud))
-    cloud_handler = traces._TraceLevelLoggingHandler(logger_provider=log_provider)
+    cloud_handler = _destination._TraceLevelLoggingHandler(logger_provider=log_provider)
     application = []
 
     class ApplicationHandler(logging.Handler):
@@ -775,14 +775,14 @@ def test_local_framework_meter_preserves_global_and_adopts_a_later_application_p
         metric_readers=[application_reader], shutdown_on_exit=False
     )
     state = {"global": proxy}
-    monkeypatch.setattr(traces.metrics_api, "get_meter_provider", lambda: state["global"])
-    cloud = traces._CloudTelemetry()
+    monkeypatch.setattr(_providers.metrics_api, "get_meter_provider", lambda: state["global"])
+    cloud = _providers._CloudTelemetry()
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
     monkeypatch.setattr(cloud, "_admit_job", lambda _: True)
     monkeypatch.setattr(
-        traces, "OTLPMetricExporter", lambda **_: ConsoleMetricExporter(out=io.StringIO())
+        _providers, "OTLPMetricExporter", lambda **_: ConsoleMetricExporter(out=io.StringIO())
     )
     try:
         cloud.configure(
@@ -842,7 +842,7 @@ def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monk
         def __iter__(self):
             raise AssertionError("oversized metadata was traversed before admission")
 
-    cloud = traces._CloudTelemetry()
+    cloud = _providers._CloudTelemetry()
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
@@ -907,10 +907,10 @@ async def test_report_without_recording_options_still_emits_its_outcome(monkeypa
     provider = LoggerProvider(shutdown_on_exit=False)
     exporter = InMemoryLogRecordExporter()
     provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
-    cloud = traces._CloudTelemetry()
+    cloud = _providers._CloudTelemetry()
     cloud._logger_provider = provider
     monkeypatch.setattr(traces, "_cloud", cloud)
-    monkeypatch.setattr(traces, "_upload_gate", traces._UploadGate())
+    monkeypatch.setattr(_destination, "upload_gate", traces._core.UploadGate())
     report = SessionReport(
         job_id="outcome-job",
         room_id="outcome-room",
@@ -943,10 +943,10 @@ def test_automatic_provider_adoption_reports_legacy_pii_conflict_outside_lock(mo
 
     provider = TracerProvider(shutdown_on_exit=False)
     monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
-    monkeypatch.setattr(traces, "tracer", traces._DynamicTracer("automatic-adoption"))
+    monkeypatch.setattr(_context, "tracer", _context._DynamicTracer("automatic-adoption"))
     monkeypatch.setenv("LIVEKIT_TELEMETRY_ALLOW_PII", "0")
-    monkeypatch.setattr(traces, "OTLPSpanExporter", lambda **_: InMemorySpanExporter())
-    cloud = traces._CloudTelemetry()
+    monkeypatch.setattr(_providers, "OTLPSpanExporter", lambda **_: InMemorySpanExporter())
+    cloud = _providers._CloudTelemetry()
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)
     monkeypatch.setattr(cloud, "_ensure_meter_provider", lambda *_: None)
@@ -972,7 +972,7 @@ def test_automatic_provider_adoption_reports_legacy_pii_conflict_outside_lock(mo
                 enable_logs=False,
             )
         assert observed == [False]
-        assert traces.tracer._tracer_provider is provider
+        assert _context.tracer._tracer_provider is provider
     finally:
         cloud.release("env-policy-job")
         cloud.discard("env-policy-job")

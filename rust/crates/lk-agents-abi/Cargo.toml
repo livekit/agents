@@ -42,10 +42,9 @@ lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # plausible-looking JSON that nothing gates, which is the whole hazard.
 # `serde_json::Value` is the output type; no `to_dict` type derives serde.
 serde_json = { workspace = true, features = ["preserve_order"] }
-# Optional, and never on a `to_dict` type: the `serde` feature below derives
-# `Serialize`/`Deserialize` on the plain enums the voice core's commands and journal carry (a
-# stored simulation case names them). `lk-agents-voice` turns it on.
-serde = { workspace = true, optional = true }
+# Report admission counts serialized bytes without retaining an unbounded temporary. The
+# `serde` feature separately enables derives on the voice command and journal records.
+serde.workspace = true
 thiserror.workspace = true
 # One warning today: a repaired tool-arguments payload (`llm::tool_arguments::parse_logged`), which
 # the binding forwards to the host logger.
@@ -77,7 +76,7 @@ bytes = "1"
 # hand-written methods beside it that no declaration expresses (a getter building host objects).
 python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:pyo3-async-runtimes"]
 # See the `serde` dependency's note: the derive on the plain enums the voice core carries.
-serde = ["dep:serde"]
+serde = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util"] }

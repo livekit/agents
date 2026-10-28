@@ -38,12 +38,12 @@ from livekit.protocol import agent, models
 from . import _core
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
+from .telemetry._destination import _BufferingHandler, _JobTelemetry
+from .telemetry._export import call_bounded, policy
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
-    _BufferingHandler,
     _cloud_log_handler,
     _discard_cloud_tracer,
-    _JobTelemetry,
     _prepare_cloud_tracer,
     _setup_cloud_tracer,
     _shutdown_telemetry,
@@ -287,31 +287,42 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
-        flush_turn_metrics(session.history)
-
         if (finished := session._recording_finished) is not None:
             try:
                 await finished
             except Exception:
                 logger.exception("failed to finish the session recording")
 
-        report = self.make_session_report(session)
+        def prepare_report() -> SessionReport:
+            flush_turn_metrics(session.history)
+            report = self.make_session_report(session)
 
-        from .voice.remote_session import ConsoleCall
+            from .voice.remote_session import ConsoleCall
 
-        # console recording, the report beside the session's other local files
-        if ConsoleCall.record:
-            directory = Path(
-                "console-recordings",
-                f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
-            )
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-                (directory / "session_report.json").write_text(
-                    json.dumps(report.to_dict(), indent=2)
+            if ConsoleCall.record:
+                directory = Path(
+                    "console-recordings",
+                    f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
                 )
-            except Exception:
-                logger.exception("failed to save session report")
+                try:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    (directory / "session_report.json").write_text(
+                        json.dumps(report.to_dict(), indent=2)
+                    )
+                except Exception:
+                    logger.exception("failed to save session report")
+            return report
+
+        try:
+            report = await call_bounded(
+                f"session-report:{self.job.id}:{id(session):x}",
+                prepare_report,
+                policy().report_retained_bytes,
+                policy().upload_timeout_seconds,
+            )
+        except Exception:
+            logger.exception("failed to prepare the session report")
+            return
 
         has_evals = self._tagger.has_evals()
         obs_url = self._run.observability_url
@@ -397,6 +408,9 @@ class JobContext:
 
         if not session:
             raise RuntimeError("Cannot prepare report, no VoiceSession was found")
+
+        if not session._event_retention.allows_read(self.job.id):
+            raise PermissionError("A session report is available only to its owning job")
 
         recording_started_at = session._recorder.started_at if session._recorder else None
         sr = SessionReport(

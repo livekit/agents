@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from livekit.agents.job import _JobContextVar
 from livekit.agents.telemetry import set_tracer_provider, tracer
-from livekit.agents.telemetry.traces import _JobTelemetry
+from livekit.agents.telemetry._destination import _JobTelemetry
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
