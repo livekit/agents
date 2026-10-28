@@ -118,7 +118,7 @@ impl WsTransport for FakeWs {
         }
         let sender = Arc::new(FakeWsSender {
             sent: self.sent.clone(),
-            closed: Mutex::new(false),
+            closed: Default::default(),
             stall: self.stall_sends,
         });
         let receiver =

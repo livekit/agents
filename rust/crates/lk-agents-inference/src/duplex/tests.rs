@@ -519,7 +519,6 @@ fn a_requested_reply_is_the_speech_that_follows_it_and_otherwise_fails() {
     );
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is_new() {
     let mut f = Fake::new();
@@ -546,7 +545,7 @@ fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is
         "typed_1",
         Role::User,
         "typed by the app",
-        std::time::SystemTime::now(),
+        std::time::SystemTime::UNIX_EPOCH,
     )));
     let new = f.seg.update_chat_ctx(&ctx);
     assert_eq!(new.iter().map(ChatItem::id).collect::<Vec<_>>(), ["typed_1"]);
@@ -556,7 +555,6 @@ fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is
     assert!(f.seg.update_chat_ctx(&ctx).is_empty(), "a removal is logged, never sent");
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn startup_history_seeds_both_the_adapter_and_the_model() {
     let mut f = Fake::new();
@@ -564,7 +562,7 @@ fn startup_history_seeds_both_the_adapter_and_the_model() {
         "m1",
         Role::User,
         "a prior turn",
-        std::time::SystemTime::now(),
+        std::time::SystemTime::UNIX_EPOCH,
     ))]);
     let items = f.seg.seed(&ctx);
     assert_eq!(items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["m1"]);
