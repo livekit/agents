@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+
 from scripts.bench import media
 from scripts.bench.metrics import distribution
 

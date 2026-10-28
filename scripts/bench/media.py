@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
+
 from scripts.bench.metrics import CallbackSlices, Distribution, LoopLag, distribution
 
 T = TypeVar("T")
