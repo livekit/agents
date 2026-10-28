@@ -135,7 +135,7 @@ pub struct TaskRecord {
     /// Unix milliseconds.
     pub updated_at: i64,
     pub data: TaskData,
-    /// The question the task waits on the person to answer, while it does.
+    /// What the framework keeps to resume the task: its pending question and response streams.
     pub internal: Option<TaskInternal>,
 }
 

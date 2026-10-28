@@ -32,11 +32,12 @@ class StorageUnavailable(StorageError):
 class RunRejected(StorageError):
     """The reject policy refused the message while a turn runs."""
 
+    running_task_id: str | None
+    """The running turn's task, when the journal names it."""
+
     def __init__(self, message: str, *, running_task_id: str | None = None) -> None:
         super().__init__(message)
         self.running_task_id = running_task_id
-
-    """The running turn's task, when the journal names it."""
 
 
 __all__ = [

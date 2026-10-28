@@ -140,7 +140,7 @@ class TaskRecord:
     """Unix milliseconds."""
     data: TaskData
     internal: TaskInternal | None
-    """The question the task waits on the person to answer, while it does."""
+    """What the framework keeps to resume the task: its pending question and response streams."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
