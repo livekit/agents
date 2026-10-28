@@ -688,17 +688,7 @@ impl std::fmt::Debug for ReplyContext {
     }
 }
 
-/// The agent's `@agent.instructions` functions, rendered by the host for each model request of a
-/// reply (`Agent._render_dynamic_instructions`). `speech` is the reply's, as the host's
-/// `SpeechHandle` sees it.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.agent_session._DynamicInstructions"))]
-#[async_trait::async_trait]
-pub trait HostInstructions: Send + Sync {
-    async fn render(
-        &self,
-        speech: &lk_agents_abi::CoreObject,
-    ) -> Result<String, lk_agents_abi::errors::HostError>;
-}
+pub use lk_agents_abi::agent::HostInstructions;
 
 /// Append dynamic instructions to the request's static prompt.
 pub(crate) fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {

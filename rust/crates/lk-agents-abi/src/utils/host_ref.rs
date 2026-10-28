@@ -26,6 +26,7 @@ pub struct StaleHostRef {
 }
 
 /// The reverse of [`HostRef`]: a core object the host receives as a live handle.
+#[crate::host(handwritten(emit, host = "object"))]
 #[derive(Clone)]
 pub struct CoreObject(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
 

@@ -367,7 +367,6 @@
   "host|rust/crates/lk-agents-voice/src/filler_scheduler.rs|enum FillerError|lk_agents_abi :: host (error (kind = \"ValueError\"))",
   "host|rust/crates/lk-agents-voice/src/generation/mod.rs|const INSTRUCTIONS_MESSAGE_ID|lk_agents_abi :: host (export (pid = false , name = \"instructions_message_id\"))",
   "host|rust/crates/lk-agents-voice/src/generation/mod.rs|fn instructions_positions|lk_agents_abi :: host (export (name = \"remove_instructions\" , pid = false))",
-  "host|rust/crates/lk-agents-voice/src/generation/mod.rs|trait HostInstructions|lk_agents_abi :: host (proxy (host = \"livekit.agents.voice.agent_session._DynamicInstructions\"))",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreAudioSink::capture_frame|host (method)",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreAudioSink::clear_buffer|host (method)",
   "host|rust/crates/lk-agents-voice/src/io.rs|impl  for CoreAudioSink::flush|host (method)",
