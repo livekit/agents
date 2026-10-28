@@ -27,6 +27,13 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         ),
         None => String::new(),
     };
+    if p.handed_back {
+        // The object the host passed, before any view over it.
+        fields.push("    /// The host object it was taken from, handed back as itself.\n    source: ::std::sync::Arc<Py<PyAny>>,\n".into());
+        inits.push("source".into());
+        reads =
+            format!("        let source = ::std::sync::Arc::new(obj.clone().unbind());\n{reads}");
+    }
     if p.captures_context() {
         fields.push(
             "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
@@ -66,6 +73,12 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     s.push_str(&format!(
         "::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::DeclaredProxy::of::<dyn {tr}>(|obj| {name}::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))\n}}\n\n"
     ));
+    if p.handed_back {
+        s.push_str(&format!(
+            "impl {name} {{\n    /// The host object behind a proxy of `{tr}`; a native implementation has none.\n    pub fn to_host<'py>(py: Python<'py>, value: ::std::sync::Arc<dyn {tr}>) -> PyResult<Bound<'py, PyAny>> {{\n        let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;\n        match any.downcast::<Self>() {{\n            Ok(proxy) => Ok(proxy.source.bind(py).clone()),\n            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(\"a native `{}` has no host object to hand back\")),\n        }}\n    }}\n}}\n\n",
+            p.rust_name
+        ));
+    }
     if p.async_trait {
         s.push_str("#[::async_trait::async_trait]\n");
     }
@@ -91,11 +104,19 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let label = format!("{}.{}", p.rust_name, m.name);
     let params: Vec<String> =
         m.params.iter().map(|q| format!("{}: {}", q.name, param_type(q))).collect();
-    let receiver = if m.consumes { "self: ::std::boxed::Box<Self>" } else { "&self" };
+    // A future named by the method's own lifetime (`fn m<'a>(&'a self, ..) -> BoxFuture<'a, _>`)
+    // keeps it: the proxy's future borrows nothing, so its parameters need not carry it.
+    let named = m.boxed.as_deref().filter(|l| *l != "'_" && *l != "'static");
+    let receiver = match (m.consumes, named) {
+        (true, _) => "self: ::std::boxed::Box<Self>".to_owned(),
+        (false, Some(l)) => format!("&{l} self"),
+        (false, None) => "&self".to_owned(),
+    };
     let sig = format!(
-        "fn {}({})",
+        "fn {}{}({})",
         m.rust_name,
-        std::iter::once(receiver.to_owned()).chain(params).collect::<Vec<_>>().join(", ")
+        named.map(|l| format!("<{l}>")).unwrap_or_default(),
+        std::iter::once(receiver).chain(params).collect::<Vec<_>>().join(", ")
     );
     match m.kind {
         ProxyCall::ReadOnce if m.lends => {
@@ -172,20 +193,37 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let no_context = format!(
         "::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")"
     );
-    let missing = match m.kind {
-        ProxyCall::Notify => format!(
+    // Before the call's future exists: a boxed future returns its failure as a ready future.
+    let ready = |value: &str| match m.boxed {
+        Some(_) => format!("return ::std::boxed::Box::pin(async move {{ {value} }});"),
+        None => format!("return {value};"),
+    };
+    let missing = match (m.kind, m.ret.err.as_deref()) {
+        (ProxyCall::Notify, _) => format!(
             "::lk_agents_abi::python::log::warn!(\"{label} failed: {{}}\", {no_context});\n            return;"
         ),
-        _ => format!(
-            "return Err(::pyo3::Python::attach(|py| <{} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &{no_context})));",
-            m.ret.err.as_deref().unwrap_or_default()
+        (_, None) => format!(
+            "::lk_agents_abi::python::log::warn!(\"{label} failed: {{}}\", {no_context});\n            {}",
+            ready("")
         ),
+        (_, Some(err)) => ready(&format!(
+            "Err(::pyo3::Python::attach(|py| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &{no_context})))"
+        )),
     };
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let read = from_host("o", &m.ret.ok, &label, &at)?;
+        // A host stream it returns is pulled in the call's context, else the captured one.
+        let context = match (m.ret.ok.holds_host_stream(), m.context) {
+            (false, _) => String::new(),
+            (true, Some(i)) => format!(
+                "        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context({}).cloned() else {{\n            {missing}\n        }};\n        let context = &context;\n",
+                m.params[i].name
+            ),
+            (true, None) => "        let context = &self.context;\n".into(),
+        };
         return Ok(format!(
-            "    {sig} -> {ret} {{\n{moved}        ::pyo3::Python::attach(|py| {{\n            // One place converts the call's failures to its declared error.\n            #[allow(clippy::redundant_closure_call)]\n            let out = (|| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n                self.host.bind(py).call_method1({:?}, ::pyo3::types::PyTuple::new(py, args)?)\n            }})();\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = &out;\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
+            "    {sig} -> {ret} {{\n{moved}{context}        ::pyo3::Python::attach(|py| {{\n            // One place converts the call's failures to its declared error.\n            #[allow(clippy::redundant_closure_call)]\n            let out = (|| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n                self.host.bind(py).call_method1({:?}, ::pyo3::types::PyTuple::new(py, args)?)\n            }})();\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = &out;\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
             args.len(),
             args.join(", "),
             m.name
@@ -299,6 +337,14 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         // A host class the framework does not generate: built from the record's fields.
         Ty::Record(Record { host: HostForm::External { module, name }, .. }) => format!(
             "py.import({module:?})?.getattr({name:?})?.call((), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
+        ),
+        // The host object a declared proxy was taken from.
+        Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {
+            format!("super::{family}::{name}Proxy::to_host(py, ::std::sync::Arc::clone(&{v}))?")
+        }
+        Ty::Optional(t) if matches!(**t, Ty::Proxy { .. }) => format!(
+            "match &{v} {{ None => py.None().into_bound(py), Some(x) => {} }}",
+            to_host("x", t, at)?
         ),
         Ty::Unit
         | Ty::This

@@ -726,7 +726,8 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
 
 // Catches: an awaited call of a trait without async-trait (`-> BoxFuture<'_, T>`) refused or
 // implemented as an `async fn` (which would not match the trait), a consuming one losing its
-// `'static` future, or the two forms mixed in one trait.
+// `'static` future, a method's named future lifetime dropped, a missing context returned as a bare
+// `Err` where the future is due, or the two forms mixed in one trait.
 #[test]
 fn a_proxy_without_async_trait_returns_boxed_futures() {
     let decls = read(
@@ -746,6 +747,23 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
         llm.contains("fn next(&self, id: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>> {")
             && llm.contains("fn close(self: ::std::boxed::Box<Self>) -> ::lk_agents_abi::BoxFuture<'static, ()> {")
             && llm.contains("::std::boxed::Box::pin(async move {"),
+        "{llm}"
+    );
+    // TurnHost's form: the future named by the method's lifetime, the call's own context.
+    let named = read(
+        r#"use super::chat::{Chunk, Report};
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Turns"))]
+        pub trait Turns: Send + Sync {
+            #[host(await)] fn handle<'a>(&'a self, #[host(context)] at: &'a Report) -> crate::BoxFuture<'a, Result<Chunk, HostError>>;
+        }"#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&named).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains("fn handle<'a>(&'a self, at: &::lk_agents_abi::llm::chat::Report) -> ::lk_agents_abi::BoxFuture<'a, ")
+            && llm.contains("return ::std::boxed::Box::pin(async move { Err("),
         "{llm}"
     );
     let mixed = read(
@@ -1165,4 +1183,52 @@ fn an_omitted_field_is_computed_from_the_record_read() {
         pub struct Out { #[host(omitted = Self::sum)] pub total: u32 }"#,
     );
     assert!(emitted_only.err().is_some_and(|e| e.contains("`omitted`")));
+}
+
+// Catches: a declared proxy refused as a host call's argument (a typed noise-cancellation choice
+// passed back to the SDK), handed back as the view over it rather than the object the host
+// passed, a trait no proxy can be found behind accepted, or a host stream a synchronous call
+// returns pulled without a context.
+#[test]
+fn a_declared_proxy_is_handed_back_as_its_host_object() {
+    let decls = read(
+        r#"use std::sync::Arc;
+        use std::any::Any;
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Noise", view = "livekit.agents._NoiseView"))]
+        pub trait Noise: Any + Send + Sync {
+            #[host(read_once, name = "_core_kind")] fn kind(&self) -> String;
+        }
+        #[crate::host(proxy(host = "livekit.agents.Track"))]
+        pub trait Track: Send + Sync {
+            #[host(call)] fn open(&self, noise: Option<Arc<dyn Noise>>) -> Result<(), HostError>;
+            #[host(call)] fn frames(&self) -> Result<Box<dyn crate::utils::stream::StreamSource<String>>, HostError>;
+        }"#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains(
+            "let source = ::std::sync::Arc::new(obj.clone().unbind());\n        let view ="
+        ) && llm.contains("Ok(proxy) => Ok(proxy.source.bind(py).clone()),")
+            && llm.contains(
+                "Some(x) => super::llm::NoiseProxy::to_host(py, ::std::sync::Arc::clone(&x))?"
+            )
+            && llm.contains("let context = &self.context;"),
+        "{llm}"
+    );
+    let not_any = read(
+        r#"use std::sync::Arc;
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Noise"))]
+        pub trait Noise: Send + Sync {
+            #[host(read_once, name = "_core_kind")] fn kind(&self) -> String;
+        }
+        #[crate::host(proxy(host = "livekit.agents.Track"))]
+        pub trait Track: Send + Sync {
+            #[host(call)] fn open(&self, noise: Arc<dyn Noise>) -> Result<(), HostError>;
+        }"#,
+    );
+    assert!(not_any.err().is_some_and(|e| e.contains("Noise: Any + Send + Sync")));
 }

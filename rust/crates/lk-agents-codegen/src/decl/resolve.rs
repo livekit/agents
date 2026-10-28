@@ -42,6 +42,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
         }
     }
     crate::records::check_none_defaults(&out)?;
+    proxy::check_handed_back(&out)?;
     crate::records::mark_in_place(&mut out);
     Ok(out)
 }

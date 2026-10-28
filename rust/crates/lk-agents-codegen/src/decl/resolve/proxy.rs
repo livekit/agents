@@ -67,6 +67,9 @@ impl Resolver<'_> {
             host,
             view,
             async_trait,
+            handed_back: tr.supertraits.iter().any(|b| {
+                matches!(b, syn::TypeParamBound::Trait(t) if t.path.segments.last().is_some_and(|s| s.ident == "Any"))
+            }),
             methods,
         })
     }
@@ -142,8 +145,8 @@ impl Resolver<'_> {
                     None => (false, self.ty(other, &pat)?),
                 },
             };
-            // It crosses to the host.
-            check_output(&pat, &ty)?;
+            // It crosses to the host; a declared proxy as the host object behind it.
+            check_argument(&pat, &ty)?;
             params.push(Param { name, ty, by_ref, kw_only: false, default: None });
         }
         let mut lends = false;
@@ -315,4 +318,37 @@ fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)> {
         }
         _ => None,
     }
+}
+
+/// A proxy call's argument crosses to the host: an output, or a declared proxy (`Arc<dyn ..>`,
+/// optional or not) handed back as its host object (`check_handed_back`).
+fn check_argument(at: &str, ty: &Ty) -> Result<(), String> {
+    match ty {
+        Ty::Proxy { declared: Some(_), boxed: false, .. } => Ok(()),
+        Ty::Optional(t) if matches!(**t, Ty::Proxy { .. }) => check_argument(at, t),
+        other => check_output(at, other),
+    }
+}
+
+/// A declared proxy passed back to the host is of a trait declaring `Any`: its proxy is found
+/// behind the `Arc<dyn ..>` (trait upcasting) to hand back the host object it was taken from.
+pub(super) fn check_handed_back(decls: &Declarations) -> Result<(), String> {
+    for p in &decls.proxies {
+        for m in &p.methods {
+            for q in &m.params {
+                let ty = match &q.ty {
+                    Ty::Optional(t) => &**t,
+                    t => t,
+                };
+                let Ty::Proxy { declared: Some((_, name)), .. } = ty else { continue };
+                if !decls.proxies.iter().any(|o| &o.rust_name == name && o.handed_back) {
+                    return Err(format!(
+                        "{}::{}({}): `{name}` is handed back to the host: declare it `{name}: Any + Send + Sync`",
+                        p.trait_path, m.rust_name, q.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }

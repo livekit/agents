@@ -132,6 +132,9 @@ pub struct Proxy {
     pub view: Option<(String, String)>,
     /// `#[async_trait]` on the trait: the implementation carries it too.
     pub async_trait: bool,
+    /// The trait declares `Any`: a proxy of it passed to a host call is handed back as the host
+    /// object it was taken from.
+    pub handed_back: bool,
     pub methods: Vec<ProxyMethod>,
 }
 
@@ -160,9 +163,15 @@ impl Proxy {
     /// Some call has no `#[host(context)]` parameter: the proxy captures the host's context
     /// (running loop and a copy of its context) when it is taken, and those calls run in it.
     pub fn captures_context(&self) -> bool {
-        self.methods
-            .iter()
-            .any(|m| m.context.is_none() && matches!(m.kind, ProxyCall::Await | ProxyCall::Notify))
+        self.methods.iter().any(|m| {
+            m.context.is_none()
+                && match m.kind {
+                    ProxyCall::Await | ProxyCall::Notify => true,
+                    // A host stream it returns is pulled in a context.
+                    ProxyCall::Call => m.ret.ok.holds_host_stream(),
+                    ProxyCall::ReadOnce | ProxyCall::Bind => false,
+                }
+        })
     }
 
     /// The parameter a `bind` method appends to every awaited call of its proxy.
@@ -468,6 +477,16 @@ pub struct Record {
 }
 
 impl Ty {
+    /// A host stream (`HostSource`, `HostDuplex`) somewhere in it: pulled in a host context.
+    pub fn holds_host_stream(&self) -> bool {
+        match self {
+            Ty::HostSource(_) | Ty::HostDuplex { .. } => true,
+            Ty::Optional(t) | Ty::List(t) => t.holds_host_stream(),
+            Ty::Tuple(ts) => ts.iter().any(Ty::holds_host_stream),
+            _ => false,
+        }
+    }
+
     /// The Rust type, written from outside the ABI crate.
     pub fn rust(&self) -> String {
         match self {
