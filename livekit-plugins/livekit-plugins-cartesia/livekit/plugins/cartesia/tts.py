@@ -211,7 +211,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Cartesia"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
         try:
@@ -367,6 +367,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         json = _to_cartesia_options(self._opts, streaming=False)
         json["transcript"] = self._input_text
 
@@ -379,7 +380,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "User-Agent": USER_AGENT,
                 },
                 json=json,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -406,6 +407,12 @@ class ChunkedStream(tts.ChunkedStream):
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        if conn_options.write_timeout is not None or conn_options.total_timeout is not None:
+            raise APIError(
+                "cartesia streaming requires write_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -468,7 +475,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await input_sent_event.wait()
             skip_aligning = False
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await asyncio.wait_for(ws.receive(), self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -546,7 +553,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cartesia_context_id = utils.shortuuid()
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),

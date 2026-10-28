@@ -24,6 +24,7 @@ import aiohttp
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -223,6 +224,17 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         turn_end_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "cartesia streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
         self._encoding = encoding
         self._sample_rate = sample_rate
@@ -397,7 +409,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                         "User-Agent": USER_AGENT,
                     },
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
             c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
             logger.debug(
