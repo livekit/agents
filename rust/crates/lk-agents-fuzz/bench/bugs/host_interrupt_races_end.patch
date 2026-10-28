@@ -2,10 +2,10 @@ Reverted by known_bugs.sh to reintroduce the bug fixed by 643e1bed9:
 voice core: a host interrupt() that races the speech's end lands, as the reference's does
 
 diff --git a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-index 71c1dd71d..4c90570c7 100644
+index 0e93c33..f8a9270 100644
 --- a/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
 +++ b/rust/crates/lk-agents-voice/src/agent_activity/speech.rs
-@@ -1001,6 +1001,11 @@ impl Driver {
+@@ -1010,6 +1010,11 @@ impl Driver {
              if !h.done() {
                  h.mark_done(None);
              }
@@ -18,10 +18,10 @@ index 71c1dd71d..4c90570c7 100644
              // The run that owned it lets it go, and its verdict moves to this speech.
              let h = Arc::clone(h);
 diff --git a/rust/crates/lk-agents-voice/src/speech_handle.rs b/rust/crates/lk-agents-voice/src/speech_handle.rs
-index 423ee2c08..3decc95b5 100644
+index 230c11f..fedb266 100644
 --- a/rust/crates/lk-agents-voice/src/speech_handle.rs
 +++ b/rust/crates/lk-agents-voice/src/speech_handle.rs
-@@ -214,6 +214,8 @@ struct Inner {
+@@ -184,6 +184,8 @@ struct Inner {
      host: Option<lk_agents_abi::HostRef>,
      /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
      blocking_tools: Vec<(String, String)>,
@@ -30,7 +30,7 @@ index 423ee2c08..3decc95b5 100644
  }
  
  /// `SpeechHandle`: one speech's id, state and outcome, shared by the loop that runs the speech and
-@@ -291,6 +293,7 @@ impl SpeechHandle {
+@@ -270,6 +272,7 @@ impl SpeechHandle {
                  user_metrics: None,
                  host: None,
                  blocking_tools: Vec::new(),
@@ -38,8 +38,8 @@ index 423ee2c08..3decc95b5 100644
              }),
          }
      }
-@@ -376,6 +379,11 @@ impl SpeechHandle {
-         self.interrupted.get()
+@@ -369,6 +372,11 @@ impl SpeechHandle {
+         self.interrupt_requested.store(false, Ordering::Release);
      }
  
 +    /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
@@ -97,7 +97,7 @@ index 423ee2c08..3decc95b5 100644
              SpeechOutcome::Interrupted
          } else {
              SpeechOutcome::Completed
-@@ -773,15 +792,20 @@ impl SpeechHandle {
+@@ -783,15 +802,20 @@ impl SpeechHandle {
          #[host(ambient)] spawner: Arc<dyn lk_agents_abi::Spawner>,
      ) -> Result<(), SpeechRefused> {
          let created = self.created();
@@ -106,7 +106,7 @@ index 423ee2c08..3decc95b5 100644
          {
 -            return Ok(());
 -        }
--        if !force && !self.allow_interruptions() {
+-        if !force && !self.allow_interruptions_for_host() {
 -            return Err(SpeechError::InterruptionsNotAllowed.into());
 +            // Checked and recorded under the lock `mark_done` takes: a request it does not see
 +            // is refused as too late.
@@ -116,7 +116,7 @@ index 423ee2c08..3decc95b5 100644
 +            {
 +                return Ok(());
 +            }
-+            if !force && !self.allow_interruptions() {
++            if !force && !self.allow_interruptions_for_host() {
 +                return Err(SpeechError::InterruptionsNotAllowed.into());
 +            }
 +            self.interrupt_requested.store(true, Ordering::Release);
