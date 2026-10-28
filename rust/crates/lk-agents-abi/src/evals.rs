@@ -87,7 +87,6 @@ pub trait EvaluationHost: Send + Sync {
 /// Runs judges on one model. A model the host implements is offered `tools`, the host's live
 /// judge tools (`judge_tool_schemas`).
 #[crate::host(class(name = "_core_JudgeRunner"))]
-#[async_trait]
 pub trait JudgeRunner: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self;

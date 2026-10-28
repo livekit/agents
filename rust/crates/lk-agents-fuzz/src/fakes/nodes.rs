@@ -123,11 +123,12 @@ struct EchoAudio(
     Invocation,
 );
 
-#[async_trait::async_trait]
 impl RealtimeAudioNode for EchoAudio {
-    async fn push(&self, frame: &AudioFrame) {
-        self.2.input();
-        let _ = self.0.send(frame.clone());
+    fn push<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.2.input();
+            let _ = self.0.send(frame.clone());
+        })
     }
 
     fn clear(&self) {
@@ -141,7 +142,6 @@ fn missing(leg: &str) -> ProviderError {
     ApiError::new(format!("no {leg} below the node")).into()
 }
 
-#[async_trait::async_trait]
 impl NodeFactory for FakeNodes {
     /// `transcription_node` as the default: each delta down the leg below, in order, and the
     /// segment's flush after its last one.
@@ -188,22 +188,35 @@ impl NodeFactory for FakeNodes {
         Ok(Arc::new(EchoAudio(tx, cut, self.invocation(NodeUse::RealtimeAudio))))
     }
 
-    async fn llm_node(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        self.used(NodeUse::Llm);
-        if let Some(text) = self.llm_text {
-            return Ok(Box::new(NodeText(Some(text))));
-        }
-        self.llm.as_ref().ok_or_else(|| missing("LLM"))?.chat(req).await
+    fn llm_node<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            self.used(NodeUse::Llm);
+            if let Some(text) = self.llm_text {
+                return Ok(Box::new(NodeText(Some(text))) as LlmStream);
+            }
+            self.llm.as_ref().ok_or_else(|| missing("LLM"))?.chat(req).await
+        })
     }
 
-    async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        self.used(NodeUse::Tts);
-        self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream().await
+    fn tts_node(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            self.used(NodeUse::Tts);
+            self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream().await
+        })
     }
 
-    async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
-        self.used(NodeUse::Stt);
-        let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
-        stt.stream(None, None).await?.ok_or_else(|| missing("streaming STT"))
+    fn stt_node(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+        Box::pin(async move {
+            self.used(NodeUse::Stt);
+            let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
+            stt.stream(None, None).await?.ok_or_else(|| missing("streaming STT"))
+        })
     }
 }

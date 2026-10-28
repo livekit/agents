@@ -278,7 +278,6 @@ mod tests {
     /// A node whose provider gave up after its own retries.
     struct GaveUp;
 
-    #[async_trait]
     impl NodeFactory for GaveUp {
         fn text_node(
             &self,
@@ -294,16 +293,23 @@ mod tests {
             unreachable!()
         }
 
-        async fn llm_node(&self, _req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-            Err(ApiError::new("down").into())
+        fn llm_node<'a>(
+            &'a self,
+            _req: &'a ChatRequest,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+            Box::pin(async move { Err(ApiError::new("down").into()) })
         }
 
-        async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-            Err(ApiError::new("down").into())
+        fn tts_node(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+            Box::pin(async move { Err(ApiError::new("down").into()) })
         }
 
-        async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
-            Err(ApiError::new("down").into())
+        fn stt_node(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+            Box::pin(async move { Err(ApiError::new("down").into()) })
         }
     }
 

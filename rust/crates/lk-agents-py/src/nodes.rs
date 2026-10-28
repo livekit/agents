@@ -8,20 +8,19 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::python::{
     Ambient, Convert, HostHandle, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState,
     NodeCalls, captured, check_pid, item_stream, pyo3_async_runtimes,
 };
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
+use lk_agents_abi::voice::nodes::NodeFactory;
+use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 use lk_agents_abi::{
     AudioFrame, ChatRequest, ChoiceDelta, LlmChunk, LlmStream, Role, SpawnerExt as _, SpeechEvent,
     StreamSink as _, StreamSource as _, Stt, SttSink, SttSource, SynthesizedAudio, TimedString,
     Tts, TtsSink, TtsSource,
 };
-use lk_agents_abi::voice::nodes::NodeFactory;
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
-use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 use pyo3::IntoPyObjectExt as _;
 use pyo3::prelude::*;
 
@@ -202,35 +201,59 @@ impl AgentNodes {
     }
 }
 
-#[async_trait]
 impl NodeFactory for AgentNodes {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
         let node = TranscriptionNode { nodes: self.share(), below, segment: Mutex::new(None) };
         Ok(Arc::new(node))
     }
 
-    fn audio_node(&self, below: Arc<dyn AudioOutput>) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
+    fn audio_node(
+        &self,
+        below: Arc<dyn AudioOutput>,
+    ) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
         let cut = Arc::new(AtomicBool::new(false));
-        let node = AudioOutputNode { nodes: self.share(), below, generation: Mutex::new(None), cut };
+        let node =
+            AudioOutputNode { nodes: self.share(), below, generation: Mutex::new(None), cut };
         Ok(Arc::new(node))
     }
 
-    async fn llm_node(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let req = req.clone();
-        Ok(Box::new(self.call("llm", move |py| req.into_py_any(py), Box::new(llm_chunk)).await?))
+    fn llm_node<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move {
+            let req = req.clone();
+            Ok(
+                Box::new(
+                    self.call("llm", move |py| req.into_py_any(py), Box::new(llm_chunk)).await?,
+                ) as LlmStream,
+            )
+        })
     }
 
-    async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let request_id = node_id("tts_node_");
-        let convert: Convert<SynthesizedAudio> = Box::new(move |frame| synthesized(frame, &request_id));
-        let (sink, source) = self.duplex("tts", |py, text: &String| text.into_py_any(py), convert).await?;
-        Ok((Box::new(sink), Box::new(source)))
+    fn tts_node(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        Box::pin(async move {
+            let request_id = node_id("tts_node_");
+            let convert: Convert<SynthesizedAudio> =
+                Box::new(move |frame| synthesized(frame, &request_id));
+            let (sink, source) =
+                self.duplex("tts", |py, text: &String| text.into_py_any(py), convert).await?;
+            Ok((Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+        })
     }
 
-    async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
-        let convert: Convert<SpeechEvent> = Box::new(|ev| ev.extract::<SpeechEvent>().map_err(Into::into));
-        let (sink, source) = self.duplex("stt", |py, frame: &AudioFrame| frame.into_py_any(py), convert).await?;
-        Ok((Box::new(sink), Box::new(source)))
+    fn stt_node(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+        Box::pin(async move {
+            let convert: Convert<SpeechEvent> =
+                Box::new(|ev| ev.extract::<SpeechEvent>().map_err(Into::into));
+            let (sink, source) =
+                self.duplex("stt", |py, frame: &AudioFrame| frame.into_py_any(py), convert).await?;
+            Ok((Box::new(sink) as SttSink, Box::new(source) as SttSource))
+        })
     }
 }
 
@@ -256,7 +279,11 @@ impl TranscriptionNode {
                     let below = Arc::clone(&below);
                     async move {
                         let timed = t.start_time.is_some() || t.end_time.is_some();
-                        let sent = if timed { below.capture_timed(&t).await } else { below.capture_text(&t.text).await };
+                        let sent = if timed {
+                            below.capture_timed(&t).await
+                        } else {
+                            below.capture_text(&t.text).await
+                        };
                         sent.is_ok()
                     }
                 },
@@ -306,26 +333,29 @@ struct AudioOutputNode {
     cut: Arc<AtomicBool>,
 }
 
-#[async_trait]
 impl RealtimeAudioNode for AudioOutputNode {
-    async fn push(&self, frame: &AudioFrame) {
-        let mut generation = self.generation.lock().unwrap_or_else(|p| p.into_inner());
-        if generation.is_none() {
-            let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
-            *generation = self.nodes.open(
-                "realtime_audio",
-                |py, f: &AudioFrame| f.into_py_any(py),
-                Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)),
-                move |frame: AudioFrame| {
-                    let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
-                    async move { !cut.load(Ordering::SeqCst) && below.capture_frame(&frame).await.is_ok() }
-                },
-                || {},
-            );
-        }
-        if let Some(sink) = generation.as_ref() {
-            sink.send(frame);
-        }
+    fn push<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let mut generation = self.generation.lock().unwrap_or_else(|p| p.into_inner());
+            if generation.is_none() {
+                let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
+                *generation = self.nodes.open(
+                    "realtime_audio",
+                    |py, f: &AudioFrame| f.into_py_any(py),
+                    Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)),
+                    move |frame: AudioFrame| {
+                        let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
+                        async move {
+                            !cut.load(Ordering::SeqCst) && below.capture_frame(&frame).await.is_ok()
+                        }
+                    },
+                    || {},
+                );
+            }
+            if let Some(sink) = generation.as_ref() {
+                sink.send(frame);
+            }
+        })
     }
 
     fn clear(&self) {
@@ -346,8 +376,17 @@ impl RealtimeAudioNode for AudioOutputNode {
 /// `FlushSentinel` (the spoken segment ends here), or a model's `ChatChunk`.
 fn llm_chunk(item: &Bound<'_, PyAny>) -> PyResult<LlmChunk> {
     if let Ok(text) = item.extract::<String>() {
-        let delta = ChoiceDelta { role: Some(Role::Assistant), content: Some(text), ..ChoiceDelta::default() };
-        return Ok(LlmChunk { id: node_id("chunk_"), delta: Some(delta), node_text: true, ..LlmChunk::default() });
+        let delta = ChoiceDelta {
+            role: Some(Role::Assistant),
+            content: Some(text),
+            ..ChoiceDelta::default()
+        };
+        return Ok(LlmChunk {
+            id: node_id("chunk_"),
+            delta: Some(delta),
+            node_text: true,
+            ..LlmChunk::default()
+        });
     }
     let flush = item.py().import("livekit.agents.types")?.getattr("FlushSentinel")?;
     if item.is_instance(&flush)? {
@@ -414,7 +453,10 @@ fn caller_input<T: Send + 'static>(
 /// The provider's stream fed from `input` and drained into `output`, until either side stops.
 /// Its calls are read through `calls` by the node's reader.
 async fn pump<I: Send + 'static, O: Send + 'static>(
-    opened: Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn lk_agents_abi::StreamSource<O>>), ProviderError>,
+    opened: Result<
+        (Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn lk_agents_abi::StreamSource<O>>),
+        ProviderError,
+    >,
     mut input: HostSource<I>,
     output: ItemSink<O>,
     clock: Arc<dyn lk_agents_abi::Clock>,
@@ -517,8 +559,10 @@ fn stt_node(
     let stt = <dyn Stt as HostProxy>::from_host(stt, None)?;
     let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v, None)).transpose()?;
     let stt = stt.with_conn_options(&options).unwrap_or(stt);
-    let stt = lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad, Arc::clone(&clock));
-    let input = caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
+    let stt =
+        lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad, Arc::clone(&clock));
+    let input =
+        caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
     let (output, events) = item_stream(py, speech_event)?;
     let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
     spawner.spawn_unboxed(async move {

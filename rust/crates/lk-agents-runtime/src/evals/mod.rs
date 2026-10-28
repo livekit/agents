@@ -12,7 +12,6 @@ mod tests;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use async_trait::async_trait;
 use futures_util::future::join_all;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::evals::{
@@ -49,7 +48,6 @@ enum Judge {
     Host { name: String, evaluator: HostRef },
 }
 
-#[async_trait]
 impl JudgeRunner for Judges {
     fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self {
         Judges { llm, tools, host, clock: crate::process::host_clock() }

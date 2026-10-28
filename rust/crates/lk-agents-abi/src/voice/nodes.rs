@@ -15,7 +15,6 @@ use crate::{
 /// `stt_node` are opened per request in place of the provider: one completion, one segment's
 /// synthesis, one recognition stream.
 #[crate::host(native(refused = "expected an agent's nodes (`_core.AgentNodes`)"))]
-#[async_trait::async_trait]
 pub trait NodeFactory: Send + Sync {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
     fn audio_node(
@@ -23,11 +22,14 @@ pub trait NodeFactory: Send + Sync {
         below: Arc<dyn crate::voice::io::AudioOutput>,
     ) -> Result<Arc<dyn RealtimeAudioNode>, HostError>;
     /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks.
-    async fn llm_node(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError>;
+    fn llm_node<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
     /// `tts_node(text, model_settings)`: text pushed in, its frames out.
-    async fn tts_node(&self) -> Result<(TtsSink, TtsSource), ProviderError>;
+    fn tts_node(&self) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
-    async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError>;
+    fn stt_node(&self) -> crate::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>>;
 }
 
 // Text is handed to the node on its loop and never awaited: a `transcription_node` may hold text
@@ -43,10 +45,9 @@ pub trait TextNode: Send + Sync {
 /// `Agent.realtime_audio_output_node`: one realtime generation's audio, on its way to the speaker
 /// through the leg the node was opened over (a node per generation, so its state never carries
 /// over and it plays into the output of its own step).
-#[async_trait::async_trait]
 pub trait RealtimeAudioNode: Send + Sync {
     /// One frame in; returns as soon as it is queued.
-    async fn push(&self, frame: &AudioFrame);
+    fn push<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, ()>;
 
     /// Interrupted: what the node still yields is dropped (the leg below was cleared).
     fn clear(&self);

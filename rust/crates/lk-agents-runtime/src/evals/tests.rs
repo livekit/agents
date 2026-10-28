@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use async_trait::async_trait;
 use lk_agents_abi::errors::{HostError, ProviderError, RefRegistry};
 use lk_agents_abi::{
     AgentConfigUpdate, AgentHandoffItem, ChoiceDelta, Closed, FunctionCall, FunctionCallOutput,
