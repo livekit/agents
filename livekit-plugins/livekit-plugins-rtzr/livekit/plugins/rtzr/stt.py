@@ -15,12 +15,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
 
 import aiohttp
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -46,6 +47,30 @@ _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
 _RECV_COMPLETION_TIMEOUT = 5.0
 _IDLE_CHECK_INTERVAL = 1.0
+
+
+class _Word(TypedDict, total=False):
+    text: str | None
+    start_at: float | None
+    duration: float | None
+
+
+class _Alternative(TypedDict, total=False):
+    text: str | None
+
+
+class _Transcript(TypedDict, total=False):
+    type: str
+    error: object
+    message: str
+    start_at: float | None
+    duration: float | None
+    words: list[_Word] | None
+    alternatives: list[_Alternative] | None
+    final: bool | None
+
+
+_TRANSCRIPT = TypeAdapter(_Transcript)
 
 
 @dataclass
@@ -320,19 +345,19 @@ class SpeechStream(stt.SpeechStream):
             await self._cleanup_connection()
         self._state = _StreamState.IDLE
 
-    def _parse_words(self, words: list[dict]) -> list[TimedString]:
+    def _parse_words(self, words: list[_Word]) -> list[TimedString]:
         """Parse word timing data from RTZR response."""
         return [
             TimedString(
-                text=w.get("text", ""),
-                start_time=w.get("start_at", 0) / 1000.0 + self.start_time_offset,
-                end_time=(w.get("start_at", 0) + w.get("duration", 0)) / 1000.0
+                text=w.get("text") or "",
+                start_time=(w.get("start_at") or 0) / 1000.0 + self.start_time_offset,
+                end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0
                 + self.start_time_offset,
             )
             for w in words
         ]
 
-    def _check_error_response(self, data: dict) -> None:
+    def _check_error_response(self, data: _Transcript) -> None:
         """Check for error in RTZR response and raise if found."""
         if "error" in data:
             raise APIStatusError(
@@ -351,7 +376,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_transcript_event(
         self,
-        data: dict,
+        data: _Transcript,
         in_speech: bool,
         speech_started_at: float | None,
     ) -> tuple[list[stt.SpeechEvent], bool, float | None]:
@@ -359,14 +384,15 @@ class SpeechStream(stt.SpeechStream):
 
         Returns: (events, in_speech, speech_started_at)
         """
-        start_time = data.get("start_at", 0) / 1000.0
-        duration = data.get("duration", 0) / 1000.0
-        words = data.get("words", [])
+        start_time = (data.get("start_at") or 0) / 1000.0
+        duration = (data.get("duration") or 0) / 1000.0
+        words = data.get("words") or []
 
-        if "alternatives" not in data or not data["alternatives"]:
+        alternatives = data.get("alternatives")
+        if not alternatives:
             return [], in_speech, speech_started_at
 
-        text = data["alternatives"][0].get("text", "")
+        text = alternatives[0].get("text") or ""
         is_final = bool(data.get("final", False))
 
         if not text:
@@ -419,10 +445,9 @@ class SpeechStream(stt.SpeechStream):
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    logger.warning("Non-JSON text from RTZR STT", extra={"lk.pii.data": msg.data})
-                    continue
+                    data = _TRANSCRIPT.validate_json(msg.data)
+                except ValidationError as error:
+                    raise APIConnectionError("Malformed RTZR response", retryable=False) from error
 
                 self._check_error_response(data)
 

@@ -23,15 +23,19 @@ import warnings
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    LanguageCode,
     stt,
     utils,
 )
@@ -74,15 +78,45 @@ _KEEPALIVE_INTERVAL_S = 5.0
 _MAX_SILENT_RECONNECTS = 3
 
 
-def _safe_error_code(exc: BaseException) -> int | None:
-    for attr in ("status_code", "code"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-    return None
+class _Word(TypedDict, total=False):
+    start: float | None
+    end: float | None
 
 
-def _extract_error_text(data: dict[str, object]) -> str:
+class _Alternative(TypedDict, total=False):
+    transcript: str | None
+    confidence: float | None
+    words: list[_Word] | None
+    language: str | None
+
+
+class _Channel(TypedDict, total=False):
+    alternatives: list[_Alternative] | None
+
+
+class _Message(TypedDict, total=False):
+    transcript: str | None
+    confidence: float | None
+    words: list[_Word] | None
+    language: str | None
+    type: str
+    is_final: bool | str | None
+    channel: _Channel | None
+    slng_request_id: str | None
+    session_id: str | None
+    data: dict[str, JsonValue] | None
+    message: str
+    description: str
+    error: JsonValue
+    code: int | str
+    status_code: int | str
+    err_code: int | str
+
+
+_MESSAGE = TypeAdapter(_Message)
+
+
+def _extract_error_text(data: _Message) -> str:
     nested = data.get("data")
     if isinstance(nested, dict):
         for key in ("message", "description", "error"):
@@ -91,18 +125,22 @@ def _extract_error_text(data: dict[str, object]) -> str:
                 return value
 
     for key in ("message", "description", "error"):
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_message = value.get("message") or value.get("description") or value.get("error")
+        outer_value = data.get(key)
+        if isinstance(outer_value, str) and outer_value:
+            return outer_value
+        if isinstance(outer_value, dict):
+            nested_message = (
+                outer_value.get("message")
+                or outer_value.get("description")
+                or outer_value.get("error")
+            )
             if isinstance(nested_message, str) and nested_message:
                 return nested_message
 
     return "Unknown error"
 
 
-def _extract_error_code(data: dict[str, object]) -> int | None:
+def _extract_error_code(data: _Message) -> int | None:
     return extract_error_status(data)
 
 
@@ -167,7 +205,7 @@ class STT(stt.STT):
         extra_headers: dict[str, str] | None = None,
         final_timeout_s: float | None = None,
         fallback_recovery_cooldown_s: float = 60.0,
-        **model_options: Any,
+        **model_options: JsonValue,
     ) -> None:
         """
         Initialize SLNG STT.
@@ -334,7 +372,7 @@ class STT(stt.STT):
         self,
         name: str,
         level: Literal["info", "warning", "error"] = "info",
-        **data: Any,
+        **data: object,
     ) -> None:
         self.emit(
             "slng_event",
@@ -474,7 +512,7 @@ class SpeechStream(stt.SpeechStream):
         connections: Sequence[STTConnectionConfig],
         active_endpoint_index: int,
         candidate_state: CandidateState,
-        model_options: dict[str, Any],
+        model_options: dict[str, JsonValue],
         http_session: aiohttp.ClientSession,
         extra_headers: dict[str, str],
         final_timeout_s: float | None,
@@ -649,7 +687,7 @@ class SpeechStream(stt.SpeechStream):
             )
             self._speech_duration = 0
 
-        def retrieve_task_exception(task: asyncio.Task[Any]) -> None:
+        def retrieve_task_exception(task: asyncio.Task[object]) -> None:
             if task.cancelled():
                 return
             with contextlib.suppress(Exception):
@@ -847,7 +885,7 @@ class SpeechStream(stt.SpeechStream):
             pending_replay = bytes(buffered_audio)
             return True
 
-        async def next_audio_frame() -> Any | None:
+        async def next_audio_frame() -> rtc.AudioFrame | None:
             async for item in self.input:
                 if isinstance(item, self.Flush):
                     continue
@@ -857,7 +895,7 @@ class SpeechStream(stt.SpeechStream):
         async def send_task(
             ws: aiohttp.ClientWebSocketResponse,
             *,
-            pending_frames: list[Any],
+            pending_frames: list[rtc.AudioFrame],
             close_on_input_end: bool,
         ) -> None:
             nonlocal awaiting_final, input_finished, pending_replay
@@ -985,15 +1023,9 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    data = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    logger.debug(
-                        "[SLNG STT] ignoring non-JSON text frame",
-                        extra={"lk.pii.data": msg.data[:200]},
-                    )
-                    continue
-                if not isinstance(data, dict):
-                    continue
+                    data = _MESSAGE.validate_json(msg.data)
+                except ValidationError as error:
+                    raise APIConnectionError("Malformed SLNG response", retryable=False) from error
 
                 msg_type = data.get("type")
                 if msg_type == "ready":
@@ -1013,25 +1045,24 @@ class SpeechStream(stt.SpeechStream):
                         is_final = is_final_value.strip().lower() in ("true", "1")
                     else:
                         is_final = bool(is_final_value)
-                    raw_channel = data.get("channel")
-                    channel = raw_channel if isinstance(raw_channel, dict) else {}
-                    raw_alternatives = channel.get("alternatives")
-                    alternatives = raw_alternatives if isinstance(raw_alternatives, list) else []
-                    alt0 = (
-                        alternatives[0]
-                        if alternatives and isinstance(alternatives[0], dict)
-                        else {}
-                    )
+                    alternatives = (data.get("channel") or {}).get("alternatives") or []
+                    alt0: _Alternative = alternatives[0] if alternatives else {}
                     detected_language = data.get("language") or alt0.get("language")
-                    data = {
-                        "type": "final_transcript" if is_final else "partial_transcript",
+                    transcript_data: _Alternative = {
                         "transcript": alt0.get("transcript", ""),
                         "confidence": alt0.get("confidence", 0.0),
                         "words": alt0.get("words", []),
                     }
                     if detected_language:
-                        data["language"] = detected_language
-                    msg_type = data["type"]
+                        transcript_data["language"] = detected_language
+                    msg_type = "final_transcript" if is_final else "partial_transcript"
+                else:
+                    transcript_data = {
+                        "transcript": data.get("transcript"),
+                        "confidence": data.get("confidence"),
+                        "words": data.get("words"),
+                        "language": data.get("language"),
+                    }
 
                 if msg_type in ("Error", "error"):
                     message = _extract_error_text(data)
@@ -1041,7 +1072,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(f"SLNG STT error: {message}")
 
                 if msg_type in ("partial_transcript", "final_transcript"):
-                    text = data.get("transcript", "")
+                    text = transcript_data.get("transcript")
                     text = text.strip() if isinstance(text, str) else ""
                     is_final = msg_type == "final_transcript"
                     if not is_final and text:
@@ -1069,9 +1100,9 @@ class SpeechStream(stt.SpeechStream):
                             recover_primary_if_ready()
                         continue
 
-                    confidence = data.get("confidence", 0.0)
-                    language = data.get("language", self._opts.language)
-                    words = data.get("words", [])
+                    confidence = transcript_data.get("confidence") or 0.0
+                    language = transcript_data.get("language") or self._opts.language
+                    words = transcript_data.get("words") or []
 
                     # Only a FINAL transcript satisfies an outstanding finalize;
                     # an interim must not disarm the final-result watchdog, or a
@@ -1088,8 +1119,8 @@ class SpeechStream(stt.SpeechStream):
                         # only a final (not an interim) clears the reconnect debt.
                         same_endpoint_replays = 0
 
-                        start_time = words[0].get("start", 0.0) if words else 0.0
-                        end_time = words[-1].get("end", 0.0) if words else 0.0
+                        start_time = (words[0].get("start") or 0.0) if words else 0.0
+                        end_time = (words[-1].get("end") or 0.0) if words else 0.0
                     else:
                         start_time = 0.0
                         end_time = 0.0
@@ -1104,7 +1135,7 @@ class SpeechStream(stt.SpeechStream):
                         else stt.SpeechEventType.INTERIM_TRANSCRIPT,
                         alternatives=[
                             stt.SpeechData(
-                                language=language,
+                                language=LanguageCode(language),
                                 text=text,
                                 confidence=confidence,
                                 start_time=start_time,
@@ -1134,7 +1165,7 @@ class SpeechStream(stt.SpeechStream):
             wait_user_state: asyncio.Task[bool] | None = None
             wait_timeout_permission: asyncio.Task[bool] | None = None
 
-            pending_frames: list[Any] = []
+            pending_frames: list[rtc.AudioFrame] = []
             if pending_replay is None:
                 first = await next_audio_frame()
                 if first is None:
@@ -1471,11 +1502,9 @@ class SpeechStream(stt.SpeechStream):
                 continue
 
             try:
-                data = json.loads(msg.data)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(data, dict):
-                continue
+                data = _MESSAGE.validate_json(msg.data)
+            except ValidationError as error:
+                raise APIConnectionError("Malformed SLNG response", retryable=False) from error
 
             msg_type = data.get("type")
             if msg_type == "ready":
@@ -1491,7 +1520,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 raise APIStatusError(f"SLNG STT error: {message}")
 
-    def _emit_session_event(self, data: dict[str, Any]) -> None:
+    def _emit_session_event(self, data: _Message) -> None:
         self._slng_stt._emit_plugin_event(
             "gateway.session",
             gateway_request_id=(

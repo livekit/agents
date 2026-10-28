@@ -22,9 +22,10 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -36,6 +37,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.metrics import TTSMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -209,9 +211,9 @@ class _TTSOptions:
     speed: float
     word_tokenizer: tokenize.WordTokenizer
     api_key: str
-    model_options: dict[str, object]
+    model_options: dict[str, JsonValue]
     extra_headers: dict[str, str]
-    runtime_init: dict[str, Any] | None
+    runtime_init: dict[str, JsonValue] | None
     warm_standby_enabled: bool
     text_chunking: Literal["auto", "word", "phrase"]
     phrase_max_chars: int
@@ -266,11 +268,11 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         extra_headers: dict[str, str] | None = None,
         # Advanced / optional. Used by integrations that drive the session
         # themselves; a typical client can ignore these.
-        runtime_init: dict[str, Any] | None = None,
+        runtime_init: dict[str, JsonValue] | None = None,
         warm_standby_enabled: bool = False,
         text_chunking: Literal["auto", "word", "phrase"] = "auto",
         phrase_max_chars: int = 60,
-        **model_options: Any,
+        **model_options: JsonValue,
     ) -> None:
         """
         Create a new instance of SLNG TTS.
@@ -439,6 +441,8 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                 candidate = TTS(
                     api_key=resolved_key,
                     connections=[config],
+                    model=None,
+                    model_endpoint=None,
                     provider_api_key=provider_api_key,
                     voice=config.voice or voice,
                     slng_base_url=slng_base_url,
@@ -469,7 +473,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                 candidate.on("slng_event", self._forward_plugin_event)
             self._fallback = tts.FallbackAdapter(list(self._candidate_tts), sample_rate=sample_rate)
 
-    def _forward_metrics(self, metrics: Any) -> None:
+    def _forward_metrics(self, metrics: TTSMetrics) -> None:
         self.emit("metrics_collected", metrics)
 
     def _forward_plugin_event(self, event: PluginEvent) -> None:
@@ -479,7 +483,7 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         self,
         name: str,
         level: Literal["info", "warning", "error"] = "info",
-        **data: Any,
+        **data: object,
     ) -> None:
         self.emit(
             "slng_event",

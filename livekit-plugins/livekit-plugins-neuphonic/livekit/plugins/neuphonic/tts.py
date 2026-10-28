@@ -22,6 +22,8 @@ import weakref
 from dataclasses import dataclass, replace
 
 import aiohttp
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -300,23 +302,39 @@ class ChunkedStream(tts.ChunkedStream):
 
                     parsed_message = _parse_sse_message(message)
 
-                    if (
-                        parsed_message is not None
-                        and parsed_message.get("data", {}).get("audio") is not None
-                    ):
-                        audio_bytes = base64.b64decode(parsed_message["data"]["audio"])
-                        output_emitter.push(audio_bytes)
+                    if parsed_message is not None:
+                        audio = (parsed_message.get("data") or {}).get("audio")
+                        if audio is not None:
+                            output_emitter.push(base64.b64decode(audio))
 
                 output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
 
-def _parse_sse_message(message: str) -> dict | None:
+class _AudioData(TypedDict, total=False):
+    audio: str | None
+    context_id: str | None
+    stop: bool | None
+
+
+class _Response(TypedDict, total=False):
+    data: _AudioData | None
+    type: str
+    status_code: int | None
+    errors: object
+
+
+_RESPONSE = TypeAdapter(_Response)
+
+
+def _parse_sse_message(message: str) -> _Response | None:
     """
     Parse each response from the SSE endpoint.
 
@@ -331,11 +349,14 @@ def _parse_sse_message(message: str) -> dict | None:
         return None
 
     _, value = message.split(": ", 1)
-    message_dict: dict = json.loads(value)
+    try:
+        message_dict = _RESPONSE.validate_json(value)
+    except ValidationError as error:
+        raise APIConnectionError("Malformed Neuphonic response", retryable=False) from error
 
     if message_dict.get("errors") is not None:
         raise Exception(
-            f"received error status {message_dict['status_code']}:{message_dict['errors']}"
+            f"received error status {message_dict.get('status_code')}:{message_dict.get('errors')}"
         )
 
     return message_dict
@@ -389,6 +410,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise create_api_error_from_http(
                 e.message, status=e.status, request_id=request_id
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -428,15 +451,16 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        resp = json.loads(msg.data)
-                    except json.JSONDecodeError:
-                        logger.warning("Invalid JSON from NeuPhonic")
-                        continue
+                        resp = _RESPONSE.validate_json(msg.data)
+                    except ValidationError as error:
+                        raise APIConnectionError(
+                            "Malformed Neuphonic response", retryable=False
+                        ) from error
 
                     if resp.get("type") == "error":
                         raise APIError(f"NeuPhonic returned error: {resp}")
 
-                    data = resp.get("data", {})
+                    data = resp.get("data") or {}
                     audio_data = data.get("audio")
                     if audio_data and audio_data != "" and data.get("context_id") == segment_id:
                         try:

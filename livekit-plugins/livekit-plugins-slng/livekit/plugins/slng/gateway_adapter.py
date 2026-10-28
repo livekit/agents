@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+
+from pydantic import JsonValue
 
 _EXTERNAL_TRACKING_ID_RE = re.compile(r"[\x00-\x1f\x7f,]")
 _MODEL_IDENTIFIER_RE = re.compile(
@@ -72,9 +73,9 @@ def build_tts_init_payload(
     sample_rate: int,
     encoding: str,
     speed: float,
-    model_options: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    config: dict[str, Any] = {
+    model_options: Mapping[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    config: dict[str, JsonValue] = {
         "language": language,
         "encoding": encoding,
         "sample_rate": sample_rate,
@@ -103,10 +104,10 @@ def build_stt_init_payload(
     enable_partial_transcripts: bool,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-    model_options: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    model_options: Mapping[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
     del model
-    config: dict[str, Any] = {
+    config: dict[str, JsonValue] = {
         "language": language,
         "sample_rate": sample_rate,
         "encoding": "linear16" if encoding == "pcm_s16le" else encoding,
@@ -220,7 +221,7 @@ def is_payload_too_large(exc: BaseException | None) -> bool:
     return http_status_from_exception(exc) == 413
 
 
-def error_details(exc: BaseException | None) -> dict[str, Any]:
+def error_details(exc: BaseException | None) -> dict[str, str | int | None]:
     if exc is None:
         return {"error_type": None, "error_code": None, "error_message": None}
     message = str(exc).strip() or type(exc).__name__

@@ -3,8 +3,10 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
+
+from pydantic import JsonValue
 
 from .gateway_adapter import validate_model_identifier
 
@@ -14,7 +16,7 @@ class STTConnectionConfig:
     endpoint: str
     model: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
-    init: Mapping[str, Any] | None = None
+    init: Mapping[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,7 @@ class TTSConnectionConfig:
     model: str | None = None
     voice: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
-    init: Mapping[str, Any] | None = None
+    init: Mapping[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class PluginEvent:
     name: str
     component: Literal["stt", "tts"]
     level: Literal["info", "warning", "error"] = "info"
-    data: Mapping[str, Any] = field(default_factory=dict)
+    data: Mapping[str, object] = field(default_factory=dict)
 
 
 class CandidateState:
