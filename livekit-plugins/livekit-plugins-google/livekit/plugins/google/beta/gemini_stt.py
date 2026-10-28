@@ -39,6 +39,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from ..log import logger
+from ..utils import genai_http_options
 
 # Must be a Live-capable model: the plain chat models (e.g. gemini-2.5-flash) are
 # rejected by the Live endpoint with "not supported for bidiGenerateContent".
@@ -204,6 +205,12 @@ class RecognizeStream(stt.RecognizeStream):
         self._http_options = http_options
 
     async def _run(self) -> None:
+        http_options = genai_http_options(
+            self._conn_options,
+            types.HttpOptions.model_validate(self._http_options)
+            if self._http_options is not None
+            else None,
+        )
         creds = None
         project_id = self._opts.project
 
@@ -239,7 +246,7 @@ class RecognizeStream(stt.RecognizeStream):
 
         client_kwargs: dict[str, Any] = {
             "api_key": self._api_key,
-            "http_options": self._http_options,
+            "http_options": http_options,
         }
         if is_enterprise:
             client_kwargs["enterprise"] = True

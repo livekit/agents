@@ -9,7 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 
 from google.genai import types
-from livekit.agents import llm
+from livekit.agents import APIConnectOptions, APIError, llm
 from livekit.agents.llm import utils as llm_utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -280,3 +280,40 @@ class _GeminiJsonSchema:
 
         if items_schema := schema.get("items"):
             self._simplify(items_schema, refs_stack)
+
+
+def cloud_rpc_timeout(options: APIConnectOptions) -> None:
+    if (
+        options.pool_timeout is not None
+        or options.connect_timeout is not None
+        or options.write_timeout is not None
+        or options.read_timeout is not None
+        or options.total_timeout is not None
+    ):
+        raise APIError(
+            "Google Cloud gRPC cannot enforce pool/connect/write/read inactivity or a total deadline "
+            "across framework attempts; disable those limits",
+            retryable=False,
+        )
+
+
+def genai_http_options(
+    options: APIConnectOptions, http_options: types.HttpOptions | None
+) -> types.HttpOptions:
+    if (
+        options.pool_timeout is not None
+        or options.connect_timeout is not None
+        or options.write_timeout is not None
+        or options.read_timeout is not None
+        or options.total_timeout is not None
+    ):
+        raise APIError(
+            "Google GenAI cannot enforce separate timeout phases consistently across its "
+            "HTTP transports; disable those limits",
+            retryable=False,
+        )
+    result = http_options.model_copy() if http_options is not None else types.HttpOptions()
+    result.headers = dict(result.headers or {})
+    result.timeout = 0
+    result.retry_options = types.HttpRetryOptions(attempts=1)
+    return result

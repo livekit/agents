@@ -18,6 +18,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from ..log import logger
+from ..utils import genai_http_options
 
 GEMINI_TTS_MODELS = Literal[
     "gemini-2.5-flash-preview-tts",
@@ -364,11 +365,13 @@ class ChunkedStream(tts.ChunkedStream):
         return parts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_options = genai_http_options(self._conn_options, None)
         try:
             opts = self._tts._opts
             config = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=_speech_config(opts),
+                http_options=http_options,
             )
             input_text = self._input_text
             if opts.instructions is not None:
@@ -384,7 +387,7 @@ class ChunkedStream(tts.ChunkedStream):
             if (styled_parts := self._styled_parts()) is not None:
                 extra_body["contents"] = [{"parts": styled_parts}]
             if extra_body:
-                config.http_options = types.HttpOptions(extra_body=extra_body)
+                http_options.extra_body = extra_body
 
             response = await self._tts._client.aio.models.generate_content_stream(
                 model=self._tts._opts.model,

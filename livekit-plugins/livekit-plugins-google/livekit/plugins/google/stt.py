@@ -58,6 +58,7 @@ from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
+from .utils import cloud_rpc_timeout
 
 LgType = SpeechLanguages | str
 LanguagesInput = LgType | list[LgType]
@@ -317,7 +318,9 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Google Cloud Platform"
 
-    async def _create_client(self, timeout: float) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:
+    async def _create_client(
+        self, timeout: float | None
+    ) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:
         # Add support for passing a specific location that matches recognizer
         # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
         # TODO(long): how to set timeout?
@@ -464,6 +467,7 @@ class STT(stt.STT):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        cloud_rpc_timeout(conn_options)
         frame = rtc.combine_audio_frames(buffer)
 
         config = self._build_recognition_config(
@@ -473,10 +477,13 @@ class STT(stt.STT):
         )
 
         try:
-            async with self._pool.connection(timeout=conn_options.timeout) as client:
+            async with self._pool.connection(
+                timeout=conn_options.connect_timeout, pool_timeout=conn_options.pool_timeout
+            ) as client:
                 raw = await client.recognize(
                     self._build_recognition_request(client, config, frame.data.tobytes()),
-                    timeout=conn_options.timeout,
+                    timeout=None,
+                    retry=None,
                 )
                 return _recognize_response_to_speech_event(raw)
         except DeadlineExceeded:
@@ -492,6 +499,7 @@ class STT(stt.STT):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        cloud_rpc_timeout(conn_options)
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,
@@ -1007,12 +1015,17 @@ class SpeechStream(stt.SpeechStream):
         while True:
             audio_pushed = False
             try:
-                async with self._pool.connection(timeout=self._conn_options.timeout) as client:
+                async with self._pool.connection(
+                    timeout=self._conn_options.connect_timeout,
+                    pool_timeout=self._conn_options.pool_timeout,
+                ) as client:
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
+                        timeout=None,
+                        retry=None,
                     )
                     self._session_connected_at = time.time()
 

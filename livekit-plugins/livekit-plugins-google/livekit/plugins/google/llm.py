@@ -37,7 +37,7 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import create_tools_config, to_response_format
+from .utils import create_tools_config, genai_http_options, to_response_format
 from .version import __version__
 
 
@@ -489,6 +489,10 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
+        http_options = genai_http_options(
+            self._conn_options,
+            self._llm._opts.http_options if is_given(self._llm._opts.http_options) else None,
+        )
 
         try:
             # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
@@ -504,13 +508,6 @@ class LLMStream(llm.LLMStream):
             # attached, `system_instruction` must also live inside the CachedContent
             # resource, so it's dropped from the outgoing request below.
             using_cache = "cached_content" in self._extra_kwargs
-            if is_given(self._llm._opts.http_options):
-                http_options = self._llm._opts.http_options.model_copy()
-                if http_options.timeout is None:
-                    http_options.timeout = int(self._conn_options.timeout * 1000)
-            else:
-                http_options = types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
-
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             http_options.headers = headers

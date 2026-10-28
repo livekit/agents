@@ -29,7 +29,12 @@ from livekit.agents.utils import audio as audio_utils, images, is_given
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
-from ..utils import create_function_response, create_tools_config, get_tool_results_for_realtime
+from ..utils import (
+    create_function_response,
+    create_tools_config,
+    genai_http_options,
+    get_tool_results_for_realtime,
+)
 from ..version import __version__
 
 INPUT_AUDIO_SAMPLE_RATE = 16000
@@ -520,8 +525,9 @@ class RealtimeSession(llm.RealtimeSession):
         ):
             api_version = "v1alpha"
 
-        http_options = self._opts.http_options or types.HttpOptions(
-            timeout=int(self._opts.conn_options.timeout * 1000)
+        http_options = genai_http_options(
+            self._opts.conn_options,
+            self._opts.http_options if is_given(self._opts.http_options) else None,
         )
         if api_version:
             http_options.api_version = api_version
