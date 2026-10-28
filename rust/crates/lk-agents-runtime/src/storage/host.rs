@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus, Task};
+use livekit_protocol::agent::agent_task::{GetTasksRequest, Task};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, GetItemsRequest, Item, ListRequest, ListResponse, Thread as ThreadRecord,
     UpdateRequest,
@@ -156,36 +156,17 @@ fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
     })
 }
 
-/// agent-db's task status as the framework's state. agent-db keeps four states: a submitted or
-/// input-required task is `running` there and reads back as `working`.
-fn cloud_task(t: Task) -> ThreadTask {
-    let status = match TaskStatus::try_from(t.status).unwrap_or_default() {
-        TaskStatus::Completed => TaskState::Completed,
-        TaskStatus::Failed => TaskState::Failed,
-        TaskStatus::Canceled => TaskState::Canceled,
-        TaskStatus::Running | TaskStatus::Unspecified => TaskState::Working,
-    };
-    ThreadTask {
+/// Preserve the framework's A2A state and the presence of an application label.
+fn cloud_task(t: Task) -> Result<ThreadTask, StorageError> {
+    let status = TaskState::parse(&t.status)
+        .ok_or_else(|| StorageError::Decode(format!("unknown task state {}", t.status)))?;
+    Ok(ThreadTask {
         task_id: t.task_id,
         thread_id: t.thread_id,
-        name: (!t.name.is_empty()).then_some(t.name),
+        name: t.name,
         status,
         updated_at: seconds_of(t.updated_at),
-    }
-}
-
-/// The agent-db filter for `state`; the states agent-db does not keep cannot be filtered on.
-fn cloud_status(state: TaskState) -> Result<TaskStatus, StorageError> {
-    match state {
-        TaskState::Working => Ok(TaskStatus::Running),
-        TaskState::Completed => Ok(TaskStatus::Completed),
-        TaskState::Failed => Ok(TaskStatus::Failed),
-        TaskState::Canceled => Ok(TaskStatus::Canceled),
-        other => Err(StorageError::Invalid(format!(
-            "agent-db does not filter tasks by {}",
-            other.as_str()
-        ))),
-    }
+    })
 }
 
 /// Every task of a local thread, of `status` when given.
@@ -363,18 +344,20 @@ impl HostStorageClass for HostStorage {
     ) -> Result<Vec<ThreadTask>, StorageError> {
         match self.backend().await? {
             Backend::Cloud(cloud) => {
-                let status = status.map(cloud_status).transpose()?;
+                let status = status.map(|status| status.as_str().to_owned());
                 let mut tasks = Vec::new();
                 let mut page_token = String::new();
                 loop {
                     let request = GetTasksRequest {
                         thread_id: thread_id.clone(),
-                        status: status.map(i32::from),
+                        status: status.clone(),
                         page_token,
                         ..Default::default()
                     };
                     let page = cloud.threads().tasks(request).await.map_err(thread_error)?;
-                    tasks.extend(page.tasks.into_iter().map(cloud_task));
+                    tasks.extend(
+                        page.tasks.into_iter().map(cloud_task).collect::<Result<Vec<_>, _>>()?,
+                    );
                     if page.next_page_token.is_empty() {
                         return Ok(tasks);
                     }
