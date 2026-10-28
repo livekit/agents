@@ -7,7 +7,7 @@ use lk_agents_abi::worker::endpoint::EndpointLimits;
 use lk_agents_worker::endpoint_budget::EndpointBudget;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use a2a::{JsonRpcId, error_code};
+use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
@@ -16,8 +16,9 @@ use lk_agents_core::a2a::auth::{allows, allows_first_message};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_storage::db::TaskQuery;
+use lk_agents_storage::schema::TaskRow;
 
-use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND, TaskState};
+use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -25,6 +26,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::a2a::Turn;
 use crate::storage::{Storage, Thread, now_ms, shortuuid};
+use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
 /// The transport's database frame ceiling also bounds one decoded door payload.
@@ -105,30 +107,13 @@ impl A2ADoor for Door {
                 Some(Admission { budget: self.budget.clone(), bytes: body_size })
             }
         };
-        let decoded = if body_size > MAX_PAYLOAD_BYTES {
-            Err(Box::new(rpc::Refusal {
-                id: JsonRpcId::Null,
-                error: rpc::rpc_error(
-                    error_code::INVALID_PARAMS,
-                    "A2A payload exceeds the transport budget",
-                ),
-            }))
-        } else if admission.is_none() {
-            Err(Box::new(rpc::Refusal {
-                id: JsonRpcId::Null,
-                error: rpc::rpc_error(
-                    error_code::INTERNAL_ERROR,
-                    "endpoint request budget exhausted",
-                ),
-            }))
-        } else {
-            rpc::decode(&body)
-        };
-        let decoded = decoded.and_then(|request| {
-            rpc::check_version(version.as_deref())
-                .map(|()| request.clone())
-                .map_err(|error| Box::new(rpc::Refusal { id: request.id, error }))
-        });
+        let decoded = rpc::admit(
+            &body,
+            body_size,
+            MAX_PAYLOAD_BYTES,
+            admission.is_some(),
+            version.as_deref(),
+        );
         let streaming = decoded.as_ref().is_ok_and(Request::is_streaming);
         let (sender, receiver) = mpsc::channel(RESPONSE_CAPACITY);
         let cancel = CancellationToken::new();
@@ -152,21 +137,10 @@ impl A2ADoor for Door {
                     .execute(request, principal, offset, sender.clone(), observer, host_context)
                     .await
                 {
-                    match error {
-                        DoorError::Auth(error) => {
-                            let _ = sender.try_send(Err(DoorError::Auth(error)));
-                        }
-                        DoorError::Storage(error) => {
-                            let code = match error {
-                                StorageError::Invalid(_) => error_code::INVALID_PARAMS,
-                                _ => error_code::INTERNAL_ERROR,
-                            };
-                            let _ = sender.try_send(Ok(wire::frame(
-                                rpc::failure(id, rpc::rpc_error(code, error.to_string())),
-                                None,
-                            )));
-                        }
-                    }
+                    let _ = sender.try_send(match error {
+                        DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
+                        auth => Err(auth),
+                    });
                 }
             },
             &self.runtime,
@@ -227,12 +201,6 @@ impl Drop for Response {
     }
 }
 
-struct Exchange {
-    id: JsonRpcId,
-    principal: AuthPrincipal,
-    sender: mpsc::Sender<Result<DoorFrame, DoorError>>,
-}
-
 impl Inner {
     fn authorize(
         principal: &AuthPrincipal,
@@ -266,38 +234,31 @@ impl Inner {
         request: Request,
         principal: AuthPrincipal,
         offset: Option<String>,
-        sender: mpsc::Sender<Result<DoorFrame, DoorError>>,
+        sender: Sender,
         observer: CancellationToken,
         host_context: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), DoorError> {
-        match request.call {
+        let id = request.id;
+        let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
-                self.send(
-                    Exchange { id: request.id, principal, sender },
-                    message,
-                    history_length,
-                    streaming,
-                    host_context,
-                )
-                .await
+                let frames = self
+                    .send(id, &principal, message, history_length, streaming, &sender, host_context)
+                    .await?;
+                for frame in frames {
+                    let _ = sender.send(Ok(frame)).await;
+                }
+                return Ok(());
+            }
+            Call::Subscribe { task, offset: requested } => {
+                return self
+                    .subscribe(id, &principal, task, requested.or(offset), sender, observer)
+                    .await;
             }
             Call::Get { task, history_length } => {
                 let thread = self.thread(&principal, &task.context_id, AuthOperation::Read).await?;
-                let row = thread.task(&task.id).await?;
+                let row = thread.task(&task.id).await;
                 thread.close().await;
-                match row {
-                    Some(row) => {
-                        let _ = sender
-                            .send(Ok(wire::success(
-                                request.id,
-                                wire::task(&row, &task.context_id, history_length, true),
-                                None,
-                            )))
-                            .await;
-                    }
-                    None => Self::not_found(request.id, &task, &sender).await,
-                }
-                Ok(())
+                rpc::got(id, &task, row?.as_ref(), history_length)
             }
             Call::List(query) => {
                 let thread =
@@ -307,163 +268,51 @@ impl Inner {
                         status: query.status,
                         updated_after: query.updated_after,
                         page_size: query.page_size.unwrap_or(50),
-                        page_token: query.page_token,
+                        page_token: query.page_token.clone(),
                     })
-                    .await?;
+                    .await;
                 thread.close().await;
-                let result = a2a::ListTasksResponse {
-                    tasks: page
-                        .tasks
-                        .iter()
-                        .map(|row| {
-                            wire::task(
-                                row,
-                                &query.context_id,
-                                Some(query.history_length.unwrap_or(0)),
-                                query.include_artifacts,
-                            )
-                        })
-                        .collect(),
-                    next_page_token: page.next_page_token,
-                    page_size: page.page_size as i32,
-                    total_size: i32::try_from(page.total_size).map_err(|_| {
-                        StorageError::TooLarge {
-                            what: "task list".into(),
-                            limit: i32::MAX as usize,
-                        }
-                    })?,
-                };
-                let _ = sender.send(Ok(wire::success(request.id, result, None))).await;
-                Ok(())
+                let page = page?;
+                let (token, size, total) = (page.next_page_token, page.page_size, page.total_size);
+                rpc::listed(id, &query, &page.tasks, token, size, total)
             }
             Call::Cancel { task, reason } => {
                 let thread =
                     self.thread(&principal, &task.context_id, AuthOperation::Write).await?;
-                let row = thread.task(&task.id).await?;
-                let Some(row) = row else {
-                    thread.close().await;
-                    Self::not_found(request.id, &task, &sender).await;
-                    return Ok(());
-                };
-                let mut metadata = row.data.metadata.clone();
-                if let Some(reason) = reason {
-                    metadata.insert(REASON_KEY.into(), Value::String(reason));
-                }
-                let result = if row.status.is_terminal() {
-                    None
-                } else {
-                    thread.lane(&row.lane).cancel_task(&task.id, metadata).await?
-                };
+                let after = self.cancel(&thread, &task, reason).await;
                 thread.close().await;
-                if let Some(row) = result.filter(|r| r.status == TaskState::Canceled) {
-                    let _ = sender
-                        .send(Ok(wire::success(
-                            request.id,
-                            wire::task(&row, &task.context_id, None, true),
-                            None,
-                        )))
-                        .await;
-                } else {
-                    let _ = sender
-                        .send(Ok(wire::frame(
-                            rpc::failure(
-                                request.id,
-                                rpc::rpc_error(
-                                    error_code::TASK_NOT_CANCELABLE,
-                                    "the task is already terminal",
-                                ),
-                            ),
-                            None,
-                        )))
-                        .await;
-                }
-                Ok(())
+                rpc::canceled(id, &task, after?.as_ref())
             }
-            Call::Subscribe { task, offset: requested } => {
-                self.subscribe(
-                    Exchange { id: request.id, principal, sender },
-                    task,
-                    requested.or(offset),
-                    observer,
-                )
-                .await
-            }
-        }
+        };
+        let _ = sender.send(Ok(frame)).await;
+        Ok(())
     }
 
-    async fn not_found(
-        id: JsonRpcId,
-        task: &TaskRef,
-        sender: &mpsc::Sender<Result<DoorFrame, DoorError>>,
-    ) {
-        let _ = sender
-            .send(Ok(wire::frame(
-                rpc::failure(
-                    id,
-                    rpc::rpc_error(
-                        error_code::TASK_NOT_FOUND,
-                        format!("task {} is not in thread {}", task.id, task.context_id),
-                    ),
-                ),
-                None,
-            )))
-            .await;
-    }
-
-    async fn send(
+    /// The row after a client's cancel; a terminal row stays as it is.
+    async fn cancel(
         &self,
-        exchange: Exchange,
-        mut message: a2a::Message,
-        history: Option<usize>,
-        streaming: bool,
-        host_context: Option<lk_agents_abi::HostRef>,
-    ) -> Result<(), DoorError> {
-        let Exchange { id, principal, sender } = exchange;
-        let context = if let Some(context) =
-            message.context_id.as_deref().filter(|id| !id.is_empty())
-        {
-            match self.storage.get_thread(context).await {
-                Ok(info) => {
-                    Self::authorize(&principal, AuthOperation::Write, context, Some(&info.scope))?;
-                    context.to_owned()
-                }
-                Err(StorageError::NotFound(_)) => {
-                    Self::authorize(&principal, AuthOperation::Write, context, None)?;
-                    let row = lk_agents_core::a2a::unpersisted_failed(
-                        &shortuuid("AST_"),
-                        &self.lane,
-                        None,
-                        REASON_THREAD_NOT_FOUND,
-                        now_ms(),
-                        shortuuid("msg_"),
-                    );
-                    if streaming {
-                        let _ = sender
-                            .send(Ok(wire::success(
-                                id.clone(),
-                                wire::submitted(&row.task_id, context, now_ms()),
-                                None,
-                            )))
-                            .await;
-                        let _ = sender
-                            .send(Ok(wire::success(id, wire::final_status(&row, context), None)))
-                            .await;
-                    } else {
-                        let _ = sender
-                            .send(Ok(wire::success(
-                                id,
-                                a2a::SendMessageResponse::Task(wire::task(
-                                    &row, context, history, true,
-                                )),
-                                None,
-                            )))
-                            .await;
-                    }
-                    return Ok(());
-                }
-                Err(error) => return Err(error.into()),
-            }
-        } else {
+        thread: &Thread,
+        task: &TaskRef,
+        reason: Option<String>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        let Some(row) = thread.task(&task.id).await? else { return Ok(None) };
+        if row.status.is_terminal() {
+            return Ok(Some(row));
+        }
+        let mut metadata = row.data.metadata.clone();
+        if let Some(reason) = reason {
+            metadata.insert(REASON_KEY.into(), Value::String(reason));
+        }
+        thread.lane(&row.lane).cancel_task(&task.id, metadata).await
+    }
+
+    /// The thread a message is for: the one it names, else a new one in the grant's scope.
+    async fn context(
+        &self,
+        principal: &AuthPrincipal,
+        context: Option<&str>,
+    ) -> Result<Result<String, String>, DoorError> {
+        let Some(context) = context else {
             let grant =
                 principal.grant.as_ref().filter(|grant| allows_first_message(grant)).ok_or_else(
                     || {
@@ -472,54 +321,68 @@ impl Inner {
                         )
                     },
                 )?;
-            let info = self
-                .storage
-                .create_thread(livekit_protocol::agent::agent_thread::CreateRequest {
-                    scope: grant.scope.clone(),
-                    ..Default::default()
-                })
-                .await?;
-            Self::authorize(&principal, AuthOperation::Write, &info.thread_id, Some(&info.scope))?;
-            info.thread_id
+            let request = livekit_protocol::agent::agent_thread::CreateRequest {
+                scope: grant.scope.clone(),
+                ..Default::default()
+            };
+            let info = self.storage.create_thread(request).await?;
+            Self::authorize(principal, AuthOperation::Write, &info.thread_id, Some(&info.scope))?;
+            return Ok(Ok(info.thread_id));
+        };
+        match self.storage.get_thread(context).await {
+            Ok(info) => {
+                Self::authorize(principal, AuthOperation::Write, context, Some(&info.scope))?;
+                Ok(Ok(context.to_owned()))
+            }
+            Err(StorageError::NotFound(_)) => {
+                Self::authorize(principal, AuthOperation::Write, context, None)?;
+                Ok(Err(context.to_owned()))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "one request's exchange")]
+    async fn send(
+        &self,
+        id: JsonRpcId,
+        principal: &AuthPrincipal,
+        mut message: a2a::Message,
+        history: Option<usize>,
+        streaming: bool,
+        sender: &Sender,
+        host_context: Option<lk_agents_abi::HostRef>,
+    ) -> Result<Vec<DoorFrame>, DoorError> {
+        let context = match self.context(principal, message.context_id.as_deref()).await? {
+            Ok(context) => context,
+            Err(unknown) => {
+                let row = lk_agents_core::a2a::unpersisted_failed(
+                    &shortuuid("AST_"),
+                    &self.lane,
+                    None,
+                    REASON_THREAD_NOT_FOUND,
+                    now_ms(),
+                    shortuuid("msg_"),
+                );
+                return Ok(rpc::unpersisted(id, &row, &unknown, streaming, history));
+            }
         };
         message.context_id = Some(context.clone());
         let thread = self.storage.open(&context, &self.holder).await?;
-        let mut continuing = None;
-        if let Some(task) = message.task_id.as_deref() {
-            let row = thread.task(task).await?;
-            match row {
-                None => {
-                    thread.close().await;
-                    Self::not_found(id, &TaskRef { id: task.into(), context_id: context }, &sender)
-                        .await;
-                    return Ok(());
+        let continuing = match message.task_id.clone() {
+            None => None,
+            Some(task_id) => {
+                let task = TaskRef { id: task_id, context_id: context.clone() };
+                let row = thread.task(&task.id).await;
+                match rpc::follow_up(id.clone(), &task, row?.as_ref(), &self.lane) {
+                    Ok(continuing) => continuing,
+                    Err(refused) => {
+                        thread.close().await;
+                        return Ok(vec![refused]);
+                    }
                 }
-                Some(row) if row.status.is_terminal() => {
-                    thread.close().await;
-                    let _ = sender
-                        .send(Ok(wire::frame(
-                            rpc::failure(
-                                id,
-                                rpc::rpc_error(
-                                    error_code::UNSUPPORTED_OPERATION,
-                                    "a follow-up to a terminal task must start a new task",
-                                ),
-                            ),
-                            None,
-                        )))
-                        .await;
-                    return Ok(());
-                }
-                Some(row)
-                    if row.lane == self.lane
-                        && row.status == TaskState::InputRequired
-                        && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some()) =>
-                {
-                    continuing = Some(task.to_owned());
-                }
-                _ => {}
             }
-        }
+        };
         let streams = self.storage.response_streams();
         let created = streams.create(None).await?;
         let publisher = Arc::new(stream::Publisher::new(
@@ -549,21 +412,8 @@ impl Inner {
         match result {
             Ok(result) => {
                 publisher.finish(&result).await?;
-                if !streaming {
-                    let _ = sender
-                        .send(Ok(wire::success(
-                            id,
-                            a2a::SendMessageResponse::Task(wire::task(
-                                &result.task,
-                                &context,
-                                history,
-                                true,
-                            )),
-                            None,
-                        )))
-                        .await;
-                }
-                Ok(())
+                let answer = rpc::sent(id, &result.task, &context, history);
+                Ok(if streaming { Vec::new() } else { vec![answer] })
             }
             Err(error) => {
                 streams.close(&created.stream_id).await?;
@@ -572,61 +422,42 @@ impl Inner {
         }
     }
 
+    /// The current task, then its response streams from the cursor, followed live while the
+    /// task runs.
     async fn subscribe(
         &self,
-        exchange: Exchange,
+        id: JsonRpcId,
+        principal: &AuthPrincipal,
         task: TaskRef,
         offset: Option<String>,
+        sender: Sender,
         observer: CancellationToken,
     ) -> Result<(), DoorError> {
-        let Exchange { id, principal, sender } = exchange;
-        let thread = self.thread(&principal, &task.context_id, AuthOperation::Read).await?;
-        let row = thread.task(&task.id).await?;
+        let thread = self.thread(principal, &task.context_id, AuthOperation::Read).await?;
+        let row = thread.task(&task.id).await;
         thread.close().await;
-        let Some(row) = row else {
-            Self::not_found(id, &task, &sender).await;
+        let Some(row) = row? else {
+            let _ = sender.send(Ok(rpc::task_not_found(id, &task))).await;
             return Ok(());
         };
-        // Subscription starts with the authoritative Task even when replay has expired.
-        if sender
-            .send(Ok(wire::success(
-                id.clone(),
-                a2a::StreamResponse::Task(wire::task(&row, &task.context_id, None, true)),
-                None,
-            )))
-            .await
-            .is_err()
-        {
+        // the authoritative Task comes first, even when replay has expired
+        let current = a2a::StreamResponse::Task(wire::task(&row, &task.context_id, None, true));
+        if sender.send(Ok(wire::success(id.clone(), current, None))).await.is_err() {
             return Ok(());
         }
         let refs =
             row.internal.as_ref().map(|internal| internal.streams.as_slice()).unwrap_or_default();
+        let resume = rpc::resume(&task, refs, offset.as_deref())?;
         let streams = self.storage.response_streams();
-        let cursor = offset.as_deref().map(wire::Cursor::decode).transpose()?;
-        if let Some(cursor) = &cursor {
-            if cursor.task_id != task.id || !refs.iter().any(|s| s.stream_id == cursor.stream_id) {
-                return Err(StorageError::Invalid(
-                    "response cursor belongs to a different task".into(),
-                )
-                .into());
-            }
-        }
-        let start = cursor
-            .as_ref()
-            .and_then(|c| refs.iter().position(|s| s.stream_id == c.stream_id))
-            .unwrap_or(0);
-        for (index, stream) in refs.iter().enumerate().skip(start) {
-            let after = cursor
-                .as_ref()
-                .filter(|c| c.stream_id == stream.stream_id)
-                .map(|c| c.offset.as_str());
-            let mut reader = streams.read(
-                &stream.stream_id,
-                after,
-                !row.status.is_terminal() && index + 1 == refs.len(),
-            );
+        let last = resume.len();
+        for (index, (stream, after)) in resume.into_iter().enumerate() {
+            let follow = !row.status.is_terminal() && index + 1 == last;
+            let mut reader = streams.read(&stream.stream_id, after.as_deref(), follow);
             loop {
-                let next = tokio::select! { _ = observer.cancelled() => return Ok(()), next = reader.next() => next? };
+                let next = tokio::select! {
+                    _ = observer.cancelled() => return Ok(()),
+                    next = reader.next() => next?,
+                };
                 let Some(bytes) = next else { break };
                 let event: a2a::StreamResponse = serde_json::from_slice(&bytes)
                     .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
@@ -634,9 +465,9 @@ impl Inner {
                     task_id: task.id.clone(),
                     stream_id: stream.stream_id.clone(),
                     offset: reader.next_offset().into(),
-                }
-                .encode();
-                if sender.send(Ok(wire::success(id.clone(), event, Some(&cursor)))).await.is_err() {
+                };
+                let frame = wire::success(id.clone(), event, Some(&cursor.encode()));
+                if sender.send(Ok(frame)).await.is_err() {
                     return Ok(());
                 }
             }

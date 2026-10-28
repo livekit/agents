@@ -11,8 +11,12 @@ use lk_agents_abi::a2a_protocol as a2a;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use lk_agents_abi::a2a::door::DoorFrame;
 use lk_agents_abi::a2a::metadata::REASON_KEY;
-use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::TaskRow;
+use lk_agents_abi::storage::{StorageError, StreamInfo, TaskState};
+
+use crate::a2a::wire;
 
 /// Wire versions are separate from the accepted historical method aliases.
 const VERSIONS: [&str; 1] = ["1.0"];
@@ -293,6 +297,171 @@ pub fn extensions_header(requested: Option<&str>) -> Option<String> {
         .map(|_| supported.to_owned())
 }
 
+/// A request body admitted by the door: refused when over the transport's payload budget, when
+/// the endpoint's request budget is spent, when malformed, or when its `A2A-Version` is not
+/// served.
+pub fn admit(
+    body: &[u8],
+    size: usize,
+    max: usize,
+    admitted: bool,
+    version: Option<&str>,
+) -> Result<Request, Box<Refusal>> {
+    let refuse = |code, message: &str| {
+        Box::new(Refusal { id: JsonRpcId::Null, error: rpc_error(code, message) })
+    };
+    if size > max {
+        return Err(refuse(error_code::INVALID_PARAMS, "A2A payload exceeds the transport budget"));
+    }
+    if !admitted {
+        return Err(refuse(error_code::INTERNAL_ERROR, "endpoint request budget exhausted"));
+    }
+    let request = decode(body)?;
+    match check_version(version) {
+        Ok(()) => Ok(request),
+        Err(error) => Err(Box::new(Refusal { id: request.id, error })),
+    }
+}
+
+/// A method's failure on a storage error: invalid params for a caller error, else internal.
+pub fn storage_failure(id: JsonRpcId, error: &StorageError) -> DoorFrame {
+    let code = match error {
+        StorageError::Invalid(_) => error_code::INVALID_PARAMS,
+        _ => error_code::INTERNAL_ERROR,
+    };
+    wire::frame(failure(id, rpc_error(code, error.to_string())), None)
+}
+
+/// `TaskNotFoundError` for a task not in the named thread.
+pub fn task_not_found(id: JsonRpcId, task: &TaskRef) -> DoorFrame {
+    let message = format!("task {} is not in thread {}", task.id, task.context_id);
+    wire::frame(failure(id, rpc_error(error_code::TASK_NOT_FOUND, message)), None)
+}
+
+/// `GetTask`'s answer.
+pub fn got(
+    id: JsonRpcId,
+    task: &TaskRef,
+    row: Option<&TaskRow>,
+    history: Option<usize>,
+) -> DoorFrame {
+    match row {
+        Some(row) => wire::success(id, wire::task(row, &task.context_id, history, true), None),
+        None => task_not_found(id, task),
+    }
+}
+
+/// `CancelTask`'s answer from the row after the cancel: canceled, else not cancelable.
+pub fn canceled(id: JsonRpcId, task: &TaskRef, row: Option<&TaskRow>) -> DoorFrame {
+    match row {
+        None => task_not_found(id, task),
+        Some(row) if row.status == TaskState::Canceled => {
+            wire::success(id, wire::task(row, &task.context_id, None, true), None)
+        }
+        Some(_) => {
+            let error = rpc_error(error_code::TASK_NOT_CANCELABLE, "the task is already terminal");
+            wire::frame(failure(id, error), None)
+        }
+    }
+}
+
+/// `ListTasks`' answer: one page of the thread's tasks.
+pub fn listed(
+    id: JsonRpcId,
+    query: &TaskList,
+    tasks: &[TaskRow],
+    next_page_token: String,
+    page_size: i64,
+    total_size: i64,
+) -> DoorFrame {
+    let history = Some(query.history_length.unwrap_or(0));
+    let result = a2a::ListTasksResponse {
+        tasks: tasks
+            .iter()
+            .map(|row| wire::task(row, &query.context_id, history, query.include_artifacts))
+            .collect(),
+        next_page_token,
+        page_size: page_size as i32,
+        total_size: i32::try_from(total_size).unwrap_or(i32::MAX),
+    };
+    wire::success(id, result, None)
+}
+
+/// What a message naming `taskId` meets before its turn: the task's row on the thread. A task
+/// not in the thread is not found, a terminal one takes no follow-up; a question of this lane
+/// waiting is the task the answer is announced under.
+pub fn follow_up(
+    id: JsonRpcId,
+    task: &TaskRef,
+    row: Option<&TaskRow>,
+    lane: &str,
+) -> Result<Option<String>, DoorFrame> {
+    match row {
+        None => Err(task_not_found(id, task)),
+        Some(row) if row.terminal() => {
+            let message = "a follow-up to a terminal task must start a new task";
+            Err(wire::frame(
+                failure(id, rpc_error(error_code::UNSUPPORTED_OPERATION, message)),
+                None,
+            ))
+        }
+        Some(row) => Ok((row.lane == lane
+            && row.status == TaskState::InputRequired
+            && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some()))
+        .then(|| task.id.clone())),
+    }
+}
+
+/// The answer to a message whose task failed before any storage held it (an unknown thread):
+/// the `submitted` and final events on a stream, else the task.
+pub fn unpersisted(
+    id: JsonRpcId,
+    row: &TaskRow,
+    context: &str,
+    streaming: bool,
+    history: Option<usize>,
+) -> Vec<DoorFrame> {
+    if streaming {
+        vec![
+            wire::success(id.clone(), wire::submitted(&row.task_id, context, row.updated_at), None),
+            wire::success(id, wire::final_status(row, context), None),
+        ]
+    } else {
+        let task = a2a::SendMessageResponse::Task(wire::task(row, context, history, true));
+        vec![wire::success(id, task, None)]
+    }
+}
+
+/// `SendMessage`'s answer once the turn ended; a stream already carried it.
+pub fn sent(id: JsonRpcId, row: &TaskRow, context: &str, history: Option<usize>) -> DoorFrame {
+    wire::success(id, a2a::SendMessageResponse::Task(wire::task(row, context, history, true)), None)
+}
+
+/// Where a resubscribe resumes among the task's streams `refs`: the first stream to read, and
+/// the cursor's offset within it. A cursor of another task or stream is invalid.
+pub fn resume<'a>(
+    task: &TaskRef,
+    refs: &'a [StreamInfo],
+    offset: Option<&str>,
+) -> Result<Vec<(&'a StreamInfo, Option<String>)>, StorageError> {
+    let cursor = offset.map(wire::Cursor::decode).transpose()?;
+    let start = match &cursor {
+        None => 0,
+        Some(c) => refs
+            .iter()
+            .position(|s| s.stream_id == c.stream_id)
+            .filter(|_| c.task_id == task.id)
+            .ok_or_else(|| {
+                StorageError::Invalid("response cursor belongs to a different task".into())
+            })?,
+    };
+    Ok(refs[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s, cursor.as_ref().filter(|_| i == 0).map(|c| c.offset.clone())))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +649,46 @@ mod tests {
                 "{params}"
             );
         }
+    }
+
+    // Catches: the error table of a2a.md#errors drifting while the answers moved out of the door
+    // (a follow-up to a terminal task, cancel of a terminal task, a cursor of another task).
+    #[test]
+    fn method_answers_keep_the_documented_errors() {
+        let task = TaskRef { id: "AST_1".into(), context_id: "AT_1".into() };
+        let row = |status| {
+            lk_agents_abi::storage::thread::TaskWrite {
+                task_id: "AST_1".into(),
+                status,
+                message_id: Some("m".into()),
+                name: None,
+                data: Default::default(),
+                internal: None,
+            }
+            .row("desk")
+        };
+        let code =
+            |f: DoorFrame| serde_json::from_str::<Value>(&f.json).unwrap()["error"]["code"].clone();
+        let id = || JsonRpcId::Number(1);
+        assert_eq!(
+            code(follow_up(id(), &task, None, "desk").unwrap_err()),
+            json!(error_code::TASK_NOT_FOUND)
+        );
+        let done = row(TaskState::Completed);
+        let refused = follow_up(id(), &task, Some(&done), "desk").unwrap_err();
+        assert_eq!(code(refused), json!(error_code::UNSUPPORTED_OPERATION));
+        assert_eq!(
+            code(canceled(id(), &task, Some(&done))),
+            json!(error_code::TASK_NOT_CANCELABLE)
+        );
+        assert_eq!(code(canceled(id(), &task, Some(&row(TaskState::Canceled)))), Value::Null);
+        let streams = [StreamInfo { stream_id: "s1".into(), expires_at: 0 }];
+        let other =
+            wire::Cursor { task_id: "AST_2".into(), stream_id: "s1".into(), offset: "3".into() };
+        assert!(resume(&task, &streams, Some(&other.encode())).is_err());
+        let ours = wire::Cursor { task_id: "AST_1".into(), ..other };
+        let from = resume(&task, &streams, Some(&ours.encode())).unwrap();
+        assert_eq!(from[0].1.as_deref(), Some("3"));
     }
 
     #[test]
