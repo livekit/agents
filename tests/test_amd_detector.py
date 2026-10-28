@@ -1732,6 +1732,34 @@ async def test_classifier_sees_that_the_agent_spoke_but_not_its_words() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_reply_keeps_speaking_order_when_a_turn_commits_during_it() -> None:
+    async with running() as (detector, session, classifier, _):
+        commit_turn(detector, end_of_turn("Please state your name."))
+        first = await classifier.request()
+        commit_turn(detector, end_of_turn("Okay."))
+        second = await classifier.request()
+        assert first.current_turn.created_at < second.current_turn.created_at
+        # the reply started between the two turns but is added when its speech ends
+        session._conversation_item_added(
+            llm.ChatMessage(
+                role="assistant",
+                content=["This is Alex from Acme."],
+                created_at=(first.current_turn.created_at + second.current_turn.created_at) / 2,
+            )
+        )
+        commit_turn(detector, end_of_turn("Please hold."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "Please state your name."),
+            ("assistant", AGENT_REPLY),
+            ("user", "Okay."),
+            ("user", "Please hold."),
+        ]
+
+
+@pytest.mark.asyncio
 async def test_dtmf_tool_works_without_amd() -> None:
     from livekit.agents.beta.tools.send_dtmf import send_dtmf_events
     from livekit.agents.beta.workflows.utils import DtmfEvent

@@ -535,7 +535,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and item.text_content
             and item.created_at >= self._started_at
         ):
-            self._chat_ctx.add_agent_reply()
+            self._chat_ctx.add_agent_reply(item.created_at)
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE:

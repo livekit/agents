@@ -68,9 +68,13 @@ class AMDChatContext(llm.ChatContext):
             extra={"turn_id": turn.turn_id},
         )
 
-    def add_agent_reply(self) -> None:
-        # that the agent spoke, never its words
-        self.add_message(role="assistant", content=AGENT_REPLY)
+    def add_agent_reply(self, started_at: float) -> None:
+        """Mark that the agent spoke, never its words, at the time its speech started.
+
+        The session adds a reply when its speech ends, so a participant turn committed
+        during that speech can arrive first. Inserting by start time keeps speaking order.
+        """
+        self.insert(llm.ChatMessage(role="assistant", content=[AGENT_REPLY], created_at=started_at))
 
     def add_tool_result(self, call: llm.FunctionCall, output: llm.FunctionCallOutput) -> None:
         if (
