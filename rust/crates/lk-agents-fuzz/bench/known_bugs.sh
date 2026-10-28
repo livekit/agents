@@ -20,7 +20,6 @@ root="$(git rev-parse --show-toplevel)"
 out="${VOICE_BENCH_OUT:-$(mktemp -d)}"
 mkdir -p "$out"
 export VOICE_SEEDS="${VOICE_SEEDS:-16384}" VOICE_SCHEDULES="${VOICE_SCHEDULES:-512}"
-export CARGO_INCREMENTAL=0
 
 bench() {
     cargo test -q --release -p lk-agents-fuzz --test pos -- --ignored --nocapture --exact bench \

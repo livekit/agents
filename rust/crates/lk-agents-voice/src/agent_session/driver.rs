@@ -332,6 +332,9 @@ pub mod objects {
         Video,
         Run,
         Fillers,
+        /// The session's span tree, which every step on a turn, a speech or the conversation
+        /// also writes.
+        Spans,
         /// The idle waiters and holds.
         Waiters,
     }
@@ -365,14 +368,25 @@ pub mod objects {
 
     impl Event {
         pub fn accesses(&self) -> Vec<Access> {
-            match self {
+            let mut accesses = match self {
                 Event::Wake => w(&[All]),
                 Event::Forwarder(ForwarderCommand::ReportCensus) => {
                     with_reads(Vec::new(), &[Forwarder])
                 }
                 Event::Forwarder(_) => w(&[Forwarder]),
                 Event::Input(input) => input_accesses(input),
+            };
+            let spans = |a: &Access| {
+                a.write
+                    && matches!(
+                        a.object,
+                        Speech(_) | Floor | Turn | Chat | Agent | Hooks | Tools | Close | Realtime
+                    )
+            };
+            if accesses.iter().any(spans) {
+                accesses.push(Access { object: Spans, write: true });
             }
+            accesses
         }
     }
 
@@ -455,7 +469,9 @@ pub mod objects {
             }
             GenEvent::ProviderFailed { speech: id, .. } => speech(*id, &[Errors, Close]),
             GenEvent::KeytermAnswer { .. } => with_reads(w(&[Keyterms]), &[Legs]),
-            GenEvent::Emit(_) | GenEvent::Trace(_) => Vec::new(),
+            // A forwarded event may open or close a span.
+            GenEvent::Emit(_) => w(&[Spans]),
+            GenEvent::Trace(_) => Vec::new(),
         }
     }
 
@@ -494,7 +510,7 @@ pub mod objects {
                 ActivityCommand::Update(_) | ActivityCommand::Drain { .. } => w(&[All]),
                 ActivityCommand::UpdateInstructions(_)
                 | ActivityCommand::UpdateTools(_)
-                | ActivityCommand::UpdateExpressive(_) => w(&[Agent]),
+                | ActivityCommand::UpdateExpressive(_) => w(&[Agent, Chat]),
                 ActivityCommand::SetAudioInput(_) => w(&[Legs, Turn]),
                 ActivityCommand::SetVideoInput(_) => w(&[Video]),
                 ActivityCommand::SetIoEnabled { .. } => w(&[Legs, Turn, Floor]),
@@ -518,6 +534,7 @@ pub mod objects {
             Command::Recorder(_) => w(&[Recorder]),
             Command::Dtmf(_) => w(&[Dtmf, Floor]),
             Command::Run(_) => w(&[Run, Floor, Chat, Agent]),
+            Command::AmdSpan(_) => w(&[Spans]),
         }
     }
 }

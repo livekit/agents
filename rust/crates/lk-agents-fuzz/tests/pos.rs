@@ -56,25 +56,26 @@ fn parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec
     done.into_iter().map(|(_, r)| r).collect()
 }
 
-/// Wall-clock stamps cut to the millisecond: the session clock moves a microsecond per read, so
-/// whichever of two steps in one instant goes second stamps a later microsecond. That is the
-/// clock's tie-break, not state the two share.
+/// Wall-clock stamps, and the span durations taken from them, cut to the millisecond: the
+/// session clock moves a microsecond per read, so whichever of two steps in one instant goes
+/// second stamps a later microsecond. That is the clock's tie-break, not state the two share.
 fn mask(step: &str) -> String {
+    const SECONDS: [&str; 3] = ["time: ", "timestamp: ", "value: "];
     let mut out = String::with_capacity(step.len());
     let mut rest = step;
     while let Some(at) = rest.find(|c: char| c.is_ascii_digit()) {
         let (head, tail) = rest.split_at(at);
         out.push_str(head);
-        let len = tail.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(tail.len());
+        let float = SECONDS.iter().any(|label| head.ends_with(label));
+        let part = |c: char| c.is_ascii_digit() || c == '.' || (float && "eE+-".contains(c));
+        let len = tail.find(|c: char| !part(c)).unwrap_or(tail.len());
         let (number, tail) = tail.split_at(len);
         if head.ends_with("tv_nsec: ")
             && let Ok(nanos) = number.parse::<u64>()
         {
             out.push_str(&(nanos / 1_000_000).to_string());
-        } else if head.ends_with("timestamp: ")
-            && let Some(dot) = number.find('.')
-        {
-            out.push_str(&number[..(dot + 4).min(number.len())]);
+        } else if float && let Ok(seconds) = number.parse::<f64>() {
+            out.push_str(&format!("{seconds:.3}"));
         } else {
             out.push_str(number);
         }
