@@ -32,6 +32,7 @@ use lk_agents_voice::{
     avatar::{DataStreamAudioReceiver, RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{
         AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner, AvatarVideoGenerator,
+        Event,
     },
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -548,7 +549,17 @@ impl FakeAvatarWorker {
             true,
             clock,
             spawner,
-            move |ready| order.usize(..ready),
+            // Any ready event, but a clear never ahead of a frame the receiver handed over before
+            // it: the receiver drops the cut stream from the clear on, so that order cannot be.
+            move |ready: &std::collections::VecDeque<Event>| {
+                let audio = ready.iter().position(|e| matches!(e, Event::Audio(_)));
+                let open: Vec<usize> = (0..ready.len())
+                    .filter(|&i| {
+                        !matches!(ready[i], Event::ClearBuffer) || audio.is_none_or(|a| a > i)
+                    })
+                    .collect();
+                open[order.usize(..open.len())]
+            },
         ));
         let me = Arc::new(FakeAvatarWorker {
             room,

@@ -566,15 +566,15 @@ impl Drop for AvatarRunner {
 }
 
 impl AvatarRunner {
-    /// The runner, its ready events taken in the order `order(len)` picks (an index below
-    /// `len`): arrival order in production, the simulation's own choice under test.
+    /// The runner, its ready events taken in the order `order(ready)` picks (an index into
+    /// `ready`): arrival order in production, the simulation's own choice under test.
     pub fn scheduled(
         room: Arc<dyn RtcRoom>,
         io: AvatarIo,
         lazy_publish: bool,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
-        mut order: impl FnMut(usize) -> usize + Send + 'static,
+        mut order: impl FnMut(&std::collections::VecDeque<Event>) -> usize + Send + 'static,
     ) -> Self {
         let (events, mut queue) = mpsc::unbounded_channel();
         let answers: Answers = Arc::default();
@@ -595,7 +595,7 @@ impl AvatarRunner {
                     while let Ok(event) = queue.try_recv() {
                         ready.push_back(event);
                     }
-                    let pick = order(ready.len()).min(ready.len() - 1);
+                    let pick = order(&ready).min(ready.len() - 1);
                     let Some(event) = ready.remove(pick) else { continue };
                     for effect in core.handle(event, clock.now()) {
                         match effect {
