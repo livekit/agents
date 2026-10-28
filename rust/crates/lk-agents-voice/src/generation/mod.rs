@@ -712,8 +712,7 @@ pub struct Providers {
     /// agent has none.
     pub dynamic_instructions: Option<Arc<dyn HostInstructions>>,
     pub llm: Option<Arc<dyn Llm>>,
-    /// A provider with no duplex path arrives wrapped in a
-    /// [`StreamAdapter`](lk_agents_abi::StreamAdapter).
+    /// A provider with no duplex path arrives adapted by the executor's `TtsAdapter`.
     pub tts: Option<Arc<dyn Tts>>,
     /// A per-turn override rides on [`ReplyContext::toolset`] instead.
     pub toolset: Arc<Toolset>,

@@ -78,7 +78,7 @@ pub use llm::realtime::{
 };
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
 pub use tts::stream_adapter::{
-    SentenceSplitter, SentenceTextProcessor, SplitterFactory, StreamAdapter, StreamAdapterFunctions,
+    SentenceSplitter, SentenceTextProcessor, SplitterFactory, StreamAdapterFunctions,
     TextProcessorFactory,
 };
 pub use turn::detector::{EotDetector, LegEvent, ReqId};

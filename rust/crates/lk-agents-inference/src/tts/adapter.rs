@@ -5,10 +5,11 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, StreamAdapter, StreamAdapterFunctions};
+use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, StreamAdapterFunctions};
 use lk_agents_abi::{ApiConnectOptions, Tts};
 
 use super::TtsHost;
+use super::sentence_adapter::StreamAdapter;
 use super::stream::TtsStream;
 
 pub struct AdapterStreams<E>(PhantomData<fn() -> E>);

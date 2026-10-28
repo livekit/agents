@@ -22,6 +22,14 @@ pub struct Executor {
 }
 
 impl SessionExecutor for Executor {
+    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+        Arc::new(
+            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
+                crate::process::Process,
+            >,
+        )
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a Resources,

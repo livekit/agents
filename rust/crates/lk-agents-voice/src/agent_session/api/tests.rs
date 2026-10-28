@@ -13,6 +13,10 @@ use lk_agents_abi::errors::ProviderError;
 struct NoLegs;
 
 impl SessionExecutor for NoLegs {
+    fn tts_adapter(&self) -> crate::agent_session::TtsAdapter {
+        Arc::new(|tts, _, _| tts)
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         _: &'a lk_agents_abi::resources::Resources,

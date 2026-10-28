@@ -525,13 +525,9 @@ fn tts_node(
     let clock = <Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient();
     let tts = <dyn Tts as HostProxy>::from_host(tts, None)?;
     let tts = tts.with_conn_options(&options).unwrap_or(tts);
-    let tts = lk_agents_abi::StreamAdapter::adapted(
-        tts,
-        lk_agents_runtime::cores::SentenceBuffer::factory(),
-        lk_agents_runtime::cores::text_processor_factory(),
-        Arc::clone(&clock),
-        options,
-    );
+    let tts = lk_agents_runtime::inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
+        lk_agents_runtime::process::Process,
+    >(tts, Arc::clone(&clock), options);
     let input = caller_input(py, text, Box::new(|t| t.extract::<String>().map_err(Into::into)))?;
     let (output, frames) = item_stream(py, audio_frame)?;
     let calls = node_calls_var(py)?.call_method1("get", (py.None(),))?;

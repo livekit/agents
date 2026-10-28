@@ -6,6 +6,7 @@
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
+use crate::tts::sentence_adapter::StreamAdapter;
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
@@ -13,9 +14,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::tts::text::TtsTextProcessorFactory;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
-use lk_agents_abi::{
-    StreamAdapter, StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
-};
+use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 
 mod ports;
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};

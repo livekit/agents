@@ -8,6 +8,7 @@
 pub mod adapter;
 pub mod machine;
 mod ports;
+pub mod sentence_adapter;
 pub mod stream;
 mod pump;
 pub use ports::TtsHost;

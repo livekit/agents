@@ -51,9 +51,24 @@ pub struct SessionCores {
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
 }
 
+/// How a TTS with no duplex path is made to stream: sentence by sentence on the session's clock,
+/// each sentence retried within the budget. The executor supplies it with its speech text.
+pub type TtsAdapter = Arc<
+    dyn Fn(
+            Arc<dyn Tts>,
+            Arc<dyn lk_agents_abi::Clock>,
+            lk_agents_abi::ApiConnectOptions,
+        ) -> Arc<dyn Tts>
+        + Send
+        + Sync,
+>;
+
 /// What runs a session: the production runtime, or a simulation's own executor. It opens the
 /// opening STT and VAD streams before the cores exist, then takes the cores over.
 pub trait SessionExecutor: Send {
+    /// Adapts each TTS handed over, at start and on every later swap.
+    fn tts_adapter(&self) -> TtsAdapter;
+
     /// Opens the streams and registers their sinks in `resources`; their sources are read once
     /// the executor owns the cores.
     fn open_legs<'a>(
@@ -110,8 +125,9 @@ pub struct DriverBuilder {
     /// Where the providers below are registered, and every one handed over later.
     pub resources: lk_agents_abi::resources::Resources,
     pub llm: Option<Arc<dyn Llm>>,
-    /// A TTS with no duplex path arrives wrapped in `StreamAdapter`.
+    /// Adapted at start by the executor's [`TtsAdapter`], under `tts_node`.
     pub tts: Option<Arc<dyn Tts>>,
+    pub tts_node: Option<Arc<dyn super::api::NodeFactory>>,
     pub stt: Option<Arc<dyn Stt>>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
@@ -171,6 +187,11 @@ impl DriverBuilder {
         if let Some(stt) = &self.stt {
             stt.prewarm();
         }
+        let adapter = executor.tts_adapter();
+        let nodes = super::nodes::Nodes { llm: None, tts: self.tts_node.take(), stt: None };
+        self.tts = self.tts.take().map(|tts| {
+            nodes.tts(super::api::tts_leg(tts, &adapter, self.time.clock(), &self.conn.tts))
+        });
         if let Some(tts) = &self.tts {
             tts.prewarm();
         }

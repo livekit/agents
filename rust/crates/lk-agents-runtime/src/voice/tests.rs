@@ -43,6 +43,7 @@ async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
         expressive: Default::default(),
         llm: None,
         tts: None,
+        tts_node: None,
         stt: None,
         keyterms: None,
         forward_chat_context: true,

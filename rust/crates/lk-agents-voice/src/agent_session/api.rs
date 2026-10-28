@@ -163,6 +163,7 @@ impl SessionApi {
             room_io.start();
             builder.room_io_events = room_io.events();
 
+            let tts_adapter = executor.tts_adapter();
             let (cores, handle) = builder.start(&mut *executor).await?;
             let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
                 handle;
@@ -203,6 +204,7 @@ impl SessionApi {
                 tasks,
                 drained: Some(drained),
                 speech_ids,
+                tts_adapter,
             });
             // A drain that returned without reading drops the sender: nothing to wait for.
             let _ = opening_rx.await;
@@ -437,6 +439,8 @@ impl SessionApi {
         }
         let clock = self.time.clock();
         let r = &self.resources;
+        // Before start nothing reaches the loop (the command is refused and the leg released).
+        let adapter = self.running(|r| Ok(r.tts_adapter.clone())).ok();
         let vad_now = match &vad {
             Maybe::Given(given) => given.clone(),
             Maybe::NotGiven => {
@@ -446,7 +450,13 @@ impl SessionApi {
         };
         let models = ModelRefs {
             llm: map(llm, |l| r.register_llm(nodes.llm(llm_leg(l, &self.conn.llm)))),
-            tts: map(tts, |t| r.register_tts(nodes.tts(tts_leg(t, clock.clone(), &self.conn.tts)))),
+            tts: map(tts, |t| {
+                let t = match &adapter {
+                    Some(adapter) => tts_leg(t, adapter, clock.clone(), &self.conn.tts),
+                    None => t,
+                };
+                r.register_tts(nodes.tts(t))
+            }),
             stt: map(stt, |s| {
                 r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt, clock.clone())))
             }),
@@ -680,6 +690,8 @@ struct Running {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The loop's id counter: a speech call's handle has its id before the loop creates it.
     speech_ids: Arc<std::sync::atomic::AtomicU64>,
+    /// The executor's, for every TTS swapped in.
+    tts_adapter: super::TtsAdapter,
 }
 
 impl Running {
@@ -1132,21 +1144,14 @@ fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dy
     llm.with_conn_options(&one_attempt(conn)).unwrap_or(llm)
 }
 
-/// A non-streaming TTS is split into sentences with BlingFire, as the reference, each sentence
-/// retried on the leg's budget.
-fn tts_leg(
+/// One attempt per call, adapted by the executor when it has no duplex path.
+pub(super) fn tts_leg(
     tts: Arc<dyn Tts>,
+    adapter: &super::TtsAdapter,
     clock: Arc<dyn Clock>,
     conn: &lk_agents_abi::ApiConnectOptions,
 ) -> Arc<dyn Tts> {
-    let tts = tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts);
-    lk_agents_abi::StreamAdapter::adapted(
-        tts,
-        crate::tokenize::blingfire::SentenceBuffer::factory(),
-        crate::tts::markup::text_processor_factory(),
-        clock,
-        *conn,
-    )
+    adapter(tts.with_conn_options(&one_attempt(conn)).unwrap_or(tts), clock, *conn)
 }
 
 /// `start()`'s awaited half failed: the loop, or what the host does beside it (the room's

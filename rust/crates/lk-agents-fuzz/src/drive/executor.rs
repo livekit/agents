@@ -85,6 +85,14 @@ impl Handover {
 }
 
 impl SessionExecutor for Handover {
+    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+        Arc::new(
+            lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for::<
+                lk_agents_voice::tts::processing::SpeechText,
+            >,
+        )
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a lk_agents_abi::resources::Resources,

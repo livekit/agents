@@ -151,6 +151,10 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
 struct Observing(Executor, Arc<Mutex<Option<lk_agents_voice::trace::Journal>>>);
 
 impl SessionExecutor for Observing {
+    fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
+        self.0.tts_adapter()
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a lk_agents_abi::resources::Resources,

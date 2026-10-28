@@ -111,7 +111,7 @@ impl SentenceBuffer {
         SentenceBuffer(TokenBuffer::new(tok, buf))
     }
 
-    /// One splitter per stream, for [`StreamAdapter`](lk_agents_abi::StreamAdapter).
+    /// One splitter per stream, for the sentence adapter.
     pub fn factory() -> lk_agents_abi::SplitterFactory {
         SentenceBuffer::factory_with(SentenceBufferOptions::default())
     }
