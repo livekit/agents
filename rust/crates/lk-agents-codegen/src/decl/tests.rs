@@ -770,3 +770,28 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     let err = refuse_proxy("#[host(call)] fn state(&self) -> Chunk;");
     assert!(err.contains("Result<T, E>"), "{err}");
 }
+
+// Catches: a host class without the `_core_*` surface (an io leg) called directly instead of
+// through its declared view, or a shared `_core` object read back as a copy rather than the very
+// object the host holds.
+#[test]
+fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
+    let decls = read(
+        "pub struct Tracker;\n#[crate::host(object(cell = \"arc\"))]\nimpl Tracker {}\n\
+         #[crate::host(proxy(host = \"livekit.agents.io.Sink\", view = \"livekit.agents.view._Sink\"))]\n\
+         pub trait Sink: Send + Sync {\n\
+             #[host(read_once, name = \"_core_tracker\")] fn tracker(&self) -> &std::sync::Arc<Tracker>;\n\
+             #[host(notify, name = \"_core_flush\")] fn flush(&self);\n\
+         }",
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    for want in [
+        "let view = obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?.call1((obj,))?;\n        let obj = &view;",
+        "<::lk_agents_abi::llm::class::Tracker as ::lk_agents_abi::python::ArcClass>::shared(&v)",
+        "fn tracker(&self) -> &::std::sync::Arc<::lk_agents_abi::llm::class::Tracker> {",
+    ] {
+        assert!(llm.contains(want), "{want}\n{llm}");
+    }
+}

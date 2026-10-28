@@ -9,6 +9,7 @@ use lk_agents_host_derive::Host;
 /// `NOT_GIVEN`, `None` and anything unreadable folded to `None`; `speaker_id` may be missing on
 /// older subclasses. Declared for the Node binding's record; the Python crossing is written below.
 #[derive(Debug, Clone, Default, PartialEq, Host)]
+#[crate::host(handwritten(extract, emit, host = "livekit.agents.types.TimedString"))]
 pub struct TimedString {
     /// The text itself: `TimedString(text=word, ..)` out, and the `str` the object is on the way in.
     pub text: String,

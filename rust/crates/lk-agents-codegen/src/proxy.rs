@@ -21,7 +21,12 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let mut s = format!("// Declared in {}.\n\n", p.source);
     let mut fields = vec!["    host: ::std::sync::Arc<Py<PyAny>>,\n".to_owned()];
     let mut inits = vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()];
-    let mut reads = String::new();
+    let mut reads = match &p.view {
+        Some((module, class)) => format!(
+            "        let view = obj.py().import({module:?})?.getattr({class:?})?.call1((obj,))?;\n        let obj = &view;\n"
+        ),
+        None => String::new(),
+    };
     if p.captures_context() {
         fields.push(
             "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
@@ -270,6 +275,9 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Handle { .. }
         | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
+        }
+        Ty::Shared { rust, .. } => {
+            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::wrap(py, {v})?")
         }
         // Seconds, as the host's timeouts and delays are.
         Ty::Duration => {

@@ -6,10 +6,17 @@ impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
         let at = self.at;
-        voc::only(at, &proxy.nested, &["host"])?;
+        voc::only(at, &proxy.nested, &["host", "view"])?;
         let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
             format!("{at}: proxy(host = \"module.Class\") names the class it calls")
         })?;
+        let view = match voc::text(at, &proxy.nested, "view")? {
+            None => None,
+            Some(v) => match v.rsplit_once('.') {
+                Some((module, class)) => Some((module.to_owned(), class.to_owned())),
+                None => return Err(format!("{at}: view = \"{v}\" is a dotted class path")),
+            },
+        };
         if !tr.generics.params.is_empty() {
             return Err(format!("{at}: a generic trait has no single proxy"));
         }
@@ -48,6 +55,7 @@ impl Resolver<'_> {
             })?,
             source: module.file.clone(),
             host,
+            view,
             async_trait: tr
                 .attrs
                 .iter()

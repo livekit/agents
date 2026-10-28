@@ -49,8 +49,8 @@ impl AudioInput for FakeAudioInput {
     fn label(&self) -> &str {
         "fake::audio_input"
     }
-    async fn next_frame(&self) -> Option<AudioFrame> {
-        self.frames.lock().await.recv().await
+    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<AudioFrame>> {
+        Ok(self.frames.lock().await.recv().await)
     }
 }
 
@@ -74,14 +74,14 @@ impl VideoInput for FakeVideoInput {
     fn label(&self) -> &str {
         "fake::video_input"
     }
-    async fn next_frame(&self) -> Option<lk_agents_rtc::VideoFrameRef> {
-        let ordinal = self.frames.lock().await.recv().await?;
-        Some(lk_agents_rtc::VideoFrameRef {
+    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>> {
+        let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
+        Ok(Some(lk_agents_rtc::VideoFrameRef {
             media: MediaRef::new(ordinal, &self.refs),
             width: 1280,
             height: 720,
             timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,
-        })
+        }))
     }
 }
 

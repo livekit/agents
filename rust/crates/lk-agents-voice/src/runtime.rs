@@ -324,8 +324,12 @@ async fn read_audio(
         let frame = tokio::select! {
             biased;
             frame = input.next_frame() => match frame {
-                Some(frame) => frame,
-                None => break ChannelEndCause::SourceEnded,
+                Ok(Some(frame)) => frame,
+                Ok(None) => break ChannelEndCause::SourceEnded,
+                Err(e) => {
+                    log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "audio input failed");
+                    break ChannelEndCause::Error;
+                }
             },
             _ = closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
         };

@@ -430,6 +430,12 @@ impl Resolver<'_> {
                     (["std", "sync", "Arc"], [Shape::Dyn { found: Found::Item { module, item }, args }]) if args.is_empty() => {
                         self.proxy(*module, *item, false, at)?
                     }
+                    (["std", "sync", "Arc"], [Shape::Named { found: Found::Item { module, item }, args }])
+                        if args.is_empty() && self.arc_object(*module, *item, at)?.is_some() =>
+                    {
+                        let class = self.arc_object(*module, *item, at)?.expect("checked");
+                        Ty::Shared { rust: self.krate.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?, class }
+                    }
                     (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
                         if args.is_empty() && !self.is_stream_source(*module, *item) =>
                     {
@@ -451,6 +457,27 @@ impl Resolver<'_> {
                 self.declared(*module, *item, at)
             }
         }
+    }
+
+    /// The host class of an item declared `#[host(object(cell = "arc"))]`, if it is one.
+    fn arc_object(&self, module: usize, item: usize, at: &str) -> Result<Option<String>, String> {
+        let k = self.krate;
+        let ident = k.item_name(module, item);
+        for i in &k.modules[module].items {
+            let syn::Item::Impl(imp) = i else { continue };
+            if imp.trait_.is_some()
+                || !matches!(&*imp.self_ty, syn::Type::Path(p) if p.path.is_ident(&ident))
+            {
+                continue;
+            }
+            let entries = voc::read(&imp.attrs).map_err(|e| format!("{at}: {e}"))?;
+            if let Some(object) = voc::find(&entries, "object")
+                && voc::text(at, &object.nested, "cell")?.as_deref() == Some("arc")
+            {
+                return Ok(Some(voc::text(at, &object.nested, "name")?.unwrap_or(ident)));
+            }
+        }
+        Ok(None)
     }
 
     /// The item is the ABI's `StreamSource` trait.
@@ -548,8 +575,10 @@ impl Resolver<'_> {
                 emit: true,
             }));
         }
+        // Beside a derive (for another binding's record), `host` says Python crosses it by its own
+        // conversions all the same.
         if let Some(own) = voc::find(&entries, "handwritten")
-            && !derives_host(attrs)
+            && (!derives_host(attrs) || voc::find(&own.nested, "host").is_some())
         {
             voc::only(at, &own.nested, &["extract", "emit", "host"])?;
             let host = voc::text(at, &own.nested, "host")?.ok_or_else(|| {
@@ -615,7 +644,8 @@ impl Resolver<'_> {
                 continue;
             }
             let entries = voc::read(&imp.attrs).map_err(|e| format!("{at}: {e}"))?;
-            // A `#[class]` struct's object: the host holds a `_core` handle over a clone.
+            // A `#[class]` struct's object: the host holds a `_core` handle over a clone, and hands
+            // one back when the class is `#[class(from_py_object)]`.
             if let Some(object) = voc::find(&entries, "object")
                 && object.nested.is_empty()
                 && class_struct(it)
@@ -623,7 +653,7 @@ impl Resolver<'_> {
                 return Ok(Ty::Record(Record {
                     rust,
                     host: HostForm::CoreClass(ident.clone()),
-                    extract: false,
+                    extract: class_from_py_object(it),
                     emit: true,
                 }));
             }
@@ -919,6 +949,18 @@ const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 /// A struct carrying `#[class]` (`#[crate::class]`, `#[lk_agents_abi::class]`).
 fn class_struct(item: &syn::Item) -> bool {
     matches!(item, syn::Item::Struct(st) if st.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "class")))
+}
+
+/// `#[class(from_py_object)]`: pyo3 takes the class by value (a clone).
+fn class_from_py_object(item: &syn::Item) -> bool {
+    let syn::Item::Struct(st) = item else { return false };
+    st.attrs.iter().any(|a| {
+        a.path().segments.last().is_some_and(|s| s.ident == "class")
+            && a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|ps| ps.iter().any(|p| p.is_ident("from_py_object")))
+    })
 }
 
 fn shared(r: &syn::Receiver) -> bool {

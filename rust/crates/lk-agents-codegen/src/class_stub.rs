@@ -278,7 +278,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             imports.add("collections.abc", "AsyncIterable");
             format!("AsyncIterable[{}]", annotation(c, output, dir, imports))
         }
-        Ty::Handle { class, .. } | Ty::Instance { class, .. } => {
+        Ty::Handle { class, .. } | Ty::Instance { class, .. } | Ty::Shared { class, .. } => {
             imports.add(".._core", class);
             class.clone()
         }

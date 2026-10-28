@@ -20,6 +20,7 @@ pub mod text_session;
 pub mod tts;
 pub mod turn;
 pub mod vad;
+pub mod voice;
 pub mod worker;
 
 /// The implementation of each declared class. The registration shell implements it.

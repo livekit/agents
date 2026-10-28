@@ -17,6 +17,7 @@ mod text_session;
 mod tts;
 mod turn;
 mod vad;
+mod voice;
 mod worker;
 
 /// `obj` is not an instance of the model(s) `expected` names.

@@ -385,7 +385,7 @@ impl Default for AudioStreamOptions {
 /// One frame off an `rtc.VideoStream`: a [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never
 /// cross), the size read at the seam to reject non-frames, and the frame's own capture stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::class]
+#[crate::class(from_py_object)]
 pub struct VideoFrameRef {
     /// The side-table key; the host frame is released when the last clone drops.
     pub media: MediaRef,
@@ -580,7 +580,7 @@ pub struct StreamInfo {
     derive(serde::Serialize, serde::Deserialize),
     serde(deny_unknown_fields)
 )]
-#[crate::class]
+#[crate::class(from_py_object)]
 pub struct AudioOutputCapabilities {
     pub pause: bool,
 }

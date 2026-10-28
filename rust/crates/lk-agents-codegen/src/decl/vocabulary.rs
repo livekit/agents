@@ -4,7 +4,7 @@
 //! | where | key | meaning |
 //! |---|---|---|
 //! | trait | `class(name = "X", native = Trait)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait |
-//! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind` |
+//! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind`; `view = "module.Class"`: the proxy calls that class's instance over the host object (a host class without the `_core_*` surface) |
 //! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
 //! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error |
 //! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited; a failure is logged |
@@ -29,7 +29,7 @@
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `string` | crosses as its string: `Display` to the host, `FromStr` from it |
 //! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
-//! | `#[derive(Host)]` record | `handwritten(extract)` | read through its own `FromPyObject` beside the derive's emit |
+//! | `#[derive(Host)]` record | `handwritten(extract)` | read through its own `FromPyObject` beside the derive's emit; with `host = ".."`, crosses both ways by its own conversions |
 //! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions written into `lk-agents-abi/src/python/generated/` |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains `to_json()`/`from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |

@@ -1,5 +1,5 @@
 //! A host `io.AudioInput` / `VideoInput` / `AudioOutput` / `TextOutput` is its trait through the
-//! trait's bare `#[host(proxy)]`. A host sink reports its playback into the [`PlaybackTracker`] its
+//! generated proxy, which calls the host object's `_core_view` view. A host sink reports its playback into the [`PlaybackTracker`] its
 //! `_core_tracker()` hands over, stamped on the session's clock by [`PlaybackTracker::anchor_to`].
 
 use crate::voice::rtc::TrackSid;
@@ -372,10 +372,13 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
 
 /// What a host wrapper over a core leg hears of its playback (`_ParticipantAudioOutput`, re-emitting
 /// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, through its `_core_*` surface.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", view = "livekit.agents._core_view._AudioOutput"))]
 pub trait PlaybackListener: Send + Sync {
+    #[host(notify, name = "_core_on_playback_started")]
     fn on_playback_started(&self, created_at: f64);
+    #[host(notify, name = "_core_on_playback_progressed")]
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64);
+    #[host(notify, name = "_core_on_playback_finished")]
     fn on_playback_finished(
         &self,
         playback_position: f64,
@@ -412,46 +415,58 @@ impl PlaybackObserver for ListenerObserver {
 
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput", view = "livekit.agents._core_view._AudioInput"))]
 #[async_trait]
 pub trait AudioInput: Send + Sync {
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     /// The next frame, or `None` at end of stream.
-    async fn next_frame(&self) -> Option<AudioFrame>;
+    #[host(await, name = "_core_next_frame")]
+    async fn next_frame(&self) -> Result<Option<AudioFrame>>;
 
     /// The chain was enabled; frames are dropped while detached, so a re-attach resumes mid-stream.
+    #[host(notify, name = "_core_on_attached")]
     fn on_attached(&self) {}
+    #[host(notify, name = "_core_on_detached")]
     fn on_detached(&self) {}
 }
 
 /// `io.VideoInput`: the source end of the video-in chain; one reader. Frames are side-table keys.
-#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput", view = "livekit.agents._core_view._VideoInput"))]
 #[async_trait]
 pub trait VideoInput: Send + Sync {
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     /// The next frame, or `None` at end of stream.
-    async fn next_frame(&self) -> Option<crate::voice::rtc::VideoFrameRef>;
+    #[host(await, name = "_core_next_frame")]
+    async fn next_frame(&self) -> Result<Option<crate::voice::rtc::VideoFrameRef>>;
 
     /// `set_video_enabled`: frames are dropped while detached.
+    #[host(notify, name = "_core_on_attached")]
     fn on_attached(&self) {}
+    #[host(notify, name = "_core_on_detached")]
     fn on_detached(&self) {}
 }
 
 /// `io.AudioOutput`: one link in the audio-out chain. Implement [`capture`](Self::capture) and
 /// [`flush_segment`](Self::flush_segment); call [`AudioOutputExt::capture_frame`] and [`AudioOutputExt::flush`].
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", view = "livekit.agents._core_view._AudioOutput"))]
 #[async_trait]
 pub trait AudioOutput: Send + Sync {
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     /// This node's own bookkeeping and event fan-out. One per node, never shared.
+    #[host(read_once, name = "_core_tracker")]
     fn tracker(&self) -> &Arc<PlaybackTracker>;
 
+    #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> AudioOutputCapabilities;
 
     /// The rate this sink requires, or `None` if it takes any.
+    #[host(read_once, name = "_core_sample_rate")]
     fn sample_rate(&self) -> Option<u32> {
         None
     }
@@ -462,32 +477,39 @@ pub trait AudioOutput: Send + Sync {
 
     /// Push one frame downstream. Callers use [`AudioOutputExt::capture_frame`]. Awaited on a host
     /// sink, where backpressure lives.
+    #[host(await, name = "_core_capture")]
     async fn capture(&self, frame: &AudioFrame) -> Result<()>;
 
     /// End the current segment. **Not the caller's entry point** -- use [`AudioOutputExt::flush`].
+    #[host(notify, name = "_core_flush_segment")]
     fn flush_segment(&self);
 
     /// Throw away buffered audio and stop playback immediately. Synchronous: this is interruption.
+    #[host(notify, name = "_core_clear_buffer")]
     fn clear_buffer(&self);
 
+    #[host(notify, name = "_core_on_attached")]
     fn on_attached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_attached();
         }
     }
 
+    #[host(notify, name = "_core_on_detached")]
     fn on_detached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_detached();
         }
     }
 
+    #[host(notify, name = "_core_pause")]
     fn pause(&self) {
         if let Some(next) = self.next_in_chain() {
             next.pause();
         }
     }
 
+    #[host(notify, name = "_core_resume")]
     fn resume(&self) {
         if let Some(next) = self.next_in_chain() {
             next.resume();
@@ -528,9 +550,10 @@ pub trait AudioOutputExt: AudioOutput {
 impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 
 /// `io.TextOutput`: one link in the transcript chain; `flush` is the whole protocol.
-#[crate::host(proxy(host = "livekit.agents.voice.io.TextOutput"))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.TextOutput", view = "livekit.agents._core_view._TextOutput"))]
 #[async_trait]
 pub trait TextOutput: Send + Sync {
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
@@ -539,22 +562,27 @@ pub trait TextOutput: Send + Sync {
 
     /// Capture a delta with word timings (Python's `TimedString` is a `str`; here it's a separate
     /// method whose default drops the timings).
+    #[host(await, name = "_core_capture_timed")]
     async fn capture_timed(&self, text: &TimedString) -> Result<()> {
         self.capture_text(&text.text).await
     }
 
     /// Capture a text delta. Must not drop: a lost token mangles the transcript and the speech.
+    #[host(await, name = "_core_capture_text")]
     async fn capture_text(&self, text: &str) -> Result<()>;
 
     /// The generation is complete; close the segment.
+    #[host(notify, name = "_core_flush")]
     fn flush(&self);
 
+    #[host(notify, name = "_core_on_attached")]
     fn on_attached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_attached();
         }
     }
 
+    #[host(notify, name = "_core_on_detached")]
     fn on_detached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_detached();

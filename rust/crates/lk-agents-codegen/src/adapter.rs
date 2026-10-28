@@ -7,7 +7,9 @@
 //! lists, declared records) is a typed parameter; JSON, JSON objects and host proxies are taken as
 //! objects and converted here with the parameter's name as the error path.
 
-use crate::decl::{Class, Declarations, Form, Literal, Method, MethodKind, Param, RecordDecl, Ty};
+use crate::decl::{
+    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Record, RecordDecl, Ty,
+};
 use crate::python::Out;
 
 pub const DIR: &str = "rust/crates/lk-agents-py/src/generated";
@@ -367,6 +369,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Proxy { declared: Some((family, name)), .. } => {
             format!("super::{family}::{name}Proxy::from_host(&{v})")
         }
+        Ty::Shared { rust, .. } => {
+            format!("<{rust} as ::lk_agents_abi::python::ArcClass>::shared(&{v})")
+        }
         Ty::Proxy { rust, declared: None, .. } => {
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
         }
@@ -395,9 +400,22 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
             from_object(v, inner, path, at)?
         ),
+        // A `_core` class is taken by a clone, whose borrow failure converts.
+        other if native(other) && holds_core_class(other) => {
+            format!("{v}.extract::<{}>().map_err(::pyo3::PyErr::from)", other.rust())
+        }
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })
+}
+
+fn holds_core_class(ty: &Ty) -> bool {
+    match ty {
+        Ty::Record(Record { host: HostForm::CoreClass(_), .. }) => true,
+        Ty::Optional(t) | Ty::List(t) => holds_core_class(t),
+        Ty::Tuple(ts) => ts.iter().any(holds_core_class),
+        _ => false,
+    }
 }
 
 /// The adapter's return type and the expression of `{}` (the trait's value) it returns.

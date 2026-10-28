@@ -109,6 +109,9 @@ pub struct Proxy {
     pub source: String,
     /// The host class the object is an instance of: its annotation.
     pub host: String,
+    /// `view = "module.Class"`: the class whose instance over the host object the proxy calls,
+    /// for host classes that do not carry the `_core_*` surface themselves (the io legs).
+    pub view: Option<(String, String)>,
     /// `#[async_trait]` on the trait: the implementation carries it too.
     pub async_trait: bool,
     pub methods: Vec<ProxyMethod>,
@@ -372,6 +375,11 @@ pub enum Ty {
         assoc: String,
         class: String,
     },
+    /// `Arc<T>` of an `object(cell = "arc")` class: the `_core` object itself, shared both ways.
+    Shared {
+        rust: String,
+        class: String,
+    },
     /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
     /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's
     /// type). Output only.
@@ -443,6 +451,7 @@ impl Ty {
                 format!("({})", ts.iter().map(Ty::rust).collect::<Vec<_>>().join(", "))
             }
             Ty::Record(r) => r.rust.clone(),
+            Ty::Shared { rust, .. } => format!("::std::sync::Arc<{rust}>"),
             Ty::This => "Self".into(),
             Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),
             Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),

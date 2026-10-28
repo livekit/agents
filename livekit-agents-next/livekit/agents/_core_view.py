@@ -3,9 +3,9 @@ crosses with.
 
 A core proxy calls ``_core_<method>`` on the object it was handed. The provider bases (``stt.STT``,
 ``tts.TTS``, ``llm.LLM``, ``vad.VAD``, ``llm.RealtimeModel`` and their streams) carry that
-surface themselves, generated with them; an io leg or a room is seen through ``duck(obj, cls)``,
-``cls`` naming the base class the core expects, and the duplex and turn-detection views here
-answer over a plugin's public API. Chat items cross as ``_core.ChatItem``.
+surface themselves, generated with them. An io leg is seen through its view here (the proxy's
+declared ``view``), a room through ``duck(obj, cls)``, ``cls`` naming the base class the core
+expects; the duplex and turn-detection views answer over a plugin's public API. Chat items cross as ``_core.ChatItem``.
 """
 
 from __future__ import annotations
@@ -298,10 +298,6 @@ class _AudioOutput:
     def _core_sample_rate(self) -> int | None:
         return self._obj.sample_rate
 
-    def _core_next_in_chain(self) -> None:
-        # the host chain is the host's: the core sees its head as one sink
-        return None
-
     async def _core_capture(self, frame: Any) -> None:
         await self._obj.capture_frame(frame)
 
@@ -347,9 +343,6 @@ class _TextOutput:
 
     def _core_label(self) -> str:
         return self._obj.label
-
-    def _core_next_in_chain(self) -> None:
-        return None
 
     async def _core_capture_timed(self, text: Any) -> None:
         await self._obj.capture_text(text)

@@ -139,8 +139,8 @@ impl VideoInput for ParticipantVideoInput {
         "RoomIO"
     }
 
-    async fn next_frame(&self) -> Option<VideoFrameRef> {
-        ParticipantVideoInput::next_frame(self).await
+    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<VideoFrameRef>> {
+        Ok(ParticipantVideoInput::next_frame(self).await)
     }
 
     fn on_attached(&self) {
@@ -760,8 +760,8 @@ impl AudioInput for ParticipantAudioInput {
         "RoomIO"
     }
 
-    async fn next_frame(&self) -> Option<AudioFrame> {
-        self.reader.recv().await
+    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<AudioFrame>> {
+        Ok(self.reader.recv().await)
     }
 
     fn on_attached(&self) {
@@ -927,7 +927,7 @@ mod tests {
             let (tx, stream) = BoundedLossy::audio();
             drop(tx);
             input.clone().pump(lease, "TR_buffer".into(), stream, Some(processor.clone())).await;
-            let frame = input.next_frame().await.unwrap();
+            let frame = input.next_frame().await.unwrap().unwrap();
             assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
             let sample = if fail { 0 } else { 11 };
             assert!(
