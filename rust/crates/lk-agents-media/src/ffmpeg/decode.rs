@@ -41,6 +41,9 @@ extern "C" fn pcm_trampoline(opaque: *mut c_void, pcm: *const i16, n: c_int) -> 
     // SAFETY: same lifetime argument; `pcm`/`n` are the shim's converted output, valid for this
     // call only, which is why it is copied here.
     let shared = unsafe { &*(opaque as *const Shared) };
+    if shared.err.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+        return -1;
+    }
     let samples = unsafe { std::slice::from_raw_parts(pcm, n as usize) };
     shared.pcm.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(samples);
     shared.ready();
@@ -56,6 +59,7 @@ pub struct FfmpegDecoder {
     out_rate: u32,
     out_channels: u16,
     saw_output: bool,
+    closed: bool,
 }
 
 impl FfmpegDecoder {
@@ -83,6 +87,7 @@ impl FfmpegDecoder {
             out_rate,
             out_channels,
             saw_output: false,
+            closed: false,
         })
     }
 
@@ -101,6 +106,9 @@ impl FfmpegDecoder {
     }
 
     fn start(&mut self) -> Result<()> {
+        if self.closed {
+            return Err(CodecError::InputClosed);
+        }
         if self.handle.is_some() {
             return Ok(());
         }
@@ -168,7 +176,7 @@ impl FfmpegDecoder {
         Ok(())
     }
 
-    fn drain(&mut self) -> Result<Vec<i16>> {
+    pub fn drain(&mut self) -> Result<Vec<i16>> {
         if let Some(e) = self.shared.err.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             return Err(e);
         }
@@ -194,15 +202,27 @@ impl FfmpegDecoder {
 
     /// Stop native input immediately and return ownership of its settlement receipt.
     pub fn close(&mut self) -> Option<MediaWorker<()>> {
+        self.closed = true;
         self.set_on_output(None);
+        let mut error = self.shared.err.lock().unwrap_or_else(|e| e.into_inner());
+        if error.is_none() {
+            *error = Some(CodecError::InputClosed);
+        }
+        drop(error);
         self.input.close();
+        self.handle.take()
+    }
+
+    /// Signal EOF and transfer the existing worker receipt without waiting.
+    pub fn end_input(&mut self) -> Option<MediaWorker<()>> {
+        self.closed = true;
+        self.input.end_input();
         self.handle.take()
     }
 
     /// Joins the decode thread, so everything the container held is decoded on return.
     pub fn flush(&mut self) -> Result<Vec<i16>> {
-        self.input.end_input();
-        if let Some(h) = self.handle.take() {
+        if let Some(h) = self.end_input() {
             h.wait().map_err(|e| CodecError::Worker(e.to_string()))?;
         }
         self.drain()

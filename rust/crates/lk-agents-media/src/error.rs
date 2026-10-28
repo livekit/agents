@@ -37,6 +37,9 @@ pub enum CodecError {
     #[error("cannot resample {from} Hz to {to} Hz: {detail}")]
     Resample { from: u32, to: u32, detail: String },
 
+    #[error("decoder input is closed")]
+    InputClosed,
+
     #[error("codec worker: {0}")]
     Worker(String),
 

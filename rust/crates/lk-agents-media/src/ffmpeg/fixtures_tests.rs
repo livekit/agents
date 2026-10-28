@@ -459,3 +459,16 @@ fn cancellation_settlement_releases_the_injected_decoder_slot() {
     receipt.wait().unwrap();
     let _replacement = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
 }
+
+#[test]
+fn closed_decoder_rejects_input_without_reacquiring_worker_admission() {
+    use crate::workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
+    let workers =
+        MediaWorkers::new(MediaWorkerLimits { decoders: 1, ..Default::default() }).unwrap();
+    let mut decoder = FfmpegDecoder::new(&workers, Some("mp3"), 24_000, 1).unwrap();
+    decoder.push(&[]).unwrap();
+    decoder.close().unwrap().wait().unwrap();
+    let _other_stream = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
+    let error = decoder.push(&[]).expect_err("closed decoder must reject input");
+    assert_eq!(error.to_string(), "decoder input is closed");
+}
