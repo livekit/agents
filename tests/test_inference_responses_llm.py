@@ -187,6 +187,29 @@ async def test_extra_kwargs_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert transport.body()["max_output_tokens"] == 64
 
 
+async def test_per_call_parallel_tool_calls_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_llm(monkeypatch, transport, extra_kwargs={"parallel_tool_calls": False})
+
+    await _drain(model, extra_kwargs={"parallel_tool_calls": True})
+
+    assert transport.body()["parallel_tool_calls"] is True
+
+
+async def test_per_call_extra_kwargs_tool_choice_converted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_llm(monkeypatch, transport, extra_kwargs={"tool_choice": "none"})
+
+    await _drain(
+        model,
+        extra_kwargs={"tool_choice": {"type": "function", "function": {"name": "get_weather"}}},
+    )
+
+    assert transport.body()["tool_choice"] == {"type": "function", "name": "get_weather"}
+
+
 async def test_prompt_cache_ttl_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _GatewayTransport()
     model = _make_llm(monkeypatch, transport, extra_kwargs={"prompt_cache_options": {"ttl": "30m"}})
