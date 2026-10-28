@@ -41,6 +41,7 @@ compiled=(
     "lk-agents-worker: tests not in the gate yet; worker DST is K-2"
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
     "lk-agents-codegen: unit tests not in the gate yet; codegen --check runs in ci.yml core"
+    "lk-agents-runtime: tests not in the gate yet (runtime verification is K-30)"
 )
 outside=(
     "lk-agents-storage: ci.yml storage-tests (cargo test); storage DST is K-3"
