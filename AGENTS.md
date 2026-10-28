@@ -221,7 +221,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ## Rust architecture rules
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> subject cores -> lk-agents-abi`;
-  `voice -> core`, `a2a -> storage`, and `fuzz -> subject cores + abi` are allowed composition edges.
+  `voice -> core`, `voice -> media`, `inference -> media`, `a2a -> storage`, `py -> abi`
+  and `fuzz -> subject cores + abi` are allowed composition edges.
   ABI never depends on subjects or runtime; cores never depend on runtime or host adapters.
 - The subject cores (`lk-agents-core`, `-voice`, `-worker`, `-inference`, `-storage`, `-a2a`,
   `-media`) and `lk-agents-abi` have no executor, async transport or SDK dependency in their

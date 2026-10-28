@@ -55,9 +55,16 @@ objects.
 ```text
 lk-agents-py -> lk-agents-runtime -> subject cores -> lk-agents-abi
 lk-agents-voice -> lk-agents-core -> lk-agents-abi
+lk-agents-voice -> lk-agents-media
+lk-agents-inference -> lk-agents-media
 lk-agents-a2a -> lk-agents-storage
+lk-agents-py -> lk-agents-abi
 lk-agents-fuzz -> subject cores + lk-agents-abi
 ```
+
+`lk-agents-media` is a synchronous data-plane core, so voice and inference compose it
+like `lk-agents-core`. `lk-agents-py` uses ABI only for the declared types its generated
+conversions translate; it reaches cores through the runtime.
 
 All subject crates obey the core/runtime boundary. `lk-agents-core` contains
 the shared agent and backend TextSession state machines.
@@ -887,8 +894,8 @@ Those closures must contain no runtime, executor, async transport or host SDK:
 no tokio, futures, pyo3, async-trait, reqwest, tungstenite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> subject cores -> abi`, with the composition edges
-`voice -> core`, `a2a -> storage` and `fuzz -> subject cores + abi` described
-above. These dependency bans apply to the subjects and ABI, not to runtime,
+`voice -> core`, `voice -> media`, `inference -> media`, `a2a -> storage`,
+`py -> abi` and `fuzz -> subject cores + abi` described above. These dependency bans apply to the subjects and ABI, not to runtime,
 fuzz support, language bindings or build tools.
 
 Per-core `clippy.toml` files configure `disallowed-methods`, `disallowed-types`
