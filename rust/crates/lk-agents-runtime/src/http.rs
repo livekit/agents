@@ -1,0 +1,235 @@
+//! The gateway's HTTPS exchange for one LLM request attempt: sends the request, reports what the
+//! transport observed (connection, request handed over, response bytes, decoded events, end or
+//! failure) and decides nothing. The request core owns every deadline and retry.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::task::{Context, Poll};
+
+use futures_util::StreamExt;
+use lk_agents_abi::{Clock, Ts};
+use lk_agents_inference::llm::lifecycle::{AttemptFailure, LlmRequestEvent};
+use lk_agents_inference::llm::parse::WireChunk;
+use lk_agents_inference::transport::HttpRequest;
+use tokio::sync::{Notify, mpsc};
+
+use crate::sse::SseDecoder;
+
+/// A transport observation and the instant it was made.
+#[derive(Debug)]
+pub(crate) struct Stamped {
+    pub at: Ts,
+    pub event: LlmRequestEvent,
+}
+
+/// Where an attempt's observations go: the request's bounded queue, so an attempt reads the
+/// response no faster than the request consumes it.
+#[derive(Clone)]
+pub(crate) struct Reporter {
+    pub tx: mpsc::Sender<Stamped>,
+    pub clock: Arc<dyn Clock>,
+}
+
+impl Reporter {
+    async fn report(&self, event: LlmRequestEvent) {
+        // A closed queue is a request that stopped listening; nothing is owed to it.
+        let _ = self.tx.send(Stamped { at: self.clock.now(), event }).await;
+    }
+}
+
+/// The response's text when the gateway rejects the request is read up to this many bytes.
+const ERROR_BODY_LIMIT: usize = 64 * 1024;
+
+/// One client for the process: keep-alive connections are shared by every request. No reqwest
+/// timeout is set: the request core times each phase.
+pub struct GatewayHttp {
+    client: reqwest::Client,
+}
+
+impl GatewayHttp {
+    pub fn new() -> Result<Self, String> {
+        lk_agents_inference::transport::install_tls_provider();
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(50)
+            .pool_idle_timeout(std::time::Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .map_err(|e| error_chain(&e))?;
+        Ok(GatewayHttp { client })
+    }
+
+    /// A GET whose response is read to its end, so its connection stays pooled (`prewarm()`).
+    pub async fn warm(&self, url: String, headers: Vec<(String, String)>) {
+        let mut builder = self.client.get(url);
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        if let Ok(response) = builder.send().await {
+            let _ = response.bytes().await;
+        }
+    }
+
+    pub(crate) async fn exchange(&self, request: HttpRequest, attempt: u32, reporter: Reporter) {
+        let progress = Arc::new(BodyProgress::default());
+        let body = ReportingBody { bytes: Some(request.body.into()), progress: progress.clone() };
+        let mut builder = self.client.post(request.url).body(reqwest::Body::wrap_stream(body));
+        for (name, value) in request.headers {
+            builder = builder.header(name, value);
+        }
+        let mut send = std::pin::pin!(builder.send());
+        let mut reported = 0;
+        let response = loop {
+            tokio::select! {
+                biased;
+                response = &mut send => break response,
+                () = progress.changed.notified() => progress.report(attempt, &mut reported, &reporter).await,
+            }
+        };
+        progress.report(attempt, &mut reported, &reporter).await;
+        let failure = match response {
+            Err(err) => Some(AttemptFailure::Connection(error_chain(&err))),
+            Ok(response) if !response.status().is_success() => Some(rejected(response).await),
+            Ok(response) => read_events(response, attempt, &reporter).await,
+        };
+        if let Some(failure) = failure {
+            reporter.report(LlmRequestEvent::Failed { attempt, failure }).await;
+        }
+    }
+}
+
+/// Decodes the event stream into chunk events; `None` once the response ended cleanly.
+async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Reporter) -> Option<AttemptFailure> {
+    let mut decoder = SseDecoder::new();
+    let mut bytes = response.bytes_stream();
+    let mut events = Vec::new();
+    loop {
+        let Some(chunk) = bytes.next().await else {
+            return match decoder.finish() {
+                Ok(()) => {
+                    reporter.report(LlmRequestEvent::Ended { attempt }).await;
+                    None
+                }
+                Err(err) => Some(AttemptFailure::Malformed(err.to_string())),
+            };
+        };
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(err) => return Some(AttemptFailure::Connection(error_chain(&err))),
+        };
+        if let Err(err) = decoder.feed(&chunk, &mut events) {
+            return Some(AttemptFailure::Malformed(err.to_string()));
+        }
+        if events.is_empty() {
+            reporter.report(LlmRequestEvent::Progress { attempt }).await;
+        }
+        for event in events.drain(..) {
+            if event.data == "[DONE]" {
+                reporter.report(LlmRequestEvent::Ended { attempt }).await;
+                return None;
+            }
+            match serde_json::from_str::<WireChunk>(&event.data) {
+                Ok(chunk) => reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await,
+                Err(err) => return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}"))),
+            }
+        }
+    }
+}
+
+async fn rejected(response: reqwest::Response) -> AttemptFailure {
+    let status = i64::from(response.status().as_u16());
+    let header = |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let request_id = header("x-request-id");
+    if status == 429 {
+        let quota = lk_agents_inference::extract_quota_usage(|name| {
+            response.headers().get(name).and_then(|v| v.to_str().ok())
+        });
+        let quota: Vec<String> = quota.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        log::warn!(
+            target: "livekit.agents",
+            request_id = request_id.as_deref().unwrap_or(""), quota = quota.join(" ").as_str();
+            "LLM request rate limited by inference gateway"
+        );
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(Ok(chunk)) = stream.next().await {
+        body.extend_from_slice(&chunk[..chunk.len().min(ERROR_BODY_LIMIT - body.len())]);
+        if body.len() >= ERROR_BODY_LIMIT {
+            break;
+        }
+    }
+    let body = String::from_utf8_lossy(&body);
+    let message = error_message(&body).unwrap_or_default();
+    AttemptFailure::Rejected { status, message, request_id }
+}
+
+/// OpenAI's `{"error": {"message": ..}}`, a top-level `message`, or the trimmed text itself
+/// (a plain `404 page not found` must survive).
+fn error_message(body: &str) -> Option<String> {
+    let text = || Some(body.trim().chars().take(512).collect::<String>()).filter(|t| !t.is_empty());
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else { return text() };
+    let message = parsed.get("error").and_then(|e| e.get("message")).or_else(|| parsed.get("message"));
+    message.and_then(|m| m.as_str()).map(str::to_owned).or_else(text)
+}
+
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut message = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
+/// How far the transport has taken the request body: hyper polls it only on a ready
+/// connection, and polls it to its end once every byte is handed to the connection.
+#[derive(Default)]
+struct BodyProgress {
+    stage: AtomicU8,
+    changed: Notify,
+}
+
+const CONNECTED: u8 = 1;
+const WRITTEN: u8 = 2;
+
+impl BodyProgress {
+    fn reach(&self, stage: u8) {
+        self.stage.fetch_max(stage, Ordering::SeqCst);
+        self.changed.notify_one();
+    }
+
+    async fn report(&self, attempt: u32, reported: &mut u8, reporter: &Reporter) {
+        let stage = self.stage.load(Ordering::SeqCst);
+        if *reported < CONNECTED && stage >= CONNECTED {
+            reporter.report(LlmRequestEvent::Connected { attempt }).await;
+        }
+        if *reported < WRITTEN && stage >= WRITTEN {
+            reporter.report(LlmRequestEvent::RequestWritten { attempt }).await;
+        }
+        *reported = (*reported).max(stage);
+    }
+}
+
+struct ReportingBody {
+    bytes: Option<bytes::Bytes>,
+    progress: Arc<BodyProgress>,
+}
+
+impl futures_util::Stream for ReportingBody {
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.bytes.take() {
+            Some(bytes) => {
+                self.progress.reach(CONNECTED);
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            None => {
+                self.progress.reach(WRITTEN);
+                Poll::Ready(None)
+            }
+        }
+    }
+}

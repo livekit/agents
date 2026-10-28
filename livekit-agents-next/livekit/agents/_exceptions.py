@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 
 class UnexpectedModelBehavior(RuntimeError):
     """Raised when the model behaves in a way the run cannot recover from,
@@ -152,10 +154,21 @@ class APIConnectionError(APIError):
 
 
 class APITimeoutError(APIConnectionError):
-    """Raised when an API request timed out."""
+    """Raised when an API request timed out.
 
-    def __init__(self, message: str = "Request timed out.", *, retryable: bool = True) -> None:
+    ``phase`` names the ``APIConnectOptions`` limit that expired (``pool``, ``connect``,
+    ``read``, ``write`` or ``total``), or is ``None`` when the failing layer did not say.
+    """
+
+    def __init__(
+        self,
+        message: str = "Request timed out.",
+        *,
+        retryable: bool = True,
+        phase: Literal["pool", "connect", "read", "write", "total"] | None = None,
+    ) -> None:
         super().__init__(message, retryable=retryable)
+        self.phase = phase
 
 
 class CLIError(Exception):

@@ -1,0 +1,29 @@
+[package]
+name = "lk-agents-runtime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The runtime half of the core/runtime boundary (docs/internals/rust-core.md "Ownership boundaries"):
+# Tokio, sockets, real clocks, task ownership, effect execution and the async host bridge. Cores
+# never depend on it. Grown from consumers: each module lands with the slice that uses it.
+[dependencies]
+lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-inference = { path = "../lk-agents-inference" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+log.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+pyo3 = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
+
+[features]
+# The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
+python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python"]

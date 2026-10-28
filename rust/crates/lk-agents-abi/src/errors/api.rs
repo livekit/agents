@@ -77,6 +77,30 @@ pub fn http_error_message(message: &str, status: i64, reason: Option<&str>) -> S
     }
 }
 
+/// The wait an `APITimeoutError` bounded, as `APIConnectOptions` names its limits. Absent when the
+/// failing layer does not say (a foreign SDK timeout), never guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimeoutPhase {
+    Pool,
+    Connect,
+    Read,
+    Write,
+    Total,
+}
+
+impl TimeoutPhase {
+    /// The Python value of `APITimeoutError.phase`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeoutPhase::Pool => "pool",
+            TimeoutPhase::Connect => "connect",
+            TimeoutPhase::Read => "read",
+            TimeoutPhase::Write => "write",
+            TimeoutPhase::Total => "total",
+        }
+    }
+}
+
 /// `body` stays on the Python object.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
@@ -87,6 +111,8 @@ pub struct ApiError {
     pub retryable: bool,
     pub status_code: Option<i64>,
     pub request_id: Option<String>,
+    /// [`ApiErrorKind::Timeout`] only.
+    pub phase: Option<TimeoutPhase>,
 }
 
 impl ApiError {
@@ -98,6 +124,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
+            phase: None,
         }
     }
 
@@ -114,6 +141,7 @@ impl ApiError {
             retryable: retryable_for_status(status_code, retryable),
             status_code: Some(status_code),
             request_id,
+            phase: None,
         }
     }
 
@@ -124,6 +152,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
+            phase: None,
         }
     }
 
@@ -134,6 +163,7 @@ impl ApiError {
             retryable: true,
             status_code: None,
             request_id: None,
+            phase: None,
         }
     }
 
@@ -144,6 +174,11 @@ impl ApiError {
             request_id,
             None,
         )
+    }
+
+    /// An `APITimeoutError` for the wait `phase` bounded.
+    pub fn timed_out(phase: TimeoutPhase) -> Self {
+        Self { phase: Some(phase), ..Self::timeout(Some(format!("Request timed out ({} timeout).", phase.as_str()))) }
     }
 
     pub fn with_retryable(mut self, retryable: bool) -> Self {

@@ -3,6 +3,7 @@
 //! `retryable` is cleared once a chunk `has_response()`, so a failure after the model began
 //! answering is not retried.
 
+pub mod lifecycle;
 pub mod models;
 pub mod parse;
 #[cfg(feature = "python")]
@@ -167,47 +168,8 @@ impl NativeLlm {
         args: ChatArgs,
     ) -> Result<Prepared, ApiError> {
         let opts = &self.opts;
-
-        let mut extra = request::compose_extra(&args, &opts.extra_kwargs);
-        // Before `tool_choice` is popped (as in `LLMStream.__init__`): the model must see the
-        // tool list as passed to `chat()`.
-        models::drop_unsupported_params(&opts.model, &mut extra, !tools.is_empty());
-        let extra_headers = extra.remove("extra_headers");
-
-        let formatted = lk_agents_abi::llm::provider_format::openai::to_chat_ctx(chat_ctx, self.images.as_ref())
-            .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
-        let schemas = request::tool_schemas(tools)?;
-        let body = request::build_body(&opts.model, formatted.messages, &schemas, extra);
-
-        // `extra_headers` (the composed kwarg, so the instance's replaces the call's), overlaid
-        // with the job's identification, the provider pin and the bearer.
-        let mut headers: Headers = match extra_headers {
-            Some(serde_json::Value::Object(map)) => map
-                .into_iter()
-                .map(|(k, v)| (k, v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
-                .collect(),
-            _ => Headers::new(),
-        };
-        for (name, value) in gateway_headers(
-            self.identification.as_ref(),
-            args.inference_class.as_deref().or(opts.inference_class.as_deref()),
-            opts.provider.as_deref(),
-            &opts.api_key,
-            &opts.api_secret,
-        )?
-        .into_vec()
-        {
-            headers.set(name, value);
-        }
-        headers.set("Content-Type", "application/json");
-
         Ok(Prepared {
-            request: HttpRequest {
-                url: request::completions_url(&opts.base_url),
-                headers: headers.into_vec(),
-                body: serde_json::to_vec(&serde_json::Value::Object(body))
-                    .map_err(|e| ApiError::new(e.to_string()))?,
-            },
+            request: build_request(opts, self.identification.as_ref(), self.images.as_ref(), chat_ctx, tools, args)?,
             timeout: Duration::from_secs_f64(self.conn_options.timeout.max(0.0)),
             clock: self.clock.clone(),
             http: self.http.clone(),
@@ -216,6 +178,59 @@ impl NativeLlm {
             think_tags: models::think_tags(&opts.model),
         })
     }
+}
+
+
+/// The `chat.completions.create` exchange for one request: the body from the conversation, the
+/// tools and the composed kwargs; the headers from `extra_headers`, the job's identification, the
+/// provider pin and the bearer.
+pub fn build_request(
+    opts: &LlmOptions,
+    identification: Option<&Headers>,
+    images: &(dyn ImageResolver + Send + Sync),
+    chat_ctx: &ChatContext,
+    tools: &[ToolSpec],
+    args: ChatArgs,
+) -> Result<HttpRequest, ApiError> {
+    let mut extra = request::compose_extra(&args, &opts.extra_kwargs);
+    // Before `tool_choice` is popped (as in `LLMStream.__init__`): the model must see the
+    // tool list as passed to `chat()`.
+    models::drop_unsupported_params(&opts.model, &mut extra, !tools.is_empty());
+    let extra_headers = extra.remove("extra_headers");
+
+    let formatted = lk_agents_abi::llm::provider_format::openai::to_chat_ctx(chat_ctx, images)
+        .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
+    let schemas = request::tool_schemas(tools)?;
+    let body = request::build_body(&opts.model, formatted.messages, &schemas, extra);
+
+    // `extra_headers` (the composed kwarg, so the instance's replaces the call's), overlaid
+    // with the job's identification, the provider pin and the bearer.
+    let mut headers: Headers = match extra_headers {
+        Some(serde_json::Value::Object(map)) => map
+            .into_iter()
+            .map(|(k, v)| (k, v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
+            .collect(),
+        _ => Headers::new(),
+    };
+    for (name, value) in gateway_headers(
+        identification,
+        args.inference_class.as_deref().or(opts.inference_class.as_deref()),
+        opts.provider.as_deref(),
+        &opts.api_key,
+        &opts.api_secret,
+    )?
+    .into_vec()
+    {
+        headers.set(name, value);
+    }
+    headers.set("Content-Type", "application/json");
+
+    Ok(HttpRequest {
+        url: request::completions_url(&opts.base_url),
+        headers: headers.into_vec(),
+        body: serde_json::to_vec(&serde_json::Value::Object(body))
+            .map_err(|e| ApiError::new(e.to_string()))?,
+    })
 }
 
 #[async_trait]

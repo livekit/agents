@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind};
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock};
 use prost::Message as _;
 use tokio::sync::mpsc;
@@ -164,13 +164,7 @@ impl CloudTransport {
                         Some(&backchannel),
                         f64::from(created.default_backchannel_threshold),
                     )
-                    .map_err(|e| ApiError {
-                        kind: ApiErrorKind::Api,
-                        message: e.to_string(),
-                        retryable: false,
-                        status_code: None,
-                        request_id: None,
-                    })?;
+                    .map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
             }
             Some(proto::server_message::Message::SessionClosed(_))
             | Some(proto::server_message::Message::InferenceStarted(_))
@@ -203,12 +197,9 @@ impl CloudTransport {
             600,
             crate::token::now_unix(),
         )
-        .map_err(|e| ApiError {
-            kind: ApiErrorKind::Api,
-            message: format!("failed to mint the turn detector access token: {e}"),
-            retryable: false,
-            status_code: None,
-            request_id: None,
+        .map_err(|e| {
+            ApiError::new(format!("failed to mint the turn detector access token: {e}"))
+                .with_retryable(false)
         })?;
         headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
         let session_id = headers

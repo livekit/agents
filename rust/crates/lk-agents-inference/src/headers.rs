@@ -180,7 +180,7 @@ pub fn inference_headers(
 
 /// Identification (finished by the host from the job context, else [`inference_headers`] with no
 /// job), the pinned provider, and the bearer minted from the key pair.
-pub(crate) fn gateway_headers(
+pub fn gateway_headers(
     identification: Option<&Headers>,
     inference_class: Option<&str>,
     provider: Option<&str>,

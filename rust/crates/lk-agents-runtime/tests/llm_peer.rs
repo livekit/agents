@@ -1,0 +1,273 @@
+//! The gateway LLM through its real HTTP/SSE adapter against a controlled peer: a local HTTP/1.1
+//! server that writes each response in chunks cut where the test says, pauses, hangs, rejects or
+//! resets, and records whether the client released the connection.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
+use lk_agents_abi::{ChatContext, Clock, Closed, RealClock};
+use lk_agents_inference::llm::LlmOptions;
+use lk_agents_inference::llm::lifecycle::RequestPolicy;
+use lk_agents_runtime::http::GatewayHttp;
+use lk_agents_runtime::llm::{GatewayLlm, LlmChunks};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
+
+#[derive(Clone)]
+enum Part {
+    Bytes(&'static [u8]),
+    Pause(u64),
+    /// Stop writing and wait for the client to go away.
+    Hang,
+}
+
+#[derive(Clone)]
+enum Reply {
+    Sse(Vec<Part>),
+    /// Hang before the response head.
+    Silent,
+    Status(u16, &'static str),
+}
+
+struct Peer {
+    url: String,
+    requests: Arc<AtomicUsize>,
+    /// Connections the client closed while the peer was still serving them.
+    released: Arc<AtomicUsize>,
+}
+
+impl Peer {
+    async fn start(replies: Vec<Reply>) -> Peer {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let replies = Arc::new(Mutex::new(replies.into_iter()));
+        let (requests, released) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (req, rel) = (requests.clone(), released.clone());
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let (replies, req, rel) = (replies.clone(), req.clone(), rel.clone());
+                tokio::spawn(async move { serve(socket, replies, req, rel).await });
+            }
+        });
+        Peer { url, requests, released }
+    }
+}
+
+async fn serve(
+    mut socket: TcpStream,
+    replies: Arc<Mutex<std::vec::IntoIter<Reply>>>,
+    requests: Arc<AtomicUsize>,
+    released: Arc<AtomicUsize>,
+) {
+    // Requests on a kept-alive connection are served in turn.
+    loop {
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !request.ends_with(b"\r\n0\r\n\r\n") {
+            match socket.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => request.extend_from_slice(&buf[..n]),
+            }
+        }
+        if request.starts_with(b"GET") {
+            continue;
+        }
+        requests.fetch_add(1, Ordering::SeqCst);
+        let Some(reply) = replies.lock().await.next() else { return };
+        let hang = |mut socket: TcpStream, released: Arc<AtomicUsize>| async move {
+            let mut buf = [0u8; 64];
+            while let Ok(n) = socket.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+            }
+            released.fetch_add(1, Ordering::SeqCst);
+        };
+        match reply {
+            Reply::Silent => return hang(socket, released).await,
+            Reply::Status(status, body) => {
+                let head = format!("HTTP/1.1 {status} Nope\r\ncontent-length: {}\r\n\r\n", body.len());
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(body.as_bytes()).await;
+            }
+            Reply::Sse(parts) => {
+                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
+                let _ = socket.write_all(head.as_bytes()).await;
+                for part in parts {
+                    match part {
+                        Part::Bytes(bytes) => {
+                            let chunk = [format!("{:x}\r\n", bytes.len()).as_bytes(), bytes, b"\r\n"].concat();
+                            let _ = socket.write_all(&chunk).await;
+                            let _ = socket.flush().await;
+                        }
+                        Part::Pause(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
+                        Part::Hang => return hang(socket, released).await,
+                    }
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            }
+        }
+    }
+}
+
+fn policy(max_retry: u32, read_ms: u64) -> RequestPolicy {
+    let limit = Some(Duration::from_secs(5));
+    RequestPolicy {
+        connect_timeout: limit,
+        write_timeout: limit,
+        read_timeout: Some(Duration::from_millis(read_ms)),
+        total_timeout: None,
+        max_retry,
+        retry_interval: Duration::from_millis(50),
+    }
+}
+
+fn llm(peer: &Peer) -> GatewayLlm {
+    let opts = LlmOptions {
+        model: "openai/gpt-4o".into(),
+        base_url: peer.url.clone(),
+        api_key: "key".into(),
+        api_secret: "secret".into(),
+        provider: None,
+        inference_class: None,
+        extra_kwargs: Default::default(),
+    };
+    let http = Arc::new(GatewayHttp::new().unwrap());
+    GatewayLlm::new(opts, http, tokio::runtime::Handle::current(), Arc::new(RealClock::new()))
+}
+
+fn open(llm: &GatewayLlm, policy: RequestPolicy) -> LlmChunks {
+    llm.chat(&ChatContext::new(Vec::new()), &[], Default::default(), policy).unwrap()
+}
+
+async fn text(chunks: &mut LlmChunks) -> Result<String, lk_agents_abi::errors::ApiError> {
+    let mut text = String::new();
+    while let Some(chunk) = chunks.next().await? {
+        if let Some(content) = chunk.delta.and_then(|d| d.content) {
+            text.push_str(&content);
+        }
+    }
+    Ok(text)
+}
+
+fn deadline(ms: u64) -> lk_agents_abi::Ts {
+    RealClock::new().now().saturating_add(Duration::from_millis(ms))
+}
+
+async fn eventually(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{what}");
+}
+
+// Catches: framing by network chunk: a character, a CRLF or a field split across chunks, a
+// chunk boundary inside `[DONE]`, or events delivered before their blank line.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_completion_cut_at_hostile_boundaries_streams_whole() {
+    let peer = Peer::start(vec![Reply::Sse(vec![
+        Part::Bytes(b": ping\r"),
+        Part::Bytes(b"\ndata: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"Hel"),
+        Part::Pause(20),
+        Part::Bytes(b"l\xc3"),
+        Part::Bytes(b"\xb3\"}}]}\r\n\r"),
+        Part::Bytes(b"\ndata: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\" ok\"}}]}\n\nda"),
+        Part::Bytes(b"ta: [DO"),
+        Part::Bytes(b"NE]\n\n"),
+    ])])
+    .await;
+    let llm = llm(&peer);
+    let mut chunks = open(&llm, policy(0, 2_000));
+    assert_eq!(text(&mut chunks).await.unwrap(), "Hell\u{f3} ok");
+    assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
+}
+
+// Catches: the retry loop living anywhere but the request core: a 503 not retried, retried
+// without the response being read, or retried more than `max_retry` times.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_attempt_is_retried_and_the_retry_answers() {
+    let ok = Reply::Sse(vec![Part::Bytes(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")]);
+    let peer = Peer::start(vec![Reply::Status(503, "{\"error\":{\"message\":\"busy\"}}"), ok]).await;
+    let llm = llm(&peer);
+    let mut chunks = open(&llm, policy(1, 2_000));
+    assert_eq!(text(&mut chunks).await.unwrap(), "hi");
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 2);
+
+    let peer = Peer::start(vec![Reply::Status(401, "{\"error\":{\"message\":\"bad key\"}}")]).await;
+    let llm = self::llm(&peer);
+    let err = text(&mut open(&llm, policy(3, 2_000))).await.unwrap_err();
+    assert_eq!((err.kind, err.status_code, err.retryable), (ApiErrorKind::Status, Some(401), false));
+    assert!(err.message.contains("bad key"), "{}", err.message);
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 1);
+}
+
+// Catches: a stalled stream waited on forever, a read timeout reported without its phase or as
+// retryable after visible output, or the stalled connection left open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_stalled_after_output_times_out_on_read_and_releases_its_connection() {
+    let peer = Peer::start(vec![Reply::Sse(vec![
+        Part::Bytes(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n"),
+        Part::Hang,
+    ])])
+    .await;
+    let llm = llm(&peer);
+    let mut chunks = open(&llm, policy(3, 300));
+    let err = text(&mut chunks).await.unwrap_err();
+    assert_eq!((err.kind, err.phase, err.retryable), (ApiErrorKind::Timeout, Some(TimeoutPhase::Read), false));
+    assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
+    eventually("the stalled connection was never released", || peer.released.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 1, "output was delivered: no replay");
+}
+
+// Catches: an undecodable chunk skipped (silently losing part of the answer) instead of failing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_malformed_stream_fails_the_request() {
+    let peer = Peer::start(vec![Reply::Sse(vec![Part::Bytes(b"data: {not json\n\n")])]).await;
+    let llm = llm(&peer);
+    let err = text(&mut open(&llm, policy(0, 2_000))).await.unwrap_err();
+    assert_eq!(err.kind, ApiErrorKind::Connection);
+    assert!(err.message.contains("malformed"), "{}", err.message);
+}
+
+// Catches: a consumer that stops waiting (its pull dropped) or closes the stream at any await
+// point leaving the attempt's connection open, close reporting Clean before the transport is
+// released, or a dropped pull losing what was already received.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_at_every_await_point_releases_the_attempt() {
+    let first = b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n";
+    let cases: Vec<(&str, Reply, usize)> = vec![
+        ("waiting for the response head", Reply::Silent, 0),
+        ("waiting for the first event", Reply::Sse(vec![Part::Hang]), 0),
+        ("waiting between events", Reply::Sse(vec![Part::Bytes(first), Part::Hang]), 1),
+    ];
+    for (point, reply, delivered) in cases {
+        let peer = Peer::start(vec![reply]).await;
+        let llm = llm(&peer);
+        let mut chunks = open(&llm, policy(0, 10_000));
+        for _ in 0..delivered {
+            assert!(chunks.next().await.unwrap().is_some(), "{point}");
+        }
+        // The consumer stops waiting: the pull is dropped mid-await.
+        let pulled = tokio::time::timeout(Duration::from_millis(150), chunks.next()).await;
+        assert!(pulled.is_err(), "{point}: the peer sent nothing more");
+        assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean, "{point}");
+        eventually(&format!("{point}: connection never released"), || peer.released.load(Ordering::SeqCst) == 1).await;
+    }
+
+    // During the retry backoff: no attempt is live, and none launches after close.
+    let peer = Peer::start(vec![Reply::Status(503, "busy"), Reply::Silent]).await;
+    let llm = llm(&peer);
+    let mut chunks = open(&llm, RequestPolicy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
+    eventually("the first attempt was never sent", || peer.requests.load(Ordering::SeqCst) == 1).await;
+    let _ = tokio::time::timeout(Duration::from_millis(300), chunks.next()).await;
+    assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "the 100 ms first retry ran; nothing after close");
+}

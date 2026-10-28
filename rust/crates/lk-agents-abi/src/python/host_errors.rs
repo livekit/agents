@@ -138,6 +138,9 @@ pub fn raise_provider(py: Python<'_>, err: ProviderError) -> PyErr {
             kwargs.set_item("request_id", api.request_id.clone())?;
             kwargs.set_item("body", py.None())?;
         }
+        if api.kind == ApiErrorKind::Timeout {
+            kwargs.set_item("phase", api.phase.map(|p| p.as_str()))?;
+        }
         let instance = class.bind(py).call((api.message.clone(),), Some(&kwargs))?;
         Ok(PyErr::from_value(instance))
     };
