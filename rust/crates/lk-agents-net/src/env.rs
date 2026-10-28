@@ -1,7 +1,7 @@
 //! What the hosting process lends the async crates' clients (decision 88): its Tokio runtime, the
-//! executor its host awaits on, the host's clock and process admissions. Every client takes these values in its
-//! constructor; a class the host constructs (a declared `new`) reads them through its [`Env`]
-//! type parameter, which `lk-agents-runtime` binds to its process.
+//! executor its host awaits on, the host's clock and process admissions. Every client takes these
+//! values in its constructor; a class the host constructs (a declared `new`) reads them through
+//! its [`Env`] type parameter, which `lk-agents-runtime` binds to its process.
 
 use std::sync::{Arc, LazyLock};
 
