@@ -210,15 +210,19 @@ class LLM(llm.LLM):
 
         Each option is read on the next ``chat()`` call. ``extra_kwargs`` *replaces* the
         persistent kwargs dict rather than merging; pass ``{}`` to clear it. Over WebSocket a
-        new ``model`` invalidates the pool, since the gateway binds the model to the socket;
-        a turn already streaming keeps its socket.
+        new ``model`` or new ``extra_headers`` invalidates the pool, since both are bound to
+        the socket at the upgrade; a turn already streaming keeps its socket.
         """
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             if isinstance(self._ws, _GatewayResponsesWebsocket):
                 self._ws._set_model(model)
         if is_given(extra_kwargs):
+            old_headers = self._opts.extra_kwargs.get("extra_headers")
             self._opts.extra_kwargs = dict(extra_kwargs)
+            # headers ride on the upgrade, so pooled sockets carry the old ones
+            if self._ws is not None and extra_kwargs.get("extra_headers") != old_headers:
+                self._ws._pool.invalidate()
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
