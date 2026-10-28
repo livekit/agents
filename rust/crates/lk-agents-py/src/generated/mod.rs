@@ -13,6 +13,7 @@ pub mod inference;
 pub mod llm;
 pub mod recorder;
 pub mod storage;
+pub mod stt;
 pub mod telemetry;
 pub mod tts;
 pub mod vad;

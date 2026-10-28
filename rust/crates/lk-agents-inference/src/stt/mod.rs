@@ -33,6 +33,7 @@ use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use options::FallbackModel;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -465,11 +466,11 @@ impl Stt for NativeStt {
         &self,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Option<Result<(crate::abi::SttSink, crate::abi::SttSource), ProviderError>> {
+    ) -> Result<Option<(crate::abi::SttSink, crate::abi::SttSource)>, ProviderError> {
         let offset = start_time_offset.unwrap_or(0.0);
-        Some(self.stream_native(language.map(|l| l.as_str()), offset).map(|(sink, source)| {
-            (Box::new(sink) as crate::abi::SttSink, Box::new(source) as crate::abi::SttSource)
-        }))
+        self.stream_native(language.map(|l| l.as_str()), offset).map(|(sink, source)| {
+            Some((Box::new(sink) as crate::abi::SttSink, Box::new(source) as crate::abi::SttSource))
+        })
     }
 }
 
@@ -489,7 +490,9 @@ enum SinkCmd {
 /// reconnect upstream when the keyterms change". One slot, latest wins.
 #[derive(Debug, Default)]
 struct DeferredExtra {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     speaking: std::sync::atomic::AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pending: Mutex<Option<serde_json::Map<String, serde_json::Value>>>,
 }
 
@@ -587,6 +590,7 @@ impl SttSinkHandle {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
 #[lk_agents_abi::host(stream(name = "InferenceSttStream", doc = "One live recognition session.", sink = crate::stt::SttSinkHandle,
     input = AudioFrame, input_py = "rtc.AudioFrame",
@@ -719,6 +723,8 @@ impl Pump {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self) -> Result<(), ApiError> {
         let headers = gateway_headers(
@@ -843,6 +849,8 @@ impl Pump {
         })
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn send_loop(
         sender: Arc<dyn WsSender>,
         audio_rx: &mut mpsc::Receiver<SinkCmd>,
@@ -976,6 +984,7 @@ impl Pump {
         std::future::pending().await
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn recv_loop(
         receiver: &mut dyn crate::transport::WsReceiver,
         machine: Arc<Mutex<SttProtocol>>,

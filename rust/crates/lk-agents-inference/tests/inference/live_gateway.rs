@@ -109,7 +109,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
     );
 
     let (sink, mut source) =
-        stt.stream(None, None).await.expect("gateway STT is always duplex").expect("the socket opened");
+        stt.stream(None, None).await.expect("the socket opened").expect("gateway STT is always duplex");
     // Half a second of silence, in 20 ms frames, then close the input.
     for _ in 0..25 {
         sink.push(AudioFrame::new(vec![0u8; 16_000 / 50 * 2], 16_000, 1, 16_000 / 50))

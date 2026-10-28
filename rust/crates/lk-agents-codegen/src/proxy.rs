@@ -5,7 +5,8 @@
 //! the one its `#[host(context)]` parameter carries, else the one the proxy captured when it was
 //! taken from the host. Every parameter crosses by its declared kind and the result is read by its
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
-//! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last.
+//! proxy is taken; a `bind` method returns a copy whose awaited calls pass the bound value last,
+//! handed out through its declared native wrapper when it names one.
 //!
 //! The ABI's `HostProxy for dyn Trait` (the in-place exports' conversion) is written into the ABI
 //! crate by [`legacy_bridge`]; it resolves to this proxy through the `DeclaredProxy` registration
@@ -94,12 +95,19 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         }
         ProxyCall::Bind => {
             let q = &m.params[0];
-            return Ok(format!(
-                "    {sig} -> {} {{\n        Some(::std::sync::Arc::new(Self {{ {}: Some({}), ..::std::clone::Clone::clone(self) }}))\n    }}\n",
-                m.ret.ok.rust(),
+            let copy = format!(
+                "::std::sync::Arc::new(Self {{ {}: Some({}), ..::std::clone::Clone::clone(self) }})",
                 q.name,
                 owned(q)
-            ));
+            );
+            let out = match &m.wrap {
+                None => copy,
+                Some(wrap) => format!(
+                    "{wrap}::bound({copy}, {}, ::lk_agents_runtime::process::host_clock())",
+                    q.name
+                ),
+            };
+            return Ok(format!("    {sig} -> {} {{\n        Some({out})\n    }}\n", m.ret.ok.rust()));
         }
         ProxyCall::Notify | ProxyCall::Await => {}
     }
@@ -189,6 +197,8 @@ fn param_type(q: &Param) -> String {
     match (&q.ty, q.by_ref) {
         (Ty::Str, true) => "&str".into(),
         (Ty::List(t), true) => format!("&[{}]", t.rust()),
+        (Ty::Optional(t), true) if **t == Ty::Str => "Option<&str>".into(),
+        (Ty::Optional(t), true) => format!("Option<&{}>", t.rust()),
         (t, true) => format!("&{}", t.rust()),
         (t, false) => t.rust(),
     }
@@ -199,6 +209,7 @@ fn owned(q: &Param) -> String {
     match (&q.ty, q.by_ref) {
         (Ty::Str, true) => format!("{}.to_owned()", q.name),
         (Ty::List(_), true) => format!("{}.to_vec()", q.name),
+        (Ty::Optional(_), true) => format!("{}.map(::std::borrow::ToOwned::to_owned)", q.name),
         (_, true) => format!("::std::clone::Clone::clone({})", q.name),
         (_, false) => q.name.clone(),
     }
@@ -254,6 +265,11 @@ fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> 
                 output.rust()
             ))
         }
+        // `None` for no stream.
+        Ty::Optional(t) if matches!(**t, Ty::HostSource(_) | Ty::HostDuplex { .. }) => Ok(format!(
+            "if {o}.is_none() {{ ::pyo3::PyResult::Ok(None) }} else {{ ({}).map(Some) }}",
+            from_host(o, t, label, at)?
+        )),
         _ => from_object(o, ty, &format!("{label:?}"), at),
     }
 }

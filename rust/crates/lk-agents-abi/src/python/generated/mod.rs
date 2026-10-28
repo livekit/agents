@@ -10,6 +10,7 @@ mod agent;
 mod llm;
 mod recorder;
 mod storage;
+mod stt;
 mod telemetry;
 mod tts;
 mod vad;

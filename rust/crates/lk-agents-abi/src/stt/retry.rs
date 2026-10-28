@@ -47,6 +47,13 @@ impl RetryingStt {
     }
 }
 
+impl RetryingStt {
+    /// A host STT bound to `conn_options` (its proxy's `with_conn_options`), retried under them.
+    pub fn bound(stt: Arc<dyn Stt>, conn_options: &ApiConnectOptions, clock: Arc<dyn Clock>) -> Arc<dyn Stt> {
+        Arc::new(RetryingStt { inner: stt, options: conn_options.clone(), clock })
+    }
+}
+
 /// One failed attempt: reported, then waited out when retried, else the error to raise.
 struct Failure<'a> {
     kind: RequestKind,
@@ -156,19 +163,19 @@ impl Stt for RetryingStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
         let deadline = self.options.total_deadline(self.clock.now());
         let offset = start_time_offset.unwrap_or(0.0);
         let input = Arc::new(Input::default());
         let opened = before(&*self.clock, deadline, self.inner.stream(language, Some(offset))).await;
         let (current, failed) = match opened {
-            Err(_) => return Some(Err(total_expired(&*self.inner))),
-            Ok(None) => return None,
-            Ok(Some(Ok((sink, source)))) => {
+            Err(_) => return Err(total_expired(&*self.inner)),
+            Ok(Ok(None)) => return Ok(None),
+            Ok(Ok(Some((sink, source)))) => {
                 input.install(sink);
                 (Some(source), None)
             }
-            Ok(Some(Err(error))) => (None, Some(error)),
+            Ok(Err(error)) => (None, Some(error)),
         };
         let source = RetrySource {
             stt: Arc::clone(&self.inner),
@@ -185,7 +192,7 @@ impl Stt for RetryingStt {
             deadline,
             hook: None,
         };
-        Some(Ok((Box::new(InputSink(input)) as SttSink, Box::new(source) as SttSource)))
+        Ok(Some((Box::new(InputSink(input)) as SttSink, Box::new(source) as SttSource)))
     }
 }
 
@@ -367,12 +374,12 @@ impl RetrySource {
             self.offset += now - self.began;
             self.began = now;
             match self.stt.stream(self.language.as_ref(), Some(self.offset)).await {
-                Some(Ok((sink, source))) => {
+                Ok(Some((sink, source))) => {
                     self.input.install(sink);
                     self.current = Some(source);
                 }
-                Some(Err(error)) => self.failed = Some(error),
-                None => return Ok(None),
+                Err(error) => self.failed = Some(error),
+                Ok(None) => return Ok(None),
             }
         }
     }
@@ -478,13 +485,13 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             offset: Option<f64>,
-        ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+        ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
             let mut opened = self.opened.lock().unwrap();
             opened.push(offset.unwrap_or_default());
             self.heard.lock().unwrap().push(0);
             let attempt = if opened.len() == 1 { Attempt::Fail } else { Attempt::Final };
             let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
-            Some(Ok((Box::new(sink), Box::new(attempt))))
+            Ok(Some((Box::new(sink), Box::new(attempt))))
         }
     }
 
@@ -581,8 +588,8 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-        ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
-            Some(Ok((Box::new(Deaf), Box::new(Silent(self.uptime, Arc::clone(&self.clock))))))
+        ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+            Ok(Some((Box::new(Deaf), Box::new(Silent(self.uptime, Arc::clone(&self.clock))))))
         }
     }
 

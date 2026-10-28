@@ -250,8 +250,8 @@ impl Stt for Node<dyn Stt> {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
-        Some(duplex(self.host.stt_node().await))
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+        duplex(self.host.stt_node().await).map(Some)
     }
 }
 

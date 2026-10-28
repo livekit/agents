@@ -199,6 +199,6 @@ impl NodeFactory for FakeNodes {
     async fn stt_node(&self) -> Result<(SttSink, SttSource), ProviderError> {
         self.used(NodeUse::Stt);
         let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
-        stt.stream(None, None).await.unwrap_or_else(|| Err(missing("streaming STT")))
+        stt.stream(None, None).await?.ok_or_else(|| missing("streaming STT"))
     }
 }

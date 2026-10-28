@@ -106,14 +106,14 @@ pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
     output = SpeechEvent))]
 pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
 
-// A host `stt.STT` is this trait through its bare `#[host(proxy)]` (`PyStt`): each method calls the
-// base class's `_core_<method>`, which `lk-agents-codegen` writes with the class from the
-// `#[python]` markers, keeping the plugin API's shape (`_recognize_impl`, `conn_options`) there.
+// A host `stt.STT` is this trait through its generated proxy (`SttProxy`), calling the `_core_*`
+// methods of the base class `lk-agents-codegen` writes from the `#[python]` markers, which keeps
+// the plugin API's shape (`_recognize_impl`, `conn_options`) there.
 /// A speech-to-text provider.
 ///
 /// Plugins implement `_recognize_impl` for batch recognition, and override `stream()` when the
 /// service recognizes live audio.
-#[crate::host(proxy(host = "livekit.agents.stt.STT", clock))]
+#[crate::host(proxy(host = "livekit.agents.stt.STT"))]
 #[python(provider(
     module = "stt",
     path = "livekit.agents.stt",
@@ -124,23 +124,25 @@ pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
 pub trait Stt: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
+    #[host(read_once, name = "_core_label")]
     fn label(&self) -> String;
 
     /// What this instance supports, fixed at construction.
     #[python(init)]
+    #[host(read_once, name = "_core_capabilities")]
     fn capabilities(&self) -> SttCapabilities;
 
     /// The model and provider labelling this instance's turn metrics.
-    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label. Read
-    // when stamped: a `FallbackAdapter` names the instance serving now.
+    // `label`/`model`/`provider` as metrics and errors stamp them; defaults from the label.
     #[python(identity)]
-    #[host(live)]
+    #[host(read_once, name = "_core_id")]
     fn id(&self) -> crate::ProviderId {
         crate::types::identity::ProviderId::of_label(self.label())
     }
 
     /// Open the connection to the service early; a provider with nothing to warm ignores it.
     #[python(hook)]
+    #[host(notify, name = "_core_prewarm")]
     fn prewarm(&self) {}
 
     /// Set the session's keyterms: its configured ones and those confirmed in the conversation,
@@ -150,6 +152,7 @@ pub trait Stt: Send + Sync {
     /// - keyterms: Every keyterm the session holds now.
     // The default drops it; an adapter forwards it.
     #[python(hook = "_update_session_keyterms")]
+    #[host(notify, name = "_core_update_keyterms")]
     fn update_keyterms(&self, _keyterms: &[String]) {}
 
     /// Feed a conversation turn to bias recognition. Providers with the `chat_context`
@@ -160,17 +163,20 @@ pub trait Stt: Send + Sync {
     /// - text: What was said.
     // The default drops it; an adapter forwards it.
     #[python(hook = "_push_conversation_item")]
+    #[host(notify, name = "_core_push_conversation_item")]
     fn push_conversation_item(&self, _role: &str, _text: &str) {}
 
     // The framework's report of a failed attempt of a call it retries: the provider's `error`
     // event, `recoverable` while the call is retried. A wrapper forwards it.
     #[python(report)]
+    #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
     // A view of this provider whose calls carry `conn` -- how a fallback chain gives each entry
     // its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
     // and the chain uses it as it is. A host STT is retried by the core (`RetryingStt`).
     #[python(conn(retry = "RetryingStt"))]
+    #[host(bind(wrap = crate::stt::retry::RetryingStt))]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Stt>> {
         None
     }
@@ -183,6 +189,7 @@ pub trait Stt: Send + Sync {
     /// - conn_options: The timeout and retries of the request.
     // Always present. `language: None` is `NOT_GIVEN`, the provider's default.
     #[python(hook = "recognize", impl = "_recognize_impl", retry = "recognize")]
+    #[host(await, name = "_core_recognize")]
     async fn recognize(
         &self,
         #[python(ty = "AudioBuffer", import = "..utils:AudioBuffer")] buffer: &[AudioFrame],
@@ -195,8 +202,8 @@ pub trait Stt: Send + Sync {
     /// Args:
     /// - language: The language to recognize; the provider's default when not given.
     /// - conn_options: The timeout and retries of the connection.
-    // The duplex path, if this instance has one. `None` selects the STT stream adapter (VAD +
-    // batch `recognize`); `Some(Err)` is a construction failure. `async` as on [`Tts`](crate::Tts).
+    // The duplex path, if this instance has one. `Ok(None)` selects the STT stream adapter (VAD +
+    // batch `recognize`); `Err` is a construction failure. `async` as on [`Tts`](crate::Tts).
     //
     // `start_time_offset`: the stream's `RecognizeStream.start_time_offset`, in seconds -- where
     // its timestamps sit on the caller's input timeline (a fallback leg opened mid-input). `None`
@@ -212,9 +219,10 @@ pub trait Stt: Send + Sync {
             doc = "A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.\n\nPlugins implement ``_run``, reading ``input`` and handing each event to ``send``."
         )
     )]
+    #[host(await, name = "_core_stream")]
     async fn stream(
         &self,
         language: Option<&LanguageCode>,
         #[python(attr)] start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>>;
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError>;
 }

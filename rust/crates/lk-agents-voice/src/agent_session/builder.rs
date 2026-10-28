@@ -333,7 +333,7 @@ impl DriverBuilder {
     ) -> Result<Option<Arc<EotLeg>>, DriverError> {
         if let Some(stt) = &self.stt {
             let (sink, mut source) =
-                stt.stream(None, None).await.ok_or(DriverError::Missing("a streaming STT"))??;
+                stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
             source.report_retries(crate::audio::report_to(queue.clone()));
             let sink = sinks.install(&self.resources, AudioChannel::Stt, Arc::from(sink));
             spawn_drain(

@@ -79,7 +79,7 @@ impl Stt for FakeStt {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
         if !self.connect.is_zero() {
             tokio::time::sleep(self.connect).await;
         }
@@ -91,7 +91,7 @@ impl Stt for FakeStt {
             self.detail.clone(),
             Control::Stt(sender, opened, None),
         );
-        Some(Ok((
+        Ok(Some((
             Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
             Box::new(Recognition { slot, registry: self.registry.clone(), events, ended }),
         )))

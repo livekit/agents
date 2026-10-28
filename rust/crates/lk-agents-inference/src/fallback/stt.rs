@@ -261,8 +261,8 @@ impl Backend for SttBackend {
                 let offset = offset.map(|o| o.at(self.clock.now()));
                 let (sink, source) = stt
                     .stream(language.as_ref(), offset)
-                    .await
-                    .ok_or_else(|| no_duplex(&self.inner.label()))??;
+                    .await?
+                    .ok_or_else(|| no_duplex(&self.inner.label()))?;
                 tee.set_main(sink);
                 Ok(SttSession::Stream(source))
             }
@@ -287,8 +287,8 @@ impl Backend for SttBackend {
             (SttReq::Stream { language, tee, .. }, _) => {
                 let (sink, mut source) = stt
                     .stream(language.as_ref(), None)
-                    .await
-                    .ok_or_else(|| no_duplex(&self.inner.label()))??;
+                    .await?
+                    .ok_or_else(|| no_duplex(&self.inner.label()))?;
                 // Read until a non-empty final transcript; a clean drain with none is `NotYet` (`stt:465-466`).
                 let id = tee.add_probe(sink);
                 let verdict = loop {
@@ -487,7 +487,7 @@ impl FallbackStt {
     ) -> Result<(SttSink, SttSource), ProviderError> {
         Stt::stream(self, language.as_ref(), start_time_offset)
             .await
-            .expect("the chain's `stream` is always duplex")
+            .map(|opened| opened.expect("the chain's `stream` is always duplex"))
     }
 }
 
@@ -560,7 +560,7 @@ impl Stt for FallbackStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
         let tee = InputTee::new();
         let opened = self.chain.clock().now();
         let offset =
@@ -607,7 +607,7 @@ impl Stt for FallbackStt {
             let _ = done_tx.send(());
         });
 
-        Some(Ok((
+        Ok(Some((
             Box::new(TeeSink(tee)) as SttSink,
             Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as SttSource,
         )))

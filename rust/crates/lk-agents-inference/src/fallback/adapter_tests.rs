@@ -434,8 +434,8 @@ impl Stt for FakeStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
-        None
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+        Ok(None)
     }
 }
 
@@ -610,16 +610,16 @@ impl Stt for DuplexStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
         let left = self.refusals.load(Ordering::SeqCst);
         if left > 0 {
             self.refusals.store(left - 1, Ordering::SeqCst);
-            return Some(Err(boom(&format!("{} has no socket", self.label))));
+            return Err(boom(&format!("{} has no socket", self.label)));
         }
         let sess = Arc::new(SttSess::default());
         let (tx, rx) = mpsc::unbounded_channel();
         self.made.lock().expect("made").push((Arc::clone(&sess), Some(tx)));
-        Some(Ok((
+        Ok(Some((
             Box::new(SttSessSink(Arc::clone(&sess))) as SttSink,
             Box::new(SttSessSource { sess, rx }) as SttSource,
         )))
@@ -658,7 +658,7 @@ async fn closing_the_fallback_stream_early_closes_the_serving_member() {
     let a = DuplexStt::new("a", 0);
     let fb = stt_chain(vec![Arc::clone(&a)]);
     let (_sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
     until("the member to be serving", || a.sessions() == 1).await;
     a.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
     let first =
@@ -688,8 +688,8 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
 
     let (sink, mut source) = within("stream", fb.stream(None, None))
         .await
-        .expect("the adapter is duplex")
-        .expect("opened");
+        .expect("opened")
+        .expect("the adapter is duplex");
     until("the provider's session to be open", || p.sessions() == 1).await;
     let s = p.sess(0);
 
@@ -729,7 +729,7 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
     let fb = stt_chain(vec![Arc::clone(&p), Arc::clone(&b)]);
 
     let (sink, source) =
-        within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
     until("the backup to be serving", || b.sessions() == 1).await;
     until("the primary's probe to join the tee", || p.sessions() == 1).await;
     assert!(!fb.chain().is_available(0), "the primary failed to open");
@@ -776,7 +776,7 @@ async fn the_stt_that_produced_transcripts_owns_the_turn_and_the_failure_names_t
     assert_eq!(fb.active().label(), "p", "before any traffic the primary is active");
 
     let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
     until("the backup to be serving", || b.sessions() == 1).await;
 
     b.send(0, Ok(speech(SpeechEventType::FinalTranscript, "hello")));
@@ -807,7 +807,7 @@ async fn a_closed_stt_adapter_starts_no_more_recovery_probes() {
     fb.aclose();
 
     let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
     assert!(within("closed refusal", source.next()).await.is_err());
     assert_eq!(b.sessions(), 0);
     for _ in 0..8 {

@@ -301,9 +301,9 @@ impl Runtime {
                 self.shared.spawner.spawn_unboxed(async move {
                     let outcome = match pending {
                         Pending::Stt(stt) => match stt.stream(None, None).await {
-                            Some(Ok((sink, source))) => Ok(Opened::Stt(sink, source)),
-                            Some(Err(e)) => Err(e),
-                            None => Err(ProviderError::Local(ApiError::new(
+                            Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
+                            Err(e) => Err(e),
+                            Ok(None) => Err(ProviderError::Local(ApiError::new(
                                 "the new agent's STT does not stream",
                             ))),
                         },

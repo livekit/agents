@@ -593,9 +593,9 @@ impl AmdSystem {
         let time = self.peer.time.clone();
         self.peer.spawner.clone().spawn_unboxed(async move {
             let outcome = match stt.stream(None, None).await {
-                Some(Ok(pair)) => Ok(pair),
-                Some(Err(e)) => Err(e),
-                None => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                Ok(Some(pair)) => Ok(pair),
+                Err(e) => Err(e),
+                Ok(None) => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                     "the AMD STT does not stream",
                 ))),
             };

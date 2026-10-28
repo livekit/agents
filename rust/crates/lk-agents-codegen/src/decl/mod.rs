@@ -145,6 +145,9 @@ pub struct ProxyMethod {
     /// the proxy captured.
     pub context: Option<usize>,
     pub ret: ProxyRet,
+    /// `bind(wrap = T)`: the bound copy is handed out as `T::bound(copy, &x, clock)`, a native
+    /// wrapper the core runs around it (the retry loop of a host STT).
+    pub wrap: Option<String>,
 }
 
 /// How the core calls the host: declared, then checked against the signature.

@@ -82,7 +82,7 @@ impl SttStreamAdapter {
     ) -> Result<(SttSink, SttSource), ProviderError> {
         Stt::stream(self, language.as_ref(), start_time_offset)
             .await
-            .expect("the adapter's `stream` is always duplex")
+            .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
     }
 }
 
@@ -144,7 +144,7 @@ impl Stt for SttStreamAdapter {
         &self,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
         let opened = self.vad.stream().await.map(|(sink, vad)| {
             let source = AdapterSource {
                 vad,
@@ -156,7 +156,7 @@ impl Stt for SttStreamAdapter {
             };
             (sink as SttSink, Box::new(source) as SttSource)
         });
-        Some(opened)
+        opened.map(Some)
     }
 }
 
@@ -297,8 +297,8 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-        ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
-            None
+        ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+            Ok(None)
         }
     }
 

@@ -526,11 +526,13 @@ fn stt_node(
     let spawner = <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient();
     spawner.spawn_unboxed(async move {
         let label = stt.label();
-        let opened = stt.stream(None, None).await.unwrap_or_else(|| {
-            Err(lk_agents_abi::errors::ApiError::new(format!(
-                "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
-            ))
-            .into())
+        let opened = stt.stream(None, None).await.and_then(|opened| {
+            opened.ok_or_else(|| {
+                lk_agents_abi::errors::ApiError::new(format!(
+                    "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
+                ))
+                .into()
+            })
         });
         pump(opened, input, output, clock, None).await;
     });
