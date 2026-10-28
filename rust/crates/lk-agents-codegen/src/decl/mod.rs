@@ -375,6 +375,8 @@ pub struct Param {
     pub default: Option<Literal>,
     /// Only the outer declared container shape, never nested value conversion failures.
     pub shape_error: Option<crate::shape_error::ShapeError>,
+    /// `#[host(one_or_many)]` on a list: the host passes one item or a `list` of them.
+    pub one_or_many: bool,
 }
 
 /// A declared default, written once as a host literal and converted for both sides.

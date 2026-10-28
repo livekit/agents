@@ -464,10 +464,21 @@ fn contains_number(ty: &Ty) -> bool {
 /// The adapter's parameter type, and the conversion (an expression of the parameter) when it is
 /// taken as an object.
 fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
+    let path = format!("{:?}", p.name);
+    if let (true, Ty::List(item)) = (p.one_or_many, &p.ty) {
+        return Ok((
+            "Bound<'_, PyAny>".into(),
+            Some(format!(
+                "(if {n}.is_instance_of::<::pyo3::types::PyList>() {{ {} }} else {{ ({}).map(|item| vec![item]) }})?",
+                from_object(&p.name, &p.ty, &path, at)?,
+                from_object(&p.name, item, &path, at)?,
+                n = p.name,
+            )),
+        ));
+    }
     if p.shape_error.is_none() && native(&p.ty) {
         return Ok((p.ty.rust(), None));
     }
-    let path = format!("{:?}", p.name);
     match &p.ty {
         Ty::Maybe(inner) => Ok((
             "::lk_agents_abi::Maybe<Bound<'_, PyAny>>".into(),
@@ -568,7 +579,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host(&{v}, None)")
         }
         Ty::List(inner) if **inner == Ty::Int(crate::decl::Int::U8) => format!(
-            "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ let bytes = ::lk_agents_abi::python::retained_bytes(&{v}, {path}, None)?; Ok({v}.py().detach(move || bytes.to_vec())) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",
+            "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ ::lk_agents_abi::python::owned_bytes(&{v}, {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",
             from_object("item", inner, path, at)?
         ),
         Ty::List(inner) => format!(

@@ -34,6 +34,7 @@
 //! | trait method | `pid = true/false` | override its class or function group fork guard |
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |
+//! | parameter | `one_or_many` | a list the host may also pass as one item (`T \| list[T]`) |
 //! | parameter | `shape_error(kind = "ValueError", message = "..", items)` | only the outer JSON-object shape, or with `items` each dict-record shape in a strict list; `{value}` formats a nonobject JSON value; nested conversion failures keep their own errors |
 //! | error type | `error(with = path)`, `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate` | `Result<_, E>` raises through E's `HostException`, the one conversion its declaration expands to |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |

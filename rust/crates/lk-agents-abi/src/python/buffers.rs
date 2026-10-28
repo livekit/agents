@@ -31,6 +31,26 @@ pub fn snapshot_buffer(
     path: &str,
     max_bytes: Option<usize>,
 ) -> PyResult<Arc<[u8]>> {
+    Ok(copy_bytes(obj.py(), &validated(obj, format, path, max_bytes)?))
+}
+
+/// Exactly one copy into an owned vector: exact bytes with the GIL released, any other exporter
+/// while attached.
+pub fn owned_bytes(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Vec<u8>> {
+    if obj.is_exact_instance_of::<PyBytes>() {
+        let bytes = obj.extract::<pyo3::pybacked::PyBackedBytes>()?;
+        return Ok(obj.py().detach(move || bytes.to_vec()));
+    }
+    validated(obj, BufferFormat::Bytes, path, None)?.to_vec(obj.py())
+}
+
+/// The exporter's bytes, acquired once and checked against `format`.
+fn validated(
+    obj: &Bound<'_, PyAny>,
+    format: BufferFormat,
+    path: &str,
+    max_bytes: Option<usize>,
+) -> PyResult<PyBuffer<u8>> {
     // The builtin view acquires the exporter once. All subsequent metadata access and casts use
     // that same view, so a custom exporter cannot hand out different buffers between checks.
     let view = PyMemoryView::from(obj).map_err(|e| super::at_path(obj.py(), e, path))?;
@@ -62,8 +82,7 @@ pub fn snapshot_buffer(
     // Byte casting is a zero-copy buffer operation. Copy the validated representation directly;
     // no aligned i16 Rust references or mutable host references escape the GIL-held snapshot.
     let byte_view = view.call_method1("cast", ("B",))?;
-    let bytes = PyBuffer::<u8>::get(&byte_view)?;
-    Ok(copy_bytes(obj.py(), &bytes))
+    PyBuffer::<u8>::get(&byte_view)
 }
 
 fn copy_bytes(py: Python<'_>, bytes: &PyBuffer<u8>) -> Arc<[u8]> {

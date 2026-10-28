@@ -209,7 +209,7 @@ impl Resolver<'_> {
             };
             let pat = format!("{at}({})", ident.ident);
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["kw", "default", "context", "shape_error"])?;
+            voc::only(&pat, &entries, &["kw", "default", "context", "shape_error", "one_or_many"])?;
             kw_only |= voc::find(&entries, "kw").is_some();
             if voc::find(&entries, "context").is_some() {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
@@ -222,6 +222,7 @@ impl Resolver<'_> {
                     name: ident.ident.to_string(),
                     ty: Ty::CallContext,
                     shape_error: None,
+                    one_or_many: false,
                     by_ref,
                     kw_only: false,
                     default: None,
@@ -245,6 +246,13 @@ impl Resolver<'_> {
             };
             check_default(&pat, &ty, default.as_ref())?;
             let shape_error = crate::shape_error::read(&pat, &entries, &ty)?;
+            let one_or_many = voc::find(&entries, "one_or_many").is_some();
+            if one_or_many
+                && (shape_error.is_some()
+                    || !matches!(&ty, Ty::List(item) if **item != Ty::Int(crate::decl::Int::U8)))
+            {
+                return Err(format!("{pat}: one_or_many applies to a list of items"));
+            }
             if params.iter().rfind(|p: &&Param| p.ty != Ty::CallContext).is_some_and(|p| {
                 (p.default.is_some() || matches!(p.ty, Ty::Maybe(_))) && !p.kw_only
             }) && default.is_none()
@@ -263,6 +271,7 @@ impl Resolver<'_> {
                 kw_only,
                 default,
                 shape_error,
+                one_or_many,
             });
         }
         if kind == MethodKind::Getter && !params.is_empty() {

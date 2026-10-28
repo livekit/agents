@@ -158,7 +158,7 @@ fn _extract_audio_decoder_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u
 }
 
 fn _extract_audio_decoder_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&obj, "data", None)?; Ok(obj.py().detach(move || bytes.to_vec())) } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
 }
 
 /// Incremental container bytes to little-endian interleaved PCM.
@@ -220,7 +220,7 @@ impl AudioDecoder {
 type StreamBufferImpl = <crate::Selected as super::Implementations>::StreamBuffer;
 
 fn _extract_stream_buffer_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&obj, "data", None)?; Ok(obj.py().detach(move || bytes.to_vec())) } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&obj, "data") } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
 }
 
 fn _extract_stream_buffer_read_size(obj: &Bound<'_, PyAny>) -> PyResult<isize> {
