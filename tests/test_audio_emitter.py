@@ -293,15 +293,8 @@ async def test_push_frame_is_not_rechunked():
 async def test_automatic_flush_preserves_partial_pcm_sample(
     num_channels: int, stream: bool, caplog: pytest.LogCaptureFixture
 ):
-    flushed = asyncio.Event()
-
-    class ObservedEmitter(tts.AudioEmitter):
-        def flush(self) -> None:
-            super().flush()
-            flushed.set()
-
     dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
-    emitter = ObservedEmitter(label="partial-pcm", dst_ch=dst_ch)
+    emitter = tts.AudioEmitter(label="partial-pcm", dst_ch=dst_ch)
     emitter.initialize(
         request_id="partial-pcm",
         sample_rate=SR,
@@ -312,12 +305,24 @@ async def test_automatic_flush_preserves_partial_pcm_sample(
     pcm = (bytes(range(256)) * 375)[: SR * 2 * num_channels]
     # Enough audio to arm the slow-generation timer, followed by half a sample.
     split = SR * 2 * num_channels * 3 // 10 + 1
+    events: list[tts.SynthesizedAudio] = []
+    complete_prefix = split // (2 * num_channels) * (2 * num_channels)
+
+    async def collect_flushed_prefix() -> None:
+        emitted = 0
+        while emitted < complete_prefix:
+            event = await dst_ch.recv()
+            assert not event.is_final, "automatic flush must leave the segment open"
+            events.append(event)
+            emitted += event.frame.data.nbytes
+        assert emitted == complete_prefix
+
     try:
         if stream:
             emitter.start_segment(segment_id="turn")
         emitter.push(pcm[:split])
-        # Let the real emitter timer request the flush. No application flush is needed.
-        await asyncio.wait_for(flushed.wait(), timeout=2)
+        # The timer releases all complete samples, including the normally held audio tail.
+        await asyncio.wait_for(collect_flushed_prefix(), timeout=2)
         emitter.push(pcm[split:])
         emitter.end_input()
         await emitter.join()
@@ -325,7 +330,7 @@ async def test_automatic_flush_preserves_partial_pcm_sample(
         await emitter.aclose()
         dst_ch.close()
 
-    events = [event async for event in dst_ch]
+    events.extend([event async for event in dst_ch])
     assert b"".join(event.frame.data.tobytes() for event in events) == pcm
     assert sum(event.is_final for event in events) == 1
     assert events[-1].is_final
