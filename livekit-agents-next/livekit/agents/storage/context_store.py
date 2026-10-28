@@ -57,7 +57,7 @@ class ContextStore:
 
     def __init__(
         self,
-        state: JsonValue = None,
+        state: object | None = None,
         *,
         read_only: bool = False,
         scopes: Sequence[ContextScope] = (),

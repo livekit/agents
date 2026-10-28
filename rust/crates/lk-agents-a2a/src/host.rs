@@ -20,12 +20,26 @@ impl From<Message> for host::Message {
     }
 }
 
-impl From<TurnContext> for host::TurnContext {
-    fn from(ctx: TurnContext) -> Self {
-        Self {
+impl TryFrom<TurnContext> for host::TurnContext {
+    type Error = StorageError;
+
+    fn try_from(ctx: TurnContext) -> Result<Self, Self::Error> {
+        fn object(
+            value: serde_json::Value,
+            field: &str,
+        ) -> Result<serde_json::Map<String, serde_json::Value>, StorageError> {
+            match value {
+                serde_json::Value::Object(value) => Ok(value),
+                _ => Err(StorageError::Invalid(format!("{field} must be a chat context object"))),
+            }
+        }
+        let message = object(serde_json::to_value(ctx.message).expect("chat item"), "message")?;
+        let caller_history =
+            ctx.caller_history.map(|value| object(value, "caller_history")).transpose()?;
+        Ok(Self {
             thread_id: ctx.thread_id,
             lane: ctx.lane,
-            message: serde_json::to_value(ctx.message).expect("chat item"),
+            message,
             batch: ctx.batch.into_iter().map(Into::into).collect(),
             history: ctx.history.into_iter().map(Into::into).collect(),
             state: ctx.state,
@@ -34,9 +48,10 @@ impl From<TurnContext> for host::TurnContext {
             read_only: ctx.read_only,
             task_id: ctx.task_id,
             tasks: ctx.tasks.into_iter().map(Into::into).collect(),
-            caller_history: ctx.caller_history,
+            caller_history,
             answer_tool: ctx.answer_tool,
-        }
+            host_context: None,
+        })
     }
 }
 

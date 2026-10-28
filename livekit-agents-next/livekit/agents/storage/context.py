@@ -14,6 +14,7 @@ from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import cast
 
 from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
 
 from .._generated.a2a_client import Message
 from .._generated.storage_class import RunUsage, TaskRecord
@@ -145,18 +146,37 @@ class TurnHost:
 
     async def _core_handle(self, ctx: TurnContext) -> TurnStream:
         """The handler opened on one turn, as the stream of its events."""
-        return TurnStream(lambda checkpoint: self._run(ctx, checkpoint))
+
+        async def update(task_id: str, text: str) -> None:
+            await stream.progress(task_id, text)
+            if self._on_update is not None:
+                await self._on_update(task_id, text)
+
+        async def token(task_id: str, delta: str) -> None:
+            await stream.token(task_id, delta)
+            if self._on_token is not None:
+                await self._on_token(task_id, delta)
+
+        stream = TurnStream(lambda checkpoint: self._run(ctx, checkpoint, update, token))
+        return stream
 
     async def _run(
-        self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
+        self,
+        ctx: TurnContext,
+        checkpoint: Callable[[], Awaitable[bool]],
+        on_update: UpdateHook,
+        on_token: TokenHook,
     ) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
+        thread = self._thread
+        if thread.id != ctx.thread_id:
+            thread = Thread(thread.storage, ctx.thread_id, agent_name=ctx.lane)
         context = A2ASessionContext(
             ctx,
             checkpoint,
-            thread=self._thread,
-            on_update=self._on_update,
-            on_token=self._on_token,
+            thread=thread,
+            on_update=on_update,
+            on_token=on_token,
         )
         results: list[RunResult[object]] = []
         hooks = RunHooks(
@@ -164,7 +184,7 @@ class TurnHost:
             on_result=results.append,
             on_update=context.update,
             on_token=context.token,
-            thread=self._thread,
+            thread=thread,
             task_id=ctx.task_id,
             store=context.store,
             answer_tool=ctx.answer_tool,
@@ -222,7 +242,7 @@ class TurnHost:
         from ..a2a.extension import VERBATIM
 
         asked = next((r for r in reversed(results) if isinstance(r, RunInputRequired)), None)
-        metadata = dict(ctx.metadata)
+        metadata: dict[str, object] = dict(ctx.metadata)
         last = results[-1] if results else None
         if last is not None and last.verbatim is not None:
             # what must reach the person as written: the delegate relays it unchanged
@@ -240,7 +260,9 @@ class TurnHost:
             else None
         )
         return HandlerOutput(
-            output=output.question if isinstance(output, InputRequired) else output,
+            output=to_jsonable_python(
+                output.question if isinstance(output, InputRequired) else output
+            ),
             new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
             state=None,
             scope_writes=ctx.store._scope_writes,
@@ -263,7 +285,8 @@ class TurnStream:
         self, run: Callable[[Callable[[], Awaitable[bool]]], Awaitable[HandlerOutput]]
     ) -> None:
         self._run = run
-        self._events: asyncio.Queue[TurnEvent | BaseException | None] = asyncio.Queue()
+        self._events: asyncio.Queue[TurnEvent | BaseException | None] = asyncio.Queue(maxsize=64)
+        self._closed = False
         self._verdict: asyncio.Future[str] | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -289,28 +312,40 @@ class TurnStream:
             self._verdict.set_result(verdict)
 
     async def aclose(self) -> None:
+        self._closed = True
         if self._task is not None and not self._task.done():
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
 
+    async def progress(self, task_id: str, text: str) -> None:
+        from .._generated.storage_turn import Progress
+
+        await self._events.put(Progress(task_id=task_id, text=text))
+
+    async def token(self, task_id: str, delta: str) -> None:
+        from .._generated.storage_turn import Token
+
+        await self._events.put(Token(task_id=task_id, delta=delta))
+
     async def _checkpoint(self) -> bool:
         self._verdict = asyncio.get_running_loop().create_future()
-        self._events.put_nowait(Checkpoint())
+        await self._events.put(Checkpoint())
         return await self._verdict == "yield"
 
     async def _drive(self) -> None:
         try:
             output = await self._run(self._checkpoint)
         except asyncio.CancelledError as e:
-            self._events.put_nowait(e)
+            if not self._closed:
+                await self._events.put(e)
             raise
         except Exception as e:
             # a storage error the handler met; its own errors are already the output's
-            self._events.put_nowait(e)
+            await self._events.put(e)
             return
-        self._events.put_nowait(Output(output=output))
-        self._events.put_nowait(None)
+        await self._events.put(Output(output=output))
+        await self._events.put(None)
 
 
 def _waiting_call(result: RunInputRequired) -> FunctionCall | None:

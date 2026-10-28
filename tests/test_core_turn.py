@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import _core
+from livekit.agents._generated.a2a_client import TextPart
 from livekit.agents._generated.storage_class import ItemRow, RunUsage
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
@@ -57,7 +58,9 @@ class Host:
         self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
     ) -> HandlerOutput:
         self.contexts.append(ctx)
-        text = ctx.batch[-1].parts[0]["text"]
+        part = ctx.batch[-1].parts[0]
+        assert isinstance(part, TextPart)
+        text = part.text
         self.entered.set()
         if self.gate is not None:
             await self.gate.wait()

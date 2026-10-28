@@ -68,6 +68,10 @@ pub fn agent_card(descriptor: EndpointDescriptor) -> Result<AgentCard, HostError
 }
 
 impl EndpointCard for CardBuilder {
+    fn _core_a2a_extensions_header(requested: Option<String>) -> Option<String> {
+        lk_agents_a2a::rpc::extensions_header(requested.as_deref())
+    }
+
     fn _core_a2a_agent_card(descriptor: EndpointDescriptor) -> Result<String, HostError> {
         serde_json::to_string(&agent_card(descriptor)?)
             .map_err(|error| HostError::new(error.to_string()))

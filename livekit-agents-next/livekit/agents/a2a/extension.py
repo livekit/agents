@@ -15,7 +15,7 @@ from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message as ProtoMessage
 from pydantic import JsonValue
 
-from .._core import _core_a2a_agent_card
+from .._core import _core_a2a_agent_card, _core_a2a_extensions_header
 from .._generated.a2a_card import EndpointDescriptor
 from .._generated.a2a_metadata import (
     ANSWER_ARTIFACT_NAME,
@@ -49,11 +49,7 @@ class Extensions:
 
     @classmethod
     def from_header(cls, value: str | None) -> Extensions:
-        if not value:
-            return cls()
-
-        requested = {part.strip() for part in value.split(",") if part.strip()}
-        return cls(livekit=EXTENSION_URI in requested)
+        return cls(livekit=_core_a2a_extensions_header(value) is not None)
 
     @classmethod
     def from_headers(cls, headers: Mapping[str, str] | None) -> Extensions:

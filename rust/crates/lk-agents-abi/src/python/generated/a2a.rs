@@ -455,6 +455,63 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::client::AgentCard {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
+static DOOR_CONFIG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::a2a::door::DoorConfig {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(DOOR_CONFIG.import(py, "livekit.agents._generated.a2a_door", "DoorConfig")?)? {
+            return Err(super::not_a(obj, "DoorConfig"));
+        }
+        Ok(Self {
+            lane: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "lane", |v| v.extract::<::std::string::String>())?,
+            holder: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "holder", |v| v.extract::<::std::string::String>())?,
+            endpoint: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "endpoint", |v| v.extract::<::lk_agents_abi::a2a::card::EndpointDescriptor>().map_err(::std::convert::Into::<PyErr>::into))?,
+            options: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "options", |v| ::lk_agents_abi::python::value_from_py(v, "DoorConfig.options"))?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::door::DoorConfig {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { lane, holder, endpoint, options } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("lane", ::pyo3::IntoPyObjectExt::into_bound_py_any(lane, py)?)?;
+        kwargs.set_item("holder", ::pyo3::IntoPyObjectExt::into_bound_py_any(holder, py)?)?;
+        kwargs.set_item("endpoint", ::pyo3::IntoPyObjectExt::into_bound_py_any(endpoint, py)?)?;
+        kwargs.set_item("options", ::lk_agents_abi::python::value_to_py(py, &options)?)?;
+        DOOR_CONFIG.import(py, "livekit.agents._generated.a2a_door", "DoorConfig")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
+static DOOR_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::door::DoorFrame {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { json, sse, is_error } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("json", ::pyo3::IntoPyObjectExt::into_bound_py_any(json, py)?)?;
+        kwargs.set_item("sse", ::pyo3::IntoPyObjectExt::into_bound_py_any(sse, py)?)?;
+        kwargs.set_item("is_error", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_error, py)?)?;
+        DOOR_FRAME.import(py, "livekit.agents._generated.a2a_door", "DoorFrame")?.call((), Some(&kwargs))
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
 static REMOTE_EVENT_PENDING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
@@ -514,11 +571,11 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::turn::TurnContext {
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Self { thread_id, lane, message, batch, history, state, context_scope_id, context_scopes, read_only, task_id, tasks, caller_history, answer_tool } = self;
+        let Self { thread_id, lane, message, batch, history, state, context_scope_id, context_scopes, read_only, task_id, tasks, caller_history, answer_tool, host_context: _ } = self;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
         kwargs.set_item("lane", ::pyo3::IntoPyObjectExt::into_bound_py_any(lane, py)?)?;
-        kwargs.set_item("message", ::lk_agents_abi::python::value_to_py(py, &message)?)?;
+        kwargs.set_item("message", ::lk_agents_abi::python::extra_to_py(py, &message)?.into_any())?;
         kwargs.set_item("batch", ::pyo3::types::PyList::new(py, batch.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
         kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
         kwargs.set_item("state", match state { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
@@ -527,7 +584,7 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::a2a::turn::TurnContext {
         kwargs.set_item("read_only", ::pyo3::IntoPyObjectExt::into_bound_py_any(read_only, py)?)?;
         kwargs.set_item("task_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(task_id, py)?)?;
         kwargs.set_item("tasks", ::pyo3::types::PyList::new(py, tasks.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-        kwargs.set_item("caller_history", match caller_history { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+        kwargs.set_item("caller_history", match caller_history { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::extra_to_py(py, &x)?.into_any() })?;
         kwargs.set_item("answer_tool", match answer_tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
         TURN_CONTEXT.import(py, "livekit.agents._generated.storage_turn", "TurnContext")?.call((), Some(&kwargs))
     }
@@ -659,6 +716,10 @@ static CHECKPOINT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
 static OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
+static PROGRESS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+static TOKEN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
 
 impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::a2a::turn::TurnEvent {
     type Error = PyErr;
@@ -672,7 +733,13 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::a2a::turn::TurnEvent {
         if obj.is_instance(OUTPUT.import(py, "livekit.agents._generated.storage_turn", "Output")?)? {
             return Ok(Self::Output { output: ::lk_agents_abi::python::attr_with(obj, "Output", "output", |v| v.extract::<::lk_agents_abi::a2a::turn::HandlerOutput>().map_err(::std::convert::Into::<PyErr>::into))? });
         }
-        Err(super::not_a(obj, "Checkpoint | Output"))
+        if obj.is_instance(PROGRESS.import(py, "livekit.agents._generated.storage_turn", "Progress")?)? {
+            return Ok(Self::Progress { task_id: ::lk_agents_abi::python::attr_with(obj, "Progress", "task_id", |v| v.extract::<::std::string::String>())?, text: ::lk_agents_abi::python::attr_with(obj, "Progress", "text", |v| v.extract::<::std::string::String>())? });
+        }
+        if obj.is_instance(TOKEN.import(py, "livekit.agents._generated.storage_turn", "Token")?)? {
+            return Ok(Self::Token { task_id: ::lk_agents_abi::python::attr_with(obj, "Token", "task_id", |v| v.extract::<::std::string::String>())?, delta: ::lk_agents_abi::python::attr_with(obj, "Token", "delta", |v| v.extract::<::std::string::String>())? });
+        }
+        Err(super::not_a(obj, "Checkpoint | Output | Progress | Token"))
     }
 }
 

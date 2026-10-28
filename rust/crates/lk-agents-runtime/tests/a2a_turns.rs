@@ -271,12 +271,13 @@ impl TurnHost for Fake {
     #[allow(clippy::type_complexity)]
     async fn handle(
         &self,
-        ctx: TurnContext,
+        ctx: &TurnContext,
     ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
     {
         let (verdicts, verdicts_rx) = mpsc::unbounded_channel();
         let (events, events_rx) = mpsc::unbounded_channel();
         let fake = self.clone();
+        let ctx = ctx.clone();
         tokio::spawn(async move {
             let mut checkpoints = Checkpoints { events: events.clone(), verdicts: verdicts_rx };
             let out = fake
@@ -315,10 +316,13 @@ impl Fake {
                 .iter()
                 .map(|i| text_of(&serde_json::from_value(i.payload.clone()).expect("chat item")))
                 .collect(),
-            message: text_of(&serde_json::from_value(ctx.message.clone()).expect("chat item"))
-                .split('\n')
-                .map(str::to_owned)
-                .collect(),
+            message: text_of(
+                &serde_json::from_value(serde_json::Value::Object(ctx.message.clone()))
+                    .expect("chat item"),
+            )
+            .split('\n')
+            .map(str::to_owned)
+            .collect(),
         });
         match &self.behavior {
             Behavior::Echo => Ok(text(&format!("reply to: {message_text}"))),
@@ -470,20 +474,20 @@ async fn two_workers_share_one_session(backend: Backend) {
     fx.cleanup(&[&a, &b]).await;
 }
 
-async fn a_run_that_raises_writes_run_ended_and_nothing_else(backend: Backend) {
+async fn a_failed_storage_run_preserves_its_original_task(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread("worker-a").await;
-    // The host met a storage error: the run aborts, nothing but `run_ended` is written, and the
-    // early row stays `working`, the orphan the next holder fails worker-lost.
-    let err = run_turn(
+    // The failed run saves no staged history/state; its original accepted task remains
+    // queryable with the observed storage failure rather than becoming a worker-loss orphan.
+    let failed = run_turn(
         &s,
         a2a("lost", "m1", None, None),
         Some(Policy::Queue),
         Fake::new(Behavior::Unavailable),
     )
     .await
-    .expect_err("the host's storage error propagates");
-    assert!(matches!(err, StorageError::Unavailable(_)), "{err}");
+    .expect("the accepted task reports its durable failure");
+    assert_eq!(failed.task.status, TaskState::Failed);
     let lane = s.lane(LANE);
     assert!(lane.history().await.unwrap().is_empty());
     let events = s.events(0, 100).await.unwrap();
@@ -496,12 +500,11 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else(backend: Backend) {
         json!({"outcome": "failed", "reason": "StorageUnavailable: the model is down"})
     );
     let rows = lane.tasks(None, 10).await.unwrap();
-    assert_eq!((rows.len(), rows[0].status.as_str()), (1, "working"));
+    assert_eq!((rows.len(), rows[0].status.as_str()), (1, "failed"));
     let info = lane.info().await.unwrap().unwrap();
     assert_eq!((info.version, info.lease_until), (0, 0), "released, not bumped");
 
-    // The handler raised: the task fails with the error as its last message, and the turn
-    // commits, the orphan above failed worker-lost first, not run again.
+    // An application error fails its own task; the prior terminal task stays immutable.
     let host = Fake::new(Behavior::Raise);
     let r = run_turn(&s, a2a("boom", "m2", None, None), Some(Policy::Queue), host.clone())
         .await
@@ -520,7 +523,7 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else(backend: Backend) {
     assert_eq!(orphan.status, TaskState::Failed);
     assert_eq!(
         json_of(&orphan.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
-        json!("worker-lost")
+        json!("storage-unavailable")
     );
     let runs = lane.runs(10).await.unwrap();
     assert_eq!(runs[0].reason.as_deref(), Some("RuntimeError: boom"));
@@ -683,7 +686,18 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     let data = TaskData { history: vec![message.clone()], ..TaskData::default() };
 
     // worker A receives, picks the task up, and dies before its commit
-    let (received, _lease) = db.receive("worker-a", "AST_1", &message, &data).await.unwrap();
+    let (received, _lease) = db
+        .receive(
+            "worker-a",
+            lk_agents_storage::db::ReceiveInput {
+                task_id: "AST_1",
+                message: &message,
+                data: &data,
+                internal: None,
+            },
+        )
+        .await
+        .unwrap();
     assert_eq!(received, Receive::Received(Some(0)));
     assert_eq!(db.pickup("AST_1").await.unwrap(), Some(TaskState::Submitted));
     // the lease is one second here; it lapses once unixepoch() moves past lease_until
@@ -727,7 +741,7 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
     .unwrap();
     assert_eq!(first.task.status, TaskState::InputRequired);
     assert_eq!(
-        first.task.internal.as_ref().and_then(|i| i.ask.as_ref()),
+        first.task.internal.as_ref().and_then(|internal| internal.ask.as_ref()),
         Some(&Ask {
             question: "Could you send a photo?".into(),
             tool: Some("request_photo".into()),
@@ -994,7 +1008,7 @@ async fn a_rejected_message_leaves_no_submitted_row(backend: Backend) {
 
 contract!(
     two_workers_share_one_session,
-    a_run_that_raises_writes_run_ended_and_nothing_else,
+    a_failed_storage_run_preserves_its_original_task,
     interrupt_yields_and_the_newer_task_answers_both,
     the_inbox_batches_a_burst_into_one_reply,
     a_message_id_resend_returns_the_existing_task,

@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod card;
 pub mod client;
+pub mod door;
 pub mod metadata;
 pub mod remote;
 

@@ -359,7 +359,8 @@ impl PyTurn {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let message = value_from_py(message, "message")?;
-        let turn = self.inner.clone();
+        let context = lk_agents_runtime::host::python::capture_context(py)?;
+        let turn = self.inner.as_ref().clone().with_context(context);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let out = turn.run(message, task_id).await.map_err(to_py_err)?;
             Python::attach(|py| lk_agents_abi::a2a::turn::TurnResult::from(out).into_py_any(py))

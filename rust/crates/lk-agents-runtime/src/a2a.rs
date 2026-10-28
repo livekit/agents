@@ -3,10 +3,12 @@
 //! (`lk_agents_a2a::outcome`) to the run. The turn writes the message's task row: `submitted`,
 //! `working`, then its end state.
 
-use std::sync::{Arc, Mutex};
+pub mod door;
+
+use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::task::JoinSet;
+use tokio_util::task::TaskTracker;
 
 use lk_agents_a2a::{
     HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost, TurnIds,
@@ -14,6 +16,7 @@ use lk_agents_a2a::{
     channel_of, channel_of_record, checkpoint_stop, failed_message, host_error, python_reason,
     resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,
 };
+use lk_agents_abi::storage::StreamInfo;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Committed, TaskWrite};
@@ -22,12 +25,18 @@ use lk_agents_storage::run::{
     ItemRow, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, RunOutcome,
     TaskRow, TaskState,
 };
-use lk_agents_storage::schema::TaskData;
+use lk_agents_storage::schema::{TaskData, TaskInternal};
 use serde_json::Value;
 
 use crate::storage::{
     CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid,
 };
+
+/// Notification after durable acceptance, before admission waits or application work.
+#[async_trait::async_trait]
+pub trait Acceptance: Send + Sync {
+    async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError>;
+}
 
 /// How many task rows the handler's context carries.
 const TASKS_IN_CONTEXT: i64 = 50;
@@ -43,6 +52,7 @@ struct Call {
 }
 
 /// One text door's turns: its lane, its options, its host.
+#[derive(Clone)]
 pub struct Turn {
     thread: Thread,
     lane: String,
@@ -50,8 +60,11 @@ pub struct Turn {
     /// The host stream's clock, for the bound on closing it.
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
+    stream: Option<StreamInfo>,
+    acceptance: Option<Arc<dyn Acceptance>>,
+    host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
-    resolvers: Mutex<JoinSet<()>>,
+    resolvers: TaskTracker,
 }
 
 /// A turn's row data: the message it came from.
@@ -60,14 +73,14 @@ fn turn_data(msg: &Message) -> TaskData {
 }
 
 /// The early `submitted` row of a turn: its message as the task's history.
-fn submitted_task(msg: &Message, task_id: &str) -> TaskWrite {
+fn submitted_task(msg: &Message, task_id: &str, stream: Option<&StreamInfo>) -> TaskWrite {
     TaskWrite {
         task_id: task_id.to_owned(),
         status: TaskState::Submitted,
         message_id: Some(msg.message_id.clone()),
         name: None,
         data: turn_data(msg),
-        internal: None,
+        internal: stream.map(|s| TaskInternal { ask: None, streams: vec![s.clone()] }),
     }
 }
 
@@ -88,6 +101,39 @@ fn failed(task_id: &str, reason: &str) -> a2a::Message {
 }
 
 impl Turn {
+    pub fn with_acceptance(mut self, acceptance: Arc<dyn Acceptance>) -> Self {
+        self.acceptance = Some(acceptance);
+        self
+    }
+
+    async fn accepted(&self, call: &Call, task_id: &str) -> Result<(), StorageError> {
+        if let Some(observer) = &self.acceptance {
+            let task =
+                call.lane.task(task_id).await?.ok_or_else(|| {
+                    StorageError::Protocol("accepted task was not durable".into())
+                })?;
+            observer.accepted(&task).await?;
+        }
+        Ok(())
+    }
+
+    pub fn with_owner(mut self, owner: TaskTracker) -> Self {
+        self.resolvers = owner;
+        self
+    }
+
+    /// Each invocation supplies its own host execution context; the endpoint proxy is shared.
+    pub fn with_context(mut self, context: lk_agents_abi::HostRef) -> Self {
+        self.host_context = Some(context);
+        self
+    }
+
+    /// The response stream is independent of task identity and is recorded with submission.
+    pub fn with_stream(mut self, stream: StreamInfo) -> Self {
+        self.stream = Some(stream);
+        self
+    }
+
     pub fn new(
         thread: Thread,
         lane: &str,
@@ -101,7 +147,10 @@ impl Turn {
             host,
             clock,
             opts: options,
-            resolvers: Mutex::new(JoinSet::new()),
+            stream: None,
+            acceptance: None,
+            host_context: None,
+            resolvers: TaskTracker::new(),
         }
     }
 
@@ -144,6 +193,15 @@ impl Turn {
     ) -> Result<TurnResult, StorageError> {
         let message: a2a::Message = serde_json::from_value(message)
             .map_err(|e| StorageError::Invalid(format!("an A2A v1 message: {e}")))?;
+        self.run_message(message, task_id).await
+    }
+
+    /// Execute an already decoded native protocol message.
+    pub async fn run_message(
+        &self,
+        message: a2a::Message,
+        task_id: Option<String>,
+    ) -> Result<TurnResult, StorageError> {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
         let caller_history = caller_history_of(&message);
         let msg = Message::from_a2a(&message, now_secs(), None)?;
@@ -174,10 +232,12 @@ impl Turn {
         // the early `submitted` row is durable before anything waits: before the debounce when
         // there is one, else in the acquire batch with the lease and the pickup. A `tasks/get`
         // finds the task at once, and a holder that dies leaves an orphan.
-        let row = submitted_task(msg, task_id);
-        let mut submitted = None;
+        let row = submitted_task(msg, task_id, self.stream.as_ref());
+        let submitted = Some(call.lane.db().submit(&row).await?);
+        if submitted == Some(true) {
+            self.accepted(call, task_id).await?;
+        }
         if !debounce.is_zero() {
-            submitted = Some(call.lane.db().submit(&row).await?);
             tokio::time::sleep(debounce).await;
         }
         let opened = call
@@ -261,6 +321,15 @@ impl Turn {
                     _ => RunOutcome::Failed,
                 };
                 run.abandon(outcome, python_reason(&e)).await?;
+                if matches!(e, StorageError::Unavailable(_)) {
+                    call.lane
+                        .db()
+                        .fail_orphan(task_id, &failed(task_id, REASON_STORAGE_UNAVAILABLE))
+                        .await?;
+                    if let Some(task) = call.lane.task(task_id).await? {
+                        return Ok(result_for(task, self.thread.id(), Some(&run.run_id)));
+                    }
+                }
                 return Err(e);
             }
         };
@@ -282,7 +351,7 @@ impl Turn {
                     // unreadable: the row as this worker left it, picked up
                     _ => TaskRow {
                         status: TaskState::Working,
-                        ..submitted_task(msg, &answer).row(&self.lane)
+                        ..submitted_task(msg, &answer, self.stream.as_ref()).row(&self.lane)
                     },
                 };
                 Ok(result_for(current, self.thread.id(), None))
@@ -303,9 +372,7 @@ impl Turn {
     /// rejection fails its task `storage-unavailable`; a commit found committed needs nothing.
     fn resolve_later(&self, call: &Call, run: Run, answer: String) {
         let lane = call.lane.clone();
-        let mut resolvers = self.resolvers.lock().expect("resolvers");
-        while resolvers.try_join_next().is_some() {}
-        resolvers.spawn(async move {
+        self.resolvers.spawn(async move {
             match run.resolve_later().await {
                 Some(Err(StorageError::VersionConflict { .. })) => {
                     let failed = failed(&answer, REASON_STORAGE_UNAVAILABLE);
@@ -355,8 +422,19 @@ impl Turn {
         let (received, lease) = call
             .lane
             .db()
-            .receive(self.thread.holder(), task_id, &msg.to_a2a(), &turn_data(msg))
+            .receive(
+                self.thread.holder(),
+                lk_agents_storage::db::ReceiveInput {
+                    task_id,
+                    message: &msg.to_a2a(),
+                    data: &turn_data(msg),
+                    internal: submitted_task(msg, task_id, self.stream.as_ref()).internal.as_ref(),
+                },
+            )
             .await?;
+        if matches!(&received, lk_agents_storage::db::Receive::Received(_)) {
+            self.accepted(call, task_id).await?;
+        }
         match (received, lease) {
             (lk_agents_storage::db::Receive::Duplicate(existing), _) => {
                 let existing_id = existing.unwrap_or_else(|| task_id.to_owned());
@@ -529,7 +607,7 @@ impl Turn {
         msg: &Message,
         task_id: &str,
     ) -> Result<TurnResult, StorageError> {
-        if !call.lane.db().submit(&submitted_task(msg, task_id)).await? {
+        if !call.lane.db().submit(&submitted_task(msg, task_id, self.stream.as_ref())).await? {
             // a resent task or message id: the task it created, awaited, not a second run
             let mut existing = match call.lane.task(task_id).await? {
                 Some(r) => Some(r),
@@ -544,6 +622,7 @@ impl Turn {
             let record = self.record_or_failed(existing, &id, None, "not-written");
             return Ok(result_for(record, self.thread.id(), None));
         }
+        self.accepted(call, task_id).await?;
         let mut run = call
             .lane
             .open(RunOptions {
@@ -584,7 +663,8 @@ impl Turn {
                 if run.closed {
                     return Ok(None);
                 }
-                call.lane.db().submit(&submitted_task(msg, task_id)).await?;
+                call.lane.db().submit(&submitted_task(msg, task_id, self.stream.as_ref())).await?;
+                self.accepted(call, task_id).await?;
                 // the row goes `working` once the lease is held, so a holder that dies leaves an
                 // orphan; a row a client canceled before the turn started runs nothing
                 if call.lane.db().pickup(task_id).await?.is_none() {
@@ -652,7 +732,7 @@ impl Turn {
             now = after + 2e-6;
         }
 
-        let pending = run.tasks.pending_ask().await?;
+        let pending = run.tasks.pending_ask(last.task_id.as_deref()).await?;
         let pending = answer_pending(
             &mut run.history,
             pending.as_ref(),
@@ -665,6 +745,28 @@ impl Turn {
             run.tasks.write(&t.task_id, t.status, t.patch).await?;
         }
         let answer_task = pending.answer_task;
+        let mut streams = Vec::new();
+        for task_id in task_ids {
+            if let Some(task) = call.lane.task(task_id).await? {
+                for stream in task.internal.into_iter().flat_map(|internal| internal.streams) {
+                    if !streams.contains(&stream) {
+                        streams.push(stream);
+                    }
+                }
+            }
+        }
+        if !streams.is_empty() {
+            run.tasks
+                .write(
+                    &answer_task,
+                    TaskState::Working,
+                    lk_agents_storage::run::TaskPatch {
+                        streams: Some(streams),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
 
         let user_message = batch_to_chat_message(batch, now, shortuuid("item_"));
         let turn_ctx = TurnContext {
@@ -736,8 +838,9 @@ impl Turn {
         interrupt: bool,
     ) -> Result<(HandlerOutput, Option<Stop>), StorageError> {
         let task_id = ctx.task_id.as_str();
-        let (verdicts, mut events) =
-            self.host.handle(ctx.clone().into()).await.map_err(host_error)?;
+        let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx.clone())?;
+        host_ctx.host_context = self.host_context.clone();
+        let (verdicts, mut events) = self.host.handle(&host_ctx).await.map_err(host_error)?;
         let lane = self.thread.lane(&self.lane);
         let mut stop = None;
         let read = async {
@@ -763,6 +866,7 @@ impl Turn {
                             if stop.is_some() { Verdict::Yield } else { Verdict::Continue };
                         verdicts.push(verdict).map_err(host_error)?;
                     }
+                    Some(TurnEvent::Progress { .. } | TurnEvent::Token { .. }) => {}
                     Some(TurnEvent::Output { output }) => {
                         let out = HandlerOutput::try_from(output)?;
                         return Ok(out);

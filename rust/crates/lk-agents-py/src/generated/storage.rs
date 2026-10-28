@@ -42,6 +42,18 @@ impl Storage {
         Ok(Storage(::std::sync::Arc::new(out)))
     }
 
+    #[pyo3(signature = (config, host))]
+    fn _core_a2a_door<'py>(&self, py: Python<'py>, config: ::lk_agents_abi::a2a::door::DoorConfig, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let host = super::a2a::TurnHostProxy::from_host(&host)?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_a2a_door(&this, config, host)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::_core_A2ADoor(::std::sync::Arc::new(out)), py))
+        })
+    }
+
     /// The absolute local directory, or the public API agentstore is reached through.
     #[getter]
     fn location(&self) -> PyResult<::std::string::String> {

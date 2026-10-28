@@ -154,6 +154,15 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(default = None)] renew_interval: Option<f64>,
     ) -> Result<Self, StorageError>;
 
+    #[host(class(name = "_core_A2ADoor"))]
+    type A2ADoor: Send + Sync + 'static;
+    #[host(await)]
+    async fn _core_a2a_door(
+        &self,
+        config: crate::a2a::door::DoorConfig,
+        host: std::sync::Arc<dyn crate::a2a::turn::TurnHost>,
+    ) -> Result<Self::A2ADoor, StorageError>;
+
     /// The absolute local directory, or the public API agentstore is reached through.
     #[host(getter)]
     fn location(&self) -> String;

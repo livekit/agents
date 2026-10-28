@@ -69,6 +69,15 @@ pub fn _core_auth_grant_allows(grant: ::lk_agents_abi::a2a::auth::AuthGrant, ope
 // Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
 type EndpointCardImpl = <crate::Selected as super::Implementations>::EndpointCard;
 
+/// Echo the supported capabilities selected by the optional extension header.
+#[pyfunction]
+#[pyo3(signature = (requested))]
+pub fn _core_a2a_extensions_header(requested: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_extensions_header(requested);
+    Ok(out)
+}
+
 /// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
 #[pyfunction]
 #[pyo3(signature = (descriptor))]
@@ -210,6 +219,79 @@ impl AgentClient {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
+type _core_A2ADoorImpl = <crate::Selected as super::Implementations>::A2ADoor;
+
+#[pyclass(frozen, name = "_core_A2ADoor", module = "livekit.agents._core")]
+pub struct _core_A2ADoor(pub(crate) ::std::sync::Arc<_core_A2ADoorImpl>);
+
+#[pymethods]
+impl _core_A2ADoor {
+    #[getter]
+    fn max_payload_bytes(&self) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_A2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::max_payload_bytes(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None))]
+    fn dispatch<'py>(&self, py: Python<'py>, body: ::std::vec::Vec<u8>, principal: ::lk_agents_abi::a2a::auth::AuthPrincipal, version: ::std::option::Option<::std::string::String>, offset: ::std::option::Option<::std::string::String>, body_size: ::std::option::Option<usize>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_A2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::dispatch(&this, body, principal, version, offset, body_size, host_context)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::_core_A2AResponse(::std::sync::Arc::new(out)), py))
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_A2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
+type _core_A2AResponseImpl = <crate::Selected as super::Implementations>::A2AResponse;
+
+#[pyclass(frozen, name = "_core_A2AResponse", module = "livekit.agents._core")]
+pub struct _core_A2AResponse(::std::sync::Arc<_core_A2AResponseImpl>);
+
+#[pymethods]
+impl _core_A2AResponse {
+    #[getter]
+    fn streaming(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_A2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::streaming(&self.0);
+        Ok(out)
+    }
+
+    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_A2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::next(&this, )
+                .await.map_err(|e: ::lk_agents_abi::a2a::door::DoorError| <::lk_agents_abi::a2a::door::DoorError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <_core_A2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
 type _core_RemoteInteractionImpl = <crate::Selected as super::Implementations>::RemoteInteraction;
 
@@ -273,8 +355,6 @@ pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option:
 #[derive(Clone)]
 pub struct TurnHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
 }
 
 impl TurnHostProxy {
@@ -292,7 +372,7 @@ impl TurnHostProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(TurnHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())? })
+        Ok(TurnHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 
@@ -302,10 +382,12 @@ impl TurnHostProxy {
 
 #[::async_trait::async_trait]
 impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
-    async fn handle(&self, ctx: ::lk_agents_abi::a2a::turn::TurnContext) -> ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>), ::lk_agents_abi::errors::ProviderError> {
+    async fn handle(&self, ctx: &::lk_agents_abi::a2a::turn::TurnContext) -> ::std::result::Result<(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>), ::lk_agents_abi::errors::ProviderError> {
         let host = ::std::sync::Arc::clone(&self.host);
-        let ctx_arg = ctx;
-        let context = ::std::clone::Clone::clone(&self.context);
+        let ctx_arg = ::std::clone::Clone::clone(ctx);
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(ctx).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context"))));
+        };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(ctx_arg, py)?];

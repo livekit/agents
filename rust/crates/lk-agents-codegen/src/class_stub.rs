@@ -220,6 +220,9 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(c, t, dir, imports)),
+        Ty::List(t) if dir == Dir::In && matches!(**t, Ty::Int(crate::decl::Int::U8)) => {
+            "bytes | bytearray | list[int]".into()
+        }
         Ty::List(t) => format!("list[{}]", annotation(c, t, dir, imports)),
         Ty::Map(k, t) => {
             format!("dict[{}, {}]", annotation(c, k, dir, imports), annotation(c, t, dir, imports))

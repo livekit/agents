@@ -14,7 +14,6 @@ from datetime import timedelta
 
 import pytest
 
-from livekit.agents.a2a import pump
 from livekit.agents.storage import AgentDBStorage, SQLiteStorage, Storage
 
 AGENTDB_LEASE_TTL = float(os.environ.get("LIVEKIT_AGENTDB_LEASE_TTL", "10"))
@@ -87,10 +86,6 @@ async def thread_storage_worker(
 
     yield make
 
-    # an A2A response ends before its turn has closed the durable stream (a2a/pump.py)
-    turns = [task for task in pump.running if not task.done()]
-    if turns:
-        await asyncio.wait(turns, timeout=5)
     for storage in made:
         await storage.aclose()
 

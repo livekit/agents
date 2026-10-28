@@ -17,7 +17,6 @@ extern crate lk_agents_inference as _;
 extern crate lk_agents_media as _;
 extern crate lk_agents_rtc as _;
 
-
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
@@ -40,6 +39,8 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type A2ADoor = lk_agents_runtime::a2a::door::Door;
+    type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
     type NativeRealtimeModel = lk_agents_runtime::realtime::NativeRealtime;
     type RealtimeFallbackModel = lk_agents_runtime::realtime::fallback::RealtimeFallbackModel;

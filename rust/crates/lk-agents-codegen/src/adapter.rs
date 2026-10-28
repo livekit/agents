@@ -123,8 +123,16 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
         Form::MutableClass => ("", format!("{name}Impl")),
         _ => ("frozen, ", format!("::std::sync::Arc<{name}Impl>")),
     };
+    // Associated class factories can construct a wrapper from another generated family.
+    let visibility = if decls.classes.iter().any(|owner| {
+        owner.family != c.family && owner.instances.iter().any(|(_, target)| target == name)
+    }) {
+        "pub(crate) "
+    } else {
+        ""
+    };
     s.push_str(&format!(
-        "#[pyclass({frozen}name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}({held});\n\n#[pymethods]\nimpl {name} {{\n"
+        "#[pyclass({frozen}name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}({visibility}{held});\n\n#[pymethods]\nimpl {name} {{\n"
     ));
     let methods = c.methods.iter().map(|m| method(decls, c, m)).collect::<Result<Vec<_>, _>>()?;
     s.push_str(&methods.join("\n"));

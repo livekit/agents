@@ -58,6 +58,7 @@ pub struct HostStorage {
     config: Config,
     backend: OnceCell<Backend>,
     streams: OnceCell<Arc<QueuedStreams>>,
+    a2a_tasks: tokio_util::task::TaskTracker,
 }
 
 /// The holder of a read-only handle: it never takes a lease.
@@ -256,7 +257,27 @@ impl HostStorageClass for HostStorage {
                 ));
             }
         };
-        Ok(Self { config, backend: OnceCell::new(), streams: OnceCell::new() })
+        Ok(Self {
+            config,
+            backend: OnceCell::new(),
+            streams: OnceCell::new(),
+            a2a_tasks: tokio_util::task::TaskTracker::new(),
+        })
+    }
+
+    type A2ADoor = crate::a2a::door::Door;
+
+    async fn _core_a2a_door(
+        &self,
+        config: lk_agents_abi::a2a::door::DoorConfig,
+        host: Arc<dyn lk_agents_abi::a2a::turn::TurnHost>,
+    ) -> Result<Self::A2ADoor, StorageError> {
+        crate::a2a::door::Door::new(
+            self.shared_storage().await?,
+            config,
+            host,
+            self.a2a_tasks.clone(),
+        )
     }
 
     fn location(&self) -> String {
@@ -422,6 +443,14 @@ impl HostStorageClass for HostStorage {
     }
 
     async fn aclose(&self) {
+        self.a2a_tasks.close();
+        if tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, self.a2a_tasks.wait())
+            .await
+            .is_err()
+        {
+            log::error!(target: "livekit.agents", "storage is closing while accepted A2A work settles");
+        }
+
         if let Some(backend) = self.backend.get() {
             backend.storage().close().await;
         }

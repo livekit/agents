@@ -399,6 +399,7 @@ statement! {
     /// A turn's `submitted` row in the inbox receive, only when this request inserted the
     /// inbox row.
     InsertSubmittedTaskForMessage<'a> {
+        internal: SqlValue,
         lane: &'a str,
         task_id: &'a str,
         message_id: &'a str,
@@ -407,7 +408,7 @@ statement! {
 INSERT INTO tasks
   (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
-  NULL, :message_id, 'submitted', jsonb(:data), NULL, CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  NULL, :message_id, 'submitted', jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM inbox
 WHERE lane = :lane AND message_id = :message_id AND task_id = :task_id
 "#

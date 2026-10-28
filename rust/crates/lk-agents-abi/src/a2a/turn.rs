@@ -11,11 +11,11 @@ use crate::{StreamSink, StreamSource};
 pub use crate::a2a::client::Message;
 
 #[crate::host(record(module = "storage_turn", emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TurnContext {
     pub thread_id: String,
     pub lane: String,
-    pub message: Value,
+    pub message: Map<String, Value>,
     pub batch: Vec<Message>,
     pub history: Vec<ItemRow>,
     pub state: Option<Value>,
@@ -24,8 +24,10 @@ pub struct TurnContext {
     pub read_only: bool,
     pub task_id: String,
     pub tasks: Vec<TaskRecord>,
-    pub caller_history: Option<Value>,
+    pub caller_history: Option<Map<String, Value>>,
     pub answer_tool: Option<String>,
+    #[host(skip)]
+    pub host_context: Option<crate::HostRef>,
 }
 
 #[crate::host(record(module = "storage_turn", extract))]
@@ -86,6 +88,10 @@ pub enum TurnEvent {
     Checkpoint,
     #[host(name = "Output")]
     Output { output: HandlerOutput },
+    #[host(name = "Progress")]
+    Progress { task_id: String, text: String },
+    #[host(name = "Token")]
+    Token { task_id: String, delta: String },
 }
 
 #[crate::host(proxy(host = "livekit.agents.storage.context.TurnHost"))]
@@ -94,6 +100,12 @@ pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
     async fn handle(
         &self,
-        ctx: TurnContext,
+        #[host(context)] ctx: &TurnContext,
     ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>;
+}
+
+impl crate::agent::HostContext for TurnContext {
+    fn host_context(&self) -> Option<&crate::HostRef> {
+        self.host_context.as_ref()
+    }
 }

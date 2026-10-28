@@ -398,20 +398,32 @@ pub struct ReceiveDecode {
 
 /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the lease
 /// attempt under `token`.
+pub struct ReceiveInput<'a> {
+    pub task_id: &'a str,
+    pub message: &'a a2a::Message,
+    pub data: &'a TaskData,
+    pub internal: Option<&'a TaskInternal>,
+}
+
 pub fn receive(
     lane: &str,
     holder: &str,
     token: &str,
     lease_secs: i64,
-    task_id: &str,
-    message: &a2a::Message,
-    data: &TaskData,
+    input: ReceiveInput<'_>,
 ) -> Plan<ReceiveDecode> {
+    let ReceiveInput { task_id, message, data, internal } = input;
     let message_id = message.message_id.as_str();
     let mut b = Batch::default();
     b.add(InsertLane { lane });
     let inbox = b.add(InsertInbox { lane, task_id, message_id, message: SqlValue::json(message) });
-    b.add(InsertSubmittedTaskForMessage { lane, task_id, message_id, data: SqlValue::json(data) });
+    b.add(InsertSubmittedTaskForMessage {
+        lane,
+        task_id,
+        message_id,
+        data: SqlValue::json(data),
+        internal: internal.map(SqlValue::json).unwrap_or(SqlValue::Null),
+    });
     let take = b.add(TakeLeaseForMessage { lane, holder, token, lease_secs, message_id, task_id });
     let existing = b.add(SelectInboxTask { lane, message_id });
     b.plan(ReceiveDecode { inbox, take, existing })

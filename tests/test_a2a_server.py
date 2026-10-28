@@ -26,7 +26,6 @@ from livekit.agents.a2a import (
     A2ASessionContext,
     AgentThreadGrant,
     Credentials,
-    Extensions,
     TextPart,
     Unauthorized,
 )
@@ -98,6 +97,15 @@ def make_server(
 
 
 def http_client(server: AgentServer, **headers: str) -> httpx.AsyncClient:
+    headers.setdefault(
+        "Authorization",
+        "Bearer "
+        + CREDENTIALS.thread_grant_token(
+            AgentThreadGrant(
+                all=True, scope="test", create=True, write=True, read=True, list=True, delete=True
+            )
+        ),
+    )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=server.http.app),
         base_url="http://agents.test",
@@ -354,7 +362,7 @@ async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
         await client_a.close()
         await client_b.close()
     assert seen == [[], ["hello", "seen 0"]]
-    assert [t.id for t in listed.tasks] == [first[0].id, second[0].id]
+    assert [t.id for t in listed.tasks] == [second[0].id, first[0].id]
     assert all(t.status.state == pb.TaskState.TASK_STATE_COMPLETED for t in listed.tasks)
 
 
@@ -555,14 +563,27 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     ctx_id = (await a.threads.create_thread()).thread_id
 
     # the first client reads the acknowledgment and drops the stream
-    from livekit.agents.a2a.methods import CallContext
-
-    stream = endpoint_a.service.stream(
-        {"message": wire("slow", "m1", context_id=ctx_id)},
-        CallContext(extensions=Extensions(livekit=True)),
+    principal = CREDENTIALS.principal(
+        {
+            "Authorization": "Bearer "
+            + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
+        },
+        agent_name=AGENT,
     )
-    ack = await stream.__anext__()
-    task_id = ack.id
+    stream = await endpoint_a.service.dispatch(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "initial",
+                "method": "message/stream",
+                "params": {"message": wire("slow", "m1", context_id=ctx_id)},
+            }
+        ).encode(),
+        principal,
+    )
+    ack = await stream.next()
+    assert ack is not None
+    task_id = json.loads(ack.json)["result"]["task"]["id"]
     await stream.aclose()
 
     async with http_client(server_b) as http_b:
@@ -612,14 +633,27 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     server_b, _ = make_server(b, handler)
     ctx_id = (await a.threads.create_thread()).thread_id
 
-    from livekit.agents.a2a.methods import CallContext
-
-    stream = endpoint_a.service.stream(
-        {"message": wire("slow", "m1", context_id=ctx_id)},
-        CallContext(extensions=Extensions(livekit=True)),
+    principal = CREDENTIALS.principal(
+        {
+            "Authorization": "Bearer "
+            + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
+        },
+        agent_name=AGENT,
     )
-    ack = await stream.__anext__()
-    task_id = ack.id
+    stream = await endpoint_a.service.dispatch(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": "initial",
+                "method": "message/stream",
+                "params": {"message": wire("slow", "m1", context_id=ctx_id)},
+            }
+        ).encode(),
+        principal,
+    )
+    ack = await stream.next()
+    assert ack is not None
+    task_id = json.loads(ack.json)["result"]["task"]["id"]
     # held, never closed: the suspended generator of a response whose client is gone
 
     async with http_client(server_b) as http_b:
@@ -698,11 +732,11 @@ async def test_the_grant_creates_in_its_scope_and_refuses_another_scopes_session
         ctx_id = created["contextId"]
         info = await storage.threads.get_thread(ctx_id)
         assert info.scope == "user:alice"
-        # a scope covers create and list only: a thread is read and written by id
+        # Scope and explicit ids both authorize existing threads.
         r = await rpc(http, "message/send", {"message": wire("hi", "m3", context_id=ctx_id)}, **bob)
         assert r.status_code == 403
         r = await rpc(http, "tasks/list", {"contextId": ctx_id}, **alice)
-        assert r.status_code == 403
+        assert r.status_code == 200
         listed = AgentThreadGrant(thread_ids=(ctx_id,), create=True, write=True, read=True)
         by_id = {"Authorization": f"Bearer {CREDENTIALS.thread_grant_token(listed)}"}
         r = await rpc(http, "tasks/list", {"contextId": ctx_id}, **by_id)
@@ -740,7 +774,8 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
     assert principal.grant.scope == "user:bob" and principal.grant.write
     # the node's verdict without a bearer is the project credential; nothing is anonymous
     assert CREDENTIALS.principal({}, agent_name=AGENT, node_authorized=True).unscoped
-    assert CREDENTIALS.principal({}, agent_name=AGENT).anonymous
+    with pytest.raises(Unauthorized):
+        CREDENTIALS.principal({}, agent_name=AGENT)
     # a grant naming neither a scope nor a thread is refused
     bare = {"Authorization": f"Bearer {grant_token('', write=True)}"}
     with pytest.raises(Unauthorized):
@@ -762,13 +797,12 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
     assert not listed.can_create("user:bob")
     scoped = AgentThreadGrant(scope="user:bob", create=True, write=True)
     assert scoped.can_create("user:bob") and not scoped.can_create("user:x")
-    assert not scoped.can_write(thread) and not scoped.can_update()
+    assert scoped.can_write(thread)
     everything = AgentThreadGrant(all=True, create=True, write=True)
-    assert everything.can_create("user:x") and everything.can_write(thread)
-    assert everything.can_update() and not AgentThreadGrant(all=True, read=True).can_update()
+    assert not everything.can_create("user:x") and everything.can_write(thread)
 
 
-async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
+async def test_endpoint_auth_and_thread_authority_are_checked_on_every_request(
     thread_storage: Storage,
 ) -> None:
     seen: list[str] = []
@@ -777,9 +811,9 @@ async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
         seen.append(connection.headers.get("x-api-key", ""))
         return connection.headers.get("x-api-key") == "letmein"
 
-    server, _ = make_server(thread_storage, public=False, auth=auth)
-    async with http_client(server) as http:
-        # nobody, the developer's check failing, then a project token with the right key
+    server, _ = make_server(thread_storage, auth=auth)
+    async with http_client(server, Authorization="") as http:
+        # The developer check and thread authority are independent.
         r = await rpc(
             http, "message/send", {"message": wire("hi", "m1")}, **{"X-Api-Key": "letmein"}
         )
@@ -789,21 +823,35 @@ async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
             http, "message/send", {"message": wire("hi", "m2")}, Authorization=f"Bearer {token}"
         )
         assert r.status_code == 401
+        endpoint_only = await rpc(
+            http,
+            "message/send",
+            {"message": wire("hi", "endpoint-only")},
+            Authorization=f"Bearer {token}",
+            **{"X-Api-Key": "letmein"},
+        )
+        assert endpoint_only.status_code == 403
         r = await rpc(
             http,
             "message/send",
             {"message": wire("hi", "m3")},
-            Authorization=f"Bearer {token}",
+            Authorization="Bearer " + grant_token("user:alice"),
             **{"X-Api-Key": "letmein"},
         )
         assert (
             r.status_code == 200
             and r.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
         )
-        # the card stays reachable, and says the endpoint is not public
-        card = (await http.get(f"/{ENDPOINT}{AGENT_CARD_PATH}")).json()
-        assert card["securityRequirements"]
-    assert seen == ["letmein", "", "letmein"]
+        assert (await http.get(f"/{ENDPOINT}{AGENT_CARD_PATH}")).status_code == 401
+        response = await http.get(
+            f"/{ENDPOINT}{AGENT_CARD_PATH}",
+            headers={
+                "Authorization": "Bearer " + grant_token("user:alice"),
+                "X-Api-Key": "letmein",
+            },
+        )
+        assert response.status_code == 200 and response.json()["securityRequirements"]
+    assert seen == ["letmein", "", "letmein", "letmein", "", "letmein"]
 
 
 async def test_a_delegation_part_and_kind_reach_the_handler(
@@ -829,7 +877,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
         "parts": [{"text": "what is the fare"}, chat_ctx_part(history)],
         "metadata": {KIND: "delegation"},
     }
-    async with http_client(server, Authorization=f"Bearer {CREDENTIALS.project_token()}") as http:
+    async with http_client(server) as http:
         client = await stock_client(http, extensions=EXTENSION_URI)
         events = await send(client, message_to_pb(msg))
         await client.close()
@@ -859,3 +907,59 @@ async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     assert task["status"]["state"] == "TASK_STATE_FAILED"
     reason = metadata_from_wire(task["status"]["message"]["metadata"])[REASON]
     assert reason == "storage-unavailable"
+
+
+async def test_each_request_supplies_its_own_application_context(thread_storage: Storage) -> None:
+    import contextvars
+
+    label = contextvars.ContextVar("request-label", default="missing")
+    seen: list[str] = []
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        seen.append(label.get())
+        return label.get()
+
+    server, _ = make_server(thread_storage, handler)
+    async with http_client(server) as http:
+        for value in ("first", "second"):
+            token = label.set(value)
+            try:
+                result = await rpc(http, "message/send", {"message": wire("hello", value)})
+                assert result.json()["result"]["task"]["artifacts"][0]["parts"][0]["text"] == value
+            finally:
+                label.reset(token)
+    assert seen == ["first", "second"]
+
+
+async def test_application_typed_output_crosses_the_native_door(thread_storage: Storage) -> None:
+    from pydantic import BaseModel
+
+    class Answer(BaseModel):
+        reservation: str
+
+    async def handler(ctx: A2ASessionContext) -> Answer:
+        return Answer(reservation="R42")
+
+    server, _ = make_server(thread_storage, handler)
+    async with http_client(server) as http:
+        response = await rpc(http, "message/send", {"message": wire("book", "typed")})
+    task = response.json()["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert task["artifacts"][0]["parts"][0]["data"] == {"reservation": "R42"}
+
+
+async def test_payload_budget_refuses_before_durable_receipt(thread_storage: Storage) -> None:
+    calls = 0
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        nonlocal calls
+        calls += 1
+        return "unexpected"
+
+    server, endpoint = make_server(thread_storage, handler)
+    native = await endpoint.service.native()
+    async with http_client(server) as http:
+        response = await http.post(f"/{ENDPOINT}/v1", content=b" " * (native.max_payload_bytes + 1))
+    assert response.json()["error"]["code"] == -32602
+    assert calls == 0
+    assert (await thread_storage.threads.list_threads("test")).threads == []

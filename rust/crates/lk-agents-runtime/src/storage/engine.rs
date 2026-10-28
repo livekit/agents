@@ -19,8 +19,7 @@ use lk_agents_storage::run::{
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
 use lk_agents_storage::schema::{
-    EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskData,
-    TaskRow,
+    EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskRow,
 };
 use lk_agents_storage::sql::Statement;
 use lk_agents_storage::{Fence, StorageError};
@@ -267,20 +266,17 @@ impl LaneDb {
     pub async fn receive(
         &self,
         holder: &str,
-        task_id: &str,
-        message: &a2a::Message,
-        data: &TaskData,
+        input: db::ReceiveInput<'_>,
     ) -> Result<(Receive, Option<Lease>), StorageError> {
         self.db.ensure_schema().await?;
         let token = shortuuid("lease_");
         let holder = format!("{holder}/{token}");
-        let plan =
-            db::receive(&self.name, &holder, &token, self.db.timing.secs(), task_id, message, data);
+        let plan = db::receive(&self.name, &holder, &token, self.db.timing.secs(), input);
         let received = self.db.execute(plan).await?;
         let lease = match received {
             Receive::Received(Some(version)) => Some(Lease::new(
                 self.db.clone(),
-                Fence { lane: self.name.clone(), holder: holder.into(), token, version },
+                Fence { lane: self.name.clone(), holder, token, version },
             )),
             _ => None,
         };
@@ -923,9 +919,7 @@ impl Run {
         reason: impl Into<String>,
     ) -> Result<(), StorageError> {
         self.finish()?;
-        let Some(lease) = &self.lease else {
-            return Ok(());
-        };
+        let Some(lease) = &self.lease else { return Ok(()) };
         if self.closed {
             return lease.release(None).await;
         }
@@ -1017,8 +1011,21 @@ impl Tasks {
         self.find(|r| r.message_id.as_deref() == Some(message_id), read).await
     }
 
-    /// The newest `input-required` row holding a conversation tool's pending call.
-    pub async fn pending_ask(&self) -> Result<Option<TaskRow>, StorageError> {
+    /// The requested pending question, or the newest one when no task was named.
+    pub async fn pending_ask(
+        &self,
+        task_id: Option<&str>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(task_id) = task_id {
+            return Ok(self
+                .find(|row| row.task_id == task_id, self.lane.task(task_id))
+                .await?
+                .filter(|row| {
+                    row.status == TaskState::InputRequired
+                        && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some())
+                }));
+        }
+
         if let Some(rows) = self.snapshot() {
             return Ok(rows
                 .iter()

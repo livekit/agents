@@ -29,6 +29,11 @@ pub fn has_subject(grant: &AuthGrant) -> bool {
     grant.all || !grant.scope.is_empty() || !grant.thread_ids.is_empty()
 }
 
+/// A first message must be able to create its scoped thread and write that message.
+pub fn allows_first_message(grant: &AuthGrant) -> bool {
+    allows(grant, AuthOperation::Create, "", None) && grant.write
+}
+
 pub fn allows(
     grant: &AuthGrant,
     operation: AuthOperation,

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class TurnContext:
     thread_id: str
     lane: str
-    message: object
+    message: dict[str, object]
     batch: list[Message]
     history: list[ItemRow]
     state: object | None
@@ -28,7 +28,7 @@ class TurnContext:
     read_only: bool
     task_id: str
     tasks: list[TaskRecord]
-    caller_history: object | None
+    caller_history: dict[str, object] | None
     answer_tool: str | None
 
 
@@ -82,4 +82,16 @@ class Output:
     output: HandlerOutput
 
 
-TurnEvent: TypeAlias = Checkpoint | Output
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Progress:
+    task_id: str
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class Token:
+    task_id: str
+    delta: str
+
+
+TurnEvent: TypeAlias = Checkpoint | Output | Progress | Token

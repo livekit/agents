@@ -30,6 +30,8 @@ pub trait Implementations: 'static {
     type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
     type Reply: ::lk_agents_abi::a2a::client::Reply;
     type AgentClient: ::lk_agents_abi::a2a::client::AgentClient<Reply = Self::Reply>;
+    type A2ADoor: ::lk_agents_abi::a2a::door::A2ADoor<Response = Self::A2AResponse>;
+    type A2AResponse: ::lk_agents_abi::a2a::door::A2AResponse;
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
@@ -45,7 +47,7 @@ pub trait Implementations: 'static {
     type NativeRealtimeModel: ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel;
     type RealtimeFallbackModel: ::lk_agents_abi::llm::realtime_native::RealtimeFallbackModel;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
-    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore>;
+    type Storage: ::lk_agents_abi::storage::Storage<ContextActivation = Self::ContextActivation, VoiceStore = Self::VoiceStore, A2ADoor = Self::A2ADoor>;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
@@ -64,9 +66,12 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::_core_Credentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_a2a_extensions_header, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_class::<a2a::Reply>()?;
     m.add_class::<a2a::AgentClient>()?;
+    m.add_class::<a2a::_core_A2ADoor>()?;
+    m.add_class::<a2a::_core_A2AResponse>()?;
     m.add_class::<a2a::_core_RemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_class::<agent::RunEvents>()?;

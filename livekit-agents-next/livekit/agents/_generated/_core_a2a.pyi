@@ -13,6 +13,7 @@ from .._core import ChatItem
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageMetadata, TaskUpdate
+from .a2a_door import DoorFrame
 from .a2a_remote import RemoteEvent
 
 class _core_Credentials:
@@ -47,6 +48,9 @@ def _core_auth_grant_allows(
     thread_id: str,
     scope: str | None,
 ) -> bool: ...
+
+def _core_a2a_extensions_header(requested: str | None) -> str | None:
+    """Echo the supported capabilities selected by the optional extension header."""
 
 def _core_a2a_agent_card(descriptor: EndpointDescriptor) -> str:
     """Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation."""
@@ -90,6 +94,27 @@ class AgentClient:
         thread_id: str | None = None,
         reason: str | None = None,
     ) -> TaskUpdate: ...
+    async def aclose(self) -> None: ...
+
+class _core_A2ADoor:
+    @property
+    def max_payload_bytes(self) -> int: ...
+    async def dispatch(
+        self,
+        body: bytes | bytearray | list[int],
+        principal: AuthPrincipal,
+        *,
+        version: str | None = None,
+        offset: str | None = None,
+        body_size: int | None = None,
+        host_context: object | None = None,
+    ) -> _core_A2AResponse: ...
+    async def aclose(self) -> None: ...
+
+class _core_A2AResponse:
+    @property
+    def streaming(self) -> bool: ...
+    async def next(self) -> DoorFrame | None: ...
     async def aclose(self) -> None: ...
 
 class _core_RemoteInteraction:

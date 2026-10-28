@@ -11,18 +11,24 @@ from livekit.agents import AgentHandler, AgentServer
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import Storage
 
-from .test_a2a_delegation import lanes_of
 from .test_a2a_server import (
     AGENT,
     API_KEY,
     API_SECRET,
-    CREDENTIALS,
     http_client,
     sse_results,
     wire,
 )
 
 pytestmark = [pytest.mark.unit]
+
+
+async def lanes_of(storage: Storage, thread_id: str) -> set[str]:
+    core = await storage.open(thread_id)
+    try:
+        return {lane.lane for lane in await core.lanes()}
+    finally:
+        core.close()
 
 
 async def echo(ctx: A2ASessionContext) -> str:
@@ -43,15 +49,15 @@ async def test_a_handler_with_a_lane_of_its_own(thread_storage: Storage) -> None
     front_desk = AgentHandler()
     front_desk.a2a_session(endpoint="frontend", description="the front desk")(echo)
     back_office = AgentHandler(lane="back-office")
-    back_office.a2a_session(endpoint="backend", description="the back office", public=False)(echo)
+    back_office.a2a_session(endpoint="backend", description="the back office")(echo)
     front = AgentServer(
         storage=thread_storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET
     )
     front.add(front_desk, back_office)
     assert set(front.a2a_endpoints) == {"frontend", "backend"}
 
-    # the back office's door is not public: the project's token opens it, as a delegate's does
-    async with http_client(front, Authorization=f"Bearer {CREDENTIALS.project_token()}") as http:
+    # A thread grant authorizes both doors for the same thread.
+    async with http_client(front) as http:
         first = await stream(http, "/frontend/v1", wire("hi", "m1"))
         thread_id = first[0]["task"]["contextId"]
         second = await stream(http, "/backend/v1", wire("hello", "m2", context_id=thread_id))

@@ -12,8 +12,8 @@ use serde_json::{Map, Value};
 
 use lk_agents_storage::run::{REASON_KEY, TaskState};
 
-/// The A2A versions an endpoint answers: 1.0, and 0.3's method names.
-const VERSIONS: [&str; 2] = ["1.0", "0.3"];
+/// Wire versions are separate from the accepted historical method aliases.
+const VERSIONS: [&str; 1] = ["1.0"];
 
 /// The largest `ListTasks` page A2A allows.
 pub const MAX_PAGE_SIZE: i64 = 100;
@@ -93,7 +93,7 @@ pub fn failure(id: JsonRpcId, error: JsonRpcError) -> JsonRpcResponse {
     JsonRpcResponse::error(id, error)
 }
 
-/// The `A2A-Version` header: absent, `1.0` or `0.3`.
+/// The `A2A-Version` header selects the served wire format.
 pub fn check_version(header: Option<&str>) -> Result<(), JsonRpcError> {
     match header.map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(()),
@@ -281,6 +281,14 @@ fn task_ref(params: &Map<String, Value>) -> Result<TaskRef, JsonRpcError> {
 fn history_length(n: Option<i32>) -> Result<Option<usize>, JsonRpcError> {
     n.map(|n| usize::try_from(n).map_err(|_| invalid_params("historyLength is not negative")))
         .transpose()
+}
+
+/// Optional extension negotiation does not confer thread authority.
+pub fn extensions_header(requested: Option<&str>) -> Option<String> {
+    let supported = lk_agents_abi::a2a::metadata::EXTENSION_URI;
+    requested
+        .filter(|value| value.split(',').any(|part| part.trim() == supported))
+        .map(|_| supported.to_owned())
 }
 
 #[cfg(test)]
@@ -476,7 +484,10 @@ mod tests {
     fn the_version_header_names_a_served_version() {
         assert!(check_version(None).is_ok());
         assert!(check_version(Some("1.0")).is_ok());
-        assert!(check_version(Some(" 0.3")).is_ok());
+        assert_eq!(
+            check_version(Some(" 0.3")).unwrap_err().code,
+            error_code::VERSION_NOT_SUPPORTED
+        );
         assert_eq!(check_version(Some("2.0")).unwrap_err().code, error_code::VERSION_NOT_SUPPORTED);
     }
 }

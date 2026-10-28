@@ -8,20 +8,14 @@ events for the streams; the caller is checked by ``auth.py`` and the developer's
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import inspect
-import json
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import TypedDict
 
-from a2a.server.jsonrpc_models import (
-    InternalError as RpcInternalError,
-    InvalidRequestError as RpcInvalidRequestError,
-    JSONParseError as RpcParseError,
-)
-from a2a.server.request_handlers.response_helpers import build_error_response
-from a2a.utils.errors import InternalError
 from pydantic import JsonValue
 from starlette.applications import Starlette
 from starlette.requests import HTTPConnection, Request
@@ -35,7 +29,7 @@ from ..storage.backends import Storage
 from ..storage.context import Handler
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
-from .methods import METHODS, STREAMING, A2AService, CallContext, JsonRpc
+from .methods import A2AService
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
 RPC_PATH = "/v1"
@@ -231,61 +225,54 @@ class A2AEndpoint:
 
         return principal
 
-    def call_context(self, connection: HTTPConnection, principal: Principal) -> CallContext:
-        return CallContext(
-            principal=principal,
-            extensions=Extensions.from_headers(connection.headers),
-            resume_offset=connection.headers.get("last-event-id"),
-        )
-
     async def _serve_rpc(self, request: Request) -> Response:
         try:
             principal = await self.authenticate(request)
-        except AuthError as e:
-            return _auth_response(e)
+        except AuthError as error:
+            return _auth_response(error)
 
-        call = self.call_context(request, principal)
-        echo = call.extensions.header()
-        headers = {EXTENSIONS_HEADER: echo} if echo else {}
+        headers: dict[str, str] = {}
+        if negotiated := Extensions.from_headers(request.headers).header():
+            headers[EXTENSIONS_HEADER] = negotiated
+        native = await self.service.native()
+        body = bytearray()
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > native.max_payload_bytes:
+                break
+            body.extend(chunk)
+        responses = await native.dispatch(
+            bytes(body),
+            principal,
+            version=request.headers.get("a2a-version"),
+            offset=request.headers.get("last-event-id"),
+            body_size=received,
+            host_context=(asyncio.get_running_loop(), contextvars.copy_context()),
+        )
         try:
-            body = await request.json()
-        except ValueError as e:
-            return JSONResponse(
-                build_error_response(None, RpcParseError(message=str(e))), headers=headers
-            )
-        if isinstance(body, list):
-            return JSONResponse(
-                build_error_response(
-                    None, RpcInvalidRequestError(message="batch requests are not supported")
-                ),
-                headers=headers,
-            )
-
-        method = body.get("method") if isinstance(body, Mapping) else None
-        streaming = METHODS.get(str(method or "")) in STREAMING
-        responses = self.service.dispatch(body, call)
-        # the first response before the head: an upfront error is a JSON error body
-        try:
-            first = await anext(responses)
-        except AuthError as e:
-            return _auth_response(e)
-        except StopAsyncIteration:
-            first = build_error_response(None, RpcInternalError(message="no response"))
-        if not streaming or "error" in first:
-            return JSONResponse(first, headers=headers)
+            first = await responses.next()
+        except AuthError as error:
+            await responses.aclose()
+            return _auth_response(error)
+        if first is None:
+            await responses.aclose()
+            raise RuntimeError("the native A2A door produced no response")
+        if not responses.streaming or first.is_error:
+            await responses.aclose()
+            return Response(first.json, media_type="application/json", headers=headers)
 
         async def sse() -> AsyncIterator[bytes]:
-            yield _sse_frame(first)
             try:
-                async for item in responses:
-                    yield _sse_frame(item)
-            except AuthError as e:
-                yield _sse_frame(
-                    build_error_response(body.get("id"), InternalError(message=e.message))
-                )
+                yield first.sse.encode()
+                while (frame := await responses.next()) is not None:
+                    yield frame.sse.encode()
+            finally:
+                await responses.aclose()
 
-        headers["Cache-Control"] = "no-cache"
-        return StreamingResponse(sse(), media_type="text/event-stream", headers=headers)
+        return StreamingResponse(
+            sse(), media_type="text/event-stream", headers={**headers, "Cache-Control": "no-cache"}
+        )
 
 
 def _seconds(
@@ -297,12 +284,6 @@ def _seconds(
     if isinstance(debounce, timedelta):
         return debounce.total_seconds()
     return {channel: wait.total_seconds() for channel, wait in debounce.items()}
-
-
-def _sse_frame(item: JsonRpc) -> bytes:
-    data = json.dumps(item, separators=(",", ":"))
-    prefix = b"event: error\n" if "error" in item else b""
-    return prefix + b"data: " + data.encode() + b"\n\n"
 
 
 def _auth_response(error: AuthError) -> Response:

@@ -1,123 +1,25 @@
-"""The A2A methods of one endpoint (plan 7.3), with no binding in them.
-
-JSON-RPC 2.0 requests in, responses out: one for a unary method, a sequence for a stream.
-``message/send`` and ``message/stream`` take the message through ``_core.Turn`` (plan 13.8); the
-``tasks/*`` methods read the task table and the answer stream, and need a ``contextId`` in v0
-(plan 3.3.8), from the params or the node's preamble. A session is named by its id and nothing
-else (docs/sessions.md). Errors map as plan 5.12 lists them.
-"""
+"""Host setup for the native A2A door. HTTP and application callbacks stay in Python."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import time
-from collections import deque
-from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, field
+import contextvars
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from a2a.server.jsonrpc_models import (
-    InvalidRequestError as RpcInvalidRequestError,
-    MethodNotFoundError as RpcMethodNotFoundError,
-)
-from a2a.server.request_handlers.response_helpers import build_error_response
-from a2a.utils.errors import (
-    A2AError,
-    InternalError,
-    InvalidParamsError,
-    TaskNotCancelableError,
-    TaskNotFoundError,
-    UnsupportedOperationError,
-)
-from google.protobuf import json_format
-from pydantic import JsonValue
-
 from .. import _core
-from .._generated.storage_class import StreamInfo, TaskData, TaskRecord
-from .._generated.storage_turn import TurnResult
-from ..log import logger
+from .._generated.a2a_card import EndpointDescriptor
+from .._generated.a2a_door import DoorConfig
 from ..storage.backends import Storage
-from ..storage.context import TokenHook, TurnHost, UpdateHook
-from ..storage.protocol import (
-    TERMINAL_TASK_STATES,
-    RunRejected,
-    StorageError,
-    ThreadNotFound,
-)
-from ..storage.resolve import ResolvedThread, Thread, resolve_thread
-from ..utils import shortuuid
-from .auth import ANONYMOUS, AuthError, Credentials, Flag, Forbidden, Principal, Unauthorized
-from .codec import (
-    StoredMessage,
-    StreamEvent,
-    final_event,
-    message_from_wire,
-    metadata_from_wire,
-    state_from_pb,
-    submitted_task,
-    task_to_pb,
-    to_stream_response,
-)
-from .extension import REASON, Extensions, pb, to_json
-from .pump import ResponsePump, WireHost, start
+from ..storage.context import TurnHost
+from ..storage.resolve import Thread
+from .auth import Credentials, Principal
 
 if TYPE_CHECKING:
     from .endpoint import A2AEndpoint
 
 
-JsonRpc = dict[str, JsonValue]
-"""One JSON-RPC envelope, as the a2a-sdk's response helpers build it."""
-
-Params = Mapping[str, JsonValue]
-
-# every method under both names: A2A 1.0 (the stock a2a-sdk client) and 0.3 (the plan's text)
-METHODS: dict[str, str] = {
-    "SendMessage": "send",
-    "message/send": "send",
-    "SendStreamingMessage": "stream",
-    "message/stream": "stream",
-    "GetTask": "get",
-    "tasks/get": "get",
-    "ListTasks": "list",
-    "tasks/list": "list",
-    "CancelTask": "cancel",
-    "tasks/cancel": "cancel",
-    "SubscribeToTask": "resubscribe",
-    "tasks/resubscribe": "resubscribe",
-    "tasks/subscribe": "resubscribe",
-}
-STREAMING = frozenset({"stream", "resubscribe"})
-
-REASON_THREAD_NOT_FOUND = "thread-not-found"
-READY_STREAMS = 2
-"""Answer streams created ahead of the requests that will use them."""
-REASON_STORAGE_UNAVAILABLE = "storage-unavailable"
-"""Plan 5.12: the ``failed`` reason of a message to an id the threads service does not know."""
-
-
-@dataclass
-class CallContext:
-    """Who is calling, what they activated, and what the transport already knows."""
-
-    principal: Principal = field(default_factory=lambda: ANONYMOUS)
-    extensions: Extensions = field(default_factory=Extensions)
-    resume_offset: str | None = None
-    """``Last-Event-ID`` or ``params.offset``: where ``tasks/resubscribe`` resumes from."""
-
-
-@dataclass
-class TurnOutcome:
-    """What one message produced: the turn, in the session it ended in."""
-
-    result: TurnResult
-    context_id: str
-    """The thread id."""
-
-
 class A2AService:
-    """The A2A methods of one endpoint."""
-
     def __init__(
         self,
         endpoint: A2AEndpoint,
@@ -131,521 +33,67 @@ class A2AService:
         self._storage = storage
         self._agent_name = agent_name
         self._lane = lane
-        self._credentials = credentials
-        self._streams: deque[asyncio.Task[StreamInfo]] = deque()
+        self.credentials = credentials
+        self._opening: asyncio.Task[_core._core_A2ADoor] | None = None
 
     @property
     def agent_name(self) -> str:
-        """The worker's name, which the door's URL and its callers' tokens carry."""
-        name = self._agent_name()
-        if not name:
-            raise RuntimeError(
-                "a session endpoint needs the worker's agent_name: "
-                "AgentServer(agent_name=) or LIVEKIT_AGENT_NAME"
-            )
-        return name
+        return self._agent_name()
 
     @property
     def lane(self) -> str:
-        """The lane this door writes: the worker's name, or its own when it was included from
-        another server (docs/internals/storage.md#lanes)."""
-        return (self._lane() if self._lane is not None else "") or self.agent_name
+        return (self._lane() if self._lane is not None else None) or self.agent_name
 
-    @property
-    def credentials(self) -> Credentials | None:
-        return self._credentials
-
-    # -- dispatch --
-
-    async def dispatch(self, request: JsonValue, call: CallContext) -> AsyncIterator[JsonRpc]:
-        """One JSON-RPC request to its responses; errors become error responses, auth failures
-        raise ``AuthError`` for the binding to answer in its own terms."""
-        request_id = request.get("id") if isinstance(request, Mapping) else None
-        if not isinstance(request_id, (str, int)):
-            request_id = None
-        if not isinstance(request, Mapping) or request.get("jsonrpc") != "2.0":
-            yield build_error_response(
-                request_id, RpcInvalidRequestError(message="'jsonrpc' must be exactly '2.0'")
-            )
-            return
-
-        name = METHODS.get(str(request.get("method") or ""))
-        if name is None:
-            yield build_error_response(request_id, RpcMethodNotFoundError())
-            return
-
-        params = request.get("params") or {}
-        if not isinstance(params, Mapping):
-            yield build_error_response(
-                request_id, InvalidParamsError(message="params must be an object")
-            )
-            return
-
-        try:
-            async for result in self._results(name, params, call):
-                yield {"jsonrpc": "2.0", "id": request_id, "result": result}
-        except AuthError:
-            raise
-        except A2AError as e:
-            yield build_error_response(request_id, e)
-        except RunRejected as e:
-            # plan 5.12: the reject policy refused the message, naming the running task
-            running = e.running_task_id
-            yield build_error_response(
-                request_id,
-                UnsupportedOperationError(
-                    message="a turn of this lane is running; cancel it first",
-                    data={"runningTaskId": running} if running else None,
+    async def _open(self) -> _core._core_A2ADoor:
+        endpoint = self._endpoint
+        host = TurnHost(
+            endpoint.handler,
+            thread=Thread(self._storage, "", agent_name=self.lane),
+        )
+        return await self._storage._core._core_a2a_door(
+            DoorConfig(
+                lane=self.lane,
+                holder=self._storage.holder,
+                endpoint=EndpointDescriptor(
+                    name=endpoint.name,
+                    description=endpoint.description,
+                    version=endpoint.version,
+                    url=endpoint.url or f"/{endpoint.name}/v1",
                 ),
-            )
-        except StorageError as e:
-            logger.warning(
-                "an agent-store error ended an A2A request",
-                extra={"endpoint": self._endpoint.name, "error": str(e)},
-            )
-            yield build_error_response(request_id, InternalError(message=str(e)))
-        except Exception as e:
-            logger.exception("an A2A request failed", extra={"endpoint": self._endpoint.name})
-            yield build_error_response(
-                request_id, InternalError(message=f"{type(e).__name__}: {e}")
-            )
-
-    async def _results(
-        self, name: str, params: Params, call: CallContext
-    ) -> AsyncIterator[JsonValue]:
-        """The method's results as JSON: one for a unary method, every frame of a stream."""
-        if name == "stream":
-            async for event in self.stream(params, call):
-                yield to_json(to_stream_response(event))
-        elif name == "resubscribe":
-            async for frame in self.resubscribe(params, call):
-                yield to_json(to_stream_response(frame))
-        elif name == "send":
-            yield to_json(await self.send(params, call))
-        elif name == "get":
-            yield to_json(await self.get_task(params, call))
-        elif name == "list":
-            yield to_json(await self.list_tasks(params, call))
-        else:
-            yield to_json(await self.cancel_task(params, call))
-
-    # -- message/send and message/stream --
-
-    async def send(self, params: Params, call: CallContext) -> pb.SendMessageResponse:
-        """``message/send``: the turn, answered with the ``Task`` when it ends."""
-        message = _message_of(params)
-        thread_id = await self._resolve(message, call)
-        if thread_id is None:
-            record, context_id = self._unknown_session(message, call)
-        else:
-            try:
-                pump = await self._start(thread_id, message, call.extensions)
-                async for _ in pump.frames():
-                    pass
-                record, context_id = pump.outcome.result.task, pump.outcome.context_id
-            except (RunRejected, ThreadNotFound):
-                raise
-            except StorageError as e:
-                record, context_id = self._unsaved(thread_id, message, e)
-
-        configuration = params.get("configuration")
-        length = configuration.get("historyLength") if isinstance(configuration, Mapping) else None
-        return pb.SendMessageResponse(
-            task=task_to_pb(
-                record,
-                context_id,
-                exts=call.extensions,
-                history_length=int(length) if isinstance(length, int) else None,
-            )
-        )
-
-    async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
-        """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
-        message = _message_of(params)
-        received = time.monotonic()
-        thread_id = await self._resolve(message, call)
-        if thread_id is None:
-            record, context_id = self._unknown_session(message, call)
-            yield submitted_task(record.task_id, context_id)
-            yield final_event(record, context_id, exts=call.extensions)
-            return
-
-        announced = False
-        try:
-            pump = await self._start(thread_id, message, call.extensions)
-            logger.debug(
-                "a turn started",
-                extra={
-                    "threadId": thread_id,
-                    "openMs": round((time.monotonic() - received) * 1000),
-                },
-            )
-            async for event in pump.frames():
-                announced = True
-                yield event
-        except (RunRejected, ThreadNotFound):
-            raise
-        except StorageError as e:
-            record, context_id = self._unsaved(thread_id, message, e)
-            if not announced:
-                yield submitted_task(record.task_id, context_id)
-            yield final_event(record, context_id, exts=call.extensions)
-
-    async def turn(
-        self,
-        message: StoredMessage,
-        *,
-        thread_id: str | None,
-        on_update: UpdateHook | None = None,
-        on_token: TokenHook | None = None,
-        principal: Principal | None = None,
-        task_id: str | None = None,
-    ) -> TurnOutcome:
-        """One message in process, A2A semantics kept, no wire: what
-        ``VoiceSession(delegate=endpoint)`` calls (plan 7.2). Progress and tokens reach the hooks."""
-        call = CallContext(
-            principal=principal or Principal(kind="project"),
-            extensions=Extensions(livekit=True),
-        )
-        if thread_id and not message.get("contextId"):
-            message = {**message, "contextId": thread_id}
-        resolved = await self._resolve(message, call)
-        if resolved is None:
-            raise ThreadNotFound(f"thread {thread_id} does not exist")
-
-        host = self._host(resolved, on_update=on_update, on_token=on_token)
-        thread = await self._storage.open(resolved)
-        return await self._run(resolved, message, host, task_id, thread)
-
-    def _next_stream(self) -> asyncio.Task[StreamInfo]:
-        """An answer stream created ahead of the request, so a turn does not wait for one;
-        the next is made as this one is taken."""
-        while len(self._streams) < READY_STREAMS:
-            self._streams.append(asyncio.ensure_future(self._create_stream()))
-        taken = self._streams.popleft()
-        self._streams.append(asyncio.ensure_future(self._create_stream()))
-        return taken
-
-    async def _create_stream(self) -> StreamInfo:
-        return await (await self._storage.streams()).create()
-
-    async def _start(
-        self, thread_id: str, message: StoredMessage, exts: Extensions
-    ) -> ResponsePump[TurnOutcome]:
-        """The turn in a task of its own, its frames through the pump (plan 6)."""
-        opening = asyncio.ensure_future(self._storage.open(thread_id))
-        try:
-            continued, created = await asyncio.gather(
-                self._continued(thread_id, message), self._next_stream()
-            )
-            thread = await opening
-        except BaseException:
-            # a request that fails before its turn leaves no connection open behind it
-            def close(f: asyncio.Future[_core.Thread]) -> None:
-                if not f.cancelled() and f.exception() is None:
-                    f.result().close()
-
-            opening.cancel()
-            opening.add_done_callback(close)
-            raise
-        stream_id = created.stream_id
-        pump: ResponsePump[TurnOutcome] = ResponsePump(await self._storage.streams(), stream_id)
-        wire = WireHost(
-            lambda on_update, on_token: self._host(
-                thread_id, on_update=on_update, on_token=on_token
+                options=endpoint.turn_options.model_dump(mode="json"),
             ),
-            pump,
-            task_id=continued or stream_id,
-            context_id=thread_id,
-            exts=exts,
+            host,
         )
 
-        async def produce() -> None:
-            try:
-                outcome = await self._run(thread_id, message, wire, stream_id, thread)
-            except Exception as e:
-                await pump.fail(e)
-                return
+    async def native(self) -> _core._core_A2ADoor:
+        opening = self._opening
+        if opening is None:
+            opening = self._opening = asyncio.create_task(self._open())
+        try:
+            return await asyncio.shield(opening)
+        except Exception:
+            if self._opening is opening:
+                self._opening = None
+            raise
 
-            wire.finish(outcome)
-            await pump.finish(outcome)
-
-        start(produce())
-        return pump
-
-    def _host(
+    async def dispatch(
         self,
-        thread_id: str,
+        body: bytes,
+        principal: Principal,
         *,
-        on_update: UpdateHook | None = None,
-        on_token: TokenHook | None = None,
-    ) -> TurnHost:
-        thread = Thread(self._storage, thread_id, agent_name=self.lane)
-        return TurnHost(
-            self._endpoint.handler,
-            thread=thread,
-            on_update=on_update,
-            on_token=on_token,
+        version: str | None = None,
+        offset: str | None = None,
+        body_size: int | None = None,
+    ) -> _core._core_A2AResponse:
+        return await (await self.native()).dispatch(
+            body,
+            principal,
+            version=version,
+            offset=offset,
+            body_size=body_size,
+            host_context=(asyncio.get_running_loop(), contextvars.copy_context()),
         )
 
-    async def _run(
-        self,
-        thread_id: str,
-        message: StoredMessage,
-        host: _core.TurnHostProtocol,
-        task_id: str | None,
-        thread: _core.Thread,
-    ) -> TurnOutcome:
-        """One message through ``_core.Turn`` on the open ``thread``, closed after."""
-        try:
-            turn = _core.Turn(thread, self.lane, host, self._endpoint.turn_options)
-            result = await turn.run(message, task_id)
-        finally:
-            thread.close()
-
-        return TurnOutcome(result=result, context_id=thread_id)
-
-    async def _continued(self, thread_id: str, message: StoredMessage) -> str | None:
-        """The task a message with a ``taskId`` continues, when it is still open (plan 5.5):
-        the id its frames go out under."""
-        continued = str(message.get("taskId") or "")
-        if not continued:
-            return None
-
-        found = await self._find_task(thread_id, continued)
-        if found is None:
-            raise TaskNotFoundError(message=f"task {continued} is not in session {thread_id}")
-        if found.status in TERMINAL_TASK_STATES:
-            raise UnsupportedOperationError(
-                message=f"task {continued} is {found.status}; a follow-up is a new task",
-                data={"taskId": continued, "status": found.status},
-            )
-        return continued
-
-    def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRecord, str]:
-        """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""
-        context_id = str(message.get("contextId") or "")
-        record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_THREAD_NOT_FOUND)
-        return record, context_id
-
-    def _unsaved(
-        self, thread_id: str, message: StoredMessage, error: StorageError
-    ) -> tuple[TaskRecord, str]:
-        """The turn's save could not be written: the task fails ``storage-unavailable`` in the
-        answer, unpersisted, and the client resends (docs/protocol/a2a.md)."""
-        logger.warning(
-            "an agent-store error ended a turn",
-            extra={"endpoint": self._endpoint.name, "threadId": thread_id, "error": str(error)},
-        )
-        record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_STORAGE_UNAVAILABLE)
-        return record, thread_id
-
-    # -- tasks/* --
-
-    async def get_task(self, params: Params, call: CallContext) -> pb.Task:
-        thread_id = await self._context_for_tasks(params, call, flag="read")
-        task_id = str(params.get("id") or "")
-        record = await self._find_task(thread_id, task_id)
-        if record is None:
-            raise TaskNotFoundError(message=f"task {task_id} is not in session {thread_id}")
-
-        length = params.get("historyLength")
-        return task_to_pb(
-            record,
-            thread_id,
-            exts=call.extensions,
-            history_length=length if isinstance(length, int) else None,
-        )
-
-    async def list_tasks(self, params: Params, call: CallContext) -> pb.ListTasksResponse:
-        thread_id = await self._context_for_tasks(params, call, flag="read")
-        try:
-            request = json_format.ParseDict(
-                dict(params), pb.ListTasksRequest(), ignore_unknown_fields=True
-            )
-        except json_format.ParseError as e:
-            raise InvalidParamsError(message=str(e)) from e
-        status = None
-        if request.status != pb.TaskState.TASK_STATE_UNSPECIFIED:
-            status = state_from_pb(request.status)
-        page = await Thread(self._storage, thread_id, agent_name=self.lane).list_tasks(
-            status=status,
-            updated_after=request.status_timestamp_after.ToMilliseconds(),
-            page_size=request.page_size or 50,
-            page_token=request.page_token or None,
-        )
-        length = params.get("historyLength")
-        return pb.ListTasksResponse(
-            tasks=[
-                task_to_pb(
-                    r,
-                    thread_id,
-                    exts=call.extensions,
-                    history_length=length if isinstance(length, int) else 0,
-                    include_artifacts=request.include_artifacts,
-                )
-                for r in page.tasks
-            ],
-            next_page_token=page.next_page_token,
-            page_size=page.page_size,
-            total_size=page.total_size,
-        )
-
-    async def cancel_task(self, params: Params, call: CallContext) -> pb.Task:
-        """``tasks/cancel``: the row goes ``canceled`` now; a running turn yields at its next
-        checkpoint and writes nothing over it."""
-        thread_id = await self._context_for_tasks(params, call, flag="write")
-        task_id = str(params.get("id") or "")
-        record = await self._find_task(thread_id, task_id)
-        if record is None:
-            raise TaskNotFoundError(message=f"task {task_id} is not in session {thread_id}")
-        if record.status in TERMINAL_TASK_STATES:
-            raise TaskNotCancelableError(message=f"task {task_id} is {record.status}")
-
-        metadata = dict(record.data.metadata)
-        reason = metadata_from_wire(params.get("metadata")).get(REASON)
-        if reason is not None:
-            metadata[REASON] = reason
-        thread = Thread(self._storage, thread_id, agent_name=record.lane)
-        updated = await thread.cancel(record, metadata)
-        if updated is not None and updated.status != "canceled":
-            # the task ended between the read and the cancel; terminal rows never change
-            raise TaskNotCancelableError(message=f"task {task_id} is {updated.status}")
-
-        logger.info(
-            "a client canceled a task",
-            extra={"taskId": task_id, "threadId": thread_id, "reason": reason},
-        )
-        return task_to_pb(updated or record, thread_id, exts=call.extensions)
-
-    async def resubscribe(
-        self, params: Params, call: CallContext
-    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
-        """``tasks/resubscribe``: the current ``Task`` object, then the stream's frames from the
-        offset, following live until the terminal one (plan 6)."""
-        thread_id = await self._context_for_tasks(params, call, flag="read")
-        task_id = str(params.get("id") or "")
-        record = await self._find_task(thread_id, task_id)
-        if record is None:
-            raise TaskNotFoundError(message=f"task {task_id} is not in session {thread_id}")
-
-        yield task_to_pb(record, thread_id, exts=call.extensions)
-        offset = params.get("offset")
-        after = str(offset) if offset is not None else call.resume_offset
-        live = record.status not in TERMINAL_TASK_STATES
-        try:
-            reader = (await self._storage.streams()).read(task_id, after=after, live=live)
-            while (frame := await reader.next()) is not None:
-                yield json_format.ParseDict(
-                    json.loads(frame), pb.StreamResponse(), ignore_unknown_fields=True
-                )
-        except StorageError:
-            # a task older than its stream's TTL, or one written by another path: the Task
-            # object above is everything there is
-            logger.info(
-                "no answer stream to replay for a task",
-                extra={"taskId": task_id, "threadId": thread_id},
-            )
-
-    # -- the session and its tasks --
-
-    async def _resolve(self, message: StoredMessage, call: CallContext) -> str | None:
-        """The session of a message (plan 4.4) under the grant rules of 4.3.2; ``None`` for an
-        id the threads service does not know."""
-        grant = call.principal.grant
-        context_id = str(message.get("contextId") or "")
-        scope = grant.scope if grant is not None and not context_id else ""
-        if grant is not None and not context_id and not grant.can_create(scope):
-            raise Forbidden("the grant does not allow create")
-
-        try:
-            if context_id:
-                # the thread as this process last saw it: a message a turn needs no fresh read
-                info = await self._storage.get_thread(context_id)
-                resolved = ResolvedThread(thread=info, created=False)
-            else:
-                resolved = await resolve_thread(self._storage.threads, scope=scope)
-        except ThreadNotFound:
-            return None
-
-        # A grant that just created the thread sends its first message into it; later
-        # messages need the thread in the grant, as protocol checks it.
-        info = resolved.thread
-        if grant is not None:
-            if not resolved.created and not grant.can_write(info):
-                raise Forbidden("the grant does not write this thread")
-        elif call.principal.anonymous and not self._endpoint.public:
-            raise Unauthorized("this endpoint is not public: a project token is required")
-        return info.thread_id
-
-    async def _context_for_tasks(self, params: Params, call: CallContext, *, flag: Flag) -> str:
-        """The ``contextId`` every ``tasks/*`` call needs in v0 (plan 3.3.8), checked against
-        the grant."""
-        thread_id = str(params.get("contextId") or params.get("context_id") or "")
-        if not thread_id:
-            raise TaskNotFoundError(
-                message="tasks/* need a contextId in v0: a task id alone names no session"
-            )
-        if call.principal.anonymous and not self._endpoint.public:
-            raise Unauthorized("this endpoint is not public: a project token is required")
-
-        grant = call.principal.grant
-        if grant is not None:
-            try:
-                info = await self._storage.get_thread(thread_id)
-            except ThreadNotFound:
-                raise TaskNotFoundError(message=f"unknown session {thread_id}") from None
-            allowed = grant.can_write(info) if flag == "write" else grant.can_read(info)
-            if not allowed:
-                raise Forbidden(f"the grant does not {flag} this thread")
-        return thread_id
-
-    async def _find_task(self, thread_id: str, task_id: str) -> TaskRecord | None:
-        return await Thread(self._storage, thread_id, agent_name=self.lane).task(task_id)
-
-
-def _message_of(params: Params) -> StoredMessage:
-    raw = params.get("message")
-    if not isinstance(raw, Mapping):
-        raise InvalidParamsError(message="params.message is required")
-
-    message = message_from_wire(raw)
-    if not message["messageId"]:
-        raise InvalidParamsError(message="a message needs a messageId")
-    return message
-
-
-def _failed_record(task_id: str, lane: str, message: StoredMessage, reason: str) -> TaskRecord:
-    """A ``failed`` task the worker could not write, with ``reason`` on its status message."""
-    return TaskRecord(
-        task_id=task_id,
-        lane=lane,
-        seq=0,
-        name=None,
-        message_id=str(message.get("messageId") or ""),
-        status="failed",
-        updated_at=int(time.time() * 1000),
-        data=TaskData(
-            history=[dict(message)],
-            artifacts=None,
-            metadata={REASON: reason},
-            status_message={
-                "messageId": shortuuid("msg_"),
-                "role": "ROLE_AGENT",
-                "parts": [{"text": f"the task failed: {reason}"}],
-                "metadata": {REASON: reason},
-            },
-        ),
-        internal=None,
-    )
-
-
-__all__ = [
-    "METHODS",
-    "REASON_THREAD_NOT_FOUND",
-    "REASON_STORAGE_UNAVAILABLE",
-    "STREAMING",
-    "A2AService",
-    "CallContext",
-    "TurnOutcome",
-]
+    async def aclose(self) -> None:
+        if self._opening is not None:
+            await (await self._opening).aclose()

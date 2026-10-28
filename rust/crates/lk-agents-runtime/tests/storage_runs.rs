@@ -413,11 +413,23 @@ async fn a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost
     let lease = run.lease().unwrap().clone();
     lease.stop();
     tokio::time::sleep(Duration::from_millis(2100)).await;
-    assert!(lane.info().await.unwrap().unwrap().lease_until <= unix_now(), "the lease lapsed");
+    let expired = lane.info().await.unwrap().unwrap();
+    assert!(expired.lease_until <= unix_now(), "the lease lapsed");
     lease.keep_alive();
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    let renewed = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let current = lane.info().await.unwrap().unwrap();
+            if current.lease_until > expired.lease_until {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the standing token renews after expiry");
     assert!(!lease.is_lost(), "renewed on the standing token");
-    assert!(lane.info().await.unwrap().unwrap().lease_until > unix_now(), "live again");
+    assert_eq!(renewed.lease_holder, expired.lease_holder);
+    assert_eq!(renewed.version, expired.version);
     lease.stop();
 
     lease.release(None).await.unwrap();

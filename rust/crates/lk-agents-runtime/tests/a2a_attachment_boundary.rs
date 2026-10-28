@@ -41,7 +41,7 @@ impl StreamSource<TurnEvent> for Events {
 impl TurnHost for Host {
     async fn handle(
         &self,
-        ctx: TurnContext,
+        ctx: &TurnContext,
     ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
     {
         let parts = &ctx.batch[0].parts;
