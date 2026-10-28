@@ -481,7 +481,7 @@ pub struct FakeAvatarWorker {
     /// The agent's room, and the avatar's identity in it.
     agent: Arc<FakeRoom>,
     avatar: String,
-    relaying: Mutex<Option<tokio::task::AbortHandle>>,
+    relaying: Mutex<Option<lk_agents_abi::AbortHandle>>,
 }
 
 impl FakeAvatarWorker {
@@ -492,6 +492,7 @@ impl FakeAvatarWorker {
     /// seeds.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
+        spawner: Arc<dyn lk_agents_abi::Spawner>,
         agent: Arc<FakeRoom>,
         avatar: &str,
         clock: Arc<dyn Clock>,
@@ -503,8 +504,6 @@ impl FakeAvatarWorker {
     ) -> Arc<FakeAvatarWorker> {
         let room = lk_agents_rtc::FakeRtc::new(clock.clone()).room(name);
         room.add_participant(Self::AGENT, ParticipantKind::Agent);
-        let spawner: Arc<dyn lk_agents_abi::Spawner> =
-            Arc::new(lk_agents_abi::TokioSpawner::current());
         let (frames, log): (Arc<Frames>, Log) = Default::default();
         let period_ms = 1000 / fps;
         record(&log, &stamps, AvatarStep::Started { period_ms, latency_ms, queue_ms: QUEUE_MS });
@@ -567,7 +566,7 @@ impl FakeAvatarWorker {
             io,
             true,
             clock,
-            spawner,
+            spawner.clone(),
             // Any ready event, but a clear never ahead of a frame the receiver handed over before
             // it: the receiver drops the cut stream from the clear on, so that order cannot be.
             move |ready: &std::collections::VecDeque<Event>| {
@@ -600,7 +599,7 @@ impl FakeAvatarWorker {
             let weak = Arc::downgrade(&me);
             let mut agent_sent = me.agent.local_participant().sent_count();
             let mut worker_sent = me.room.local_participant().sent_count();
-            tokio::spawn(async move {
+            spawner.spawn(Box::pin(async move {
                 loop {
                     tokio::select! {
                         changed = agent_sent.changed() => if changed.is_err() { return },
@@ -611,8 +610,7 @@ impl FakeAvatarWorker {
                         None => return,
                     }
                 }
-            })
-            .abort_handle()
+            }))
         };
         *me.relaying.lock().unwrap() = Some(relaying);
         // `AvatarRunner.start()`: the receiver's own start, then the runner's

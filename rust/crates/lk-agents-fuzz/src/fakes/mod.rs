@@ -260,6 +260,8 @@ const MINTED: [Kind; 14] = [
 /// harness. Cheap to clone into each fake, and nothing here is ever mutated behind a lock.
 pub struct Registry {
     stamps: Stamps,
+    /// The run's spawner for what the fakes run beside the session (`drive::World`).
+    pub world: Arc<dyn lk_agents_abi::Spawner>,
     records: mpsc::UnboundedSender<Record>,
     /// One counter per kind, because that is what a `Ref` counts. Atomic rather than locked so a
     /// fake can mint its own identity from inside a product call without blocking anything.
@@ -276,11 +278,15 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn new(stamps: Stamps) -> (Arc<Self>, mpsc::UnboundedReceiver<Record>) {
+    pub fn new(
+        stamps: Stamps,
+        world: Arc<dyn lk_agents_abi::Spawner>,
+    ) -> (Arc<Self>, mpsc::UnboundedReceiver<Record>) {
         let (records, receiver) = mpsc::unbounded_channel();
         let next = MINTED.into_iter().map(|kind| (kind, AtomicU32::new(0))).collect();
         let registry = Registry {
             stamps,
+            world,
             records,
             next,
             tool_serial: AtomicU32::new(0),

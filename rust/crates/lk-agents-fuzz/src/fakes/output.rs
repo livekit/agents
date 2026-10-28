@@ -156,8 +156,8 @@ pub struct Playout {
     tracker: Arc<PlaybackTracker>,
     state: Mutex<PlayoutState>,
     /// A host source: a cut is reported a few scheduler hops after the clear, as the report of
-    /// one crosses back from the host's own loop.
-    lagging: bool,
+    /// one crosses back from the host's own loop, on the run's spawner.
+    lagging: Option<Arc<dyn lk_agents_abi::Spawner>>,
     /// Where what the person heard of a realtime generation is written down.
     registry: Option<Arc<Registry>>,
 }
@@ -352,16 +352,16 @@ impl Playout {
                 ..Default::default()
             })
             .collect();
-        if self.lagging {
+        if let Some(world) = &self.lagging {
             let tracker = self.tracker.clone();
-            tokio::spawn(async move {
+            world.spawn(Box::pin(async move {
                 for _ in 0..LAGGING_REPORT_HOPS {
                     tokio::task::yield_now().await;
                 }
                 for ev in finished {
                     tracker.playback_finished(ev);
                 }
-            });
+            }));
         } else {
             for ev in finished {
                 self.tracker.playback_finished(ev);
@@ -385,7 +385,7 @@ impl FakeAudioOutput {
         let playout = Arc::new(Playout {
             tracker: Arc::default(),
             state: Mutex::default(),
-            lagging,
+            lagging: lagging.then(|| registry.world.clone()),
             registry: Some(registry.clone()),
         });
         let id = registry.new_audio_output(playout.clone());
@@ -527,21 +527,26 @@ pub struct FakeCli {
 
 impl FakeCli {
     /// The session's console over an in-process stream, and the CLI on its other end.
-    pub fn connect(spawner: Arc<dyn lk_agents_abi::Spawner>) -> (Arc<ConsoleIo>, FakeCli) {
+    /// `spawner` runs the session's console (product tasks); `world` the CLI's own loops.
+    pub fn connect(
+        spawner: Arc<dyn lk_agents_abi::Spawner>,
+        world: Arc<dyn lk_agents_abi::Spawner>,
+    ) -> (Arc<ConsoleIo>, FakeCli) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let (agent_end, cli_end) = tokio::io::duplex(1 << 20);
         let (mut read, mut write) = tokio::io::split(cli_end);
         let (to_agent, mut outgoing) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-        tokio::spawn(async move {
+        world.spawn(Box::pin(async move {
             while let Some(bytes) = outgoing.recv().await {
                 if write.write_all(&bytes).await.is_err() {
                     return;
                 }
             }
-        });
+        }));
         let cli = FakeCli { to_agent, playing_until: Arc::default() };
         let speaker = cli.clone();
-        tokio::spawn(async move {
+        let world_inner = world.clone();
+        world.spawn(Box::pin(async move {
             let (mut decoder, mut chunk) = (FrameDecoder::new(), vec![0u8; 16 * 1024]);
             // The audio of the segment being received, and which segment it is: a clear moves
             // on, so an ack still waiting for a cut segment's audio is dropped.
@@ -562,14 +567,14 @@ impl FakeCli {
                             let mut playing = speaker.playing_until.lock().unwrap();
                             *playing = Some(playing.map_or(until, |at| at.max(until)));
                             drop(playing);
-                            tokio::spawn(async move {
+                            world_inner.spawn(Box::pin(async move {
                                 tokio::time::sleep(audio).await;
                                 if played.load(std::sync::atomic::Ordering::Relaxed) == this {
                                     speaker.send(Message::AudioPlaybackFinished(
                                         console_io::AudioPlaybackFinished {},
                                     ));
                                 }
-                            });
+                            }));
                         }
                         Some(Message::AudioPlaybackClear(_)) => {
                             pending = Duration::ZERO;
@@ -584,7 +589,7 @@ impl FakeCli {
                     Ok(n) => decoder.push(&chunk[..n]),
                 }
             }
-        });
+        }));
         (Arc::new(ConsoleIo::over(agent_end, spawner)), cli)
     }
 

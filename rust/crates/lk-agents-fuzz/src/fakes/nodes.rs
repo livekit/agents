@@ -145,7 +145,7 @@ impl NodeFactory for FakeNodes {
     /// segment's flush after its last one.
     fn text_node(&self, below: CoreTextOutput) -> Result<Arc<dyn TextNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TimedString>>();
-        tokio::spawn(async move {
+        self.registry.world.spawn(Box::pin(async move {
             while let Some(op) = rx.recv().await {
                 let sent = match op {
                     Some(t) if t.start_time.is_none() && t.end_time.is_none() => {
@@ -161,7 +161,7 @@ impl NodeFactory for FakeNodes {
                     break;
                 }
             }
-        });
+        }));
         Ok(Arc::new(EchoText(tx, self.invocation(NodeUse::Transcription))))
     }
 
@@ -171,7 +171,7 @@ impl NodeFactory for FakeNodes {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AudioFrame>();
         let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cleared = Arc::clone(&cut);
-        tokio::spawn(async move {
+        self.registry.world.spawn(Box::pin(async move {
             while let Some(frame) = rx.recv().await {
                 if cleared.load(std::sync::atomic::Ordering::SeqCst)
                     || below.capture_frame(frame).await.is_err()
@@ -179,7 +179,7 @@ impl NodeFactory for FakeNodes {
                     break;
                 }
             }
-        });
+        }));
         Ok(Arc::new(EchoAudio(tx, cut, self.invocation(NodeUse::RealtimeAudio))))
     }
 

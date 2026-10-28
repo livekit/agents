@@ -42,7 +42,6 @@ use lk_agents_abi::{
     },
 };
 use lk_agents_rtc::{FakeRoom, ParticipantKind};
-use lk_agents_abi::TokioSpawner;
 use lk_agents_voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_voice::remote_session::{
     proto,
@@ -515,12 +514,16 @@ fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
 /// and waiting longer only spends real time before the same verdict.
 const NO_PROGRESS_STEPS: u32 = 10_000;
 
-/// Retains real Tokio joins, so a task the driver detached cannot disappear from the test, each
-/// with when and from which line it was spawned, so a task that never finishes can be placed in
-/// the run and in the source.
+/// The run's spawner: every task of the run goes through it, so nothing bypasses the harness.
+/// The product's tasks are retained as real Tokio joins, so a task the driver detached cannot
+/// disappear from the test, each with when and from which line it was spawned, so a task that
+/// never finishes can be placed in the run and in the source (`every_task_finishes`). What the
+/// fakes run beside the session ([`World`]) is scheduled the same way and aborted with the run.
 struct Tasks {
     stamps: Stamps,
     spawned: Mutex<Vec<Spawned>>,
+    /// The fakes' tasks: the world's, not the product's, so never judged.
+    world: Mutex<Vec<JoinHandle<()>>>,
     /// The task bridge, under `Policy::TaskBridge`.
     gate: Option<Arc<queue::Gate>>,
 }
@@ -550,6 +553,27 @@ impl Drop for Tasks {
         for spawned in self.spawned.get_mut().unwrap().drain(..) {
             spawned.task.abort();
         }
+        for task in self.world.get_mut().unwrap().drain(..) {
+            task.abort();
+        }
+    }
+}
+
+/// The run's spawner as the fakes hold it: a peer's or provider's own loop (a CLI, an avatar
+/// worker, a host source's late report) runs under the run's scheduling like the product's
+/// tasks, and ends with the run rather than being judged by it.
+pub struct World(Arc<Tasks>);
+
+impl Spawner for World {
+    fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
+        let future = match &self.0.gate {
+            Some(gate) => gate.wrap(future),
+            None => future,
+        };
+        let task = tokio::spawn(future);
+        let abort = task.abort_handle().into();
+        self.0.world.lock().unwrap().push(task);
+        abort
     }
 }
 

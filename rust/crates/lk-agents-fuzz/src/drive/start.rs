@@ -14,9 +14,15 @@ impl Run {
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
-        let (registry, records) = Registry::new(stamps.clone());
         let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
-        let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default(), gate });
+        let tasks = Arc::new(Tasks {
+            stamps: stamps.clone(),
+            spawned: Mutex::default(),
+            world: Mutex::default(),
+            gate,
+        });
+        let world: Arc<dyn Spawner> = Arc::new(World(tasks.clone()));
+        let (registry, records) = Registry::new(stamps.clone(), world.clone());
         // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
         // and the survey runs seeds side by side in one process.
         let room = lk_agents_rtc::FakeRtc::new(time.clock()).room(&format!("room-{schedule}"));
@@ -46,7 +52,7 @@ impl Run {
         // person's track, minted when they join.
         let legs = setup.room_legs;
         // The console's socket is a leg of the host's like the fakes, so the room's stay off.
-        let console = setup.console.then(|| fakes::FakeCli::connect(Arc::new(TokioSpawner::current())));
+        let console = setup.console.then(|| fakes::FakeCli::connect(tasks.clone(), world.clone()));
         let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
@@ -369,6 +375,7 @@ impl Run {
             let name = format!("avatar-{schedule}");
             let (fps, latency) = (setup.avatar_fps, setup.avatar_latency_ms);
             let worker = fakes::FakeAvatarWorker::start(
+                run.registry.world.clone(),
                 run.room.clone(),
                 AVATAR,
                 run.time.clock(),
