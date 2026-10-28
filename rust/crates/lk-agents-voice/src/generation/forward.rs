@@ -373,6 +373,7 @@ pub(super) struct TextLeg<'a> {
 }
 
 impl<'a> TextLeg<'a> {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) fn new(
         out: Option<&'a dyn TextOutput>,
         buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,

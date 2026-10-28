@@ -377,6 +377,7 @@ impl BackgroundAudioPlayer {
         Self::build(sample_rate, num_channels, blocksize, Duration::from_millis(stream_timeout_ms))
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn build(sample_rate: u32, num_channels: u16, blocksize: usize, timeout: Duration) -> Self {
         let mixer = Mixer::new(sample_rate, num_channels, blocksize);
         let blocksize = mixer.blocksize();
