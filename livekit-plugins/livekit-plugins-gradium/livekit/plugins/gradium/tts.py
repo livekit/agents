@@ -26,6 +26,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -194,7 +195,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
-            ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
+            ws = await self._tts._connect_ws(self._conn_options)
             async with ws:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -250,6 +251,8 @@ class ChunkedStream(tts.ChunkedStream):
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
 
+        except APIError:
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -305,6 +308,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
         try:
             await asyncio.gather(*tasks)
+        except APIError:
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -377,7 +382,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
-        ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
+        ws = await self._tts._connect_ws(self._conn_options)
         async with ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),

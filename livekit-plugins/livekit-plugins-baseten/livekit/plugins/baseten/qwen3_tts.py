@@ -42,12 +42,14 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tts as tts_module,
     utils,
 )
 from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
     TimedString,
@@ -92,6 +94,7 @@ class _WarmSocket:
     ws: aiohttp.ClientWebSocketResponse
     config: dict[str, Any] | None
     last_activity: float
+    conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
 
 
 @dataclass
@@ -301,6 +304,7 @@ class _Qwen3Backend:
 
     async def _acquire(
         self,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tuple[aiohttp.ClientWebSocketResponse, dict[str, Any] | None]:
         """Reuse the parked socket if live, else dial. Returns its applied config."""
         async with self._warm_lock:
@@ -308,12 +312,18 @@ class _Qwen3Backend:
 
         if warm:
             ttl = _CONFIGURED_TTL if warm.config else _UNCONFIGURED_TTL
-            if not warm.ws.closed and (time.monotonic() - warm.last_activity) < ttl:
+            if (
+                not warm.ws.closed
+                and (time.monotonic() - warm.last_activity) < ttl
+                and warm.conn_options == conn_options
+            ):
                 return warm.ws, warm.config
             await self._shutdown_ws(warm.ws, notify=False)
 
-        ws = await self._ensure_session().ws_connect(
+        ws = await utils.http_context.ws_connect(
+            self._ensure_session(),
             self._model_endpoint,
+            conn_options=conn_options,
             headers={"Authorization": f"Api-Key {self._api_key}"},
             max_msg_size=_WS_MAX_MSG_SIZE,
             compress=0,
@@ -326,6 +336,7 @@ class _Qwen3Backend:
         config: dict[str, Any] | None,
         *,
         discard: bool,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Park for the next turn, or discard.
 
@@ -338,7 +349,7 @@ class _Qwen3Backend:
             return
 
         async with self._warm_lock:
-            stale, self._warm = self._warm, _WarmSocket(ws, config, time.monotonic())
+            stale, self._warm = self._warm, _WarmSocket(ws, config, time.monotonic(), conn_options)
         if stale and stale.ws is not ws:
             await self._shutdown_ws(stale.ws, notify=True)
 
@@ -451,11 +462,11 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         )
 
         try:
-            ws, applied_config = await asyncio.wait_for(
-                self._backend._acquire(), timeout=self._conn_options.connect_timeout
-            )
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
+            ws, applied_config = await self._backend._acquire(self._conn_options)
+        except APIError:
+            raise
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
@@ -581,8 +592,10 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
 
             output_emitter.end_input()
             discard = False
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
+        except APIError:
+            raise
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
@@ -592,7 +605,9 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await self._backend._release(ws, config, discard=discard)
+            await self._backend._release(
+                ws, config, discard=discard, conn_options=self._conn_options
+            )
 
     async def _drain(self, recv_task: asyncio.Task[None], state: _TurnState) -> None:
         """Unblock a receiver parked on ws.receive() with nothing left to read.

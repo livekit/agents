@@ -526,7 +526,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
-            ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
+            ws = await self._tts._connect_ws(self._conn_options)
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
@@ -540,6 +540,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await sentence_stream.aclose()
                 await utils.aio.gracefully_cancel(*tasks)
 
+        except APIError:
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError(
                 f"WebSocket TTS synthesis timed out (trace_id: {trace_id})"
@@ -664,6 +666,8 @@ class ChunkedStream(tts.ChunkedStream):
                             )
                 output_emitter.flush()
 
+        except APIError:
+            raise
         except asyncio.TimeoutError:
             raise APITimeoutError("TTS synthesis timed out") from None
         except aiohttp.ClientResponseError as e:

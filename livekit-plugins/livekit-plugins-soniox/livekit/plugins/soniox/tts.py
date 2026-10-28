@@ -190,11 +190,18 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _current_connection(self, *, timeout: float | None) -> _Connection:
+    async def _current_connection(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> _Connection:
         """Return the live connection, creating one if needed."""
         async with self.__conn_lock:
             conn = self.__current_connection
-            if conn is not None and conn.is_current and not conn.closed:
+            if (
+                conn is not None
+                and conn.is_current
+                and not conn.closed
+                and conn._conn_options == conn_options
+            ):
                 return conn
 
             # Discard any stale connection reference so it can drain and close
@@ -202,8 +209,8 @@ class TTS(tts.TTS):
             if conn is not None and not conn.closed:
                 conn.mark_non_current()
 
-            new_conn = _Connection(self._opts, self._ensure_session())
-            await asyncio.wait_for(new_conn.connect(), timeout=timeout)
+            new_conn = _Connection(self._opts, self._ensure_session(), conn_options)
+            await new_conn.connect()
             self.__current_connection = new_conn
             return new_conn
 
@@ -271,7 +278,7 @@ class TTS(tts.TTS):
 
         async def _task() -> None:
             try:
-                await self._current_connection(timeout=20.0)
+                await self._current_connection()
             except Exception as e:
                 logger.debug("Soniox TTS prewarm failed", exc_info=e)
 
@@ -450,11 +457,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         self, output_emitter: tts.AudioEmitter, request_id: str, *, attempt: int = 0
     ) -> _ActiveStream:
         try:
-            connection = await self._tts._current_connection(
-                timeout=self._conn_options.connect_timeout
-            )
-        except asyncio.TimeoutError:
-            raise APITimeoutError() from None
+            connection = await self._tts._current_connection(conn_options=self._conn_options)
+        except APIError:
+            raise
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError() from e
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
@@ -605,9 +612,15 @@ class _Connection:
     WebSocket stays open and remains available for subsequent streams.
     """
 
-    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession) -> None:
+    def __init__(
+        self,
+        opts: _TTSOptions,
+        session: aiohttp.ClientSession,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> None:
         self._opts = opts
         self._session = session
+        self._conn_options = conn_options
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._streams: dict[str, _StreamData] = {}
         self._input_queue = utils.aio.Chan[_OutboundMsg]()
@@ -656,8 +669,10 @@ class _Connection:
             return
 
         try:
-            self._ws = await self._session.ws_connect(
+            self._ws = await utils.http_context.ws_connect(
+                self._session,
                 self._opts.websocket_url,
+                conn_options=self._conn_options,
                 headers={"Authorization": f"Bearer {self._opts.api_key}"},
             )
         except Exception:

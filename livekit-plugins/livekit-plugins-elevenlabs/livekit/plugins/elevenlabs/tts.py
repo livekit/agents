@@ -322,7 +322,9 @@ class TTS(tts.TTS):
                 self.__current_connection.mark_non_current()
                 self.__current_connection = None
 
-    async def _current_connection(self) -> _Connection | _DialogueConnection:
+    async def _current_connection(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> _Connection | _DialogueConnection:
         """Get the current connection, creating one if needed."""
         async with self._connection_lock:
             session = self._ensure_session()
@@ -331,15 +333,20 @@ class TTS(tts.TTS):
                     self.__current_connection
                     and self.__current_connection.is_current
                     and not self.__current_connection._closed
+                    and self.__current_connection._conn_options == conn_options
                 ):
                     return self.__current_connection
 
+                if self.__current_connection is not None:
+                    self.__current_connection.mark_non_current()
+                    if not self.__current_connection._active_contexts:
+                        await self.__current_connection.aclose()
                 opts_revision = self._opts_revision
                 opts = replace(self._opts)
                 conn: _Connection | _DialogueConnection = (
-                    _DialogueConnection(opts, session)
+                    _DialogueConnection(opts, session, conn_options)
                     if is_dialogue_model(opts.model)
-                    else _Connection(opts, session)
+                    else _Connection(opts, session, conn_options)
                 )
                 await conn.connect()
 
@@ -518,9 +525,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         connection: _Connection | _DialogueConnection
         try:
-            connection = await asyncio.wait_for(
-                self._tts._current_connection(), self._conn_options.connect_timeout
-            )
+            connection = await self._tts._current_connection(conn_options=self._conn_options)
+        except APIError:
+            raise
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
         except aiohttp.WSServerHandshakeError as e:
@@ -754,9 +761,15 @@ class _Connection:
 
     _TIMEOUT_LABEL = "11labs tts"
 
-    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
+    def __init__(
+        self,
+        opts: _TTSOptions,
+        session: aiohttp.ClientSession,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> None:
         self._opts = opts
         self._session = session
+        self._conn_options = conn_options
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._is_current = True
         self._active_contexts: set[str] = set()
@@ -804,7 +817,9 @@ class _Connection:
             return
 
         headers = {AUTHORIZATION_HEADER: self._opts.api_key}
-        self._ws = await self._session.ws_connect(self._connect_url(), headers=headers)
+        self._ws = await utils.http_context.ws_connect(
+            self._session, self._connect_url(), conn_options=self._conn_options, headers=headers
+        )
 
         self._send_task = asyncio.create_task(self._send_loop())
         self._recv_task = asyncio.create_task(self._recv_loop())
@@ -1069,8 +1084,13 @@ class _DialogueConnection(_Connection):
 
     _TIMEOUT_LABEL = "11labs text-to-dialogue"
 
-    def __init__(self, opts: _TTSOptions, session: aiohttp.ClientSession):
-        super().__init__(opts, session)
+    def __init__(
+        self,
+        opts: _TTSOptions,
+        session: aiohttp.ClientSession,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> None:
+        super().__init__(opts, session, conn_options)
         self._closing_contexts: set[str] = set()
         self._last_context_send: dict[str, float] = {}
 
