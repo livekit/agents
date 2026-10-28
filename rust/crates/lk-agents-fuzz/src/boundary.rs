@@ -79,7 +79,9 @@ pub const A2A: Boundary = Boundary {
          policies, resends at once and after a failed answer or a dead worker, client cancels, \
          answers to questions with or without the waiting task's id",
     ],
-    transitional: &[],
+    transitional: &[
+        "none: the task machine and its turn are core steps the simulation steps itself",
+    ],
     outside: &[
         "the runtime door's execution of the operations (runtime a2a_turns and a2a_door suites)",
         "lk-agents-storage's backends (real SQLite and a fake AgentDB server, its own suites)",
