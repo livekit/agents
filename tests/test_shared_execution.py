@@ -776,7 +776,7 @@ async def test_text_reaches_the_consumer_before_the_model_ends(run: Entrypoint) 
     assert len(model.requests) == 1
 
 
-async def test_none_uses_the_coordinators_documented_reply_rule(run: Entrypoint) -> None:
+async def test_a_none_result_continues_in_text_and_asks_no_reply_on_a_call(run: Entrypoint) -> None:
     model = Script(call("note", {}, "c1"), *([] if run is _voice else [Reply("Noted.")]))
     agent = Agent(instructions="Help", llm=model)
 
