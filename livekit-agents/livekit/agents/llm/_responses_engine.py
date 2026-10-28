@@ -243,7 +243,6 @@ class ResponsesLLMStream(llm.LLMStream):
         # Azure's HTTP endpoint can return several alternate `message` items in one
         # response; only the first that emits text is spoken.
         self._text_owner: str | None = None
-        self._join_candidate: str | None = None
         self._message_phases: dict[str, str | None] = {}
         self._second_message_started = False
         self._dropped_item_ids: list[str] = []
@@ -478,19 +477,8 @@ class ResponsesLLMStream(llm.LLMStream):
         return chunk
 
     def _handle_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
-        if not isinstance(event.item, ResponseOutputMessage):
-            return
-        item_id = event.item.id
-        self._message_phases[item_id] = event.item.phase
-        if self._text_owner is None:
-            return
-        if (
-            self._message_phases.get(self._text_owner) == "commentary"
-            and self._join_candidate is None
-        ):
-            self._join_candidate = item_id
-        else:
-            self._drop_item(item_id)
+        if isinstance(event.item, ResponseOutputMessage):
+            self._message_phases[event.item.id] = event.item.phase
 
     def _drop_item(self, item_id: str) -> None:
         self._second_message_started = True
@@ -518,11 +506,10 @@ class ResponsesLLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
-        elif (
-            isinstance(event.item, ResponseOutputMessage)
-            and event.item.phase is not None
-            and event.item.id not in self._dropped_item_ids
-        ):
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            self._message_phases[event.item.id] = event.item.phase
+            if event.item.id in self._dropped_item_ids:
+                return None
             # Models like gpt-5.3-codex label assistant messages as intermediate
             # `commentary` or the `final_answer`
             chunk = llm.ChatChunk(
@@ -543,14 +530,19 @@ class ResponsesLLMStream(llm.LLMStream):
         text = event.delta
         if self._text_owner is None:
             self._text_owner = event.item_id
-        elif event.item_id == self._join_candidate:
+        elif event.item_id != self._text_owner:
+            # a message counts as a second answer only once it emits text; the
+            # owner's phase may arrive on its output_item.done, so read it here
+            if (
+                self._message_phases.get(self._text_owner) != "commentary"
+                or event.item_id in self._dropped_item_ids
+            ):
+                self._drop_item(event.item_id)
+                return None
             # commentary and the answer after it are spoken as one reply; the space
             # keeps their sentences from running together
-            self._text_owner, self._join_candidate = event.item_id, None
+            self._text_owner = event.item_id
             text = " " + text
-        elif event.item_id != self._text_owner:
-            self._drop_item(event.item_id)
-            return None
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(content=text, role="assistant"),

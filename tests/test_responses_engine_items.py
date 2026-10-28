@@ -256,6 +256,39 @@ async def test_tool_call_after_second_message_is_dropped() -> None:
     assert reply.calls == []
 
 
+async def test_textless_second_message_keeps_later_tool_call(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(_message("m1", "A"), _message("m2", ""), _function_call("fc1"))
+    )
+
+    assert reply.text == "A"
+    assert reply.calls == ["fc1"]
+    assert not [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+
+
+async def test_message_then_empty_then_text_message_drops_third(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(_message("m1", "A"), _message("m2", ""), _message("m3", "B"))
+    )
+
+    assert reply.text == "A"
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["dropped_item_ids"] == ["m3"]
+
+
 async def test_commentary_owner_keeps_next_message_with_space() -> None:
     reply = await _reply_over_ws(
         _stream(
@@ -266,6 +299,19 @@ async def test_commentary_owner_keeps_next_message_with_space() -> None:
 
     assert reply.text == "Let me check. It's sunny."
     assert reply.phases == ["commentary", "final_answer"]
+
+
+async def test_commentary_phase_only_on_done_still_joins() -> None:
+    commentary = [
+        _added("m1", "message"),
+        _delta("m1", "Let me check."),
+        _msg_done("m1", "Let me check.", phase="commentary"),
+    ]
+    reply = await _reply_over_ws(
+        _stream(commentary, _message("m2", "It's sunny.", phase="final_answer"))
+    )
+
+    assert reply.text == "Let me check. It's sunny."
 
 
 async def test_dropped_message_phase_is_not_emitted() -> None:
