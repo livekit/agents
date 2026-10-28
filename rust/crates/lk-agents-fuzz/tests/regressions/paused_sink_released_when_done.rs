@@ -34,7 +34,7 @@ fn the_next_speech_plays() {
         say(SayInput::Words),
         Input::Advance { ms: Millis(3_000) },
     ];
-    for policy in [Policy::BasicPos, Policy::TaskPos] {
+    for policy in [Policy::BasicPos, Policy::TaskBridge] {
         let stuck: Vec<u64> = (0..64)
             .filter(|&schedule| {
                 let case = Case {

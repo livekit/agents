@@ -1204,7 +1204,6 @@ impl Run {
             while let Ok(event) = runtime.queue.try_recv() {
                 self.queue.push(event);
             }
-            self.queue.reported();
             // Frames are not scheduled: each reaches the data plane as it arrives.
             if !runtime.frames.is_empty() {
                 let now = self.time.read();
@@ -1223,22 +1222,17 @@ impl Run {
             }
             let now = self.time.now();
             let wake_at = runtime.driver.wake_at();
-            if wake_at.is_some_and(|at| at <= now) {
-                let now = self.time.read();
-                self.step(|runtime| runtime.handle(Event::Wake, now));
-                continue;
-            }
+            let wake_due = wake_at.is_some_and(|at| at <= now);
             let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
-            match self.queue.next(tasks_runnable(), &ready) {
+            match self.queue.next(wake_due, tasks_runnable(), &ready) {
+                Some(Next::Wake) => {
+                    let now = self.time.read();
+                    self.step(|runtime| runtime.handle(Event::Wake, now));
+                    continue;
+                }
                 Some(Next::Event(event)) => {
                     let now = self.time.read();
-                    let paired = self.queue.paired().then(|| self.steps.lock().unwrap().len());
                     self.step(|runtime| runtime.handle(event, now));
-                    if let Some(from) = paired {
-                        let steps = self.steps.lock().unwrap();
-                        let wrote = steps.iter().skip(from);
-                        queue::note_pair_steps(wrote.map(|(at, s)| format!("{} {s:?}", at.at_ms)));
-                    }
                     continue;
                 }
                 Some(Next::Tasks) => {

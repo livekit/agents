@@ -1,31 +1,22 @@
-//! Partial-order sampling, measured. Ignored by default: these are measurements, not checks.
+//! Partial-order sampling, measured. Ignored by default: this is a measurement, not a check (the
+//! scheduler's own tests are the small programs in `src/drive/queue.rs`).
 //!
-//! `cargo test --release -p lk-agents-fuzz --test pos -- --ignored --nocapture commutation`
+//! `cargo test --release -p lk-agents-fuzz --test pos -- --ignored --nocapture bench`
 //!
-//! - `commutation`: the conflict relation (`drive::objects::accesses`) against the session itself. A
-//!   campaign seed's case is replayed twice with a pair of pending events delivered back to back,
-//!   once in each order: a pair declared independent that leaves a different session (the
-//!   journal its two steps wrote, or the whole run's journal and findings) is a false
-//!   independence. Pairs declared racing are swapped the same way as the control. `VOICE_SEEDS`
-//!   (256) cases, `VOICE_SWAPS` (4) pairs each.
-//! - `bench`: every queue policy on the same seeds, the way Yuan, Yang and Gu (CAV 2018) compare
-//!   samplers. Over `VOICE_SEEDS` (4096) campaign seeds per policy: what each reached, its distinct
-//!   findings (contract and subject kind), its cost, and per contract the seeds that failed it and
-//!   the seeds to its first failure in each of `VOICE_WINDOWS` (8) windows. Then the paper's
-//!   method proper, per contract that failed: its first failing case is the program, run under
-//!   `VOICE_SCHEDULES` (512) schedules per policy, the hit ratio and the schedules to the first
-//!   hit in each window; and between the two, that case's setup under `VOICE_SETUPS` (1024)
-//!   fresh conversations. `rust/crates/lk-agents-fuzz/bench/known_bugs.sh` runs it over the known
-//!   bugs, each reintroduced from its fix commit, and tabulates it.
-use std::collections::{BTreeMap, BTreeSet};
+//! `bench`: every queue policy on the same seeds, the way Yuan, Yang and Gu (CAV 2018) compare
+//! samplers. Over `VOICE_SEEDS` (4096) campaign seeds per policy: what each reached, its distinct
+//! findings (contract and subject kind), its cost, and per contract the seeds that failed it and
+//! the seeds to its first failure in each of `VOICE_WINDOWS` (8) windows. Then the paper's method
+//! proper, per contract that failed: its first failing case is the program, run under
+//! `VOICE_SCHEDULES` (512) schedules per policy, the hit ratio and the schedules to the first hit
+//! in each window; and between the two, that case's setup under `VOICE_SETUPS` (1024) fresh
+//! conversations. `rust/crates/lk-agents-fuzz/bench/known_bugs.sh` runs it over the known bugs,
+//! each reintroduced from its fix commit, and tabulates it.
+use std::collections::BTreeSet;
 
 use fastrand::Rng;
 use lk_agents_fuzz::{
-    drive::{
-        Case, Policy,
-        queue::{self, Swap},
-        run,
-    },
+    drive::{Case, Policy, run},
     search,
 };
 
@@ -54,161 +45,6 @@ fn parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec
     });
     done.sort_by_key(|(i, _)| *i);
     done.into_iter().map(|(_, r)| r).collect()
-}
-
-/// Wall-clock stamps, and the span durations taken from them, cut to the millisecond: the
-/// session clock moves a microsecond per read, so whichever of two steps in one instant goes
-/// second stamps a later microsecond. That is the clock's tie-break, not state the two share.
-fn mask(step: &str) -> String {
-    const SECONDS: [&str; 3] = ["time: ", "timestamp: ", "value: "];
-    let mut out = String::with_capacity(step.len());
-    let mut rest = step;
-    while let Some(at) = rest.find(|c: char| c.is_ascii_digit()) {
-        let (head, tail) = rest.split_at(at);
-        out.push_str(head);
-        let float = SECONDS.iter().any(|label| head.ends_with(label));
-        let part = |c: char| c.is_ascii_digit() || c == '.' || (float && "eE+-".contains(c));
-        let len = tail.find(|c: char| !part(c)).unwrap_or(tail.len());
-        let (number, tail) = tail.split_at(len);
-        if head.ends_with("tv_nsec: ")
-            && let Ok(nanos) = number.parse::<u64>()
-        {
-            out.push_str(&(nanos / 1_000_000).to_string());
-        } else if float && let Ok(seconds) = number.parse::<f64>() {
-            out.push_str(&format!("{seconds:.3}"));
-        } else {
-            out.push_str(number);
-        }
-        rest = tail;
-    }
-    out.push_str(rest);
-    out
-}
-
-fn masked(steps: &[String]) -> Vec<String> {
-    let mut steps: Vec<String> = steps.iter().map(|s| mask(s)).collect();
-    steps.sort();
-    steps
-}
-
-/// One swapped pair, both orders.
-struct Swapped {
-    racing: bool,
-    kinds: (String, String),
-    local_differs: bool,
-    run_differs: bool,
-    /// Unmasked: the clock's microsecond counted.
-    raw_differs: bool,
-    heads: usize,
-    independent: usize,
-}
-
-fn swap(case: &Case, at: u64, racing: bool) -> Option<Swapped> {
-    let mut sides = [false, true].map(|flip| {
-        queue::arm(Some(Swap { at, flip, racing }));
-        run(case.clone());
-        queue::take()
-    });
-    let [a, b] = &mut sides;
-    if a.pair.len() != 2 || b.pair.len() != 2 {
-        return None;
-    }
-    a.pair_steps.sort();
-    b.pair_steps.sort();
-    if std::env::var_os("VOICE_SHOW").is_some()
-        && !racing
-        && masked(&a.pair_steps) != masked(&b.pair_steps)
-    {
-        let only = |x: &Vec<String>, y: &Vec<String>| -> Vec<String> {
-            x.iter().filter(|s| !y.contains(s)).cloned().collect()
-        };
-        println!(
-            "\n{:?} then {:?}: only one way {:#?}\nonly the other {:#?}",
-            a.pair,
-            b.pair,
-            only(&a.pair_steps, &b.pair_steps),
-            only(&b.pair_steps, &a.pair_steps)
-        );
-    }
-    let mut kinds = (a.pair[0].clone(), a.pair[1].clone());
-    if kinds.0 > kinds.1 {
-        kinds = (kinds.1, kinds.0);
-    }
-    Some(Swapped {
-        racing,
-        kinds,
-        local_differs: masked(&a.pair_steps) != masked(&b.pair_steps),
-        raw_differs: a.pair_steps != b.pair_steps,
-        run_differs: masked(&a.journal) != masked(&b.journal),
-        heads: a.heads,
-        independent: a.independent,
-    })
-}
-
-#[test]
-#[ignore]
-fn commutation() {
-    let seeds: Vec<u64> = (0..env("VOICE_SEEDS").unwrap_or(256)).collect();
-    let swaps = env("VOICE_SWAPS").unwrap_or(4);
-    let budget = env("VOICE_BUDGET").unwrap_or(600) as usize;
-    let results: Vec<Vec<Swapped>> = parallel(&seeds, |&seed| {
-        let setup = search::sample_setup(&mut Rng::with_seed(seed));
-        let case = search::explore(setup, seed, budget).case;
-        queue::arm(None);
-        run(case.clone());
-        let delivered = queue::take().delivered;
-        let mut rng = Rng::with_seed(seed ^ 0x7377_6170);
-        let mut found = Vec::new();
-        for racing in [false, true] {
-            let mut tries = 0;
-            let mut got = 0;
-            while got < swaps && tries < swaps * 8 && delivered > 1 {
-                tries += 1;
-                if let Some(swapped) = swap(&case, rng.u64(..delivered - 1), racing) {
-                    found.push(swapped);
-                    got += 1;
-                }
-            }
-        }
-        found
-    });
-    let all: Vec<&Swapped> = results.iter().flatten().collect();
-    for racing in [false, true] {
-        let pairs: Vec<&&Swapped> = all.iter().filter(|s| s.racing == racing).collect();
-        let n = pairs.len().max(1) as f64;
-        let local = pairs.iter().filter(|s| s.local_differs).count();
-        let whole = pairs.iter().filter(|s| s.run_differs).count();
-        let raw = pairs.iter().filter(|s| s.raw_differs).count();
-        println!(
-            "\n{} pairs: {}; their own steps differ when swapped: {local} ({:.1}%; {raw}, \
-             {:.1}%, counting the clock's microsecond); the whole run differs: {whole} ({:.1}%)",
-            if racing { "racing (control)" } else { "independent" },
-            pairs.len(),
-            100.0 * local as f64 / n,
-            100.0 * raw as f64 / n,
-            100.0 * whole as f64 / n,
-        );
-        let mut by_kind: BTreeMap<&(String, String), (usize, usize, usize)> = BTreeMap::new();
-        for s in &pairs {
-            let row = by_kind.entry(&s.kinds).or_default();
-            row.0 += 1;
-            row.1 += usize::from(s.local_differs);
-            row.2 += usize::from(s.run_differs);
-        }
-        let mut rows: Vec<_> = by_kind.into_iter().collect();
-        rows.sort_by_key(|(_, (n, local, whole))| std::cmp::Reverse((*local, *whole, *n)));
-        println!("  {:>5} {:>6} {:>6}  pair", "pairs", "local", "run");
-        for ((a, b), (n, local, whole)) in rows.iter().take(if racing { 12 } else { 40 }) {
-            println!("  {n:>5} {local:>6} {whole:>6}  {a} | {b}");
-        }
-    }
-    let heads: usize = all.iter().map(|s| s.heads).sum();
-    let independent: usize = all.iter().map(|s| s.independent).sum();
-    println!(
-        "\nat the sampled deliveries: {heads} other pending heads, {independent} ({:.1}%) \
-         declared independent of the policy's pick",
-        100.0 * independent as f64 / heads.max(1) as f64
-    );
 }
 
 /// What one campaign seed left, for the benchmark.

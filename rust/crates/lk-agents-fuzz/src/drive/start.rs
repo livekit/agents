@@ -15,7 +15,7 @@ impl Run {
         let time = Timebase::simulated();
         let stamps = Stamps::new(time.clone());
         let (registry, records) = Registry::new(stamps.clone());
-        let gate = (policy == Policy::TaskPos).then(|| Arc::new(super::queue::Gate::new()));
+        let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
         let tasks = Arc::new(Tasks { stamps: stamps.clone(), spawned: Mutex::default(), gate });
         // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
         // and the survey runs seeds side by side in one process.

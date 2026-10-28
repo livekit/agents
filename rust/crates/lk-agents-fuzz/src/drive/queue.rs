@@ -4,8 +4,12 @@
 //! In production the queue is a channel and the order is arrival order. Here the case collects
 //! what reached the channel and picks what runs next, so an interleaving the channel would only
 //! produce under load is one a seed can choose. Each source keeps its own order: a reordering no
-//! single sender could produce is never delivered.
-use std::cell::RefCell;
+//! single sender could produce is never delivered. A due wake goes before anything pending, as
+//! the production loop's biased `select!` takes it first.
+//!
+//! The scheduler knows the sources and nothing of what a step reads or writes: BasicPOS draws
+//! every pending step a priority and runs the highest, with no footprints and no race-based
+//! reassignment (owner decisions 21 and 28). Its tests are the small programs at the bottom.
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::mem::Discriminant;
@@ -16,8 +20,6 @@ use std::task::{Context, Poll, Wake, Waker};
 use fastrand::Rng;
 use lk_agents_abi::{BoxFuture, resources::ResourceId};
 use lk_agents_voice::agent_session::{Event, Input};
-
-use super::objects::{Access, accesses, races};
 
 /// How the next step is chosen, drawn per seed and carried by the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,39 +34,30 @@ pub enum Policy {
     /// the highest priority runs: a source's oldest pending event, or one task turn, after which
     /// the pool draws a new priority.
     BasicPos,
-    /// Partial-order sampling (Algorithm 4 with POS*'s read relaxation): BasicPOS, and after each
-    /// step every pending head racing with it draws a new priority. Racing is per object touched
-    /// ([`accesses`]), not per process: one core handles every event, but two events of
-    /// different speeches, or a data-plane command and a speech's tool start, touch nothing in
-    /// common. The task pool's steps are unknown, so the pool races with every event.
-    FullPos,
-    /// Full POS with the task bridge ([`Gate`]): every task the driver spawns is a process of its
-    /// own, with its own priority, rather than one turn the pool shares, so the order of two
-    /// tasks is sampled too. A task touches what it reports: the accesses of the events it sent
-    /// in its turns; before its first report it races with everything. What the fakes spawn
-    /// outside the session's spawner is the pool.
-    TaskPos,
+    /// BasicPOS with the task bridge ([`Gate`]): every task the run's spawner spawns is a process
+    /// of its own, with its own priority, rather than one turn the pool shares, so the order of
+    /// two tasks is sampled too; after its turn a task draws a new priority. Transitional: it
+    /// schedules the voice policy tasks that are not core machines yet, and goes with the last
+    /// of them (owner decision 28).
+    TaskBridge,
 }
 
 impl Policy {
-    pub const ALL: [Policy; 4] =
-        [Policy::Arrival, Policy::BasicPos, Policy::FullPos, Policy::TaskPos];
+    pub const ALL: [Policy; 3] = [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge];
 
-    /// `VOICE_POLICY=FullPos`: one policy by its name.
+    /// `VOICE_POLICY=BasicPos`: one policy by its name.
     pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| format!("{p:?}") == name)
     }
 
-    /// A seed's own policy: the task bridge for half the seeds, full POS without it for a
-    /// quarter, and arrival order for a quarter, which is still what reaches some bugs first (the
-    /// paper and gosim found the same). `tests/pos.rs bench` over the known bugs: on a failing
-    /// case's schedules the geometric-mean hit ratio is 0.07 under arrival, 0.30 under BasicPOS,
-    /// 0.33 under full POS and 0.66 with the bridge, for about a quarter more time per seed.
+    /// A seed's own policy: the task bridge for half the seeds, BasicPOS for a quarter and
+    /// arrival order for a quarter, which is still what reaches some bugs first (the paper and
+    /// gosim found the same). `bench/known_bugs.sh` measures each over the known bugs.
     pub fn of(schedule: u64) -> Self {
         match Rng::with_seed(schedule ^ POLICY_STREAM).u8(0..4) {
             0 => Policy::Arrival,
-            1 => Policy::FullPos,
-            _ => Policy::TaskPos,
+            1 => Policy::BasicPos,
+            _ => Policy::TaskBridge,
         }
     }
 }
@@ -78,6 +71,8 @@ const STARVE: u64 = 10_000;
 
 /// What runs next.
 pub enum Next {
+    /// The decision core's timer, due.
+    Wake,
     Event(Event),
     /// One turn for the driver's ready tasks.
     Tasks,
@@ -92,12 +87,6 @@ enum Pick {
     Pool,
 }
 
-/// A bridged task: its priority and what it reported touching.
-struct Proc {
-    priority: Priority,
-    accesses: Option<Vec<Access>>,
-}
-
 pub struct Queue {
     policy: Policy,
     rng: Rng,
@@ -106,16 +95,11 @@ pub struct Queue {
     dispatches: u64,
     /// The task pool's priority.
     tasks: Priority,
-    /// Events delivered, and the commutation check's pair: the event owed next, and whether the
-    /// last one delivered belongs to it.
-    delivered: u64,
-    owed: Option<u64>,
-    paired: bool,
-    /// The bridged tasks, the one whose turn's reports are being drained, and the one whose
-    /// turn is still to be reassigned for.
-    procs: BTreeMap<u64, Proc>,
-    reporter: Option<u64>,
-    stepped: Option<u64>,
+    /// The bridged tasks' priorities.
+    procs: BTreeMap<u64, Priority>,
+    /// What was dispatched, in order, folded: two runs that dispatched the same steps in the same
+    /// order agree on it.
+    order: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -128,7 +112,6 @@ struct Queued {
     source: Source,
     arrival: u64,
     priority: Priority,
-    accesses: Vec<Access>,
     event: Event,
 }
 
@@ -174,12 +157,8 @@ impl Queue {
             arrivals: 0,
             dispatches: 0,
             tasks,
-            delivered: 0,
-            owed: None,
-            paired: false,
             procs: BTreeMap::new(),
-            reporter: None,
-            stepped: None,
+            order: ORDER_SEED,
         }
     }
 
@@ -187,33 +166,18 @@ impl Queue {
         let arrival = self.arrivals;
         self.arrivals += 1;
         let priority = self.draw();
-        let (source, accesses) = (Source::of(&event), accesses(&event));
-        if let Some(proc) = self.reporter.and_then(|id| self.procs.get_mut(&id)) {
-            let theirs = proc.accesses.get_or_insert_with(Vec::new);
-            theirs.extend(accesses.iter().copied());
-            theirs.sort();
-            theirs.dedup();
+        let source = Source::of(&event);
+        self.pending.push(Queued { source, arrival, priority, event });
+    }
+
+    /// The next step: the wake when `wake_due`, else an event, a bridged task's turn (`ready`,
+    /// under [`Policy::TaskBridge`]), a turn for the pool when `tasks_ready`, or nothing.
+    pub fn next(&mut self, wake_due: bool, tasks_ready: bool, ready: &[u64]) -> Option<Next> {
+        if wake_due {
+            self.fold(0, 0);
+            return Some(Next::Wake);
         }
-        self.pending.push(Queued { source, arrival, priority, accesses, event });
-    }
-
-    /// What the bridged task last given a turn reported, as the run drains the channel after it:
-    /// what it touches.
-    pub fn reported(&mut self) {
-        self.reporter = None;
-    }
-
-    /// The next step: an event, a bridged task's turn (`ready`, under [`Policy::TaskPos`]), a turn
-    /// for the pool when `tasks_ready`, or nothing.
-    pub fn next(&mut self, tasks_ready: bool, ready: &[u64]) -> Option<Next> {
         self.dispatches += 1;
-        self.paired = false;
-        self.reporter = None;
-        if let Some(owed) = self.owed.take()
-            && let Some(i) = self.pending.iter().position(|q| q.arrival == owed)
-        {
-            return Some(self.deliver(i, true));
-        }
         let heads: Vec<usize> = (0..self.pending.len())
             .filter(|&i| {
                 let q = &self.pending[i];
@@ -223,13 +187,8 @@ impl Queue {
         for &id in ready {
             if !self.procs.contains_key(&id) {
                 let priority = self.draw();
-                self.procs.insert(id, Proc { priority, accesses: None });
+                self.procs.insert(id, priority);
             }
-        }
-        // A task's turn is reassigned for once its reports are in.
-        if let Some(id) = self.stepped.take() {
-            let theirs = self.procs.get(&id).and_then(|p| p.accesses.clone());
-            self.reassign(theirs.as_deref(), &heads, ready, Some(id));
         }
         let pick = match self.policy {
             Policy::Arrival => heads
@@ -238,7 +197,7 @@ impl Queue {
                 .min_by_key(|&i| self.pending[i].arrival)
                 .map(Pick::Event)
                 .or(tasks_ready.then_some(Pick::Pool)),
-            Policy::BasicPos | Policy::FullPos | Policy::TaskPos => {
+            Policy::BasicPos | Policy::TaskBridge => {
                 for &i in &heads {
                     if self.starved(self.pending[i].priority) {
                         self.pending[i].priority = self.draw();
@@ -248,15 +207,15 @@ impl Queue {
                     self.tasks = self.draw();
                 }
                 for &id in ready {
-                    if self.starved(self.procs[&id].priority) {
+                    if self.starved(self.procs[&id]) {
                         let priority = self.draw();
-                        self.procs.get_mut(&id).unwrap().priority = priority;
+                        self.procs.insert(id, priority);
                     }
                 }
                 let event = heads.iter().copied().max_by_key(|&i| self.pending[i].priority.value);
                 let mut best = event.map(|i| (self.pending[i].priority.value, Pick::Event(i)));
                 for &id in ready {
-                    let value = self.procs[&id].priority.value;
+                    let value = self.procs[&id].value;
                     if best.is_none_or(|(b, _)| value > b) {
                         best = Some((value, Pick::Task(id)));
                     }
@@ -269,116 +228,42 @@ impl Queue {
         };
         match pick? {
             Pick::Event(i) => {
-                let i = self.commutation_pair(i, &heads);
-                if self.reassigns() {
-                    let accesses = std::mem::take(&mut self.pending[i].accesses);
-                    self.reassign(Some(&accesses), &heads, ready, None);
-                }
-                Some(self.deliver(i, self.owed.is_some()))
+                let queued = self.pending.remove(i);
+                self.fold(1, queued.arrival);
+                Some(Next::Event(queued.event))
             }
             Pick::Task(id) => {
                 // Its next step is a new event: a new priority, as a goroutine's in gosim.
                 let priority = self.draw();
-                self.procs.get_mut(&id).unwrap().priority = priority;
-                (self.stepped, self.reporter) = (Some(id), Some(id));
+                self.procs.insert(id, priority);
+                self.fold(2, id);
                 Some(Next::Task(id))
             }
             Pick::Pool => {
-                // The pool took its step: like a goroutine in gosim, it draws its next priority,
-                // and what it did is unknown, so under full POS everything races with it.
-                if self.reassigns() {
-                    self.reassign(None, &heads, ready, None);
-                } else {
-                    self.tasks = self.draw();
-                }
+                // The pool took its step: like a goroutine in gosim, it draws its next priority.
+                self.tasks = self.draw();
+                self.fold(3, 0);
                 Some(Next::Tasks)
             }
         }
-    }
-
-    fn reassigns(&self) -> bool {
-        matches!(self.policy, Policy::FullPos | Policy::TaskPos)
-    }
-
-    /// Algorithm 4's reassignment: every pending step racing with the one just taken (`None`:
-    /// touching what nobody knows, so racing with everything) draws a new priority, so the next
-    /// race is ordered afresh rather than by what the step outran.
-    fn reassign(
-        &mut self,
-        theirs: Option<&[Access]>,
-        heads: &[usize],
-        ready: &[u64],
-        except: Option<u64>,
-    ) {
-        for &j in heads {
-            if theirs.is_none_or(|a| races(a, &self.pending[j].accesses)) {
-                self.pending[j].priority = self.draw();
-            }
-        }
-        for &id in ready.iter().filter(|&&id| Some(id) != except) {
-            let racing = match (theirs, &self.procs[&id].accesses) {
-                (Some(a), Some(b)) => races(a, b),
-                _ => true,
-            };
-            if racing {
-                let priority = self.draw();
-                self.procs.get_mut(&id).unwrap().priority = priority;
-            }
-        }
-        // The pool's next step is unknown: it races.
-        self.tasks = self.draw();
-    }
-
-    fn deliver(&mut self, i: usize, paired: bool) -> Next {
-        self.delivered += 1;
-        self.paired = paired;
-        let event = self.pending.remove(i).event;
-        PROBE.with_borrow_mut(|p| {
-            p.delivered = self.delivered;
-            if paired {
-                p.pair.push(kind(&event));
-            }
-        });
-        Next::Event(event)
-    }
-
-    /// Under the commutation check, at its chosen delivery: the policy's pick `i` and the oldest
-    /// pending head declared independent of it go out back to back, in the order the check says.
-    fn commutation_pair(&mut self, i: usize, heads: &[usize]) -> usize {
-        let Some(swap) = PROBE.with_borrow(|p| p.swap) else { return i };
-        if self.delivered != swap.at {
-            return i;
-        }
-        let picked = self.pending[i].accesses.clone();
-        let others: Vec<(usize, bool)> = heads
-            .iter()
-            .filter(|&&j| j != i)
-            .map(|&j| (j, races(&picked, &self.pending[j].accesses)))
-            .collect();
-        PROBE.with_borrow_mut(|p| {
-            p.heads = others.len();
-            p.independent = others.iter().filter(|(_, racing)| !racing).count();
-        });
-        let partner = others
-            .iter()
-            .filter(|&&(_, racing)| racing == swap.racing)
-            .map(|&(j, _)| j)
-            .min_by_key(|&j| self.pending[j].arrival);
-        let Some(j) = partner else { return i };
-        let (first, second) = if swap.flip { (j, i) } else { (i, j) };
-        self.owed = Some(self.pending[second].arrival);
-        first
-    }
-
-    /// Whether the event just delivered is one of the commutation check's pair.
-    pub fn paired(&self) -> bool {
-        self.paired
     }
 
     /// Everything still pending, in arrival order.
     pub fn drain(&mut self) -> Vec<Event> {
         self.pending.sort_by_key(|q| q.arrival);
         self.pending.drain(..).map(|q| q.event).collect()
+    }
+
+    /// The dispatch order so far, folded into one number: what replaying a seed must reproduce.
+    pub fn order(&self) -> u64 {
+        self.order
+    }
+
+    /// FNV-1a over the dispatch's kind and identity (an event's arrival, a task's id).
+    fn fold(&mut self, tag: u8, id: u64) {
+        for byte in std::iter::once(tag).chain(id.to_le_bytes()) {
+            self.order = (self.order ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
     }
 
     fn draw(&mut self) -> Priority {
@@ -390,12 +275,18 @@ impl Queue {
     }
 }
 
-/// The task bridge: under [`Policy::TaskPos`] every future the session's spawner spawns runs
+/// FNV-1a's offset basis.
+const ORDER_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// The task bridge: under [`Policy::TaskBridge`] every future the run's spawner spawns runs
 /// behind a gate, polled only when the queue gives that task its turn. Its own waker marks it
 /// ready, and wakes the run, which may be waiting on time; tokio only ever sees a task woken to
 /// take its granted turn. The gate is shut only while the run steps the session: when the run
 /// awaits something itself (a host call, the session's start, a player's close) or the session
 /// is gone, what is ready runs as tokio schedules it, as the host's loop outlives the session's.
+///
+/// Transitional (owner decision 28): it exists because voice policy tasks still run as tasks; it
+/// is deleted with the last of them.
 pub struct Gate {
     state: Mutex<GateState>,
     woken: tokio::sync::Notify,
@@ -558,95 +449,220 @@ impl Wake for TaskWaker {
     }
 }
 
-/// The commutation check (`tests/pos.rs`): two events the conflict relation declares independent
-/// must leave the same session whichever goes first. Armed per thread, as a simulation runs on
-/// the thread that started it.
-#[derive(Clone, Copy, Debug)]
-pub struct Swap {
-    /// The delivery, counted from zero, at which the pair goes out.
-    pub at: u64,
-    /// The partner first.
-    pub flip: bool,
-    /// The control: a partner the relation says races instead.
-    pub racing: bool,
-}
+/// The scheduler against small programs whose legal orders are known (RC "Partial-order
+/// sampling": scheduler correctness is tested on small programs; benchmarks do not establish it).
+/// Each program is a few sources' events; what is checked is the order the queue delivers them.
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
 
-/// What the armed check saw.
-#[derive(Default, Debug)]
-pub struct Probe {
-    pub swap: Option<Swap>,
-    pub delivered: u64,
-    /// At the chosen delivery: the other pending heads, and how many the relation calls
-    /// independent of the policy's pick.
-    pub heads: usize,
-    pub independent: usize,
-    /// The pair's kinds, in delivery order, and the journal steps their two steps wrote.
-    pub pair: Vec<String>,
-    pub pair_steps: Vec<String>,
-    /// The whole journal and the failures, sorted, at the run's end.
-    pub journal: Vec<String>,
-}
+    use lk_agents_voice::agent_session::{Command, Origin, Sent};
 
-thread_local! {
-    static PROBE: RefCell<Probe> = RefCell::default();
-}
+    use super::*;
 
-/// Arm the check for the next run on this thread; `None` only counts deliveries.
-pub fn arm(swap: Option<Swap>) {
-    PROBE.set(Probe { swap, ..Probe::default() });
-}
-
-pub(super) fn armed() -> bool {
-    PROBE.with_borrow(|p| p.swap.is_some())
-}
-
-/// What the check saw, disarming it.
-pub fn take() -> Probe {
-    PROBE.take()
-}
-
-pub(super) fn note_pair_steps(steps: impl Iterator<Item = String>) {
-    PROBE.with_borrow_mut(|p| p.pair_steps.extend(steps));
-}
-
-pub(super) fn note_journal(journal: Vec<String>) {
-    PROBE.with_borrow_mut(|p| p.journal = journal);
-}
-
-/// An event's kind, for the check's report.
-pub fn kind(event: &Event) -> String {
-    fn head(debug: String) -> String {
-        debug.split([' ', '(', '{']).next().unwrap_or_default().to_owned()
+    /// An event from `origin`'s source, named `name`.
+    fn event(origin: Origin, name: &str) -> Event {
+        Event::Input(Input::Host(Sent {
+            origin,
+            command: Command::SetStaticKeyterms(vec![name.to_owned()]),
+        }))
     }
-    match event {
-        Event::Wake => "Wake".into(),
-        Event::Forwarder(command) => format!("Forwarder::{}", head(format!("{command:?}"))),
-        Event::Input(input) => match input {
-            Input::Host(sent) => sent.command.kind().into(),
-            Input::Stt(tagged) => format!("Stt::{:?}", tagged.item.kind),
-            Input::Vad(ev) => format!("Vad::{:?}", ev.kind),
-            Input::Room(_) => "Room".into(),
-            Input::RoomIo(ev) => format!("RoomIo::{}", head(format!("{ev:?}"))),
-            Input::Gen(ev) => format!("Gen::{}", head(format!("{ev:?}"))),
-            Input::Realtime(wake) => {
-                use lk_agents_voice::agent_activity::realtime::RealtimeWake;
-                match wake {
-                    RealtimeWake::Event(ev) => format!("Realtime::{}", head(format!("{ev:?}"))),
-                    RealtimeWake::Ended => "Realtime::Ended".into(),
-                    RealtimeWake::Closed => "Realtime::Closed".into(),
-                    RealtimeWake::ToolsDone { .. } => "Realtime::ToolsDone".into(),
-                    RealtimeWake::Heard { .. } => "Realtime::Heard".into(),
+
+    fn name(next: &Next) -> String {
+        match next {
+            Next::Event(Event::Input(Input::Host(Sent {
+                command: Command::SetStaticKeyterms(names),
+                ..
+            }))) => names[0].clone(),
+            Next::Wake => "wake".into(),
+            Next::Tasks => "pool".into(),
+            Next::Task(id) => format!("task{id}"),
+            Next::Event(_) => unreachable!("only the program's events are queued"),
+        }
+    }
+
+    fn tool(call: &str) -> Origin {
+        Origin::Tool { call_id: call.to_owned() }
+    }
+
+    /// Two sources of two events each: `a1 a2` from the host, `b1 b2` from a tool.
+    fn two_by_two(queue: &mut Queue) {
+        for (origin, name) in
+            [(Origin::Host, "a1"), (tool("b"), "b1"), (Origin::Host, "a2"), (tool("b"), "b2")]
+        {
+            queue.push(event(origin, name));
+        }
+    }
+
+    /// Every event delivered, the pool offered `tasks` turns along the way.
+    fn deliver_all(queue: &mut Queue, mut tasks: u32) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Some(next) = queue.next(false, tasks > 0, &[]) {
+            if matches!(next, Next::Tasks) {
+                tasks -= 1;
+            }
+            out.push(name(&next));
+        }
+        out
+    }
+
+    /// The legal orders of `two_by_two`: each source's events in its own order.
+    fn legal(order: &[String]) -> bool {
+        let position = |n: &str| order.iter().position(|o| o == n).unwrap();
+        position("a1") < position("a2") && position("b1") < position("b2")
+    }
+
+    #[test]
+    fn each_source_keeps_its_order() {
+        for policy in Policy::ALL {
+            for seed in 0..512 {
+                let mut queue = Queue::new(seed, policy);
+                two_by_two(&mut queue);
+                let order = deliver_all(&mut queue, 0);
+                assert_eq!(order.len(), 4, "{policy:?} seed {seed}: {order:?}");
+                assert!(legal(&order), "{policy:?} seed {seed} reordered a source: {order:?}");
+            }
+        }
+    }
+
+    /// POS reaches every legal interleaving of two independent sources; arrival order only the
+    /// one the channel produces.
+    #[test]
+    fn independent_orders_are_all_reached() {
+        let reached = |policy| -> BTreeSet<Vec<String>> {
+            (0..512)
+                .map(|seed| {
+                    let mut queue = Queue::new(seed, policy);
+                    two_by_two(&mut queue);
+                    deliver_all(&mut queue, 0)
+                })
+                .collect()
+        };
+        // a1 a2 b1 b2, a1 b1 a2 b2, a1 b1 b2 a2, b1 a1 a2 b2, b1 a1 b2 a2, b1 b2 a1 a2
+        assert_eq!(reached(Policy::BasicPos).len(), 6);
+        assert_eq!(reached(Policy::TaskBridge).len(), 6);
+        let arrival = reached(Policy::Arrival);
+        assert_eq!(arrival.into_iter().collect::<Vec<_>>(), [["a1", "b1", "a2", "b2"]]);
+    }
+
+    /// A due wake runs before anything pending, under every policy.
+    #[test]
+    fn due_wake_goes_first() {
+        for policy in Policy::ALL {
+            for seed in 0..64 {
+                let mut queue = Queue::new(seed, policy);
+                two_by_two(&mut queue);
+                let first = queue.next(true, true, &[1, 2]).map(|n| name(&n));
+                assert_eq!(first.as_deref(), Some("wake"), "{policy:?} seed {seed}");
+                let then = queue.next(false, false, &[]).map(|n| name(&n)).unwrap();
+                assert!(then == "a1" || then == "b1", "{policy:?} seed {seed}: {then}");
+            }
+        }
+    }
+
+    /// A ready task's turn races the pending events: under POS it runs before, between and after
+    /// them across seeds; under arrival order only once the queue is empty.
+    #[test]
+    fn task_turns_race_pending_events() {
+        let positions = |policy| -> BTreeSet<usize> {
+            (0..512)
+                .map(|seed| {
+                    let mut queue = Queue::new(seed, policy);
+                    two_by_two(&mut queue);
+                    let order = deliver_all(&mut queue, 1);
+                    assert!(legal(&order), "{policy:?} seed {seed}: {order:?}");
+                    order.iter().position(|o| o == "pool").unwrap()
+                })
+                .collect()
+        };
+        assert_eq!(positions(Policy::BasicPos), BTreeSet::from([0, 1, 2, 3, 4]));
+        assert_eq!(positions(Policy::Arrival), BTreeSet::from([4]));
+    }
+
+    /// Only a task that is ready gets a turn: one cancelled before it, or done, is never picked.
+    #[test]
+    fn only_ready_tasks_get_turns() {
+        for seed in 0..256 {
+            let mut queue = Queue::new(seed, Policy::TaskBridge);
+            queue.push(event(Origin::Host, "a1"));
+            // Both ready; then task 1 is cancelled, and only task 2 stays ready.
+            let mut taken = vec![name(&queue.next(false, false, &[1, 2]).unwrap())];
+            while !taken.contains(&"a1".to_owned()) {
+                let next = name(&queue.next(false, false, &[2]).unwrap());
+                assert_ne!(next, "task1", "seed {seed}: a cancelled task got a turn");
+                taken.push(next);
+            }
+        }
+    }
+
+    /// Both orders of two bridged tasks are reached: the bridge samples the order of tasks too.
+    #[test]
+    fn bridged_tasks_are_ordered_by_the_seed() {
+        let firsts: BTreeSet<String> = (0..128)
+            .map(|seed| name(&Queue::new(seed, Policy::TaskBridge).next(false, false, &[1, 2]).unwrap()))
+            .collect();
+        assert_eq!(firsts, BTreeSet::from(["task1".to_owned(), "task2".to_owned()]));
+    }
+
+    /// A seed's dispatch sequence replays exactly, and its folded order says so; another seed's
+    /// differs.
+    #[test]
+    fn a_seed_replays_its_dispatches() {
+        let program = |seed| {
+            let mut queue = Queue::new(seed, Policy::TaskBridge);
+            two_by_two(&mut queue);
+            let mut order = Vec::new();
+            for step in 0..6 {
+                let ready: &[u64] = if step % 2 == 0 { &[1, 2] } else { &[] };
+                if let Some(next) = queue.next(false, step == 3, ready) {
+                    order.push(name(&next));
                 }
             }
-            Input::Eot(..) => "Eot".into(),
-            Input::Overlap(_) => "Overlap".into(),
-            Input::ChannelEnded(_) => "ChannelEnded".into(),
-            Input::SttRetried(_) => "SttRetried".into(),
-            Input::StreamOpened(_) => "StreamOpened".into(),
-            Input::Video(_) => "Video".into(),
-            Input::InputStarted { .. } => "InputStarted".into(),
-            Input::GateSilenced(_) => "GateSilenced".into(),
-            Input::InputCensus(_) => "InputCensus".into(),
-        },
+            order.extend(deliver_all(&mut queue, 0));
+            (order, queue.order())
+        };
+        for seed in 0..64 {
+            assert_eq!(program(seed), program(seed), "seed {seed} did not replay");
+        }
+        let distinct: BTreeSet<u64> = (0..64).map(|seed| program(seed).1).collect();
+        assert!(distinct.len() > 1, "every seed dispatched alike");
+    }
+
+    /// Transitional (retires with the bridge): a granted task takes exactly its turn, and a
+    /// gated task that is dropped (cancelled) leaves the ready set and any grant it held.
+    #[test]
+    fn bridge_grants_one_turn_and_forgets_cancelled_tasks() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            let gate = Arc::new(Gate::new());
+            let polls = Arc::new(Mutex::new(Vec::new()));
+            let task = |id: u32| {
+                let polls = Arc::clone(&polls);
+                let mut turns = 0;
+                gate.wrap(Box::pin(std::future::poll_fn(move |cx| {
+                    turns += 1;
+                    polls.lock().unwrap().push(id);
+                    cx.waker().wake_by_ref();
+                    if turns == 3 { Poll::Ready(()) } else { Poll::Pending }
+                })))
+            };
+            let _shut = gate.shut();
+            let one = tokio::spawn(task(1));
+            let two = tokio::spawn(task(2));
+            tokio::task::yield_now().await;
+            assert_eq!(gate.ready(), [1, 2]);
+            assert!(polls.lock().unwrap().is_empty(), "a shut gate ran a task");
+            gate.grant(2);
+            while gate.granting() {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(*polls.lock().unwrap(), [2], "the grant ran another task or two turns");
+            gate.grant(1);
+            one.abort();
+            let _ = one.await;
+            assert!(!gate.granting(), "a cancelled task kept its grant");
+            assert_eq!(gate.ready(), [2]);
+            drop(two);
+        });
     }
 }

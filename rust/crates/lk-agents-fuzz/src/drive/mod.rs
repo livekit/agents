@@ -95,7 +95,6 @@ use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, T
 mod apply;
 mod collect;
 mod finish;
-pub mod objects;
 pub mod queue;
 mod start;
 
@@ -522,7 +521,7 @@ const NO_PROGRESS_STEPS: u32 = 10_000;
 struct Tasks {
     stamps: Stamps,
     spawned: Mutex<Vec<Spawned>>,
-    /// The task bridge, under `Policy::TaskPos`.
+    /// The task bridge, under `Policy::TaskBridge`.
     gate: Option<Arc<queue::Gate>>,
 }
 
