@@ -94,6 +94,14 @@ class StreamInfo:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class TaskInternal:
+    """Resumption state and every response stream belonging to a task, in creation order."""
+
+    ask: Ask | None
+    streams: list[StreamInfo]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ItemRow:
     """One history item of a lane; `payload` is the `ChatContext.ChatItem`."""
 
@@ -131,7 +139,7 @@ class TaskRecord:
     updated_at: int
     """Unix milliseconds."""
     data: TaskData
-    internal: Ask | None
+    internal: TaskInternal | None
     """The question the task waits on the person to answer, while it does."""
 
 

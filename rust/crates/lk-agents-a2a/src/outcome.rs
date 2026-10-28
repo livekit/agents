@@ -89,28 +89,31 @@ pub fn answer_pending(
     };
     let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
     let Some(pending) = pending else { return out };
-    let Some(ask) = &pending.internal else { return out };
-    let Some(call_id) = nonempty(&ask.call_id) else { return out };
+    let Some(ask) = pending.internal.as_ref().and_then(|internal| internal.ask.as_ref()) else {
+        return out;
+    };
     out.answer_tool = nonempty(&ask.answer_tool);
-    let placeholder = history.iter_mut().rev().find_map(|i| match i.kind_mut() {
-        Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == call_id => Some(o),
-        _ => None,
-    });
-    match placeholder {
-        Some(o) => {
-            o.output = last.text();
-            o.created_at = Some(timestamp(now - 1e-6));
-        }
-        None => {
-            let item = ItemRow::new(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
-                id: item_id,
-                name: nonempty(&ask.tool).unwrap_or_default(),
-                call_id,
-                output: last.text(),
-                is_error: false,
-                created_at: Some(timestamp(now - 1e-6)),
-            }));
-            insert_by_created_at(history, item);
+    if let Some(call_id) = nonempty(&ask.call_id) {
+        let placeholder = history.iter_mut().rev().find_map(|i| match i.kind_mut() {
+            Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == call_id => Some(o),
+            _ => None,
+        });
+        match placeholder {
+            Some(o) => {
+                o.output = last.text();
+                o.created_at = Some(timestamp(now - 1e-6));
+            }
+            None => {
+                let item = ItemRow::new(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
+                    id: item_id,
+                    name: nonempty(&ask.tool).unwrap_or_default(),
+                    call_id,
+                    output: last.text(),
+                    is_error: false,
+                    created_at: Some(timestamp(now - 1e-6)),
+                }));
+                insert_by_created_at(history, item);
+            }
         }
     }
     if last.task_id.as_deref() == Some(pending.task_id.as_str()) {
@@ -520,5 +523,32 @@ mod tests {
         let canceled = settled(text("late"), Some(Stop::ClientCanceled), true);
         assert!(canceled.transitions.is_empty());
         assert_eq!(canceled.outcome, RunOutcome::Canceled);
+    }
+    #[test]
+    fn a_plain_question_can_continue_its_existing_task() {
+        let mut waiting =
+            unpersisted_failed("AST_waiting", "desk", None, "", 0, "msg_question".into());
+        waiting.status = TaskState::InputRequired;
+        waiting.internal = Some(lk_agents_abi::storage::TaskInternal {
+            ask: Some(lk_agents_abi::storage::Ask {
+                question: "Your name?".into(),
+                ..Default::default()
+            }),
+            streams: Vec::new(),
+        });
+        let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("Ada")]);
+        wire.message_id = "answer".into();
+        wire.task_id = Some("AST_waiting".into());
+        let message = Message::from_a2a(&wire, 0.0, None).unwrap();
+        let answer = answer_pending(
+            &mut Vec::new(),
+            Some(&waiting),
+            &message,
+            "AST_receipt",
+            0.0,
+            "item".into(),
+        );
+        assert_eq!(answer.answer_task, "AST_waiting");
+        assert_eq!(answer.transitions[0].task_id, "AST_receipt");
     }
 }

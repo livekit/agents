@@ -365,6 +365,24 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::StreamInfo {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
+static TASK_INTERNAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::TaskInternal {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { ask, streams } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("ask", match ask { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+        kwargs.set_item("streams", ::pyo3::types::PyList::new(py, streams.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+        TASK_INTERNAL.import(py, "livekit.agents._generated.storage_class", "TaskInternal")?.call((), Some(&kwargs))
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
 static ITEM_ROW: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
 

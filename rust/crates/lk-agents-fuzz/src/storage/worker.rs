@@ -149,7 +149,7 @@ impl Worker {
             message_id: Some(format!("m{m}")),
             name: None,
             data: TaskData::default(),
-            ask: None,
+            internal: None,
         };
         match db.batch(&[db::submit(LANE, &row)], None) {
             Ok(out) => {

@@ -1022,7 +1022,10 @@ impl Tasks {
         if let Some(rows) = self.snapshot() {
             return Ok(rows
                 .iter()
-                .find(|r| r.status == TaskState::InputRequired && r.internal.is_some())
+                .find(|r| {
+                    r.status == TaskState::InputRequired
+                        && r.internal.as_ref().is_some_and(|i| i.ask.is_some())
+                })
                 .cloned());
         }
         Ok(self
@@ -1030,7 +1033,7 @@ impl Tasks {
             .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
             .await?
             .into_iter()
-            .find(|r| r.internal.is_some()))
+            .find(|r| r.internal.as_ref().is_some_and(|i| i.ask.is_some())))
     }
 
     /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.

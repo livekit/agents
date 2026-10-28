@@ -306,7 +306,7 @@ fn submitted(task_id: &str) -> TaskWrite {
         message_id: Some(format!("m_{task_id}")),
         name: None,
         data: TaskData::default(),
-        ask: None,
+        internal: None,
     }
 }
 

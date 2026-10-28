@@ -67,7 +67,7 @@ fn submitted_task(msg: &Message, task_id: &str) -> TaskWrite {
         message_id: Some(msg.message_id.clone()),
         name: None,
         data: turn_data(msg),
-        ask: None,
+        internal: None,
     }
 }
 

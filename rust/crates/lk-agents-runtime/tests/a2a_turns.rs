@@ -293,11 +293,9 @@ fn batch_message_text(message: &lk_agents_abi::a2a::turn::Message) -> String {
     message
         .parts
         .iter()
-        .filter_map(|part| {
-            serde_json::from_value::<a2a::Part>(part.clone())
-                .expect("A2A part")
-                .as_text()
-                .map(str::to_owned)
+        .filter_map(|part| match part {
+            lk_agents_abi::a2a::client::MessagePart::TextPart { text, .. } => Some(text.clone()),
+            _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -729,7 +727,7 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
     .unwrap();
     assert_eq!(first.task.status, TaskState::InputRequired);
     assert_eq!(
-        first.task.internal.as_ref(),
+        first.task.internal.as_ref().and_then(|i| i.ask.as_ref()),
         Some(&Ask {
             question: "Could you send a photo?".into(),
             tool: Some("request_photo".into()),
@@ -909,7 +907,7 @@ async fn a_submitted_row_exists_while_the_turn_runs(backend: Backend) {
                 message_id: Some("m1".into()),
                 name: None,
                 data: TaskData::default(),
-                ask: None,
+                internal: None,
             })
             .await
             .unwrap();

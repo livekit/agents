@@ -80,9 +80,22 @@ pub struct Ask {
 /// A created response stream: its id and when it expires (unix seconds).
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StreamInfo {
     pub stream_id: String,
     pub expires_at: i64,
+}
+
+/// Resumption state and every response stream belonging to a task, in creation order.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+pub struct TaskInternal {
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub ask: Option<Ask>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub streams: Vec<StreamInfo>,
 }
 
 /// One history item of a lane; `payload` is the `ChatContext.ChatItem`.
@@ -123,7 +136,7 @@ pub struct TaskRecord {
     pub updated_at: i64,
     pub data: TaskData,
     /// The question the task waits on the person to answer, while it does.
-    pub internal: Option<Ask>,
+    pub internal: Option<TaskInternal>,
 }
 
 /// One page of A2A `tasks/list`.

@@ -69,7 +69,7 @@ pub struct TaskWrite {
     /// An optional application task label.
     pub name: Option<String>,
     pub data: TaskData,
-    pub ask: Option<Ask>,
+    pub internal: Option<TaskInternal>,
 }
 
 impl TaskWrite {
@@ -84,7 +84,7 @@ impl TaskWrite {
             status: self.status,
             updated_at: 0,
             data: self.data.clone(),
-            internal: self.ask.clone(),
+            internal: self.internal.clone(),
         }
     }
 }
@@ -97,7 +97,7 @@ impl From<TaskRow> for TaskWrite {
             message_id: r.message_id,
             name: r.name,
             data: r.data,
-            ask: r.internal,
+            internal: r.internal,
         }
     }
 }
@@ -630,7 +630,7 @@ pub fn commit(
                     message_id: t.message_id.as_deref(),
                     status: t.status.as_str(),
                     data: SqlValue::json(&t.data),
-                    internal: SqlValue::opt_json(t.ask.as_ref()),
+                    internal: SqlValue::opt_json(t.internal.as_ref()),
                 });
             }
         }
@@ -665,7 +665,7 @@ pub fn commit(
                     message_id: t.message_id.as_deref(),
                     status: t.status.as_str(),
                     data: SqlValue::json(&t.data),
-                    internal: SqlValue::opt_json(t.ask.as_ref()),
+                    internal: SqlValue::opt_json(t.internal.as_ref()),
                 });
             }
         }
@@ -970,7 +970,7 @@ fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask
         name: task.name.as_deref(),
         message_id: task.message_id.as_deref(),
         data: SqlValue::json(&task.data),
-        internal: SqlValue::opt_json(task.ask.as_ref()),
+        internal: SqlValue::opt_json(task.internal.as_ref()),
     }
 }
 

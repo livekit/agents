@@ -93,7 +93,7 @@ pub struct TaskRow {
     /// What the framework keeps to resume the task: the question it waits on the person to
     /// answer, while it does.
     #[table(json)]
-    pub internal: Option<Ask>,
+    pub internal: Option<TaskInternal>,
 }
 
 impl TaskRow {
@@ -118,7 +118,7 @@ pub struct TaskData {
     pub status_message: Option<a2a::Message>,
 }
 
-pub use lk_agents_abi::storage::Ask;
+pub use lk_agents_abi::storage::{Ask, TaskInternal};
 
 /// One lane: a registered agent's state, lease and inbox cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
@@ -210,7 +210,7 @@ pub struct InboxRow {
     pub received_at: i64,
 }
 
-json_cell!(TaskData, Ask, ChatItem, a2a::Message);
+json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);
 
 impl FromCell for TaskState {
     fn from_cell(cell: &SqlValue) -> Result<Self, String> {
@@ -463,7 +463,7 @@ statement! {
     /// its pending question dropped. A terminal row is left as it is.
     CancelTask<'a> { lane: &'a str, task_id: &'a str, metadata: SqlValue } => r#"
 UPDATE tasks
-SET status = 'canceled', internal = NULL,
+SET status = 'canceled', internal = CASE WHEN json_array_length(internal, '$.streams') > 0 THEN jsonb_remove(internal, '$.ask') END,
   data = jsonb_set(data, '$.metadata', jsonb(json_patch(COALESCE(data -> '$.metadata', '{}'), :metadata))),
   updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working', 'input-required')

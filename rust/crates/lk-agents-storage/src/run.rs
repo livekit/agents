@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::StorageError;
 use crate::db::{Commit, EventWrite, TaskWrite};
-use crate::schema::{Ask, EventRow, RunEnded, RunEvent, RunStarted};
+use crate::schema::{Ask, EventRow, RunEnded, RunEvent, RunStarted, TaskInternal};
 pub use crate::schema::{ItemRow, LaneRow, TaskRow};
 use livekit_protocol::agent::chat_context::ChatItem;
 
@@ -223,6 +223,7 @@ pub struct TaskPatch {
     /// Merged over the row's `data.metadata`; an empty map changes nothing.
     pub metadata: Option<Map<String, Value>>,
     pub ask: Option<Ask>,
+    pub streams: Option<Vec<lk_agents_abi::storage::StreamInfo>>,
     pub status_message: Option<a2a::Message>,
     pub history: Option<Vec<a2a::Message>>,
     pub artifacts: Option<Vec<a2a::Artifact>>,
@@ -300,7 +301,9 @@ pub fn merge_write(
         // a terminal or running row holds no pending question
         None
     } else {
-        patch.ask.or_else(|| base.and_then(|b| b.ask.clone()))
+        patch.ask.or_else(|| {
+            base.and_then(|b| b.internal.as_ref().and_then(|internal| internal.ask.clone()))
+        })
     };
 
     Ok(TaskWrite {
@@ -309,7 +312,18 @@ pub fn merge_write(
         message_id: patch.message_id.or_else(|| base.and_then(|b| b.message_id.clone())),
         name: patch.name.or_else(|| base.and_then(|b| b.name.clone())),
         data,
-        ask,
+        internal: {
+            let mut streams = base
+                .and_then(|b| b.internal.as_ref())
+                .map(|i| i.streams.clone())
+                .unwrap_or_default();
+            for stream in patch.streams.unwrap_or_default() {
+                if !streams.iter().any(|existing| existing.stream_id == stream.stream_id) {
+                    streams.push(stream);
+                }
+            }
+            (ask.is_some() || !streams.is_empty()).then_some(TaskInternal { ask, streams })
+        },
     })
 }
 
@@ -418,7 +432,7 @@ mod tests {
             },
         )
         .unwrap();
-        let ask = |w: &TaskWrite| w.ask.clone();
+        let ask = |w: &TaskWrite| w.internal.as_ref().and_then(|internal| internal.ask.clone());
         assert_eq!(ask(&base).map(|a| a.question), Some("when?".into()));
         let msg = merge_write(
             "AST_1",

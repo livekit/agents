@@ -335,8 +335,8 @@ async def test_inbox_batches_a_burst_into_one_reply(thread_storages: Workers) ->
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0]["text"] for m in ctx.messages])
-        assert ctx.message.content == [m.parts[0]["text"] for m in ctx.messages]
+        batches.append([m.parts[0].text for m in ctx.messages])
+        assert ctx.message.content == [m.parts[0].text for m in ctx.messages]
         return "one reply"
 
     debounce = timedelta(seconds=0.3)
@@ -398,7 +398,7 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(thread_storages: Work
         return "late"
 
     async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0]["text"] for m in ctx.messages])
+        batches.append([m.parts[0].text for m in ctx.messages])
         return "answered"
 
     # worker A receives, its drain picks the task up, and it dies before its commit
@@ -506,7 +506,7 @@ async def test_input_required_pending_call_is_the_next_messages_output(
 
     first = await run_turn(storage, sid, LANE, a2a("my car is damaged", "m1"), "interrupt", handler)
     assert first.task.status == "input-required"
-    ask = first.task.internal
+    ask = first.task.internal.ask if first.task.internal else None
     assert ask is not None
     assert (ask.question, ask.tool, ask.call_id) == (
         "Could you send a photo?",
