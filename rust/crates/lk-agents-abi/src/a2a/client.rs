@@ -119,24 +119,10 @@ pub fn _core_a2a_message_data(message: Message) -> Option<Map<String, Value>> {
 
 /// A string is shorthand for a generated message with one text part.
 #[derive(Debug, Clone)]
-#[crate::host(handwritten(extract, host = "str | Message"))]
+#[crate::host(record(module = "a2a_client", extract, transparent))]
 pub enum MessageInput {
     Text(String),
     Message(Message),
-}
-
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for MessageInput {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::types::PyAnyMethods;
-        if obj.is_instance_of::<pyo3::types::PyString>() {
-            Ok(Self::Text(obj.extract()?))
-        } else {
-            Ok(Self::Message(obj.extract()?))
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

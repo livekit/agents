@@ -1,26 +1,24 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/a2a/options.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
-from pydantic import BaseModel
 
-
-class TurnOptions(BaseModel):
+@dataclass(frozen=True, kw_only=True, slots=True)
+class TurnOptions:
     """A text door's turn options; a field left out is the default."""
 
-    policy: Policy | dict[str, Policy] | None = None
+    policy: PolicySpec = None
     """`inbox`: one policy for every channel, or a map by channel over the
     default map; `None` is the default map.
     """
-    debounce: float | dict[str, float] | None = None
+    debounce: DebounceSpec = None
     """The wait before a turn starts, in seconds: one for every channel, or a map by channel;
     `None` is the defaults.
     """
@@ -30,5 +28,18 @@ class TurnOptions(BaseModel):
     """
 
 
-Policy = Literal["batch", "interrupt", "queue", "concurrent", "reject"]
+Policy: TypeAlias = Literal["batch", "interrupt", "queue", "concurrent", "reject"]
 """A message during a run: one of the five policies."""
+
+
+PolicySpec: TypeAlias = Policy | dict[str, Policy] | None
+"""`inbox` as a door declares it: nothing (the default map), one policy for every
+channel, or a map that overrides the default map channel by channel. On the wire `null`, a
+policy string, or an object of them by channel.
+"""
+
+
+DebounceSpec: TypeAlias = float | dict[str, float] | None
+"""The debounce as a door declares it: nothing (the defaults), one wait for every channel, or a
+map per channel. On the wire `null`, seconds, or an object of seconds by channel.
+"""

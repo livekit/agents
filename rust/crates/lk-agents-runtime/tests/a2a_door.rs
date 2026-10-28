@@ -3,12 +3,14 @@
 mod storage_common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use a2a::{JsonRpcResponse, StreamResponse};
 use async_trait::async_trait;
 use lk_agents_abi::a2a::auth::{AuthGrant, AuthPrincipal, PrincipalKind};
 use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{A2ADoor as _, A2AResponse as _, DoorConfig, DoorError};
+use lk_agents_abi::a2a::options::{DebounceSpec, Policy, PolicySpec, TurnOptions};
 use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, Verdict};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamSink, StreamSource, Ts};
@@ -144,7 +146,11 @@ fn config() -> DoorConfig {
             version: "v1".into(),
             url: "http://agent/desk/v1".into(),
         },
-        options: json!({"policy": "queue", "debounce": 0}),
+        options: TurnOptions {
+            policy: PolicySpec::All(Policy::Queue),
+            debounce: DebounceSpec::All(Duration::ZERO),
+            ..Default::default()
+        },
     }
 }
 

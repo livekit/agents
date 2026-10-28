@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .a2a_card import EndpointDescriptor
+    from .storage_options import TurnOptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -18,7 +19,7 @@ class DoorConfig:
     lane: str
     holder: str
     endpoint: EndpointDescriptor
-    options: object
+    options: TurnOptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

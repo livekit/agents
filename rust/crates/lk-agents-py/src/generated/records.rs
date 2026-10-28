@@ -220,6 +220,18 @@ pub mod a2a_client {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+
+    pub fn message_input_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::client::MessageInput> {
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::a2a::client::MessageInput::Text(obj.extract::<::std::string::String>()?));
+        }
+        if obj.is_instance(&obj.py().import("livekit.agents._generated.a2a_client")?.getattr("Message")?)? {
+            return Ok(::lk_agents_abi::a2a::client::MessageInput::Message(obj.extract::<::lk_agents_abi::a2a::client::Message>().map_err(::std::convert::Into::<PyErr>::into)?));
+        }
+        Err(super::not_a(obj, "MessageInput"))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
     static ARTIFACT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -311,7 +323,7 @@ pub mod a2a_door {
                 lane: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "lane", |v| v.extract::<::std::string::String>())?,
                 holder: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "holder", |v| v.extract::<::std::string::String>())?,
                 endpoint: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "endpoint", |v| crate::generated::records::a2a_card::endpoint_descriptor_from_py(v))?,
-                options: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "options", |v| ::lk_agents_abi::python::value_from_py(v, "DoorConfig.options"))?,
+                options: ::lk_agents_abi::python::attr_with(obj, "DoorConfig", "options", |v| crate::generated::records::storage_options::turn_options_from_py(v))?,
             })
     }
 
@@ -321,7 +333,7 @@ pub mod a2a_door {
             kwargs.set_item("lane", ::pyo3::IntoPyObjectExt::into_bound_py_any(lane, py)?)?;
             kwargs.set_item("holder", ::pyo3::IntoPyObjectExt::into_bound_py_any(holder, py)?)?;
             kwargs.set_item("endpoint", crate::generated::records::a2a_card::endpoint_descriptor_to_py(py, endpoint)?)?;
-            kwargs.set_item("options", ::lk_agents_abi::python::value_to_py(py, &options)?)?;
+            kwargs.set_item("options", crate::generated::records::storage_options::turn_options_to_py(py, options)?)?;
             DOOR_CONFIG.import(py, "livekit.agents._generated.a2a_door", "DoorConfig")?.call((), Some(&kwargs))
     }
 
@@ -1713,6 +1725,106 @@ pub mod storage_context {
             kwargs.set_item("revision", ::pyo3::IntoPyObjectExt::into_bound_py_any(revision, py)?)?;
             kwargs.set_item("fields", ::lk_agents_abi::python::extra_to_py(py, &fields)?.into_any())?;
             CONTEXT_VALUES.import(py, "livekit.agents._generated.storage_context", "ContextValues")?.call((), Some(&kwargs))
+    }
+}
+
+pub mod storage_options {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
+    static TURN_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn turn_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::options::TurnOptions> {
+        let py = obj.py();
+            if !obj.is_instance(TURN_OPTIONS.import(py, "livekit.agents._generated.storage_options", "TurnOptions")?)? {
+                return Err(super::not_a(obj, "TurnOptions"));
+            }
+            Ok(::lk_agents_abi::a2a::options::TurnOptions {
+                policy: ::lk_agents_abi::python::attr_with(obj, "TurnOptions", "policy", |v| crate::generated::records::storage_options::policy_spec_from_py(v))?,
+                debounce: ::lk_agents_abi::python::attr_with(obj, "TurnOptions", "debounce", |v| crate::generated::records::storage_options::debounce_spec_from_py(v))?,
+                wait_timeout: ::lk_agents_abi::python::attr_with(obj, "TurnOptions", "wait_timeout", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "TurnOptions.wait_timeout").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("TurnOptions.wait_timeout: {e}"))))).map(Some) })?,
+            })
+    }
+
+    pub fn turn_options_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::options::TurnOptions) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::a2a::options::TurnOptions { policy, debounce, wait_timeout } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("policy", crate::generated::records::storage_options::policy_spec_to_py(py, policy)?)?;
+            kwargs.set_item("debounce", crate::generated::records::storage_options::debounce_spec_to_py(py, debounce)?)?;
+            kwargs.set_item("wait_timeout", match wait_timeout { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_secs_f64(), py)? })?;
+            TURN_OPTIONS.import(py, "livekit.agents._generated.storage_options", "TurnOptions")?.call((), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
+
+    pub fn policy_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::options::Policy> {
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "batch" => Ok(::lk_agents_abi::a2a::options::Policy::Batch),
+                "interrupt" => Ok(::lk_agents_abi::a2a::options::Policy::Interrupt),
+                "queue" => Ok(::lk_agents_abi::a2a::options::Policy::Queue),
+                "concurrent" => Ok(::lk_agents_abi::a2a::options::Policy::Concurrent),
+                "reject" => Ok(::lk_agents_abi::a2a::options::Policy::Reject),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("Policy: {other:?} is not one of 'batch', 'interrupt', 'queue', 'concurrent', 'reject'"))),
+            }
+    }
+
+    pub fn policy_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::options::Policy) -> PyResult<Bound<'py, PyAny>> {
+            let value = match value {
+                ::lk_agents_abi::a2a::options::Policy::Batch => "batch",
+                ::lk_agents_abi::a2a::options::Policy::Interrupt => "interrupt",
+                ::lk_agents_abi::a2a::options::Policy::Queue => "queue",
+                ::lk_agents_abi::a2a::options::Policy::Concurrent => "concurrent",
+                ::lk_agents_abi::a2a::options::Policy::Reject => "reject",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
+
+    pub fn policy_spec_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::options::PolicySpec> {
+        if obj.is_none() {
+            return Ok(::lk_agents_abi::a2a::options::PolicySpec::Default);
+        }
+        if obj.is_instance_of::<::pyo3::types::PyString>() {
+            return Ok(::lk_agents_abi::a2a::options::PolicySpec::All(crate::generated::records::storage_options::policy_from_py(obj)?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::a2a::options::PolicySpec::ByChannel(obj.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, crate::generated::records::storage_options::policy_from_py(item)?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()?));
+        }
+        Err(super::not_a(obj, "PolicySpec"))
+    }
+
+    pub fn policy_spec_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::options::PolicySpec) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::a2a::options::PolicySpec::Default => py.None().into_bound(py),
+            ::lk_agents_abi::a2a::options::PolicySpec::All(x) => crate::generated::records::storage_options::policy_to_py(py, x)?,
+            ::lk_agents_abi::a2a::options::PolicySpec::ByChannel(x) => { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, crate::generated::records::storage_options::policy_to_py(py, x)?)?; } d.into_any() },
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/options.rs.
+
+    pub fn debounce_spec_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::a2a::options::DebounceSpec> {
+        if obj.is_none() {
+            return Ok(::lk_agents_abi::a2a::options::DebounceSpec::Default);
+        }
+        if (obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())) {
+            return Ok(::lk_agents_abi::a2a::options::DebounceSpec::All(::lk_agents_abi::python::number_from_py::<f64>(obj, "DebounceSpec.All").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("DebounceSpec.All: {e}"))))?));
+        }
+        if obj.is_instance_of::<::pyo3::types::PyDict>() {
+            return Ok(::lk_agents_abi::a2a::options::DebounceSpec::ByChannel(obj.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, ::lk_agents_abi::python::number_from_py::<f64>(item, "DebounceSpec.ByChannel").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("DebounceSpec.ByChannel: {e}"))))?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()?));
+        }
+        Err(super::not_a(obj, "DebounceSpec"))
+    }
+
+    pub fn debounce_spec_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::a2a::options::DebounceSpec) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::a2a::options::DebounceSpec::Default => py.None().into_bound(py),
+            ::lk_agents_abi::a2a::options::DebounceSpec::All(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_secs_f64(), py)?,
+            ::lk_agents_abi::a2a::options::DebounceSpec::ByChannel(x) => { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_secs_f64(), py)?)?; } d.into_any() },
+        })
     }
 }
 

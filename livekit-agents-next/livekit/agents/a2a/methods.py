@@ -60,7 +60,7 @@ class A2AService:
                     version=endpoint.version,
                     url=endpoint.url or f"/{endpoint.name}/v1",
                 ),
-                options=endpoint.turn_options.model_dump(mode="json"),
+                options=endpoint.turn_options,
             ),
             host,
         )

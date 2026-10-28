@@ -12,7 +12,7 @@ from livekit.agents.types import APIConnectOptions
 from .._core import ChatItem
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
-from .a2a_client import AgentCard, Message, MessageMetadata, TaskUpdate
+from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
 from .a2a_door import DoorFrame
 from .a2a_remote import RemoteEvent
 
@@ -79,7 +79,7 @@ class AgentClient:
     def extensions(self) -> list[str]: ...
     async def send(
         self,
-        message: str | Message,
+        message: MessageInput,
         *,
         thread_id: str | None = None,
         task_id: str | None = None,

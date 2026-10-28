@@ -74,6 +74,10 @@ class Message:
         return _core._core_a2a_message_data(self)
 
 
+MessageInput: TypeAlias = str | Message
+"""A string is shorthand for a generated message with one text part."""
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Artifact:
     artifact_id: str

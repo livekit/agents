@@ -59,15 +59,13 @@ impl Door {
         if config.lane.is_empty() {
             return Err(StorageError::Invalid("an A2A door requires a lane".into()));
         }
-        let options = serde_json::from_value(config.options)
-            .map_err(|e| StorageError::Invalid(format!("turn options: {e}")))?;
         Ok(Self {
             inner: Arc::new(Inner {
                 storage,
                 lane: config.lane,
                 holder: config.holder,
                 host,
-                options,
+                options: config.options,
                 owner: owner.clone(),
             }),
             tasks: TaskTracker::new(),

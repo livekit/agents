@@ -180,8 +180,9 @@ impl AgentClient {
     }
 
     #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
-    fn send<'py>(&self, py: Python<'py>, message: ::lk_agents_abi::a2a::client::MessageInput, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: ::std::option::Option<::lk_agents_abi::a2a::client::MessageMetadata>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: ::std::option::Option<::lk_agents_abi::a2a::client::MessageMetadata>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let message = crate::generated::records::a2a_client::message_input_from_py(&message)?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx)

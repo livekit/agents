@@ -3,31 +3,30 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lk_agents_host_derive::Host;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 pub const LEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A text door's turn options; a field left out is the default.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[crate::host(record(module = "storage_options", emit, extract))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[python(pydantic, module = "storage_options")]
 pub struct TurnOptions {
     /// `inbox`: one policy for every channel, or a map by channel over the
     /// default map; `None` is the default map.
     #[cfg_attr(feature = "serde", serde(default))]
-    #[python(ty = "Policy | dict[str, Policy] | None", default = "None")]
+    #[host(default = None)]
     pub policy: PolicySpec,
     /// The wait before a turn starts, in seconds: one for every channel, or a map by channel;
     /// `None` is the defaults.
     #[cfg_attr(feature = "serde", serde(default))]
-    #[python(ty = "float | dict[str, float] | None", default = "None")]
+    #[host(default = None)]
     pub debounce: DebounceSpec,
     /// How long a waiter polls for the lane before its task fails `lease-timeout`, in seconds;
     /// `None` is a minute.
     #[cfg_attr(feature = "serde", serde(default, with = "opt_seconds"))]
-    #[python(ty = "float | None", default = "None")]
+    #[host(default = None)]
     pub wait_timeout: Option<Duration>,
 }
 
@@ -57,10 +56,11 @@ mod opt_seconds {
 }
 
 /// A message during a run: one of the five policies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[crate::host(record(module = "storage_options", emit, extract))]
+#[crate::host(wire_strs)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
-#[python(literal, module = "storage_options")]
 pub enum Policy {
     #[host(rename = "batch")]
     Batch,
@@ -85,6 +85,7 @@ impl Policy {
 /// channel, or a map that overrides the default map channel by channel. On the wire `null`, a
 /// policy string, or an object of them by channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::host(record(module = "storage_options", emit, extract, transparent))]
 pub enum PolicySpec {
     #[default]
     Default,
@@ -136,6 +137,7 @@ impl<'de> Deserialize<'de> for PolicySpec {
 /// The debounce as a door declares it: nothing (the defaults), one wait for every channel, or a
 /// map per channel. On the wire `null`, seconds, or an object of seconds by channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::host(record(module = "storage_options", emit, extract, transparent))]
 pub enum DebounceSpec {
     #[default]
     Default,

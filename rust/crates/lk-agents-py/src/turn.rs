@@ -21,7 +21,7 @@ use lk_agents_runtime::storage::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::storage::{parse_request, to_py_err};
+use crate::storage::to_py_err;
 
 /// Core rows as a list of their host records (`livekit.agents._generated.storage_class`), each by
 /// its generated conversion.
@@ -380,7 +380,7 @@ pub struct PyTurn {
 #[pymethods]
 impl PyTurn {
     /// Construct on the host event loop: the host's coroutines are scheduled on it. `options` is
-    /// a `TurnOptions` model (or a dict in its shape); a field left out is the crate default.
+    /// a generated `TurnOptions` record; a field left out is the crate default.
     #[new]
     #[pyo3(signature = (thread, lane, host, options=None))]
     fn new(
@@ -390,8 +390,10 @@ impl PyTurn {
         options: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         check_pid()?;
-        let opts: TurnOptions =
-            options.map(|o| parse_request(o, "options")).transpose()?.unwrap_or_default();
+        let opts: TurnOptions = options
+            .map(crate::generated::records::storage_options::turn_options_from_py)
+            .transpose()?
+            .unwrap_or_default();
         let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
         let host = <dyn TurnHost as HostProxy>::from_host(host, Some(clock.clone()))?;
         Ok(Self { inner: Arc::new(Turn::new(thread.inner.clone(), lane, host, clock, opts)) })
@@ -438,53 +440,3 @@ impl PyTurn {
 lk_agents_abi::register_host!(class PyThread);
 lk_agents_abi::register_host!(class PyRun);
 lk_agents_abi::register_host!(class PyTurn);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: an options dict read as the wrong spec (a str policy applied per channel, a
-    // debounce map read as one value), or an unknown policy accepted.
-    #[test]
-    fn options_cross_as_a_dict() {
-        use std::time::Duration;
-
-        use lk_agents_abi::a2a::options::{DebounceSpec, Policy, PolicySpec};
-
-        Python::initialize();
-        Python::attach(|py| {
-            let d = py.eval(c"{}", None, None).unwrap();
-            assert_eq!(
-                parse_request::<TurnOptions>(&d, "options").unwrap(),
-                TurnOptions::default()
-            );
-
-            let d = py
-                .eval(c"{'policy': 'interrupt', 'debounce': 0, 'wait_timeout': 1.5}", None, None)
-                .unwrap();
-            let o: TurnOptions = parse_request(&d, "options").unwrap();
-            assert_eq!(o.policy, PolicySpec::All(Policy::Interrupt));
-            assert_eq!(o.debounce, DebounceSpec::All(Duration::ZERO));
-            assert_eq!(o.wait_timeout, Some(Duration::from_millis(1500)));
-
-            let d = py
-                .eval(c"{'policy': {'sms': 'batch'}, 'debounce': {'sms': 2.0}}", None, None)
-                .unwrap();
-            let o: TurnOptions = parse_request(&d, "options").unwrap();
-            assert_eq!(
-                o.policy,
-                PolicySpec::ByChannel([("sms".to_owned(), Policy::Batch)].into_iter().collect())
-            );
-            assert_eq!(
-                o.debounce,
-                DebounceSpec::ByChannel(
-                    [("sms".to_owned(), Duration::from_secs(2))].into_iter().collect()
-                )
-            );
-
-            let d = py.eval(c"{'policy': 'later'}", None, None).unwrap();
-            let e = parse_request::<TurnOptions>(&d, "options").unwrap_err();
-            assert!(e.is_instance_of::<PyValueError>(py) && e.to_string().contains("later"), "{e}");
-        });
-    }
-}

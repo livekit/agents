@@ -2,10 +2,9 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
-
 use super::auth::{AuthError, AuthPrincipal};
 use super::card::EndpointDescriptor;
+use super::options::TurnOptions;
 use super::turn::TurnHost;
 use crate::storage::StorageError;
 
@@ -15,7 +14,7 @@ pub struct DoorConfig {
     pub lane: String,
     pub holder: String,
     pub endpoint: EndpointDescriptor,
-    pub options: Value,
+    pub options: TurnOptions,
 }
 
 #[crate::host(record(module = "a2a_door", emit))]
