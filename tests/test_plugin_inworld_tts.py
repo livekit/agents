@@ -158,6 +158,30 @@ def _patch_session_to_capture_post(tts, captured: dict[str, object]) -> None:
 
     fake_session = MagicMock()
     fake_session.post = _fake_post
+    fake_session.trace_configs = []
+
+    class _Writer:
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    class _CaptureRequest:
+        def __init__(self, url, data):
+            self.url, self.data = url, data
+
+        async def __aenter__(self):
+            writer = _Writer()
+            writer.chunks = []
+            if self.data is not None:
+                await self.data.write(writer)
+                captured["json"] = json.loads(b"".join(writer.chunks))
+            captured["url"] = self.url
+            raise RuntimeError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    fake_session.json_serialize = json.dumps
+    fake_session.request = lambda method, url, data=None, **kwargs: _CaptureRequest(url, data)
     tts._session = fake_session
 
 

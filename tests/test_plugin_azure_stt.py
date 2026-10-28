@@ -21,6 +21,7 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
     stream._opts = SimpleNamespace(language=["en-US"])
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    stream.send = events.append  # capture the provider callback output seam
     stream._start_time_offset = 0.0
 
     stream._on_recognized(
@@ -41,6 +42,7 @@ def test_azure_stream_emits_usage_for_processed_audio():
     events = []
     stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    stream.send = events.append  # capture the provider callback output seam
     stream._audio_duration = 3.5
     stream._last_audio_duration_report_time = 0.0
 

@@ -16,6 +16,8 @@ from yarl import URL
 
 from livekit.agents import APIStatusError
 
+pytestmark = pytest.mark.unit
+
 SECRET_API_KEY = "secret-api-key-do-not-log"
 
 

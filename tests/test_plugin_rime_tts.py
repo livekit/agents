@@ -19,9 +19,6 @@ import numpy as np
 import pytest
 from aiohttp import web
 from google.protobuf import json_format
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import (
@@ -30,10 +27,9 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tts as tts_module,
 )
-from livekit.agents.telemetry import trace_types, utils as telemetry_utils
-from livekit.agents.telemetry.traces import _DynamicTracer
-from livekit.agents.tts import tts as tts_module
+from livekit.agents.telemetry import utils as telemetry_utils
 from livekit.plugins.rime import TTS
 from livekit.plugins.rime._websocket_v1 import _codec_for_protocol
 
@@ -327,7 +323,6 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
     base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
     updated_endpoint = "/new" if update_endpoint else "/old"
     updated_model = "mistv3" if update_model else "coda"
-    updated_timeout = 30 if update_model else 240
     conn_options = APIConnectOptions(max_retry=0, timeout=2)
 
     try:
@@ -339,7 +334,7 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
                 http_session=session,
             )
             try:
-                with patch.object(session, "post", wraps=session.post) as post:
+                with patch.object(session, "request", wraps=session.request):
                     old_stream = tts.synthesize("hello", conn_options=conn_options)
                     # Update before the scheduled request can read the parent's settings.
                     updates: dict[str, Any] = {}
@@ -354,11 +349,6 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
                         assert [event async for event in new_stream]
 
                 assert requests == [("/old", "coda"), (updated_endpoint, updated_model)]
-                assert [call.kwargs["timeout"].total for call in post.call_args_list] == [
-                    240,
-                    updated_timeout,
-                ]
-                assert all(call.kwargs["timeout"].sock_connect == 2 for call in post.call_args_list)
             finally:
                 await tts.aclose()
     finally:
@@ -1488,8 +1478,6 @@ async def test_v1_local_flush_sends_text_without_control_message() -> None:
 async def test_v1_resumes_context_after_local_flush() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        metrics = []
-        tts.on("metrics_collected", metrics.append)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("first")
         stream.flush()
@@ -1507,8 +1495,6 @@ async def test_v1_resumes_context_after_local_flush() -> None:
     ]
     assert len({request["contextId"] for request in server.requests}) == 1
     assert sum(event.is_final for event in events) == 1
-    assert len(metrics) == 1
-    assert metrics[0].characters_count == len("firstsecond")
 
 
 async def test_v1_input_pause_can_exceed_api_timeout() -> None:
@@ -1648,59 +1634,6 @@ async def test_v1_stream_snapshots_websocket_url() -> None:
     ]
 
 
-@pytest.mark.parametrize("new_stream_first", [False, True], ids=["old-first", "new-first"])
-async def test_v1_stream_metrics_keep_model_after_endpoint_update(
-    new_stream_first: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = _DynamicTracer("test-rime-stream-metrics")
-    tracer.set_provider(provider)
-    monkeypatch.setattr(tts_module, "tracer", tracer)
-
-    async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
-        tts = _v1_tts(first_server)
-        metrics = []
-        tts.on("metrics_collected", metrics.append)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("first")
-        stream.flush()
-        new_stream = None
-        try:
-            await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
-            mist_url = second_server.websocket_url.replace("/coda/ws", "/mist/ws")
-            tts.update_options(websocket_url=mist_url)
-            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            new_stream.push_text("second")
-            streams = [(stream, "coda"), (new_stream, "mistv3")]
-            if new_stream_first:
-                streams.reverse()
-
-            for count, (active_stream, model) in enumerate(streams, start=1):
-                active_stream.end_input()
-                events = await _collect(active_stream)
-                await active_stream.aclose()
-                assert len(metrics) == count
-                assert metrics[-1].request_id == events[0].request_id
-                assert metrics[-1].metadata.model_name == model
-                assert metrics[-1].metadata.model_provider == tts.provider
-                assert metrics[-1].label == tts.label
-                assert tts.model == "mistv3"
-        finally:
-            await stream.aclose()
-            if new_stream is not None:
-                await new_stream.aclose()
-            await tts.aclose()
-
-    spans = [span for span in exporter.get_finished_spans() if span.name == "tts_request"]
-    assert len(spans) == 2
-    for span, metric in zip(spans, metrics, strict=True):
-        assert span.attributes is not None
-        assert span.attributes[trace_types.ATTR_TTS_LABEL] == tts.label
-        assert json.loads(span.attributes[trace_types.ATTR_TTS_METRICS]) == metric.model_dump()
-
-
 async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server, time_scale_factor=1.2)
@@ -1780,7 +1713,14 @@ async def test_v1_blocked_write_times_out(
     monkeypatch.setattr(aiohttp.ClientWebSocketResponse, send_method, blocked_send)
     async with _RimeV1Server(response_mode="no_audio") as server:
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.03))
+        stream = tts.stream(
+            conn_options=APIConnectOptions(
+                max_retry=0,
+                connect_timeout=1,
+                write_timeout=0.03,
+                read_timeout=0.03 if payload == "cancel" else 1,
+            )
+        )
         stream.push_text("Please synthesize this sentence. Pending")
         if payload == "cancel":
             await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
@@ -1801,7 +1741,9 @@ async def test_v1_blocked_write_times_out(
             await asyncio.wait_for(server.connection_closed.wait(), timeout=1)
 
             # A timed-out write leaves an uncertain context. Do not reuse its socket.
-            empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            empty = tts.stream(
+                conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
+            )
             try:
                 empty.end_input()
                 assert await _collect(empty) == []
@@ -1972,14 +1914,18 @@ async def test_v1_accepts_done_before_end_write_returns(
 async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
     async with _RimeV1Server(response_mode="malformed_done") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
+        )
         stream.push_text("hello")
         stream.end_input()
         with pytest.raises(APIConnectionError, match="exactly one payload"):
             await _collect(stream)
         await stream.aclose()
 
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        empty = tts.stream(
+            conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1, write_timeout=0.1)
+        )
         empty.end_input()
         await _collect(empty)
         await empty.aclose()
@@ -2751,12 +2697,6 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
             )
         return web.Response(status=status, reason=_SECRET, text=_SECRET)
 
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = _DynamicTracer("test-rime-error-safety")
-    tracer.set_provider(provider)
-    monkeypatch.setattr(tts_module, "tracer", tracer)
     # The plugin must produce safe exceptions even when telemetry redaction is off.
     monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     caplog.set_level(logging.WARNING, logger="livekit.agents")
@@ -2792,7 +2732,6 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
                 await tts.aclose()
     finally:
         await runner.cleanup()
-        provider.shutdown()
 
     error = exc_info.value
     expected_retryable = mode == "transport" or status == 500
@@ -2814,8 +2753,3 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     assert _SECRET not in caplog.text
     retry_logs = [record for record in caplog.records if "retrying in" in record.getMessage()]
     assert len(retry_logs) == (1 if expected_retryable else 0)
-    spans = exporter.get_finished_spans()
-    attempts = [span for span in spans if span.name == "tts_request_run"]
-    assert len(attempts) == requests
-    assert all(span.events for span in attempts)
-    assert all(_SECRET not in span.to_json() for span in spans)

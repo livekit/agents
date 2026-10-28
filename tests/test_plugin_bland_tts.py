@@ -166,20 +166,6 @@ def test_update_options_preserves_unset_fields():
     assert tts._opts.stability == 0.25
 
 
-def test_synthesize_returns_chunked_stream():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import ChunkedStream
-
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
-
-    tts = TTS(api_key="test-key")
-    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
-        stream = tts.synthesize("hello")
-    assert isinstance(stream, ChunkedStream)
-
-
 def _patch_session_capture_post(tts, captured: dict[str, Any]) -> None:
     class _FakePostCM:
         async def __aenter__(self):
@@ -194,6 +180,35 @@ def _patch_session_capture_post(tts, captured: dict[str, Any]) -> None:
 
     fake_session = MagicMock()
     fake_session.post = _fake_post
+    fake_session.trace_configs = []
+
+    class _Writer:
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    class _CaptureRequest:
+        def __init__(self, url, data):
+            self.url, self.data = url, data
+
+        async def __aenter__(self):
+            writer = _Writer()
+            writer.chunks = []
+            if self.data is not None:
+                await self.data.write(writer)
+                captured["json"] = json.loads(b"".join(writer.chunks))
+            captured["url"] = self.url
+            raise RuntimeError("short-circuit")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    fake_session.json_serialize = json.dumps
+
+    def _request(method, url, data=None, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+        return _CaptureRequest(url, data)
+
+    fake_session.request = _request
     tts._session = fake_session
 
 
@@ -536,20 +551,6 @@ def test_ws_url_derives_from_base_url():
     assert _ws_url(DEFAULT_BASE_URL) == "wss://api.bland.ai/v2/tts/ws"
     assert _ws_url("http://127.0.0.1:8080/v2") == "ws://127.0.0.1:8080/v2/tts/ws"
     assert _ws_url("http://127.0.0.1:8080/v2/") == "ws://127.0.0.1:8080/v2/tts/ws"
-
-
-def test_stream_returns_synthesize_stream():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import SynthesizeStream
-
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
-
-    tts = TTS(api_key="test-key")
-    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
-        stream = tts.stream()
-    assert isinstance(stream, SynthesizeStream)
 
 
 async def test_init_sent_once_with_voice_and_format():
@@ -910,7 +911,9 @@ async def test_refused_turn_does_not_contaminate_the_next_one():
 
     async with _RefusingWSServer() as srv:
         tts = TTS(api_key="k", base_url=srv.base_url, http_session=srv.session)
-        options = APIConnectOptions(max_retry=0, timeout=5)
+        options = APIConnectOptions(
+            max_retry=0, connect_timeout=1, write_timeout=0.1, read_timeout=0.1
+        )
 
         stream = tts.stream(conn_options=options)
         stream.push_text("first")
@@ -1007,19 +1010,6 @@ def test_disabled_streaming_refuses_to_open_a_stream():
 
     with pytest.raises(RuntimeError, match="streaming is disabled"):
         tts.stream()
-
-
-def test_disabled_streaming_leaves_the_http_path_alone():
-    from livekit.plugins.bland import TTS
-    from livekit.plugins.bland.tts import ChunkedStream
-
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
-
-    tts = TTS(api_key="k", streaming=False)
-    with patch("livekit.agents.tts.tts.asyncio.create_task", side_effect=_fake_create_task):
-        assert isinstance(tts.synthesize("hello"), ChunkedStream)
 
 
 async def test_disabled_streaming_teardown_is_a_noop():

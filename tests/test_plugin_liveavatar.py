@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 
-from livekit.agents.utils.aio.channel import ChanEmpty
+from livekit.agents.utils.aio import ChanEmpty
 from livekit.plugins.liveavatar.avatar import AvatarSession
 
-pytestmark = [pytest.mark.unit, pytest.mark.plugin("liveavatar")]
+pytestmark = pytest.mark.plugin("liveavatar")
 
 
 class _FakeAudioBuffer:

@@ -30,6 +30,9 @@ def _make_stream(
 ) -> stt_streaming.RealtimeSpeechStream:
     stream = object.__new__(stt_streaming.RealtimeSpeechStream)
     stream._event_ch = _FakeEventChannel()
+    # Provider frame replay captures the documented send seam; actual stream metrics
+    # are tested separately through STTRealtime.stream below.
+    stream.send = stream._event_ch.send_nowait
     stream._request_id = ""
     stream._session_id = ""
     stream._session_ended = False
@@ -1194,7 +1197,7 @@ async def test_streaming_usage_event_is_converted_to_livekit_stt_metrics(
     stt_impl.on("metrics_collected", metrics.append)
     stream = stt_impl.stream()
 
-    stream._event_ch.send_nowait(
+    stream.send(
         stt_streaming.stt.SpeechEvent(
             type=stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE,
             request_id="sess_123",
@@ -1627,12 +1630,12 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 
     async def _input() -> object:
         yield frame
-        yield stream._FlushSentinel()
+        yield stream.Flush()
         yield frame
-        yield stream._FlushSentinel()
+        yield stream.Flush()
 
-    stream._input_ch = _input()
-    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+    stream.input = _input()
+    stream.Flush = stt_streaming.stt.RecognizeStream.Flush
 
     async def _run_turns() -> None:
         await stream._process_audio(ws)
@@ -1772,8 +1775,8 @@ async def test_process_audio_stops_pumping_after_session_end() -> None:
         yield frame
         yield frame
 
-    stream._input_ch = _input()
-    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+    stream.input = _input()
+    stream.Flush = stt_streaming.stt.RecognizeStream.Flush
 
     await stream._process_audio(ws)
 
@@ -1811,8 +1814,8 @@ async def test_process_audio_survives_reset_race_on_peer_close() -> None:
         yield frame
         yield frame
 
-    stream._input_ch = _input()
-    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+    stream.input = _input()
+    stream.Flush = stt_streaming.stt.RecognizeStream.Flush
 
     await stream._process_audio(ws)
 
@@ -1850,8 +1853,8 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     async def _input() -> object:
         yield frame
 
-    stream._input_ch = _input()
-    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+    stream.input = _input()
+    stream.Flush = stt_streaming.stt.RecognizeStream.Flush
 
     await stream._process_audio(ws)
 

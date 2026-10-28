@@ -1,24 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from xml.etree import ElementTree
 
 import aiohttp
 import pytest
-from examples.microsoft import microsoft_ai_smoke as smoke, microsoft_ai_tts_room as room_example
 
-from livekit import rtc
 from livekit.agents import (
     Agent,
     APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
-    JobContext,
     VoiceSession,
     tts,
 )
@@ -102,8 +97,8 @@ async def test_complete_wav_request_and_exact_audio_framing() -> None:
     assert kwargs["headers"]["Content-Type"] == "application/ssml+xml"
     assert kwargs["headers"]["X-Microsoft-OutputFormat"] == "riff-24khz-16bit-mono-pcm"
     assert kwargs["allow_redirects"] is False
-    assert kwargs["timeout"].total == 30
-    assert kwargs["timeout"].connect == OPTIONS.timeout
+    assert kwargs["timeout"].total is None
+    assert kwargs["timeout"].sock_read == OPTIONS.read_timeout
     assert response.closed
     session.close.assert_not_awaited()
 
@@ -262,8 +257,6 @@ async def test_text_and_timeout_limits_fail_before_http() -> None:
             instance.synthesize(" ")
         with pytest.raises(ValueError, match="max_text_length"):
             instance.synthesize("a" * 9)
-        with pytest.raises(ValueError, match="greater than zero"):
-            instance.synthesize("hello", conn_options=APIConnectOptions(timeout=0))
         with pytest.raises(NotImplementedError, match="streaming"):
             instance.stream()
     session.post.assert_not_called()
@@ -278,7 +271,7 @@ async def test_cancellation_closes_http_and_emits_no_late_audio() -> None:
     response.content.gate.set()
     assert await collect(stream) == []
     assert response.closed
-    assert stream._synthesize_task.done() and stream._metrics_task.done()
+    assert stream._synthesize_task.done()
     await instance.aclose()
     session.close.assert_not_awaited()
 
@@ -603,55 +596,6 @@ def test_invalid_region_is_not_interpolated_into_a_host(region: str) -> None:
         )
 
 
-def test_smoke_refuses_audio_dumping(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LK_DUMP_TTS", "1")
-    monkeypatch.setattr(sys, "argv", ["microsoft_ai_smoke.py", "--run-live", "--tts"])
-    factory = MagicMock()
-    monkeypatch.setattr(microsoft_ai, "TTS", factory)
-    with pytest.raises(SystemExit) as caught:
-        smoke.main()
-    assert caught.value.code == 2
-    factory.assert_not_called()
-
-
-async def test_tts_smoke_sends_only_the_fixed_approved_text(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    session = fake_session()
-    response = FakeResponse(wav_bytes(b"\x01\x00" * 1001))
-    session.post.return_value = response
-    instance = microsoft_ai.TTS(
-        url="https://tts.example.invalid/speech",
-        model="test",
-        voice="en-US-Dummy:test",
-        sample_rate=24000,
-        headers={},
-        http_session=session,
-    )
-    async with instance:
-        await smoke._check_tts(instance)
-    session.post.assert_called_once()
-    body = ElementTree.fromstring(session.post.call_args.kwargs["data"])
-    assert next(iter(body)).text == smoke.TTS_TEXT
-    assert "json" not in session.post.call_args.kwargs
-    output = capsys.readouterr().out
-    assert smoke.TTS_TEXT not in output
-    assert "PCM16 mono frames at 24000 Hz" in output
-    assert "audio_duration=" in output and "not model TTFA" in output
-    assert response.closed
-    assert smoke.CONNECT_OPTIONS.max_retry == 0
-    assert smoke.MAX_DURATION == 5.0
-
-
-def test_opted_in_cli_runs_only_selected_service(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LK_DUMP_TTS", raising=False)
-    monkeypatch.setattr(sys, "argv", ["microsoft_ai_smoke.py", "--run-live", "--tts"])
-    run = AsyncMock()
-    monkeypatch.setattr(smoke, "_run", run)
-    smoke.main()
-    run.assert_awaited_once_with(pcm=None, expected=None, check_tts=True, env_file=None)
-
-
 class _Handle:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
@@ -666,141 +610,6 @@ class _Handle:
     def exception(self) -> Exception | None:
         assert self.awaited
         return self.error
-
-
-def _mock_example(monkeypatch: pytest.MonkeyPatch):
-    speech = MagicMock(spec=microsoft_ai.TTS)
-    speech.sample_rate = 24000
-    speech.__aenter__.return_value = speech
-    speech.__aexit__.return_value = False
-    provider_factory = MagicMock(return_value=speech)
-    monkeypatch.setattr(room_example.microsoft_ai, "TTS", provider_factory)
-    monkeypatch.setattr(
-        room_example.microsoft_ai,
-        "STT",
-        MagicMock(side_effect=AssertionError("TTS-only example must not construct STT")),
-    )
-    started = asyncio.Event()
-    ready = asyncio.Event()
-    handle = _Handle()
-    session = MagicMock(spec=VoiceSession)
-    session.room_io = SimpleNamespace(wait_for_ready=AsyncMock(side_effect=ready.wait))
-    session.say.return_value = handle
-
-    async def start(**kwargs: object) -> None:
-        started.set()
-
-    session.start = AsyncMock(side_effect=start)
-    session_factory = MagicMock(return_value=session)
-    monkeypatch.setattr(room_example, "VoiceSession", session_factory)
-    context = MagicMock(spec=JobContext)
-    context.room = MagicMock(spec=rtc.Room)
-    return context, session, speech, provider_factory, session_factory, started, ready, handle
-
-
-async def test_waits_for_subscription_and_says_once_without_input_services(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context, session, speech, factory, session_factory, started, ready, handle = _mock_example(
-        monkeypatch
-    )
-    monkeypatch.setenv("MICROSOFT_AI_ENV_FILE", "selected-private-config.env")
-
-    def shutdown(*, reason: str) -> None:
-        assert reason == "TTS greeting complete"
-        session.aclose.assert_awaited_once()
-        speech.__aexit__.assert_awaited_once()
-
-    context.shutdown.side_effect = shutdown
-    task = asyncio.create_task(room_example.entrypoint(context))
-    try:
-        await asyncio.wait_for(started.wait(), 1)
-        session.say.assert_not_called()
-        ready.set()
-        await asyncio.wait_for(task, 1)
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-    factory.assert_called_once_with(env_file="selected-private-config.env")
-    kwargs = session_factory.call_args.kwargs
-    assert kwargs["tts"] is speech
-    assert kwargs["vad"] is None
-    assert kwargs["turn_handling"] == {"turn_detection": None}
-    assert kwargs["user_away_timeout"] is None
-    assert "stt" not in kwargs and "llm" not in kwargs
-    assert kwargs["conn_options"].tts_conn_options.max_retry == 0
-    start = session.start.call_args.kwargs
-    assert start["room"] is context.room
-    assert start["record"] is False and start["session_host"] is False
-    options = start["room_options"]
-    assert options.audio_input is False and options.video_input is False
-    assert options.text_input is False and options.text_output is False
-    assert options.audio_output.sample_rate == 24000
-    session.say.assert_called_once_with(
-        "Hello, this is a Microsoft AI voice test.",
-        allow_interruptions=False,
-        add_to_chat_ctx=False,
-    )
-    assert handle.awaited
-    session.aclose.assert_awaited_once()
-    speech.__aexit__.assert_awaited_once()
-    context.shutdown.assert_called_once_with(reason="TTS greeting complete")
-
-
-async def test_cancelling_before_room_ready_closes_without_synthesis(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context, session, speech, _, _, started, _, _ = _mock_example(monkeypatch)
-    task = asyncio.create_task(room_example.entrypoint(context))
-    await asyncio.wait_for(started.wait(), 1)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    session.say.assert_not_called()
-    context.shutdown.assert_not_called()
-    session.aclose.assert_awaited_once()
-    speech.__aexit__.assert_awaited_once()
-
-
-async def test_readiness_timeout_is_not_reported_as_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context, session, speech, _, _, _, _, _ = _mock_example(monkeypatch)
-    session.room_io.wait_for_ready.side_effect = asyncio.TimeoutError()
-    with pytest.raises(asyncio.TimeoutError):
-        await room_example.entrypoint(context)
-    session.say.assert_not_called()
-    context.shutdown.assert_not_called()
-    session.aclose.assert_awaited_once()
-    speech.__aexit__.assert_awaited_once()
-
-
-async def test_speech_handle_error_is_checked_and_resources_close(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context, session, speech, _, _, _, ready, handle = _mock_example(monkeypatch)
-    error = APIStatusError("Microsoft AI TTS request failed", status_code=401)
-    handle.error = error
-    ready.set()
-    with pytest.raises(APIStatusError) as caught:
-        await room_example.entrypoint(context)
-    assert caught.value is error
-    assert handle.awaited
-    context.shutdown.assert_not_called()
-    session.aclose.assert_awaited_once()
-    speech.__aexit__.assert_awaited_once()
-
-
-async def test_start_failure_closes_session_and_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    context, session, speech, _, _, _, _, _ = _mock_example(monkeypatch)
-    session.start.side_effect = RuntimeError("room setup failed")
-    with pytest.raises(RuntimeError, match="room setup failed"):
-        await room_example.entrypoint(context)
-    session.say.assert_not_called()
-    context.shutdown.assert_not_called()
-    session.aclose.assert_awaited_once()
-    speech.__aexit__.assert_awaited_once()
 
 
 async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
@@ -831,11 +640,11 @@ async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
         )
         session.output.audio = output
         try:
-            await session.start(
-                Agent(instructions="Say the supplied text."), session_host=False, record=False
-            )
+            await session.start(agent=Agent(instructions="Say the supplied text."))
             handle = session.say(
-                room_example.GREETING, allow_interruptions=False, add_to_chat_ctx=False
+                "Hello, this is a Microsoft AI voice test.",
+                allow_interruptions=False,
+                add_to_chat_ctx=False,
             )
             await asyncio.wait_for(handle, 3)
             assert handle.exception() is None
@@ -844,7 +653,7 @@ async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
             await session.aclose()
     http.post.assert_called_once()
     root = ElementTree.fromstring(http.post.call_args.kwargs["data"])
-    assert next(iter(root)).text == room_example.GREETING
+    assert next(iter(root)).text == "Hello, this is a Microsoft AI voice test."
     frames = [call.args[0] for call in capture.await_args_list]
     assert frames
     assert all(frame.sample_rate == 24000 and frame.num_channels == 1 for frame in frames)

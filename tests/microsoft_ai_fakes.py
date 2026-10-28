@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from livekit import rtc
-from livekit.agents import vad
+from livekit import agents as vad, rtc
 from livekit.plugins.microsoft_ai._http import HTTPClient
 
 DUMMY_CONFIG = """\
@@ -70,6 +69,31 @@ def wav_bytes(pcm: bytes, *, sample_rate: int = 24000, channels: int = 1, width:
 def fake_session() -> MagicMock:
     session = MagicMock(spec=aiohttp.ClientSession)
     session.closed = False
+    session.trace_configs = []
+
+    class _Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    class _Request:
+        def __init__(self, url, kwargs):
+            self.url, self.kwargs = url, kwargs
+
+        async def __aenter__(self):
+            if (data := self.kwargs.get("data")) is not None:
+                writer = _Writer()
+                await data.write(writer)
+                self.kwargs["data"] = b"".join(writer.chunks)
+            self.response = session.post(self.url, **self.kwargs)
+            return await self.response.__aenter__()
+
+        async def __aexit__(self, *exc):
+            return await self.response.__aexit__(*exc)
+
+    session.request = lambda method, url, **kwargs: _Request(url, kwargs)
 
     async def close() -> None:
         session.closed = True
@@ -177,7 +201,6 @@ class ScriptedVADStream(vad.VADStream):
     def __init__(self, detector: ScriptedVAD) -> None:
         super().__init__(detector)
         self.detector = detector
-        self.closed = False
         self.retained_samples = 0
         self._previous_event: vad.VADEvent | None = None
         self._consumed_samples = 0
@@ -203,8 +226,8 @@ class ScriptedVADStream(vad.VADStream):
         samples = 0
         pending = bytearray()
         prefix = bytearray()
-        async for data in self._input_ch:
-            if isinstance(data, self._FlushSentinel):
+        async for data in self.input:
+            if isinstance(data, self.Flush):
                 # Like the bundled VAD, flush does not decode a partial inference window.
                 pending.clear()
                 prefix.clear()
@@ -236,7 +259,7 @@ class ScriptedVADStream(vad.VADStream):
     def emit(
         self, type: vad.VADEventType, samples: int, *, frames: list[rtc.AudioFrame] | None = None
     ) -> None:
-        self._event_ch.send_nowait(
+        self.send(
             vad.VADEvent(
                 type=type,
                 samples_index=samples,
@@ -248,7 +271,6 @@ class ScriptedVADStream(vad.VADStream):
         )
 
     async def aclose(self) -> None:
-        self.closed = True
         await super().aclose()
 
 

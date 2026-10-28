@@ -121,7 +121,7 @@ def _make_stream_for_unit_test(stt=None):
         task = MagicMock()
         return task
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+    with patch("asyncio.create_task", side_effect=_fake_create_task):
         stream = SpeechStream(
             stt=stt,
             opts=stt._opts,
@@ -390,7 +390,7 @@ async def test_agent_context_propagates_from_stt_to_active_stream():
         coro.close()
         return MagicMock()
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+    with patch("asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
 
     stt.update_options(agent_context="The agent greeted the caller.")
@@ -1247,7 +1247,7 @@ async def test_language_codes_propagates_from_stt_to_active_stream():
         coro.close()
         return MagicMock()
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+    with patch("asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
 
     stt.update_options(language_codes=["en", "es"])
@@ -1458,7 +1458,7 @@ async def test_carryover_forwards_short_reply_verbatim():
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
-    stt._push_conversation_item(_assistant_item_event("Your room is booked for Tuesday."))
+    stt._push_conversation_item("assistant", "Your room is booked for Tuesday.")
     assert stt._opts.agent_context == "Your room is booked for Tuesday."
 
 
@@ -1468,42 +1468,32 @@ async def test_carryover_truncates_oversize_reply_keeping_tail():
 
     text = "a" * 2000 + "b" * 1750
     stt = STT(api_key="test-key")
-    stt._push_conversation_item(_assistant_item_event(text))
+    stt._push_conversation_item("assistant", text)
     assert stt._opts.agent_context == "b" * 1750
 
 
 async def test_carryover_ignores_non_assistant_items():
     """_push_conversation_item ignores user messages and textless assistant items
     — the shapes it receives when carryover is enabled."""
-    from livekit.agents.llm import ChatMessage
-    from livekit.agents.voice.events import ConversationItemAddedEvent
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
 
-    stt._push_conversation_item(
-        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["hi there"]))
-    )
+    stt._push_conversation_item("user", "hi there")
     assert stt._opts.agent_context is NOT_GIVEN
 
-    stt._push_conversation_item(
-        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[]))
-    )
+    stt._push_conversation_item("assistant", "")
     assert stt._opts.agent_context is NOT_GIVEN
 
 
 async def test_carryover_ignores_agent_handoff_items():
     """_push_conversation_item ignores non-message items (e.g. AgentHandoff),
     which have `.type != "message"` and no `text_content`."""
-    from livekit.agents.llm import AgentHandoff
-    from livekit.agents.voice.events import ConversationItemAddedEvent
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key")
 
-    stt._push_conversation_item(
-        ConversationItemAddedEvent(item=AgentHandoff(new_agent_id="agent-2"))
-    )
+    stt._push_conversation_item("agent_handoff", "")
     assert stt._opts.agent_context is NOT_GIVEN
 
 
@@ -1614,7 +1604,7 @@ async def test_carryover_explicit_true_wins_over_n_turns_zero():
 
 
 def _drain_events(stream):
-    from livekit.agents.utils.aio.channel import ChanEmpty
+    from livekit.agents.utils.aio import ChanEmpty
 
     events = []
     while True:

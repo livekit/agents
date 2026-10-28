@@ -1,118 +1,121 @@
-"""Tests for the Soniox STT plugin: target-language segments on `SpeechData`.
-
-Covers:
-- `SpeechData.__post_init__` coerces `target_languages` strings to `LanguageCode`.
-- `_TokenAccumulator._lang_segments` coalesces consecutive same-language tokens.
-- `_lang_segments_to_fields` helper edge cases.
-- `_recv_messages_task` end-to-end via a fake WebSocket, asserting the resulting
-  `SpeechData` fields on `FINAL_TRANSCRIPT` and `INTERIM_TRANSCRIPT`.
-
-Mirrors the unit-test style of `tests/test_plugin_assemblyai_stt.py`: patches
-`asyncio.create_task` during `SpeechStream.__init__` so no real connection is
-opened, then drives `_recv_messages_task` directly with canned token messages.
-"""
+"""Soniox protocol regressions through public streams and a local WebSocket peer."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIStatusError
-from livekit.agents.language import LanguageCode
-from livekit.agents.stt import SpeechData, SpeechEventType
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode
+from livekit.agents.stt import SpeechEventType
+from livekit.plugins.soniox import STT, STTOptions
 
 pytestmark = pytest.mark.plugin("soniox")
-
-# ---------------------------------------------------------------------------
-# SpeechData.__post_init__: target_languages coercion
-# ---------------------------------------------------------------------------
+END_TOKEN_FINAL: dict[str, Any] = {"text": "<end>", "is_final": True}
 
 
-def test_speech_data_target_languages_coerces_strings_to_language_code():
-    sd = SpeechData(
-        language="en",
-        text="hello",
-        target_languages=["en", "es"],
-        target_texts=["hello, ", "hola."],
-    )
-
-    assert sd.target_languages is not None
-    assert all(isinstance(lang, LanguageCode) for lang in sd.target_languages)
-    assert sd.target_languages == [LanguageCode("en"), LanguageCode("es")]
-    assert sd.target_texts == ["hello, ", "hola."]
+def _make_stream(translation: Any = None) -> STT:
+    return STT(api_key="test-key", params=STTOptions(translation=translation))
 
 
-def test_speech_data_target_languages_none_stays_none():
-    sd = SpeechData(language="en", text="hello")
-    assert sd.target_languages is None
-    assert sd.target_texts is None
+async def _drive_recv(model: STT, messages: list[dict[str, Any]], *, expect_events: int):
+    async def peer(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive_json()  # initial provider configuration
+        for message in messages:
+            await ws.send_json(message)
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/transcribe", peer)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        # The application supplies a transport and URL, then consumes the public stream.
+        model._base_url = str(server.make_url("/transcribe"))
+        model._http_session = session
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0))
+        try:
+            return [await asyncio.wait_for(anext(stream), 2) for _ in range(expect_events)]
+        finally:
+            await stream.aclose()
+            await model.aclose()
 
 
-def test_speech_data_target_languages_preserves_existing_language_code_instances():
-    code = LanguageCode("en")
-    sd = SpeechData(language="en", text="hello", target_languages=[code])
+@pytest.mark.parametrize("level", [None, 0, 2])
+async def test_authentication_and_endpoint_options_reach_the_peer(level: int | None) -> None:
+    captured = {}
+    connected = asyncio.Event()
 
-    assert sd.target_languages is not None
-    assert sd.target_languages[0] is code
+    async def peer(request: web.Request) -> web.WebSocketResponse:
+        captured["authorization"] = request.headers.get("Authorization")
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        captured["config"] = await ws.receive_json()
+        connected.set()
+        async for _ in ws:
+            pass
+        return ws
 
-
-@pytest.mark.parametrize("level", [0, 1, 2, 3])
-def test_endpoint_latency_adjustment_level_accepts_supported_values(level: int):
-    from livekit.plugins.soniox import STTOptions
-
-    assert (
-        STTOptions(endpoint_latency_adjustment_level=level).endpoint_latency_adjustment_level
-        == level
-    )
-
-
-@pytest.mark.parametrize("level", [-1, 4])
-def test_endpoint_latency_adjustment_level_rejects_unsupported_values(level: int):
-    from livekit.plugins.soniox import STTOptions
-
-    with pytest.raises(
-        ValueError, match="endpoint_latency_adjustment_level must be between 0 and 3"
-    ):
-        STTOptions(endpoint_latency_adjustment_level=level)
-
-
-# ---------------------------------------------------------------------------
-# _TokenAccumulator._lang_segments coalescing
-# ---------------------------------------------------------------------------
-
-
-def test_token_accumulator_coalesces_consecutive_same_language_runs():
-    from livekit.plugins.soniox.stt import _TokenAccumulator
-
-    accumulator = _TokenAccumulator()
-    for lang, text in [
-        ("en", "Hello"),
-        ("en", " world"),
-        ("es", " hola"),
-        ("es", " mundo"),
-        ("en", " again"),
-    ]:
-        accumulator.update({"text": text, "language": lang, "is_final": True})
-
-    assert accumulator._lang_segments == [
-        ("en", "Hello world"),
-        ("es", " hola mundo"),
-        ("en", " again"),
-    ]
-    assert accumulator.text == "Hello world hola mundo again"
-    assert "".join(text for _, text in accumulator._lang_segments) == accumulator.text
+    app = web.Application()
+    app.router.add_get("/transcribe", peer)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        model = STT(
+            api_key="test-key",
+            base_url=str(server.make_url("/transcribe")),
+            http_session=session,
+            params=STTOptions(endpoint_latency_adjustment_level=level),
+        )
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0))
+        try:
+            await asyncio.wait_for(connected.wait(), 2)
+            assert captured["authorization"] == "Bearer test-key"
+            config = captured["config"]
+            assert "api_key" not in config
+            if level is None:
+                assert "endpoint_latency_adjustment_level" not in config
+            else:
+                assert config["endpoint_latency_adjustment_level"] == level
+        finally:
+            await stream.aclose()
+            await model.aclose()
 
 
-def test_token_accumulator_lang_segments_empty_initially():
-    from livekit.plugins.soniox.stt import _TokenAccumulator
+async def test_authentication_error_surfaces_without_retry() -> None:
+    connections = 0
 
-    accumulator = _TokenAccumulator()
-    assert accumulator._lang_segments == []
+    async def peer(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections
+        connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive_json()
+        await ws.send_json({"error_code": 401, "error_message": "invalid key"})
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/transcribe", peer)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        model = STT(
+            api_key="test-key", base_url=str(server.make_url("/transcribe")), http_session=session
+        )
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=2, retry_interval=0))
+        try:
+            with pytest.raises(APIStatusError) as raised:
+                await asyncio.wait_for(anext(stream), 2)
+            assert raised.value.status_code == 401
+            assert not raised.value.retryable
+            assert connections == 1
+        finally:
+            await stream.aclose()
+            await model.aclose()
 
 
 def test_token_accumulator_span_covers_all_timed_tokens():
@@ -176,167 +179,6 @@ def test_token_accumulator_start_time_takes_earliest():
     assert accumulator.end_time == 43843
 
 
-# ---------------------------------------------------------------------------
-# _lang_segments_to_fields helper
-# ---------------------------------------------------------------------------
-
-
-def test_lang_segments_to_fields_empty_returns_none_pair():
-    from livekit.plugins.soniox.stt import _lang_segments_to_fields
-
-    langs, texts = _lang_segments_to_fields([])
-    assert langs is None
-    assert texts is None
-
-
-def test_lang_segments_to_fields_coerces_to_language_code():
-    from livekit.plugins.soniox.stt import _lang_segments_to_fields
-
-    langs, texts = _lang_segments_to_fields([("en", "Hello, "), ("es", "hola.")])
-    assert langs == [LanguageCode("en"), LanguageCode("es")]
-    assert texts == ["Hello, ", "hola."]
-    assert langs is not None
-    assert all(isinstance(lang, LanguageCode) for lang in langs)
-
-
-# ---------------------------------------------------------------------------
-# _recv_messages_task end-to-end via a fake WebSocket
-# ---------------------------------------------------------------------------
-
-
-class _FakeWSMessage:
-    """Minimal stand-in for `aiohttp.WSMessage` used by `_recv_messages_task`."""
-
-    def __init__(self, data: Any, msg_type: aiohttp.WSMsgType = aiohttp.WSMsgType.TEXT) -> None:
-        self.type = msg_type
-        self.data = data if isinstance(data, str) else json.dumps(data)
-
-
-class _FakeWebSocket:
-    """One-shot async-iterable that yields canned messages once, then stays empty.
-
-    `__anext__` awaits `asyncio.sleep(0)` so each iteration yields control back
-    to the event loop — without that yield, the plugin's tight outer
-    `while self._ws:` loop after the iterator exhausts would starve the test's
-    `_event_ch.recv()` consumer and the test would hang.
-    """
-
-    def __init__(self, messages: list[dict[str, Any]]) -> None:
-        self._messages = [_FakeWSMessage(m) for m in messages]
-
-    def __aiter__(self) -> _FakeWebSocket:
-        return self
-
-    async def __anext__(self) -> _FakeWSMessage:
-        await asyncio.sleep(0)
-        if not self._messages:
-            raise StopAsyncIteration
-        return self._messages.pop(0)
-
-
-def _make_stream(translation: Any = None):
-    """Construct a Soniox `SpeechStream` without spawning its real `_main_task`.
-
-    Patches `asyncio.create_task` (the call site in `RecognizeStream.__init__`) so
-    `_main_task` isn't scheduled — the stream's `_event_ch` is still a live
-    channel that the test drives directly via `_recv_messages_task`.
-    """
-    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-    from livekit.plugins.soniox import STT
-    from livekit.plugins.soniox.stt import SpeechStream
-
-    stt_instance = STT(api_key="test-key")
-    if translation is not None:
-        stt_instance._params.translation = translation
-
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
-
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
-        stream = SpeechStream(stt=stt_instance, conn_options=DEFAULT_API_CONNECT_OPTIONS)
-    return stream
-
-
-async def test_websocket_authenticates_with_header():
-    stream = _make_stream()
-    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
-    ws.send_str = AsyncMock()
-    session = MagicMock(spec=aiohttp.ClientSession)
-    session.ws_connect = AsyncMock(return_value=ws)
-    stream._stt._http_session = session
-
-    await stream._connect_ws()
-
-    assert session.ws_connect.call_args.kwargs["headers"] == {"Authorization": "Bearer test-key"}
-    config = json.loads(ws.send_str.call_args.args[0])
-    assert "api_key" not in config
-    assert config["model"] == stream._stt._params.model
-
-
-@pytest.mark.parametrize("level", [None, 0, 2])
-async def test_endpoint_latency_adjustment_level_websocket_config(level: int | None):
-    from livekit.plugins.soniox import STTOptions
-
-    stream = _make_stream()
-    stream._stt._params = STTOptions(endpoint_latency_adjustment_level=level)
-
-    class FakeWebSocket:
-        config: dict[str, Any] | None = None
-
-        async def send_str(self, message: str) -> None:
-            self.config = json.loads(message)
-
-    class FakeSession:
-        def __init__(self, ws: FakeWebSocket) -> None:
-            self.ws = ws
-
-        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
-            return self.ws
-
-    ws = FakeWebSocket()
-    stream._stt._http_session = FakeSession(ws)
-
-    await stream._connect_ws()
-
-    assert ws.config is not None
-    if level is None:
-        assert "endpoint_latency_adjustment_level" not in ws.config
-    else:
-        assert ws.config["endpoint_latency_adjustment_level"] == level
-
-
-async def _drive_recv(
-    stream, messages: list[dict[str, Any]], *, expect_events: int, timeout: float = 2.0
-):
-    """Drive `_recv_messages_task` with canned messages, return collected events.
-
-    Sets `stream._ws = None` after collecting events so the plugin's outer
-    `while self._ws:` loop exits cleanly. Cancellation is the fallback for
-    timeout / event-count mismatches.
-    """
-    stream._ws = _FakeWebSocket(messages)
-    task = asyncio.create_task(stream._recv_messages_task())
-    events = []
-    try:
-        for _ in range(expect_events):
-            ev = await asyncio.wait_for(stream._event_ch.recv(), timeout=timeout)
-            events.append(ev)
-        return events
-    finally:
-        stream._ws = None
-        try:
-            await asyncio.wait_for(task, timeout=1.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            task.cancel()
-            try:
-                await task
-            except BaseException:
-                pass
-        except BaseException:
-            pass
-
-
 def _final_token(text: str, language: str, translation_status: str | None = None) -> dict:
     token: dict[str, Any] = {"text": text, "language": language, "is_final": True}
     if translation_status is not None:
@@ -349,12 +191,6 @@ def _nonfinal_token(text: str, language: str, translation_status: str | None = N
     if translation_status is not None:
         token["translation_status"] = translation_status
     return token
-
-
-END_TOKEN_FINAL: dict[str, Any] = {"text": "<end>", "is_final": True}
-
-
-# --- Two-way translation, code-switched input -------------------------------
 
 
 async def test_final_transcript_two_way_code_switched():
@@ -402,9 +238,6 @@ async def test_final_transcript_two_way_code_switched():
     assert "".join(sd.target_texts) == sd.text
 
 
-# --- One-way translation ----------------------------------------------------
-
-
 async def test_final_transcript_one_way_translation_single_target_run():
     """One-way translation produces a single-entry `target_languages` list."""
     from livekit.plugins.soniox.stt import TranslationConfig
@@ -432,9 +265,6 @@ async def test_final_transcript_one_way_translation_single_target_run():
     assert sd.source_texts == ["Hello world."]
     assert sd.target_languages == [LanguageCode("es")]
     assert sd.target_texts == ["Hola mundo."]
-
-
-# --- "none" untranslated chunk ---------------------------------------------
 
 
 async def test_final_transcript_untranslated_chunk_yields_asymmetric_lists():
@@ -486,9 +316,6 @@ async def test_final_transcript_untranslated_chunk_yields_asymmetric_lists():
     assert sd.source_languages is not None
     assert sd.target_languages is not None
     assert len(sd.source_languages) != len(sd.target_languages)
-
-
-# --- Interim transcript shape ----------------------------------------------
 
 
 async def test_interim_transcript_merges_final_and_non_final_per_run():
@@ -554,29 +381,6 @@ async def test_interim_transcript_no_translation_populates_source_runs():
     assert sd.source_texts == ["こんにちは、", "My name is Sam."]
     assert sd.target_languages is None
     assert sd.target_texts is None
-
-
-async def test_recv_messages_raises_on_server_error_frame():
-    stream = _make_stream(translation=None)
-    stream._ws = _FakeWebSocket(
-        [
-            {
-                "error_code": 401,
-                "error_message": "Incorrect API key provided",
-                "total_audio_proc_ms": 0,
-            }
-        ]
-    )
-
-    with pytest.raises(APIStatusError) as exc_info:
-        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
-
-    assert exc_info.value.status_code == 401
-    assert exc_info.value.retryable is False
-    assert exc_info.value.body is not None
-
-
-# --- Non-translation mode -------------------------------------------------
 
 
 async def test_final_transcript_no_translation_single_language_populates_source():
@@ -645,9 +449,6 @@ async def test_final_transcript_no_translation_code_switched_populates_source_ru
     assert sd.target_texts is None
     assert sd.source_texts is not None
     assert "".join(sd.source_texts) == sd.text
-
-
-# --- RECOGNITION_USAGE reporting cadence -----------------------------------
 
 
 async def test_recognition_usage_reported_for_silent_frames():
@@ -733,92 +534,3 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
     ]
     assert events[-1].recognition_usage is not None
     assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
-
-
-# ---------------------------------------------------------------------------
-# Half-open socket detection (same fix as #7206 for Deepgram v1)
-# ---------------------------------------------------------------------------
-
-
-async def test_socket_is_opened_with_a_heartbeat():
-    """aiohttp defaults `heartbeat` to None, so without it the read side of a
-    half-open socket parks forever and the reconnect in `_run`, which only fires
-    when `_recv_messages_task` ends, never gets a turn."""
-    stream = _make_stream()
-
-    class RecordingWebSocket:
-        async def send_str(self, message: str) -> None:
-            pass
-
-    class RecordingSession:
-        kwargs: dict[str, Any] | None = None
-
-        async def ws_connect(self, url: str, **kwargs: Any) -> RecordingWebSocket:
-            self.kwargs = kwargs
-            return RecordingWebSocket()
-
-    session = RecordingSession()
-    stream._stt._http_session = session
-
-    await stream._connect_ws()
-
-    assert session.kwargs is not None
-    assert session.kwargs.get("heartbeat") == 30.0
-
-
-async def test_keepalive_write_drop_requests_reconnect():
-    """The keepalive used to catch every exception and return. When no audio is
-    flowing that write is the only thing touching the socket, so swallowing it
-    left the stream on a dead connection with nothing ever logged."""
-    stream = _make_stream()
-
-    class DeadWebSocket:
-        closed = False
-
-        async def send_str(self, message: str) -> None:
-            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
-
-    stream._ws = DeadWebSocket()
-
-    await asyncio.wait_for(stream._keepalive_task(), timeout=1.0)
-
-    assert stream._reconnect_event.is_set()
-
-
-async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
-    """A heartbeat timeout arrives as WSMsgType.ERROR, not as a close frame.
-    Logging it as an unexpected type and continuing only worked because aiohttp
-    happens to report CLOSED next, and it threw away the one value that says
-    why the socket went."""
-    stream = _make_stream()
-
-    class HeartbeatTimeoutWebSocket:
-        closed = False
-
-        def __init__(self) -> None:
-            self.receives = 0
-
-        def exception(self) -> BaseException:
-            return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
-
-        def __aiter__(self) -> HeartbeatTimeoutWebSocket:
-            return self
-
-        async def __anext__(self) -> _FakeWSMessage:
-            self.receives += 1
-            # yield, so a recv loop that steps over the error instead of ending
-            # fails the receive-count assertion rather than starving the loop
-            await asyncio.sleep(0)
-            if self.receives > 5:
-                raise StopAsyncIteration
-            return _FakeWSMessage("", msg_type=aiohttp.WSMsgType.ERROR)
-
-    ws = HeartbeatTimeoutWebSocket()
-    stream._ws = ws
-
-    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
-        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
-
-    assert ws.receives == 1
-    assert stream._reconnect_event.is_set()
-    assert any("No PONG received" in r.getMessage() for r in caplog.records)

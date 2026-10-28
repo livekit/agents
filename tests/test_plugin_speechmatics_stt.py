@@ -35,7 +35,7 @@ from speechmatics.agent_stt import (
 )
 
 from livekit.agents import APIError, stt
-from livekit.agents.utils.aio.channel import ChanEmpty
+from livekit.agents.utils.aio import ChanEmpty
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
     DEFAULT_BASE_URL,
@@ -87,7 +87,6 @@ def _stream(**kwargs: Any) -> SpeechStream:
     """
     stream = _stt(**kwargs).stream()
     stream._task.cancel()
-    stream._metrics_task.cancel()
     return stream
 
 

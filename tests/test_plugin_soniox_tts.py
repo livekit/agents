@@ -53,7 +53,7 @@ async def test_websocket_authenticates_once_for_multiple_streams() -> None:
 
     try:
         for stream_id in ("first", "second"):
-            connection, _, _ = await tts._current_connection(timeout=1.0)
+            connection = await tts._current_connection(timeout=1.0)
             waiter = asyncio.get_running_loop().create_future()
             connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
             try:
@@ -212,8 +212,8 @@ async def _synthesize(
 ) -> int:
     tts = soniox.TTS(api_key="fake-key", **tts_kwargs)
 
-    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
-        return fake, 0.0, True
+    async def _fake_current_connection(*, timeout: float) -> Any:
+        return fake
 
     tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
 

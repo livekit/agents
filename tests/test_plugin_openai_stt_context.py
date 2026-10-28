@@ -10,8 +10,8 @@ import httpx2 as httpx
 import openai
 import pytest
 
-from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference, vad
+from livekit import agents as vad, rtc
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins.openai import stt
 
@@ -487,12 +487,12 @@ class _OneShotVADStream(vad.VADStream):
     async def _main_task(self) -> None:
         done = False
         # the input has to be drained until it ends, or the stream closes under its consumer
-        async for frame in self._input_ch:
+        async for frame in self.input:
             if done or not isinstance(frame, rtc.AudioFrame):
                 continue
             done = True
             for type in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH):
-                self._event_ch.send_nowait(
+                self.send(
                     vad.VADEvent(
                         type=type,
                         samples_index=0,

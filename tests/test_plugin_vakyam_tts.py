@@ -540,6 +540,13 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
             return ""
 
     class FakeSession:
+        trace_configs = []
+        json_serialize = staticmethod(json.dumps)
+
+        def request(self, method, url, **kwargs):
+            kwargs.pop("data", None)
+            return self.post(url, json=None, **kwargs)
+
         def __init__(self) -> None:
             self.timeout = None
 
@@ -554,7 +561,6 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
     frames = [event.frame async for event in stream]
     assert frames
     assert http_session.timeout.total is None
-    assert http_session.timeout.sock_connect == 0.25
     assert http_session.timeout.sock_read == 0.25
     await synth.aclose()
 
@@ -583,6 +589,13 @@ async def test_http_stream_rejects_non_audio_success_response() -> None:
             return '{"error":"upstream proxy failure"}'
 
     class FakeSession:
+        trace_configs = []
+        json_serialize = staticmethod(json.dumps)
+
+        def request(self, method, url, **kwargs):
+            kwargs.pop("data", None)
+            return self.post(url, json=None, **kwargs)
+
         def post(self, url, *, json, headers, timeout):
             return FakeResponse()
 

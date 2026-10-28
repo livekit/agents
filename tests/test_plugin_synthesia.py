@@ -34,7 +34,7 @@ from livekit.plugins.synthesia.types import (
     StartSessionResponse,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.plugin("synthesia")]
+pytestmark = pytest.mark.unit
 
 
 class TestPluginRegistration:

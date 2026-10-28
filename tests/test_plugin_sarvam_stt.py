@@ -35,6 +35,12 @@ class _ErrorResponse:
 
 
 class _ErrorSession:
+    trace_configs = []
+
+    def request(self, method, url, **kwargs):
+        kwargs.pop("data", None)
+        return self.post(url, **kwargs)
+
     def __init__(self, *, status: int, error_text: str) -> None:
         self._status = status
         self._error_text = error_text

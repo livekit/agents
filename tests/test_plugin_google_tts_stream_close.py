@@ -21,7 +21,7 @@ async def test_input_gen_close_does_not_mask_api_error() -> None:
     parked = asyncio.Event()
     consumer: asyncio.Task[None] | None = None
 
-    async def fake_streaming_synthesize(input_gen, timeout=None):  # noqa: ANN001
+    async def fake_streaming_synthesize(input_gen, timeout=None, retry=None):  # noqa: ANN001
         nonlocal consumer
 
         async def consume() -> None:
