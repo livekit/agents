@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import Any, Generic
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
@@ -137,41 +138,42 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 stream_mode=self._stream_mode,
             )
 
-        async for item in aiter:
-            # Multi-mode: item is (mode, data) tuple wrapper
-            if is_multi_mode and isinstance(item, tuple) and len(item) == 2:
-                mode, data = item
-                if isinstance(mode, str):
-                    if mode == "custom":
-                        # data = payload (str, dict, object)
-                        chat_chunk = _to_chat_chunk(data)
-                        if chat_chunk:
-                            self.send(chat_chunk)
-                        continue
-                    elif mode == "messages":
-                        # data = (token, metadata)
-                        token_like = _extract_message_chunk(data)
-                        if token_like is None:
+        async with aclosing(aiter):
+            async for item in aiter:
+                # Multi-mode: item is (mode, data) tuple wrapper
+                if is_multi_mode and isinstance(item, tuple) and len(item) == 2:
+                    mode, data = item
+                    if isinstance(mode, str):
+                        if mode == "custom":
+                            # data = payload (str, dict, object)
+                            chat_chunk = _to_chat_chunk(data)
+                            if chat_chunk:
+                                self.send(chat_chunk)
                             continue
-                        chat_chunk = _to_chat_chunk(token_like)
-                        if chat_chunk:
-                            self.send(chat_chunk)
-                        continue
+                        elif mode == "messages":
+                            # data = (token, metadata)
+                            token_like = _extract_message_chunk(data)
+                            if token_like is None:
+                                continue
+                            chat_chunk = _to_chat_chunk(token_like)
+                            if chat_chunk:
+                                self.send(chat_chunk)
+                            continue
 
-            # Single-mode: item is data directly (no tuple wrapper)
-            if self._stream_mode == "custom":
-                # item = payload (str, dict, object)
-                chat_chunk = _to_chat_chunk(item)
-                if chat_chunk:
-                    self.send(chat_chunk)
-            elif self._stream_mode == "messages":
-                # item = (token, metadata)
-                token_like = _extract_message_chunk(item)
-                if token_like is None:
-                    continue
-                chat_chunk = _to_chat_chunk(token_like)
-                if chat_chunk:
-                    self.send(chat_chunk)
+                # Single-mode: item is data directly (no tuple wrapper)
+                if self._stream_mode == "custom":
+                    # item = payload (str, dict, object)
+                    chat_chunk = _to_chat_chunk(item)
+                    if chat_chunk:
+                        self.send(chat_chunk)
+                elif self._stream_mode == "messages":
+                    # item = (token, metadata)
+                    token_like = _extract_message_chunk(item)
+                    if token_like is None:
+                        continue
+                    chat_chunk = _to_chat_chunk(token_like)
+                    if chat_chunk:
+                        self.send(chat_chunk)
 
     def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
