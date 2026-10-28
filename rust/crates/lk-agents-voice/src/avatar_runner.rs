@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, HashMap};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 pub use lk_agents_abi::utils::video::{AvatarFrame, MediaFrame};
 use lk_agents_abi::{Clock, Spawner, SpawnerExt, TaskSet, Ts};
@@ -25,49 +24,7 @@ const LOG: &str = "livekit.agents";
 
 // ----------------------------------------------------------------------------- the host's side
 
-/// `AudioReceiver`: the agent's audio as the avatar worker receives it, and where its playback is
-/// reported. A host `AudioReceiver` carries this surface (`voice/avatar.py`).
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait]
-pub trait AvatarAudioReceiver: Send + Sync {
-    /// Begin iterating (`__aiter__`).
-    async fn open_audio(&self) -> Result<(), ProviderError>;
-    /// The next frame or segment end; `None` once the receiver is exhausted.
-    async fn next_audio(&self) -> Result<Option<AvatarFrame>, ProviderError>;
-    async fn notify_playback_started(&self) -> Result<(), ProviderError>;
-    async fn notify_playback_finished(
-        &self,
-        playback_position: f64,
-        interrupted: bool,
-    ) -> Result<(), ProviderError>;
-    async fn aclose(&self) -> Result<(), ProviderError>;
-}
-
-/// `VideoGenerator`: the avatar's model, fed the audio and yielding the frames to publish. A host
-/// `VideoGenerator` carries this surface (`voice/avatar.py`).
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait]
-pub trait AvatarVideoGenerator: Send + Sync {
-    /// An audio frame, or `None` for `AudioSegmentEnd`.
-    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError>;
-    async fn clear_buffer(&self) -> Result<(), ProviderError>;
-    /// Begin iterating (`__aiter__`).
-    async fn open_frames(&self) -> Result<(), ProviderError>;
-    /// The next frame or segment end; `None` once the generator is exhausted.
-    async fn next_frame(&self) -> Result<Option<AvatarFrame>, ProviderError>;
-}
-
-/// The SDK's half: the avatar's tracks in the room and the `rtc.AVSynchronizer` pacing what is
-/// pushed to them. Python and Node each have their own.
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait]
-pub trait AvatarMedia: Send + Sync {
-    /// Publish the audio track, wait for its subscription, then publish the video track.
-    async fn publish(&self) -> Result<(), ProviderError>;
-    /// One frame into the synchronizer, which paces it out.
-    async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError>;
-    async fn aclose(&self) -> Result<(), ProviderError>;
-}
+pub use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
 
 // ----------------------------------------------------------------------------- the core
 

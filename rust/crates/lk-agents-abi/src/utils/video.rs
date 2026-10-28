@@ -65,6 +65,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for VideoFrame {
 /// A frame the SDK's synchronizer takes: audio or video.
 #[derive(Debug, Clone, PartialEq, Host)]
 #[binding(emit, extract, untagged)]
+#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame | rtc.VideoFrame"))]
 pub enum MediaFrame {
     Audio(AudioFrame),
     Video(VideoFrame),
@@ -74,6 +75,7 @@ pub enum MediaFrame {
 /// (`AudioSegmentEnd`).
 #[derive(Debug, Clone, PartialEq, Host)]
 #[binding(emit, extract, untagged)]
+#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame | rtc.VideoFrame | AudioSegmentEnd"))]
 pub enum AvatarFrame {
     Audio(AudioFrame),
     Video(VideoFrame),
