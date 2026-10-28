@@ -280,11 +280,7 @@ impl Run {
             });
             api.probe(Probe { step, host_event });
         }
-        let queue_owner = Box::new(move |cores| {
-            Box::new(super::executor::Handover::new(cores, cores_tx))
-                as Box<dyn lk_agents_voice::agent_session::QueueOwner>
-        });
-        api.start(false, queue_owner)
+        api.start(false, Box::new(super::executor::Handover::new(cores_tx)))
             .expect("a new session starts")
             .await
             .expect("the session started");

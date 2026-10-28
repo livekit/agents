@@ -1,5 +1,6 @@
 //! `DriverBuilder`: assembles a session's cores ([`SessionCores`]: its driver and data plane) from
-//! its providers, legs and options, and spawns the tasks that feed it.
+//! its providers, legs and options. The [`SessionExecutor`] opens the streams and runs the tasks
+//! that feed them.
 
 use super::driver::*;
 use crate::agent_activity::false_interruption::PausedSpeech;
@@ -10,20 +11,20 @@ use crate::agent_session::VoiceSession;
 use crate::agent_session::commands::Origin;
 use crate::agent_session::host_events::HostEvent;
 use crate::agent_session::time::{Now, Timebase};
-use crate::audio::{AudioChannel, spawn_drain};
+use crate::audio::AudioChannel;
 use crate::audio_recognition::AudioRecognition;
 use crate::data_plane::{AudioForwarder, ForwarderCommand};
 use crate::generation::Instructions;
 use crate::trace::{CoreStep, Journal, RealtimeStep, Step};
-use lk_agents_abi::turn::detector::DetectorLeg;
+use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
-use lk_agents_abi::{FrameId, Llm, Spawner, SpawnerExt, Stt, TimerSet, Ts, Tts, Vad};
+use lk_agents_abi::{
+    AudioFrame, EotDetector, FrameId, Llm, Spawner, StreamSink, Stt, TimerSet, Ts, Tts, Vad,
+};
 use lk_agents_rtc::RoomEvent;
 use std::sync::Arc;
 use std::time::Duration;
-
-type EotLeg = lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>;
 
 /// A started session's two cores, the decision core ([`Driver`]) and the data plane
 /// ([`AudioForwarder`]), with what performing their effects needs. The cores decide and the queue
@@ -34,22 +35,46 @@ pub struct SessionCores {
     /// Every source's events, in arrival order, and where the effects' reports join them.
     pub queue: (Tx, Rx<Event>),
     /// The microphone the session starts with.
-    pub source: Option<lk_agents_abi::resources::ResourceId>,
-    pub eot: Option<Arc<EotLeg>>,
+    pub source: Option<ResourceId>,
+    /// The turn detector, asked for predictions by the driver's effects.
+    pub eot: Option<Arc<dyn EotDetector>>,
+    /// The interruption detector, whose verdicts the executor pumps into the queue.
     pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
-    /// The camera's forwarder parts, its running forwarder and the camera read now.
-    pub video: (
-        crate::audio::VideoForwarderParts,
-        Option<lk_agents_abi::AbortHandle>,
-        Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
-    ),
+    /// The room's events and the room IO's, forwarded into the queue until `Closing`.
+    pub room_events: (Option<Rx<RoomEvent>>, Option<Rx<crate::room_io::RoomIoEvent>>),
+    /// The camera's forwarder parts and the camera read from the start.
+    pub video:
+        (crate::audio::VideoForwarderParts, Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>),
     pub shared: Arc<SessionShared>,
     /// Where host events and taps go.
     pub peer: PeerHandle,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
 }
 
-/// What steps a session's cores: the production runtime, or a simulation's own executor.
+/// What runs a session: the production runtime, or a simulation's own executor. It opens the
+/// opening STT and VAD streams before the cores exist, then takes the cores over.
+pub trait SessionExecutor: Send {
+    /// Opens the streams and registers their sinks in `resources`; their sources are read once
+    /// the executor owns the cores.
+    fn open_legs<'a>(
+        &'a mut self,
+        resources: &'a Resources,
+        stt: Option<Arc<dyn Stt>>,
+        vad: Option<Arc<dyn Vad>>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
+
+    /// Takes the started cores over.
+    fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner>;
+}
+
+/// The opening streams' sinks, registered.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OpeningLegs {
+    pub stt: Option<ResourceId>,
+    pub vad: Option<ResourceId>,
+}
+
+/// What steps a session's cores once its executor owns them.
 pub trait QueueOwner: Send {
     /// The opening cycle, at the instant the session opens.
     fn open(&mut self, now: Now);
@@ -124,8 +149,11 @@ pub struct DriverBuilder {
 
 impl DriverBuilder {
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    /// `async` because the provider factories must run on the host loop.
-    pub async fn start(mut self) -> Result<(SessionCores, SessionHandle), DriverError> {
+    /// `async` because the executor opens the providers' streams first.
+    pub async fn start(
+        mut self,
+        executor: &mut dyn SessionExecutor,
+    ) -> Result<(SessionCores, SessionHandle), DriverError> {
         // `agent_session` and `session_start` run from here.
         let built = self.time.wall_secs();
         let keyterms = self.keyterms.take().map(|mut setup| {
@@ -150,36 +178,26 @@ impl DriverBuilder {
         let queue = Tx::new(queue_tx);
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
         let watch = WatchHub::new();
-        // Created first so forwarders and drains can subscribe.
         let closing = tokio::sync::watch::channel(false).0;
-        // Forwarders end at `Closing`, so no task outlives teardown.
-        if let Some(rx) = self.room_io_events.take() {
-            spawn_forward(&self.spawner, rx, queue.clone(), closing.subscribe());
-        }
-        if let Some(rx) = self.room_events.take() {
-            spawn_forward(&self.spawner, rx, queue.clone(), closing.subscribe());
-        }
 
         let mut sinks = Sinks {
             by_channel: std::collections::BTreeMap::new(),
             forwarder: AudioForwarder::new(PIPELINE_SAMPLE_RATE),
         };
-        let eot = self.open_legs(&mut sinks, &queue, &closing).await?;
+        let opened =
+            executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
+        self.install_legs(&mut sinks, opened);
         let realtime = self.open_realtime(&mut sinks, &queue).await?;
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
         // The microphone, read by the runtime.
         let audio_in =
             self.audio_in.clone().map(|input| self.resources.register_audio_input(input));
-        // The camera, the same way: one task per source, replaced whole by `SetVideoInput`.
+        // The camera, read by the executor: one task per source, replaced whole by `SetVideoInput`.
         let video_parts = crate::audio::VideoForwarderParts {
             closing: closing.subscribe(),
             queue: queue.clone(),
         };
-        let video_forwarder = self
-            .video_in
-            .clone()
-            .map(|input| self.spawner.spawn_unboxed(video_parts.clone().pump(input)));
 
         let resources = &self.resources;
         let llm = self.llm.clone().map(|l| resources.register_llm(l));
@@ -247,6 +265,7 @@ impl DriverBuilder {
         let time = self.time.clone();
         let capture_run = self.capture_run.take();
         let interruption = self.interruption.take();
+        let eot = self.eot.take();
         let activity = self.activity(
             eot.as_ref(),
             realtime,
@@ -302,7 +321,8 @@ impl DriverBuilder {
             source: audio_in,
             eot,
             interruption,
-            video: (video_parts, video_forwarder, self.video_in.take()),
+            room_events: (self.room_events.take(), self.room_io_events.take()),
+            video: (video_parts, self.video_in.take()),
             shared,
             peer: peer.clone(),
             storage: self.storage.take(),
@@ -356,64 +376,29 @@ impl DriverBuilder {
         })
     }
 
-    /// The STT and VAD streams, drained into the loop, and the detectors' legs, pumped into it.
-    async fn open_legs(
-        &mut self,
-        sinks: &mut Sinks,
-        queue: &Tx,
-        closing: &tokio::sync::watch::Sender<bool>,
-    ) -> Result<Option<Arc<EotLeg>>, DriverError> {
-        if let Some(stt) = &self.stt {
-            let (sink, mut source) =
-                stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
-            source.report_retries(crate::audio::report_to(queue.clone()));
-            let sink = sinks.install(&self.resources, AudioChannel::Stt, Arc::from(sink));
-            spawn_drain(
-                &self.spawner,
-                self.time.clone(),
-                closing.subscribe(),
-                crate::audio::tagged(sink, source),
-                queue.clone(),
-                (AudioChannel::Stt, sink),
-            );
+    /// The opening streams' sinks and the detectors' audio, installed. The detector's presence
+    /// has one source, the session's `eot`.
+    fn install_legs(&mut self, sinks: &mut Sinks, opened: OpeningLegs) {
+        if let Some(sink) = opened.stt {
+            sinks.insert(AudioChannel::Stt, sink);
         }
-
-        if let Some(vad) = &self.vad {
-            let (sink, source) = vad.stream().await?;
-            let sink = sinks.install(&self.resources, AudioChannel::Vad, Arc::from(sink));
-            spawn_drain(
-                &self.spawner,
-                self.time.clone(),
-                closing.subscribe(),
-                source,
-                queue.clone(),
-                (AudioChannel::Vad, sink),
-            );
+        if let Some(sink) = opened.vad {
+            sinks.insert(AudioChannel::Vad, sink);
         }
-
-        // Detector presence has one source, the leg.
         {
             use crate::agent_activity::options::DetectorKind;
             let eot = self.eot.is_some();
             self.config.edit(|_, legs| legs.detector = eot.then_some(DetectorKind::Streaming));
         }
-        let eot = self
-            .eot
-            .clone()
-            .map(|d| Arc::new(lk_agents_abi::EotLeg::new(d, Arc::clone(&self.spawner))));
-        if let Some(leg) = &eot {
-            if let Some(audio) = leg.audio() {
-                sinks.install(&self.resources, AudioChannel::Eot, audio);
-            }
-            spawn_leg_pump(&self.spawner, Arc::clone(leg), queue.clone(), closing.subscribe());
+        if let Some(detector) = &self.eot {
+            let audio = Arc::new(EotAudioSink(Arc::clone(detector)));
+            sinks.install(&self.resources, AudioChannel::Eot, audio);
         }
         // The interruption detector's verdicts and audio leg come off one object, so neither
         // exists without the other.
-        if let Some(detector) = self.interruption.clone() {
+        if let Some(detector) = &self.interruption {
             sinks.install(&self.resources, AudioChannel::Interruption, detector.audio());
-            spawn_leg_pump(&self.spawner, detector, queue.clone(), closing.subscribe());
         }
-        Ok(eot)
     }
 
     /// The realtime session, opened once for the driver's life (a handoff updates it).
@@ -457,7 +442,7 @@ impl DriverBuilder {
     /// The opening agent's activity: nothing spoken, nothing pending.
     fn activity(
         &mut self,
-        eot: Option<&Arc<EotLeg>>,
+        eot: Option<&Arc<dyn EotDetector>>,
         realtime: Option<RealtimeStart>,
         paused_speech: PausedSpeech,
         resolved_mode: crate::audio_recognition::TurnDetectionMode,
@@ -465,11 +450,11 @@ impl DriverBuilder {
     ) -> AgentActivity {
         let effective = &self.config.effective;
         let mut audio_recognition = AudioRecognition::new(effective, &self.config.legs);
-        audio_recognition.set_thresholds(eot.as_ref().and_then(|leg| leg.thresholds()));
+        audio_recognition.set_thresholds(eot.and_then(|detector| detector.thresholds()));
         // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
         // are unreachable.
         audio_recognition.set_interruption_active(self.config.legs.adaptive_detector);
-        audio_recognition.set_eot_provider(eot.map(|leg| leg.id()));
+        audio_recognition.set_eot_provider(eot.map(|detector| detector.id()));
         let (rt_session, caps, disabled) = match realtime {
             Some(rt) => (Some(self.resources.register_realtime(rt.session)), rt.caps, rt.disabled),
             None => (None, Default::default(), false),
@@ -569,15 +554,36 @@ struct Sinks {
 impl Sinks {
     fn install(
         &mut self,
-        resources: &lk_agents_abi::resources::Resources,
+        resources: &Resources,
         channel: AudioChannel,
-        sink: Arc<dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>>,
-    ) -> lk_agents_abi::resources::ResourceId {
-        let sink = resources.register_audio_sink(sink);
+        sink: Arc<dyn StreamSink<AudioFrame>>,
+    ) {
+        self.insert(channel, resources.register_audio_sink(sink));
+    }
+
+    fn insert(&mut self, channel: AudioChannel, sink: ResourceId) {
         self.by_channel.insert(channel, sink);
         // Nothing is replaced yet, so there is nothing to perform.
         let _ = self.forwarder.handle(ForwarderCommand::Install { channel, sink });
-        sink
+    }
+}
+
+/// The turn detector's audio leg: every frame is `push_audio`. `flush` is not the detector's
+/// `flush`, which is a turn boundary the machine decides.
+struct EotAudioSink(Arc<dyn EotDetector>);
+
+impl StreamSink<AudioFrame> for EotAudioSink {
+    fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        self.0.push_audio(frame);
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        Ok(())
+    }
+
+    fn end_input(&self) {
+        // The detector's stream outlives a handoff.
     }
 }
 
@@ -588,53 +594,4 @@ struct RealtimeStart {
     disabled: bool,
     /// The turn owner before the model's refinement, which a later re-resolution compares with.
     resolved: crate::audio_recognition::TurnDetectionMode,
-}
-
-#[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
-/// Ends on `Closed` (forwarded first), when the loop is gone, or at `Closing`. None is an error:
-/// the session goes on with VAD-only interruption.
-pub(super) fn spawn_leg_pump<L>(
-    spawner: &Arc<dyn Spawner>,
-    leg: Arc<L>,
-    tx: Tx,
-    mut closing: tokio::sync::watch::Receiver<bool>,
-) where
-    L: DetectorLeg + ?Sized + 'static,
-    L::Verdict: 'static,
-    lk_agents_abi::turn::detector::LegEvent<L::Verdict>: Into<Event>,
-{
-    spawner.spawn_unboxed(async move {
-        loop {
-            let ev = tokio::select! {
-                biased;
-                _ = closing.wait_for(|c| *c) => break,
-                ev = leg.next() => ev,
-            };
-            let closed = matches!(ev, lk_agents_abi::turn::detector::LegEvent::Closed);
-            if tx.send(ev).is_err() || closed {
-                break;
-            }
-        }
-    });
-}
-
-#[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
-fn spawn_forward<T: Into<Event> + Send + 'static>(
-    spawner: &Arc<dyn Spawner>,
-    mut rx: Rx<T>,
-    tx: Tx,
-    mut closing: tokio::sync::watch::Receiver<bool>,
-) {
-    spawner.spawn_unboxed(async move {
-        loop {
-            let ev = tokio::select! {
-                biased;
-                ev = rx.recv() => ev,
-                _ = closing.wait_for(|c| *c) => None,
-            };
-            if ev.is_none_or(|ev| tx.send(ev).is_err()) {
-                break;
-            }
-        }
-    });
 }

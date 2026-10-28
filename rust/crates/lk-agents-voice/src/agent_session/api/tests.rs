@@ -4,8 +4,28 @@ use super::*;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::{HookId, HookOutcome};
 use crate::agent_session::host_events::HookCall;
+use crate::agent_session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor};
 use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
+
+/// Builds the cores of a session with no STT or VAD; nothing here runs them.
+struct NoLegs;
+
+impl SessionExecutor for NoLegs {
+    fn open_legs<'a>(
+        &'a mut self,
+        _: &'a lk_agents_abi::resources::Resources,
+        stt: Option<Arc<dyn lk_agents_abi::Stt>>,
+        vad: Option<Arc<dyn lk_agents_abi::Vad>>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
+        assert!(stt.is_none() && vad.is_none(), "these sessions open no streams");
+        Box::pin(async { Ok(OpeningLegs::default()) })
+    }
+
+    fn own(self: Box<Self>, _: SessionCores) -> Box<dyn QueueOwner> {
+        unreachable!("the tests step the cores themselves")
+    }
+}
 
 #[tokio::test(start_paused = true)]
 async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
@@ -19,7 +39,7 @@ async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_sess
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut cores, _) = ready.builder.start().await.unwrap();
+    let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();
     let driver = &mut cores.driver;
     let mut out = driver.out();
     let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
@@ -64,7 +84,7 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut cores, _) = ready.builder.start().await.unwrap();
+    let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();
     let driver = &mut cores.driver;
     let mut out = driver.out();
     let source =

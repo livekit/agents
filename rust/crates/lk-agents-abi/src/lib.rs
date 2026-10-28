@@ -80,7 +80,7 @@ pub use llm::realtime::{
 };
 pub use llm::realtime::{Realtime, RealtimeCommand, RealtimeCommandKind, RealtimeSession};
 pub use tts::stream_adapter::{SentenceSplitter, SplitterFactory, StreamAdapter, adapter_stream};
-pub use turn::detector::{DetectorLeg, EotDetector, EotLeg, EotRequest, LegEvent, ReqId};
+pub use turn::detector::{EotDetector, LegEvent, ReqId};
 pub use types::identity::ProviderId;
 pub use utils::audio::{AudioBuffer, AudioFrame};
 // The `Event` payloads. Generated code resolves them through `use lk_agents_abi::*`, so each must

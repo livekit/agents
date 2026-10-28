@@ -63,8 +63,9 @@ async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
         toolset: Default::default(),
         // `dst` is enabled by the runtime's test dependency so SessionCores has the same shape.
     };
-    let (cores, handle) = builder.start().await.unwrap();
-    (Runtime::new(cores), handle, steps)
+    let mut executor = Executor::default();
+    let (cores, handle) = builder.start(&mut executor).await.unwrap();
+    (Runtime::new(cores, Vec::new()), handle, steps)
 }
 
 #[tokio::test(start_paused = true)]

@@ -4,7 +4,10 @@
 
 pub mod console;
 mod effects;
+mod legs;
 mod storage;
+
+pub use legs::Executor;
 
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
@@ -12,7 +15,7 @@ use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, SpawnerExt};
 use lk_agents_voice::agent_session::{
     Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx,
 };
-use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
+use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd};
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
@@ -57,16 +60,22 @@ pub struct Runtime {
     video_forwarder: Option<AbortHandle>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
-    pending_legs: std::collections::BTreeMap<ResourceId, effects::PendingLeg>,
+    pending_legs: std::collections::BTreeMap<ResourceId, legs::PendingLeg>,
     /// The turn and interruption detectors, addressed by the core's effects.
-    eot: Option<Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
+    eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
+    /// The turn detector's predictions in flight, aborted at its close.
+    predictions: Vec<AbortHandle>,
     interruption:
         Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
 }
 
 impl Runtime {
-    /// Takes the cores over: the microphone is read and the start's effects performed.
-    pub fn new(cores: SessionCores) -> Self {
+    /// Takes the cores over: the opening legs and the microphone are read and the start's
+    /// effects performed.
+    fn new(
+        cores: SessionCores,
+        opening: Vec<(AudioChannel, ResourceId, legs::PendingLeg)>,
+    ) -> Self {
         let SessionCores {
             driver,
             forwarder,
@@ -74,7 +83,8 @@ impl Runtime {
             source,
             eot,
             interruption,
-            video: (video_parts, video_forwarder, video_in),
+            room_events: (room, room_io),
+            video: (video_parts, video_in),
             shared,
             peer,
             storage,
@@ -97,11 +107,23 @@ impl Runtime {
             keyterms: None,
             realtime_players: Default::default(),
             video_parts,
-            video_forwarder,
+            video_forwarder: None,
             video_in,
             eot,
+            predictions: Vec::new(),
             interruption,
         };
+        if let Some(rx) = room_io {
+            runtime.forward(rx);
+        }
+        if let Some(rx) = room {
+            runtime.forward(rx);
+        }
+        runtime.start_legs(opening);
+        // The camera, one task per source, replaced whole by `SetVideoInput`.
+        runtime.video_forwarder = runtime.video_in.clone().map(|input| {
+            runtime.shared.spawner.spawn_unboxed(runtime.video_parts.clone().pump(input))
+        });
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             runtime.read(source);
@@ -155,7 +177,7 @@ impl Runtime {
                         .map(|stt| stt.id());
                 }
                 if let lk_agents_voice::agent_session::Input::Eot(_, _, thresholds) = &mut input {
-                    *thresholds = self.eot.as_ref().and_then(|leg| leg.thresholds());
+                    *thresholds = self.eot.as_ref().and_then(|detector| detector.thresholds());
                 }
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
@@ -369,11 +391,6 @@ async fn read_audio(
     };
     let end = ChannelEnd { leg: AUDIO_IN_LEG, cause, sink: None, closed: None, error: None };
     let _ = queue.send(end);
-}
-
-/// The production queue owner supplied to the session API at startup.
-pub fn queue_owner(cores: SessionCores) -> Box<dyn QueueOwner> {
-    Box::new(Runtime::new(cores))
 }
 
 #[cfg(test)]

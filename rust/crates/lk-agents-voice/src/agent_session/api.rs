@@ -76,11 +76,6 @@ pub struct Probe {
 #[cfg(feature = "dst")]
 pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 
-pub type QueueOwnerFactory = Box<
-    dyn FnOnce(crate::agent_session::SessionCores) -> Box<dyn crate::agent_session::QueueOwner>
-        + Send,
->;
-
 #[cfg(any(test, feature = "dst"))]
 impl SessionApi {
     /// Every step the driver journals, from the first, to `observer`. Before `start()`.
@@ -124,7 +119,7 @@ impl SessionApi {
     pub fn open(
         &self,
         capture_run: bool,
-        queue_owner: QueueOwnerFactory,
+        mut executor: Box<dyn crate::agent_session::SessionExecutor>,
         drain: impl FnOnce(SessionRunner) -> lk_agents_abi::BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<
         impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
@@ -168,12 +163,12 @@ impl SessionApi {
             room_io.start();
             builder.room_io_events = room_io.events();
 
-            let (cores, handle) = builder.start().await?;
+            let (cores, handle) = builder.start(&mut *executor).await?;
             let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
                 handle;
             #[cfg(feature = "dst")]
             let host_event = probe;
-            let mut owner = queue_owner(cores);
+            let mut owner = executor.own(cores);
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's

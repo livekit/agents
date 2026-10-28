@@ -109,7 +109,7 @@ impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
         let reply = Python::attach(|py| {
             let obj = (&session).into_pyobject(py)?;
             let api = obj.extract::<PyRef<'_, lk_agents_runtime::voice::SessionApi>>()?;
-            api.start(capture_run, Box::new(lk_agents_runtime::voice::queue_owner))
+            api.start(capture_run, Box::new(lk_agents_runtime::voice::Executor::default()))
                 .map_err(|e| e.to_py_err())
         })
         .map_err(captured)?;

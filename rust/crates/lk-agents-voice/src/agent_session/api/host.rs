@@ -387,13 +387,13 @@ impl SessionApi {
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// Open the providers and run the injected queue owner beside the host event drain.
+    /// Open the providers through the injected executor and run it beside the host event drain.
     ///
     /// `capture_run` opens the run before the opening agent's handoff and `on_enter`.
     pub fn start(
         &self,
         capture_run: bool,
-        queue_owner: super::QueueOwnerFactory,
+        executor: Box<dyn crate::agent_session::SessionExecutor>,
     ) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         let events = self.host.events.clone();
@@ -406,7 +406,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         // The drain: one event per call, in driver order; a hook call handed to the host loop in
         // that order, then awaited on its own task.
-        let opening = self.open(capture_run, queue_owner, move |mut runner: SessionRunner| {
+        let opening = self.open(capture_run, executor, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {

@@ -109,7 +109,7 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let drain_ended = Arc::new(AtomicBool::new(false));
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
     let opening = api
-        .open(false, Box::new(super::queue_owner), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     match ev {
@@ -147,6 +147,25 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     assert!(matches!(api.send(TurnCommand::Clear), Err(SessionRefused::Closed)));
 }
 
+/// The production executor, keeping the journal of the cores it takes over.
+struct Observing(Executor, Arc<Mutex<Option<lk_agents_voice::trace::Journal>>>);
+
+impl SessionExecutor for Observing {
+    fn open_legs<'a>(
+        &'a mut self,
+        resources: &'a lk_agents_abi::resources::Resources,
+        stt: Option<Arc<dyn lk_agents_abi::Stt>>,
+        vad: Option<Arc<dyn lk_agents_abi::Vad>>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
+        self.0.open_legs(resources, stt, vad)
+    }
+
+    fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
+        *self.1.lock().unwrap() = Some(cores.peer.journal.clone());
+        Box::new(self.0).own(cores)
+    }
+}
+
 // Catches: a production session (no observer) that keeps every step it decides, so a long call's
 // memory grows with its length.
 #[tokio::test(start_paused = true)]
@@ -157,10 +176,7 @@ async fn a_session_nobody_observes_keeps_no_journal() {
     let opening = api
         .open(
             false,
-            Box::new(move |cores| {
-                *observed.lock().unwrap() = Some(cores.peer.journal.clone());
-                super::queue_owner(cores)
-            }),
+            Box::new(Observing(Executor::default(), observed)),
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
@@ -193,7 +209,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let (room, fixed) = fake_room("agent-state");
     let api = room_only(fixed, None);
     let opening = api
-        .open(false, Box::new(super::queue_owner), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -232,7 +248,7 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
-        .open(false, Box::new(super::queue_owner), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -498,7 +514,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 /// A session opened over a host that answers every hook at once.
 async fn running(api: SessionApi) -> SessionApi {
     let opening = api
-        .open(false, Box::new(super::queue_owner), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {

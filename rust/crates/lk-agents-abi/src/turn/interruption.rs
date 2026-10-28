@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::turn::detector::{DetectorLeg, LegEvent, ReqId};
+use crate::turn::detector::{LegEvent, ReqId};
 use crate::{AudioFrame, StreamSink, Ts};
 
 /// The reference's four sentinels, the overlap ones carrying its timestamps.
@@ -45,27 +45,6 @@ pub trait InterruptionPort: Send + Sync {
     /// One per overlap, not per frame. `Closed` ends the pump; the session carries on with VAD-only
     /// interruption.
     fn next_event(&self) -> crate::BoxFuture<'_, LegEvent<OverlapVerdict>>;
-}
-
-/// `signal(Some(req), OverlapStarted)` is `signal_overlap`; every other sentinel opens no request.
-impl DetectorLeg for dyn InterruptionPort {
-    type Signal = InterruptionSignal;
-    type Verdict = OverlapVerdict;
-
-    fn audio(&self) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
-        Some(InterruptionPort::audio(self))
-    }
-
-    fn signal(&self, req: Option<ReqId>, signal: Self::Signal) {
-        match req {
-            Some(overlap) => self.signal_overlap(overlap, signal),
-            None => InterruptionPort::signal(self, signal),
-        }
-    }
-
-    fn next(&self) -> crate::BoxFuture<'_, LegEvent<Self::Verdict>> {
-        self.next_event()
-    }
 }
 
 /// Opened when the session starts (opening spawns), stamped on the session's anchor.

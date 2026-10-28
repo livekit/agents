@@ -1,11 +1,10 @@
 //! The end-of-turn detector seam: an audio detector (`_StreamingTurnDetector.stream()`) that hears
 //! the user and predicts on request. Thresholds come from [`crate::tokenize::language`].
 
-use std::sync::Arc;
 use std::time::Duration;
 
+use crate::EotPrediction;
 use crate::errors::ProviderError;
-use crate::{AudioFrame, EotPrediction, Spawner, SpawnerExt, StreamSink};
 
 /// Strictly increasing per session; the driver drops an answer whose id is not the outstanding one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -18,22 +17,6 @@ pub enum LegEvent<V> {
     Verdict { req: Option<ReqId>, verdict: V },
     Error { req: Option<ReqId>, recoverable: bool, err: ProviderError },
     Closed,
-}
-
-/// The driver runs one pump per leg onto the session's input queue, so no leg is polled inside the
-/// loop's `select!` and none has to be cancel-safe.
-pub trait DetectorLeg: Send + Sync {
-    type Signal: Send;
-    type Verdict: Send;
-
-    /// `None` for a leg that hears no audio.
-    fn audio(&self) -> Option<Arc<dyn StreamSink<AudioFrame>>>;
-
-    /// Non-blocking (called from the session loop). `None` for a signal that opens no request.
-    fn signal(&self, req: Option<ReqId>, signal: Self::Signal);
-
-    /// Pumped by one task per leg; `Closed` ends that task.
-    fn next(&self) -> crate::BoxFuture<'_, LegEvent<Self::Verdict>>;
 }
 
 /// A host `turn_detection` object is this trait through `_core_view.TurnDetector`, which speaks
@@ -82,98 +65,5 @@ pub trait EotDetector: Send + Sync + 'static {
     #[host(await, name = "_core_aclose")]
     fn aclose(&self) -> crate::BoxFuture<'_, ()> {
         Box::pin(async move {})
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EotRequest {
-    pub timeout: Option<Duration>,
-}
-
-/// A failed prediction is `Error { recoverable: true }`; a superseded request's late answer keeps
-/// its own id and the driver drops it. Never `Closed` on its own.
-pub struct EotLeg<D: EotDetector + ?Sized> {
-    detector: Arc<D>,
-    spawner: Arc<dyn Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    tx: tokio::sync::mpsc::UnboundedSender<LegEvent<EotPrediction>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<LegEvent<EotPrediction>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    in_flight: std::sync::Mutex<Vec<crate::AbortHandle>>,
-}
-
-impl<D: EotDetector + ?Sized> EotLeg<D> {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new(detector: Arc<D>, spawner: Arc<dyn Spawner>) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        EotLeg { detector, spawner, tx, rx: tokio::sync::Mutex::new(rx), in_flight: std::sync::Mutex::new(Vec::new()) }
-    }
-
-    pub fn close(&self) {
-        for task in self.in_flight.lock().unwrap_or_else(|p| p.into_inner()).drain(..) {
-            task.abort();
-        }
-    }
-}
-
-impl<D: EotDetector + ?Sized> std::ops::Deref for EotLeg<D> {
-    type Target = D;
-    fn deref(&self) -> &D {
-        &self.detector
-    }
-}
-
-impl<D: EotDetector + ?Sized> DetectorLeg for EotLeg<D> {
-    type Signal = EotRequest;
-    type Verdict = EotPrediction;
-
-    fn audio(&self) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
-        Some(Arc::new(EotAudioSink(Arc::clone(&self.detector))))
-    }
-
-    fn signal(&self, req: Option<ReqId>, signal: Self::Signal) {
-        let detector = Arc::clone(&self.detector);
-        let tx = self.tx.clone();
-        let EotRequest { timeout } = signal;
-        // Spawned: the driver is mid-transition and cannot await here. Failures travel too.
-        let task = self.spawner.spawn_unboxed(async move {
-            let ev = match detector.predict(timeout).await {
-                Ok(verdict) => LegEvent::Verdict { req, verdict },
-                Err(err) => LegEvent::Error { req, recoverable: true, err },
-            };
-            let _ = tx.send(ev);
-        });
-        let mut in_flight = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
-        in_flight.retain(|t| !t.is_finished());
-        in_flight.push(task);
-    }
-
-    fn next(&self) -> crate::BoxFuture<'_, LegEvent<EotPrediction>> {
-        Box::pin(async move {
-            match self.rx.lock().await.recv().await {
-                Some(ev) => ev,
-                None => LegEvent::Closed,
-            }
-        })
-    }
-}
-
-/// `flush` is not the detector's `flush`, which is a turn boundary the machine decides.
-struct EotAudioSink<D: EotDetector + ?Sized>(Arc<D>);
-
-impl<D: EotDetector + ?Sized> StreamSink<AudioFrame> for EotAudioSink<D> {
-    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        self.0.push_audio(frame);
-        Ok(())
-    }
-
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-
-    fn end_input(&self) {
-        // The detector's stream outlives a handoff.
     }
 }

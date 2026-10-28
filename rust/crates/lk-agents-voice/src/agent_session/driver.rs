@@ -159,7 +159,7 @@ pub struct SessionHandle {
 }
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
+pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
@@ -245,33 +245,11 @@ queue_events! {
     crate::room_io::RoomIoEvent => |ev| Event::Input(Input::RoomIo(ev));
     GenEvent => |ev| Event::Input(Input::Gen(ev));
     crate::agent_activity::realtime::RealtimeWake => |wake| Event::Input(Input::Realtime(wake));
-    lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction> =>
-        |ev| Event::Input(eot_input(ev));
     lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict> =>
         |ev| Event::Input(Input::Overlap(ev));
     ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
     StreamOpened => |opened| Event::LegOpened(opened);
     lk_agents_rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
-}
-
-/// `Closed` is the pump's own end.
-fn eot_input(ev: lk_agents_abi::turn::detector::LegEvent<lk_agents_abi::EotPrediction>) -> Input {
-    use lk_agents_abi::turn::detector::{LegEvent, ReqId};
-    match ev {
-        LegEvent::Verdict { req, verdict } => {
-            Input::Eot(req.unwrap_or(ReqId(0)), Ok(verdict), None)
-        }
-        LegEvent::Error { req, recoverable: _, err } => {
-            Input::Eot(req.unwrap_or(ReqId(0)), Err(err), None)
-        }
-        LegEvent::Closed => Input::ChannelEnded(ChannelEnd {
-            leg: "eot",
-            cause: crate::trace::ChannelEndCause::SourceEnded,
-            sink: None,
-            closed: None,
-            error: None,
-        }),
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

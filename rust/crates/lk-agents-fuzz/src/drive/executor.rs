@@ -16,18 +16,19 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, VideoInput};
 use lk_agents_abi::{
-    AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, EotDetector, EotLeg, HOST_TEARDOWN_TIMEOUT,
-    SpawnerExt,
+    AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, EotDetector, HOST_TEARDOWN_TIMEOUT, LegEvent,
+    SpawnerExt, Stt, Vad,
 };
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::effects::{AudioOp, Effect, GateOp, StreamKind};
 use lk_agents_voice::agent_session::{
-    Command, Driver, Event, HookOutcome, HostEvent, Input, Now, PeerHandle, QueueOwner, ReplyTo,
-    RequestId, SessionCores, SessionShared, SystemTap, Tx,
+    Command, Driver, DriverError, Event, HookOutcome, HostEvent, Input, Now, OpeningLegs,
+    PeerHandle, QueueOwner, ReplyTo, RequestId, Rx, SessionCores, SessionExecutor, SessionShared,
+    SystemTap, Tx,
 };
-use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd, VideoForwarderParts};
+use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd, VideoForwarderParts};
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
@@ -62,20 +63,57 @@ pub(crate) struct Executor {
     video_in: Option<Arc<dyn VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: BTreeMap<ResourceId, PendingLeg>,
-    eot: Option<Arc<EotLeg<dyn EotDetector>>>,
+    eot: Option<Arc<dyn EotDetector>>,
+    /// The turn detector's predictions in flight, aborted at its close.
+    predictions: Vec<AbortHandle>,
     interruption: Option<Arc<dyn InterruptionPort>>,
 }
 
-/// The cores as the session's start hands them over: opened by the session, then sent to the run,
-/// which steps them from then on.
+/// The session's executor: it opens the opening streams as the runtime does, then hands the
+/// cores, opened by the session, to the run, which steps them from then on.
 pub(crate) struct Handover {
     executor: Option<Executor>,
     run: Option<oneshot::Sender<Executor>>,
+    /// The opening streams, read once the cores exist.
+    opening: Vec<(AudioChannel, ResourceId, PendingLeg)>,
 }
 
 impl Handover {
-    pub(crate) fn new(cores: SessionCores, run: oneshot::Sender<Executor>) -> Self {
-        Handover { executor: Some(Executor::new(cores)), run: Some(run) }
+    pub(crate) fn new(run: oneshot::Sender<Executor>) -> Self {
+        Handover { executor: None, run: Some(run), opening: Vec::new() }
+    }
+}
+
+impl SessionExecutor for Handover {
+    fn open_legs<'a>(
+        &'a mut self,
+        resources: &'a lk_agents_abi::resources::Resources,
+        stt: Option<Arc<dyn Stt>>,
+        vad: Option<Arc<dyn Vad>>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
+        Box::pin(async move {
+            let mut legs = OpeningLegs::default();
+            if let Some(stt) = stt {
+                let (sink, source) =
+                    stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
+                let sink = resources.register_audio_sink(Arc::from(sink));
+                self.opening.push((AudioChannel::Stt, sink, PendingLeg::Stt(source)));
+                legs.stt = Some(sink);
+            }
+            if let Some(vad) = vad {
+                let (sink, source) = vad.stream().await?;
+                let sink = resources.register_audio_sink(Arc::from(sink));
+                self.opening.push((AudioChannel::Vad, sink, PendingLeg::Vad(source)));
+                legs.vad = Some(sink);
+            }
+            Ok(legs)
+        })
+    }
+
+    fn own(mut self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
+        let opening = std::mem::take(&mut self.opening);
+        self.executor = Some(Executor::new(cores, opening));
+        self
     }
 }
 
@@ -95,7 +133,7 @@ impl QueueOwner for Handover {
 }
 
 impl Executor {
-    fn new(cores: SessionCores) -> Self {
+    fn new(cores: SessionCores, opening: Vec<(AudioChannel, ResourceId, PendingLeg)>) -> Self {
         let SessionCores {
             driver,
             forwarder,
@@ -103,7 +141,8 @@ impl Executor {
             source,
             eot,
             interruption,
-            video: (video_parts, video_forwarder, video_in),
+            room_events: (room, room_io),
+            video: (video_parts, video_in),
             shared,
             peer,
             storage,
@@ -125,12 +164,29 @@ impl Executor {
             keyterms: None,
             realtime_players: BTreeMap::new(),
             video_parts,
-            video_forwarder,
+            video_forwarder: None,
             video_in,
             pending_legs: BTreeMap::new(),
             eot,
+            predictions: Vec::new(),
             interruption,
         };
+        // The legs the session opens with, as the runtime starts them.
+        if let Some(rx) = room_io {
+            executor.forward(rx);
+        }
+        if let Some(rx) = room {
+            executor.forward(rx);
+        }
+        for (channel, sink, stream) in opening {
+            executor.drain(channel, sink, stream);
+        }
+        if let Some(detector) = executor.interruption.clone() {
+            executor.pump_verdicts(detector);
+        }
+        executor.video_forwarder = executor.video_in.clone().map(|input| {
+            executor.shared.spawner.spawn_unboxed(executor.video_parts.clone().pump(input))
+        });
         // The session's first microphone is the host's attached one: nothing to tell it.
         if let Some(source) = source {
             executor.read(source);
@@ -157,7 +213,7 @@ impl Executor {
                         .map(|stt| stt.id());
                 }
                 if let Input::Eot(_, _, thresholds) = &mut input {
-                    *thresholds = self.eot.as_ref().and_then(|leg| leg.thresholds());
+                    *thresholds = self.eot.as_ref().and_then(|detector| detector.thresholds());
                 }
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
@@ -406,31 +462,8 @@ impl Executor {
                 }
             }
             Effect::ActivateLeg { channel, sink } => {
-                let Some(stream) = self.pending_legs.remove(&sink) else { return };
-                let (time, closing) = (shared.time.clone(), shared.closing.subscribe());
-                let leg = (channel, sink);
-                match stream {
-                    PendingLeg::Stt(mut source) => {
-                        let reports = lk_agents_voice::audio::report_to(self.reports.clone());
-                        source.report_retries(reports);
-                        let source = lk_agents_voice::audio::tagged(sink, source);
-                        lk_agents_voice::audio::spawn_drain(
-                            &shared.spawner,
-                            time,
-                            closing,
-                            source,
-                            self.reports.clone(),
-                            leg,
-                        );
-                    }
-                    PendingLeg::Vad(source) => lk_agents_voice::audio::spawn_drain(
-                        &shared.spawner,
-                        time,
-                        closing,
-                        source,
-                        self.reports.clone(),
-                        leg,
-                    ),
+                if let Some(stream) = self.pending_legs.remove(&sink) {
+                    self.drain(channel, sink, stream);
                 }
             }
             Effect::DiscardLeg(sink) => {
@@ -527,16 +560,12 @@ impl Executor {
                 }
             }
             Effect::EotPredict { req, timeout } => {
-                if let Some(leg) = &self.eot {
+                if self.eot.is_some() {
                     shared.journal.record(lk_agents_voice::trace::InputStep::LegRequested {
                         leg: lk_agents_voice::trace::DetectorName::Eot,
                         req: req.0,
                     });
-                    lk_agents_abi::turn::detector::DetectorLeg::signal(
-                        &**leg,
-                        Some(req),
-                        lk_agents_abi::EotRequest { timeout },
-                    );
+                    self.predict(req, timeout);
                 }
             }
             Effect::EotCancel { req: _, timed_out } => {
@@ -577,8 +606,8 @@ impl Executor {
                 });
             }
             Effect::EotClose => {
-                if let Some(eot) = &self.eot {
-                    eot.close();
+                for task in self.predictions.drain(..) {
+                    task.abort();
                 }
             }
             Effect::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
@@ -712,6 +741,87 @@ enum Provider {
 enum PendingLeg {
     Stt(lk_agents_abi::SttSource),
     Vad(lk_agents_abi::VadSource),
+}
+
+impl Executor {
+    /// Drains an activated stream into the queue.
+    fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
+        let shared = &self.shared;
+        let (time, closing) = (shared.time.clone(), shared.closing.subscribe());
+        match stream {
+            PendingLeg::Stt(mut source) => {
+                source.report_retries(lk_agents_voice::audio::report_to(self.reports.clone()));
+                lk_agents_voice::audio::spawn_drain(
+                    &shared.spawner,
+                    time,
+                    closing,
+                    lk_agents_voice::audio::tagged(sink, source),
+                    self.reports.clone(),
+                    (channel, sink),
+                );
+            }
+            PendingLeg::Vad(source) => lk_agents_voice::audio::spawn_drain(
+                &shared.spawner,
+                time,
+                closing,
+                source,
+                self.reports.clone(),
+                (channel, sink),
+            ),
+        }
+    }
+
+    /// The prediction off the loop; its answer joins the queue unless the session is closing.
+    fn predict(&mut self, req: lk_agents_abi::ReqId, timeout: Option<std::time::Duration>) {
+        let Some(detector) = self.eot.clone() else { return };
+        let queue = self.reports.clone();
+        let closing = self.shared.closing.subscribe();
+        let task = self.shared.spawner.spawn_unboxed(async move {
+            let outcome = detector.predict(timeout).await;
+            if !*closing.borrow() {
+                let _ = queue.send(Input::Eot(req, outcome, None));
+            }
+        });
+        self.predictions.retain(|task| !task.is_finished());
+        self.predictions.push(task);
+    }
+
+    /// Until the detector's `Closed` (forwarded first), the loop's end, or `Closing`.
+    fn pump_verdicts(&self, detector: Arc<dyn InterruptionPort>) {
+        let tx = self.reports.clone();
+        let mut closing = self.shared.closing.subscribe();
+        self.shared.spawner.spawn_unboxed(async move {
+            loop {
+                let ev = tokio::select! {
+                    biased;
+                    _ = closing.wait_for(|c| *c) => break,
+                    ev = detector.next_event() => ev,
+                };
+                let closed = matches!(ev, LegEvent::Closed);
+                if tx.send(ev).is_err() || closed {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// A source's events into the queue until `Closing`.
+    fn forward<T: Into<Event> + Send + 'static>(&self, mut rx: Rx<T>) {
+        let tx = self.reports.clone();
+        let mut closing = self.shared.closing.subscribe();
+        self.shared.spawner.spawn_unboxed(async move {
+            loop {
+                let ev = tokio::select! {
+                    biased;
+                    ev = rx.recv() => ev,
+                    _ = closing.wait_for(|c| *c) => None,
+                };
+                if ev.is_none_or(|ev| tx.send(ev).is_err()) {
+                    break;
+                }
+            }
+        });
+    }
 }
 
 fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {

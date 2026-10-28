@@ -1,6 +1,7 @@
 //! Executes the decision core's effects after synchronous settlement.
 
 use super::Runtime;
+use super::legs::PendingLeg;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{HOST_TEARDOWN_TIMEOUT, SpawnerExt};
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
@@ -132,32 +133,8 @@ impl Runtime {
                 }
             }
             E::ActivateLeg { channel, sink } => {
-                let Some(stream) = self.pending_legs.remove(&sink) else { return };
-                let shared = &self.shared;
-                match stream {
-                    PendingLeg::Stt(mut source) => {
-                        source.report_retries(lk_agents_voice::audio::report_to(
-                            self.reports.clone(),
-                        ));
-                        lk_agents_voice::audio::spawn_drain(
-                            &shared.spawner,
-                            shared.time.clone(),
-                            shared.closing.subscribe(),
-                            lk_agents_voice::audio::tagged(sink, source),
-                            self.reports.clone(),
-                            (channel, sink),
-                        );
-                    }
-                    PendingLeg::Vad(source) => {
-                        lk_agents_voice::audio::spawn_drain(
-                            &shared.spawner,
-                            shared.time.clone(),
-                            shared.closing.subscribe(),
-                            source,
-                            self.reports.clone(),
-                            (channel, sink),
-                        );
-                    }
+                if let Some(stream) = self.pending_legs.remove(&sink) {
+                    self.drain(channel, sink, stream);
                 }
             }
             E::DiscardLeg(sink) => {
@@ -286,16 +263,12 @@ impl Runtime {
                 }
             }
             E::EotPredict { req, timeout } => {
-                if let Some(leg) = self.eot.as_ref() {
+                if self.eot.is_some() {
                     self.shared.journal.record(lk_agents_voice::trace::InputStep::LegRequested {
                         leg: lk_agents_voice::trace::DetectorName::Eot,
                         req: req.0,
                     });
-                    lk_agents_abi::turn::detector::DetectorLeg::signal(
-                        &**leg,
-                        Some(req),
-                        lk_agents_abi::EotRequest { timeout },
-                    );
+                    self.predict(req, timeout);
                 }
             }
             // `_generate_reply` is the one `timed_out=True` site. A session without a detector
@@ -342,8 +315,8 @@ impl Runtime {
                 });
             }
             E::EotClose => {
-                if let Some(leg) = self.eot.as_ref() {
-                    leg.close();
+                for task in self.predictions.drain(..) {
+                    task.abort();
                 }
             }
             E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
@@ -484,11 +457,4 @@ fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
         (None, None) => true,
         _ => false,
     }
-}
-
-/// An opened stream's source half, held while the core decides: its sink is already registered,
-/// so the core names it by id. Read once activated, closed once discarded.
-pub(super) enum PendingLeg {
-    Stt(lk_agents_abi::SttSource),
-    Vad(lk_agents_abi::VadSource),
 }
