@@ -892,6 +892,10 @@ async def avatar_runner() -> None:
         receiver.items.put_nowait(frame)
     receiver.items.put_nowait(AudioSegmentEnd())
     await settle(room, 0.2)
+    # the finished report is played out in real time, so it can land after the clock settles
+    async with asyncio.timeout(5):
+        while not any(r[0] == "finished" for r in receiver.reports):
+            await asyncio.sleep(0.01)
     assert published == [True], published
     assert pushed == ["VideoFrame", "AudioFrame"] * 2, pushed
     assert receiver.reports == [("started", 0.0, False), ("finished", 0.04, False)], (
