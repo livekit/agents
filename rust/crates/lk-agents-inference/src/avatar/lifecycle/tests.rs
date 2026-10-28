@@ -281,3 +281,46 @@ fn a_retirement_unanswered_by_its_deadline_is_reported_once() {
     let effects = avatar.handle(created(1, 0, &s), deadline.saturating_add(Duration::from_secs(1)));
     assert_eq!(effects, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Late }, terminate(2, &s)]);
 }
+
+// Catches: a retirement replay that the gateway leaves silent waited on until the retirement
+// deadline when the caller set no phase limits, so the replay is never asked again and the session
+// the gateway made leaks (DST avatar_sessions_are_never_leaked, seed 428).
+#[test]
+fn a_silent_retirement_replay_without_caller_limits_is_asked_again_within_the_window() {
+    let unbounded = RequestPolicy {
+        connect_timeout: None,
+        write_timeout: None,
+        read_timeout: None,
+        max_retry: 0,
+        ..policy()
+    };
+    let mut avatar = AvatarSessionLifecycle::new(AVATAR, unbounded);
+    avatar.handle(Ev::Create, at(0));
+    written(&mut avatar, 1, 0, 10);
+    avatar.handle(Ev::Close, at(20));
+    let deadline = at(20).saturating_add(RETIREMENT_TIMEOUT);
+    let mut replays = Vec::new();
+    while let Some(due) = avatar.wake_at().filter(|due| *due < deadline) {
+        for effect in avatar.handle(Ev::Wake, due) {
+            match effect {
+                Fx::AvatarSessionCreate { request, attempt, .. } => {
+                    replays.push(attempt);
+                    avatar.handle(Ev::Connected { request, attempt }, due);
+                    avatar.handle(Ev::RequestWritten { request, attempt }, due);
+                }
+                Fx::AvatarRequestCancel { request, attempt } => {
+                    avatar.handle(Ev::AttemptClosed { request, attempt }, due);
+                }
+                Fx::RetirementIncomplete { .. } => panic!("retirement gave up inside its window"),
+                _ => {}
+            }
+        }
+        if replays.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(replays.len(), 2, "a silent replay is abandoned and asked again: {replays:?}");
+    let s = session("a");
+    let answered = avatar.handle(created(1, replays[1], &s), avatar.wake_at().unwrap().min(deadline));
+    assert_eq!(answered, vec![Fx::Retiring { session: s.clone(), reason: Retirement::Closed }, terminate(2, &s)]);
+}

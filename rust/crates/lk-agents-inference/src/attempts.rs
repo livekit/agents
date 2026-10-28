@@ -25,6 +25,10 @@ use lk_agents_abi::{ApiConnectOptions, Ts};
 /// exchange is immediate, so a miss is a runtime defect, reported rather than waited on.
 pub const ATTEMPT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A retiring request's phases are bounded so it asks at least this many times inside its window:
+/// a silent attempt never holds the whole window, even when the caller set no limits.
+const RETIREMENT_ATTEMPTS: u32 = 3;
+
 /// The first retry waits this long, the next ones `retry_interval` (`APIConnectOptions`).
 const FIRST_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -251,7 +255,8 @@ impl Attempts {
 
     /// No caller takes the outcome any more. A request that may have taken effect keeps asking
     /// under its identity, retrying every retryable failure, until an attempt answers or
-    /// `deadline` ([`AttemptStep::Unresolved`]); any other request stops now.
+    /// `deadline` ([`AttemptStep::Unresolved`]); any other request stops now. Every phase,
+    /// including the running attempt's, is bounded to a share of the window.
     pub fn retire(&mut self, now: Ts, deadline: Ts, steps: &mut Vec<AttemptStep>) {
         if self.retiring {
             return;
@@ -264,6 +269,11 @@ impl Attempts {
         self.replay_unsafe = false;
         self.policy.max_retry = u32::MAX;
         self.total_deadline = Some(deadline);
+        let attempt_limit = deadline.saturating_duration_since(now) / RETIREMENT_ATTEMPTS;
+        let p = &mut self.policy;
+        for limit in [&mut p.connect_timeout, &mut p.write_timeout, &mut p.read_timeout] {
+            *limit = Some(limit.map_or(attempt_limit, |t| t.min(attempt_limit)));
+        }
         if self.is_decided() {
             self.phase = Phase::Waiting { attempt: self.next_attempt, at: now.saturating_add(self.policy.retry_interval) };
         }
