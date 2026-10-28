@@ -700,7 +700,7 @@ pub trait HostInstructions: Send + Sync {
     ) -> Result<String, lk_agents_abi::errors::HostError>;
 }
 
-/// `dynamic` appended to the request's prompt, as `Agent._render_instructions` joins them.
+/// Append dynamic instructions to the request's static prompt.
 pub(crate) fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
     if dynamic.is_empty() {
         return;

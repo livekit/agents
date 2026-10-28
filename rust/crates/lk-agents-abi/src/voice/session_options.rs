@@ -758,7 +758,7 @@ impl Instructions {
 pub struct ExpressiveConfig {
     #[python(ty = "SpeechSteeringOptions")]
     pub speech_steering: Option<SpeechSteering>,
-    #[python(ty = "Instructions | str", import = "..llm.chat_context:Instructions")]
+    #[python(ty = "str")]
     pub tts_instructions_template: Option<Instructions>,
     #[python(ty = "str")]
     pub tts_instructions_append: Option<String>,
@@ -784,23 +784,10 @@ mod host {
     crate::python::from_host_str!(DetectorKind);
     crate::python::from_host_str!(TurnDetection);
 
-    /// The whole `(common, audio, text)` triple (`beta.workflows` tasks leave `common` empty), or
-    /// a bare `str`.
     impl<'a, 'py> FromPyObject<'a, 'py> for Instructions {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-            if let Ok((common, audio, text)) = obj.extract::<(String, Option<String>, Option<String>)>() {
-                return Ok(Instructions { common, audio, text });
-            }
-            // `llm.Instructions`: its three parts by attribute.
-            if !obj.is_instance_of::<PyString>() && let Ok(common) = obj.getattr("common") {
-                return Ok(Instructions {
-                    common: common.extract()?,
-                    audio: obj.getattr("audio")?.extract()?,
-                    text: obj.getattr("text")?.extract()?,
-                });
-            }
             Ok(Instructions::plain(obj.extract::<String>()?))
         }
     }

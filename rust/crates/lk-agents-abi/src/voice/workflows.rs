@@ -302,17 +302,17 @@ pub struct TwilioDial {
 #[binding(extract)]
 pub struct WorkflowInstructionsArg {
     /// `NOT_GIVEN` keeps the workflow's built-in persona; `""` removes the section.
-    pub persona: crate::Maybe<crate::voice::session_options::Instructions>,
-    pub extra: crate::voice::session_options::Instructions,
+    pub persona: crate::Maybe<String>,
+    pub extra: String,
 }
 
-/// A workflow's `instructions: WorkflowInstructions | Instructions | str`: a
+/// A workflow's `instructions: WorkflowInstructions | str`: a
 /// `WorkflowInstructions` fills the built-in template, anything else is fixed instructions.
 #[derive(Clone, PartialEq, Eq, Host)]
 #[binding(extract, untagged)]
 pub enum InstructionsArg {
     Workflow(WorkflowInstructionsArg),
-    Fixed(crate::voice::session_options::Instructions),
+    Fixed(String),
 }
 
 // A workflow's collected value reaches the host (`CoreObject`) as its class, over a clone.

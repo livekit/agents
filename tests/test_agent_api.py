@@ -25,6 +25,7 @@ from livekit.agents.llm import ChatContext, FunctionToolCall, Tool, Toolset
 from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.voice.agent_session import ExpressiveOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session
@@ -94,7 +95,8 @@ def test_agent_tool_decorator() -> None:
     assert [t.info.name for t in WithMethod().tools] == ["on_method"]  # type: ignore[union-attr]
 
 
-async def test_agent_instructions_and_on_enter() -> None:
+@pytest.mark.parametrize("expressive", [False, {"tts_instructions_template": "Speak naturally."}])
+async def test_agent_instructions_and_on_enter(expressive: bool | ExpressiveOptions) -> None:
     llm = RecordingLLM(
         fake_responses=[FakeLLMResponse(input="hello", content="hi there", ttft=0, duration=0)]
     )
@@ -109,7 +111,7 @@ async def test_agent_instructions_and_on_enter() -> None:
     async def greet(session: VoiceSession) -> None:
         entered.append(session)
 
-    async with VoiceSession(llm=llm) as session:
+    async with VoiceSession(llm=llm, expressive=expressive) as session:
         await session.start(agent)
         assert entered == [session]
         assert agent._frozen

@@ -18,7 +18,6 @@ from typing import (
     Generic,
     Literal,
     NamedTuple,
-    cast,
     overload,
 )
 
@@ -37,7 +36,7 @@ from ..llm import (
     RealtimeModel,
     find_function_tools,
 )
-from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
     DuplicateMode,
     DuplicateScope,
@@ -75,7 +74,6 @@ if TYPE_CHECKING:
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
-_InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
 _HookFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
@@ -167,7 +165,7 @@ class Agent(Generic[Context_T, Output_T]):
     def __init__(
         self,
         *,
-        instructions: str | Instructions,
+        instructions: str,
         name: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         output_type: type[Output_T]
@@ -186,6 +184,8 @@ class Agent(Generic[Context_T, Output_T]):
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        if not isinstance(instructions, str):
+            raise TypeError("instructions must be a string")
         tools = tools or []
         # an unnamed agent takes the name of the module-level variable it is assigned to: the
         # assigning frame's namespace is kept and scanned the first time the name is read, since
@@ -247,7 +247,7 @@ class Agent(Generic[Context_T, Output_T]):
     def instructions(self) -> _InstructionsView[Context_T]:
         """The static instructions, also the decorator registering dynamic ones.
 
-        Reads as the ``str`` or ``Instructions`` the agent was built with. Used as
+        Reads as the static string the agent was built with. Used as
         ``@agent.instructions`` it registers a function rendered into the instructions on every
         turn, which receives the ``RunContext`` and returns a string, sync or async::
 
@@ -257,7 +257,7 @@ class Agent(Generic[Context_T, Output_T]):
         if self._instructions_view is None or self._instructions_view._source is not (
             self._instructions
         ):
-            self._instructions_view = _wrap_instructions(self._instructions, self)
+            self._instructions_view = _InstructionsView(self._instructions, self)
         return self._instructions_view
 
     @property
@@ -422,12 +422,9 @@ class Agent(Generic[Context_T, Output_T]):
         """The core's ``AgentDefinition`` of this agent with ``tools``."""
         from .agent_run import tool_infos
 
-        static = self._instructions
-        if isinstance(static, Instructions):
-            static = static.render(modality="text")
         return AgentDefinition(
             name=self.name,
-            instructions=static,
+            instructions=self._instructions,
             dynamic_instructions=bool(self._instruction_fns),
             tools=tool_infos(tools),
             output=self._host._output.spec(validated=bool(self._output_validators)),
@@ -536,19 +533,6 @@ class Agent(Generic[Context_T, Output_T]):
             if rendered:
                 parts.append(str(rendered))
         return "\n\n".join(parts)
-
-    async def _render_instructions(
-        self, ctx: RunContext, *, modality: Literal["audio", "text"] | None = None
-    ) -> str | Instructions:
-        """The static instructions with the dynamic ones appended, for one turn."""
-        dynamic = await self._render_dynamic_instructions(ctx)
-        if not dynamic:
-            return self._instructions
-
-        static = self._instructions
-        if isinstance(static, Instructions):
-            static = static.render(modality=modality)
-        return f"{static}\n\n{dynamic}" if static else dynamic
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -958,54 +942,23 @@ def _output_type_of(output: Any) -> type[Any]:
     return get_type_hints(output).get("return", Any)  # type: ignore[no-any-return]
 
 
-class _InstructionsText(str):
-    """``Agent.instructions`` for a ``str``: the value, callable as the decorator."""
+_RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
 
-    __slots__ = ("_source", "_agent")
-    _source: str | Instructions
+
+class _InstructionsView(str, Generic[Context_T]):
+    """The static instructions, callable to register a dynamic instruction function."""
+
+    _source: str
     _agent: Agent
 
-    def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT:
+    def __new__(cls, source: str, agent: Agent) -> _InstructionsView[Context_T]:
+        view = super().__new__(cls, source)
+        view._source = source
+        view._agent = agent
+        return view
+
+    def __call__(
+        self, f: Callable[[RunContext[Context_T]], _RenderedT]
+    ) -> Callable[[RunContext[Context_T]], _RenderedT]:
         self._agent._register_instructions(f)
         return f
-
-
-class _InstructionsObject(Instructions):
-    """``Agent.instructions`` for an ``Instructions``: the value, callable as the decorator."""
-
-    _source: str | Instructions
-    _agent: Agent
-
-    def __call__(self, f: _InstructionsFnT) -> _InstructionsFnT:
-        self._agent._register_instructions(f)
-        return f
-
-
-if TYPE_CHECKING:
-    _RenderedT = TypeVar("_RenderedT", bound=str | Awaitable[str])
-
-    class _InstructionsView(str, Instructions, Generic[Context_T]):
-        """What a type checker sees: the value, read as a ``str`` or an ``Instructions``, and
-        the decorator, which takes the agent's ``RunContext``. One class, since a union of
-        callables is an untyped decorator to mypy."""
-
-        _source: str | Instructions
-        _agent: Agent
-
-        def __call__(
-            self, f: Callable[[RunContext[Context_T]], _RenderedT]
-        ) -> Callable[[RunContext[Context_T]], _RenderedT]: ...
-
-else:
-    _InstructionsView = _InstructionsText | _InstructionsObject
-
-
-def _wrap_instructions(source: str | Instructions, agent: Agent) -> _InstructionsView[Any]:
-    view: _InstructionsText | _InstructionsObject
-    if isinstance(source, Instructions):
-        view = _InstructionsObject(source.common, audio=source.audio, text=source.text)
-    else:
-        view = _InstructionsText(source)
-    view._source = source
-    view._agent = agent
-    return cast("_InstructionsView[Any]", view)

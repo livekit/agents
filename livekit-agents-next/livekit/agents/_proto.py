@@ -82,13 +82,7 @@ def encode_metrics(metrics: Mapping[str, Any] | None) -> _pb.MetricsReport:
 
 def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
     if item.type == "message":
-        from .llm.chat_context import Instructions
-
-        content = [
-            _pb.ChatMessage.ChatContent(text=str(c))
-            for c in item.content
-            if isinstance(c, (str, Instructions))
-        ]
+        content = [_pb.ChatMessage.ChatContent(text=c) for c in item.content if isinstance(c, str)]
         return _pb.ChatContext.ChatItem(
             message=encode_by_name(
                 _pb.ChatMessage,

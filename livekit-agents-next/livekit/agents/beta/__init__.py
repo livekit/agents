@@ -20,7 +20,6 @@ from typing_extensions import Self
 from .. import _core
 from ..job import get_job_context
 from ..llm import ToolFlag, Toolset, function_tool
-from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -36,7 +35,6 @@ from . import workflows
 from .workflows import DtmfEvent
 
 __all__ = [
-    "Instructions",
     "workflows",
     "EndCallTool",
     "send_dtmf_events",

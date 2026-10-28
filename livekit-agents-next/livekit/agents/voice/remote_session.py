@@ -13,7 +13,6 @@ from google.protobuf.json_format import MessageToDict
 from .. import _core, llm
 from .._core_view import to_core_items
 from ..job import get_job_context
-from ..llm.chat_context import Instructions
 from ..log import logger
 from ..version import __version__
 
@@ -50,14 +49,8 @@ class SessionPort:
 
     async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[_core.ChatItem]]:
         agent = self._session.current_agent
-        instructions = agent.instructions
-        rendered = (
-            instructions.render(modality="audio")
-            if isinstance(instructions, Instructions)
-            else str(instructions)
-        )
         tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.name, rendered, tools, to_core_items(self._session.history.items)
+        return agent.name, agent._instructions, tools, to_core_items(self._session.history.items)
 
     async def _core_run_input(self, text: str) -> tuple[list[_core.ChatItem] | None, str | None]:
         try:

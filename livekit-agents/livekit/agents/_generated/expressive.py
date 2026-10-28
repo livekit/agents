@@ -13,8 +13,6 @@ from typing import Literal
 
 from typing_extensions import TypedDict
 
-from ..llm.chat_context import Instructions
-
 
 class ExpressiveOptions(TypedDict, total=False):
     """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
@@ -33,7 +31,7 @@ class ExpressiveOptions(TypedDict, total=False):
     """
 
     speech_steering: SpeechSteeringOptions
-    tts_instructions_template: Instructions | str
+    tts_instructions_template: str
     tts_instructions_append: str
 
 

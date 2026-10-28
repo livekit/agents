@@ -44,7 +44,6 @@ from .._generated.vad import VAD
 from ..inference.interruption import OverlappingSpeechEvent
 from ..job import get_job_context
 from ..llm import LLM, ChatContext, RealtimeModel, StopResponse, function_tool
-from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import _MODEL_USAGE, AgentMetrics, AgentSessionUsage
 from ..telemetry import trace_types
@@ -642,7 +641,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         *,
         user_input: NotGivenOr[str] = NOT_GIVEN,
-        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[str]] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
@@ -658,8 +657,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "tools_host": pool,
                 "tool_runner": ToolRunner(self, self.current_agent, pool),
             }
-        if isinstance(instructions, Instructions):
-            instructions = instructions.render(modality="audio")
         core = self._running.generate_reply(
             user_input=user_input if is_given(user_input) else None,
             instructions=instructions if is_given(instructions) else None,
@@ -796,7 +793,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         agent._frozen = True
         pool = self._pool(agent)
         frame: dict[str, Any] = {
-            "instructions": _instructions(agent.instructions),
+            "instructions": agent._instructions,
             "dynamic_instructions": (
                 _DynamicInstructions(self, agent) if agent._instruction_fns else None
             ),
@@ -1157,12 +1154,6 @@ async def _setup_toolset(toolset: llm.Toolset) -> None:
 
 def _host_value(value: Any) -> Any:
     return from_core_item(value) if isinstance(value, _core.ChatItem) else value
-
-
-def _instructions(value: str | Instructions) -> str | tuple[str, str | None, str | None]:
-    if isinstance(value, Instructions):
-        return (value.common, value.audio, value.text)
-    return str(value)
 
 
 class _DynamicInstructions:

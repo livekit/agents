@@ -12,14 +12,15 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
-use crate::workflows::instructions::{InstructionsArg, TemplateValue, WorkflowInstructions};
+use crate::workflows::instructions::render;
 use crate::workflows::prompts::warm_transfer as p;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::voice::workflows::{IoEnableState, SipParticipantRequest, TwilioDial};
+use lk_agents_abi::voice::workflows::{
+    InstructionsArg, IoEnableState, SipParticipantRequest, TwilioDial,
+};
 use lk_agents_abi::{ChatContext, HostRef, Maybe};
 use lk_agents_rtc::{DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
-use lk_agents_voice::generation::Instructions;
 use serde_json::{Value, json};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
@@ -220,7 +221,7 @@ struct Running {
 /// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
 /// and its run.
 pub struct HostWarmTransfer {
-    instructions: Instructions,
+    instructions: String,
     origination: Origination,
     ringing_timeout: Option<Duration>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -281,22 +282,21 @@ fn transfer_tools() -> Vec<Value> {
 fn briefing(
     instructions: Option<InstructionsArg>,
     conversation: Option<Vec<(String, String)>>,
-) -> Instructions {
+) -> String {
+    let (persona, extra) = match instructions {
+        Some(InstructionsArg::Fixed(text)) => return text,
+        Some(InstructionsArg::Workflow(sections)) => (sections.persona.given(), sections.extra),
+        None => (None, String::new()),
+    };
     let history = conversation.map(conversation_of).as_ref().map(format_conversation_history);
-    let sections = [("_conversation_history", TemplateValue::plain(history.unwrap_or_default()))];
-    match instructions {
-        Some(InstructionsArg::Fixed(i)) => i,
-        Some(InstructionsArg::Workflow(w)) => {
-            WorkflowInstructions::from(w)
-                .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
-                .instructions
-        }
-        None => {
-            WorkflowInstructions::default()
-                .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
-                .instructions
-        }
-    }
+    render(
+        p::INSTRUCTIONS_TEMPLATE,
+        &[
+            ("persona", persona.as_deref().unwrap_or(p::PERSONA)),
+            ("extra", &extra),
+            ("_conversation_history", &history.unwrap_or_default()),
+        ],
+    )
 }
 
 #[lk_agents_abi::host(object(name = "WarmTransfer", cell = "arc"))]
@@ -366,11 +366,10 @@ impl HostWarmTransfer {
         })
     }
 
-    /// The briefing agent's instructions, as `(common, audio, text)`.
+    /// The briefing agent's static instructions.
     #[host(getter)]
-    pub fn instructions(&self) -> (String, Option<String>, Option<String>) {
-        let i = self.instructions.clone();
-        (i.common, i.audio, i.text)
+    pub fn instructions(&self) -> String {
+        self.instructions.clone()
     }
 
     /// The briefing agent's three tools, as raw function schemas, each answered by
@@ -898,9 +897,9 @@ mod tests {
             None,
             Some(vec![("user".into(), "my order is late".into()), ("system".into(), "x".into())]),
         );
-        assert!(i.common.contains("Caller: my order is late\n"), "{}", i.common);
-        assert!(i.common.contains("# Identity"));
-        assert!(!i.common.contains("x\n## End"));
+        assert!(i.contains("Caller: my order is late\n"), "{i}");
+        assert!(i.contains("# Identity"));
+        assert!(!i.contains("x\n## End"));
     }
 
     #[test]

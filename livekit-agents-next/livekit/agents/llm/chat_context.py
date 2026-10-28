@@ -35,120 +35,6 @@ if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
 
 
-class Instructions:
-    """Instructions with optional modality-specific additions.
-
-    Construction::
-
-        # Simple — same instructions for all modalities
-        Instructions("You are a helpful assistant.")
-
-        # With modality-specific additions
-        Instructions(
-            "You are a helpful assistant.",
-            audio="Keep responses short for voice.",
-            text="Use markdown formatting.",
-        )
-
-    Rendering::
-
-        instr.render()                              # → common text
-        instr.render(modality="audio")               # → common + audio addition
-        instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
-    """
-
-    def __init__(
-        self,
-        common: str = "",
-        *,
-        audio: str | None = None,
-        text: str | None = None,
-    ) -> None:
-        self.common = common
-        self.audio = audio
-        self.text = text
-
-    def render(
-        self,
-        *,
-        modality: Literal["audio", "text"] | None = None,
-        data: dict[str, object] | None = None,
-    ) -> str:
-        """Render instructions to a plain string.
-
-        Args:
-            modality: If given, appends the modality-specific addition to the common text.
-            data: Template variables to fill. Missing placeholders log a warning
-                and are replaced with empty strings.
-        """
-        parts = [self.common]
-        if modality is not None:
-            addition = self.audio if modality == "audio" else self.text
-            if addition:
-                parts.append(addition)
-
-        result = "\n\n".join(p for p in parts if p)
-
-        if data:
-            result = utils.misc.safe_render(result, data)
-
-        return result
-
-    @staticmethod
-    def resolve_template(template: str, **kwargs: object) -> Instructions:
-        """Fill a template string, producing an ``Instructions`` with modality variants.
-
-        If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
-        parts are substituted into the matching variant of the result. This is used by
-        workflow tasks to build modality-aware instructions from a single template.
-        """
-        any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
-        if any_instructions:
-            audio_kw: dict[str, object] = {
-                # an explicit "" removes the section; only None falls back to common
-                k: (v.audio if v.audio is not None else str(v))
-                if isinstance(v, Instructions)
-                else v
-                for k, v in kwargs.items()
-            }
-            text_kw: dict[str, object] = {
-                k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
-                for k, v in kwargs.items()
-            }
-            # audio/text hold fully rendered variants of the whole template, so they go in
-            # place of common (which render() would otherwise prepend, doubling the template).
-            audio = utils.misc.safe_render(template, audio_kw)
-            text = utils.misc.safe_render(template, text_kw)
-            if audio == text:
-                # no modality-specific differences; a single common variant renders correctly
-                # with or without a modality
-                return Instructions(common=audio)
-            return Instructions(common="", audio=audio, text=text)
-        else:
-            rendered = utils.misc.safe_render(template, kwargs)
-            return Instructions(common=rendered)
-
-    def __str__(self) -> str:
-        return self.common
-
-    def __repr__(self) -> str:
-        return f"Instructions({self.common!r})"
-
-    def __hash__(self) -> int:
-        return hash((self.common, self.audio, self.text))
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, Instructions):
-            return (
-                self.common == other.common
-                and self.audio == other.audio
-                and self.text == other.text
-            )
-        if isinstance(other, str):
-            return self.common == other
-        return NotImplemented
-
-
 class ImageContent(BaseModel):
     """
     ImageContent is used to input images into the ChatContext on supported LLM providers / plugins.
@@ -481,8 +367,8 @@ class ChatContext:
     ) -> ChatMessage:
         given = {"id": id, "interrupted": interrupted, "metrics": metrics, "extra": extra}
         kwargs: dict[str, Any] = {k: v for k, v in given.items() if is_given(v)}
-        if isinstance(content, (str, Instructions)):
-            content = [str(content)]
+        if isinstance(content, str):
+            content = [content]
         if not is_given(created_at):
             message = ChatMessage(role=role, content=content, **kwargs)
             self._items.append(message)

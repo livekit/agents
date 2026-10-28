@@ -26,7 +26,6 @@ from .._generated.workflows import (
     WarmTransferResult,
 )
 from ..job import JobContext, get_job_context
-from ..llm.chat_context import Instructions
 from ..llm.tool_context import ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -120,28 +119,16 @@ async def receive_dtmf(
     return await _core.receive_dtmf(room, num_digits, timeout, stop_event.value)
 
 
-class WorkflowInstructions(Instructions):
-    """Customizable instruction sections for built-in workflows.
+class WorkflowInstructions:
+    """Static sections inserted into a built-in workflow's instructions.
 
-    Extends :class:`Instructions` with ``persona`` and ``extra`` fields that a workflow fills
-    into its own template.
-
-    Each field overrides that section when set; leave as ``NOT_GIVEN`` to
-    preserve the workflow's built-in default. Set to ``""`` to remove a
-    section entirely.
+    Leave ``persona`` as ``NOT_GIVEN`` to keep the workflow's default; an empty
+    string removes the section.
     """
 
-    def __init__(
-        self,
-        audio: str = "",
-        *,
-        text: str | None = None,
-        persona: NotGivenOr[Instructions | str] = NOT_GIVEN,
-        extra: Instructions | str = "",
-    ) -> None:
-        super().__init__(audio=audio, text=text)
-        self.persona: NotGivenOr[Instructions | str] = persona
-        self.extra: Instructions | str = extra
+    def __init__(self, *, persona: NotGivenOr[str] = NOT_GIVEN, extra: str = "") -> None:
+        self.persona = persona
+        self.extra = extra
 
 
 class WarmTransfer:
@@ -163,7 +150,7 @@ class WarmTransfer:
         dtmf: str | None = None,
         ringing_timeout: float | None = None,
         hold_audio: AudioSource | AudioConfig | list[AudioConfig] | None = _HOLD_MUSIC,
-        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | str] = NOT_GIVEN,
         chat_ctx: llm.ChatContext | None = None,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
@@ -243,7 +230,7 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
         original_caller_number: str | None = None,
         ringing_timeout: float | None = _core.TWILIO_RINGING_TIMEOUT,
         hold_audio: AudioSource | AudioConfig | list[AudioConfig] | None = _HOLD_MUSIC,
-        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
+        instructions: NotGivenOr[WorkflowInstructions | str] = NOT_GIVEN,
         chat_ctx: llm.ChatContext | None = None,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
@@ -311,9 +298,8 @@ def _briefing_agent(
     transfer: _core.WarmTransfer, *, tools: list[llm.Tool | llm.Toolset] | None, **agent: Any
 ) -> Agent:
     """The agent that briefs the human agent: the transfer's instructions and tools."""
-    common, audio, text = transfer.instructions
     return Agent(
-        instructions=Instructions(common, audio=audio, text=text),
+        instructions=transfer.instructions,
         tools=[*(tools or []), *(_transfer_tool(transfer, spec) for spec in transfer.tools())],
         **agent,
     )
