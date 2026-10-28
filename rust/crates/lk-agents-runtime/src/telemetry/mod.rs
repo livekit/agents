@@ -8,5 +8,3 @@ mod upload_policy;
 pub mod work;
 
 mod metrics;
-#[cfg(all(test, feature = "python"))]
-mod parentage_tests;

@@ -528,7 +528,7 @@ pub struct ChainObserverProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: ::lk_agents_runtime::host::python::Notifier,
+    notifier: crate::host::Notifier,
 }
 
 impl ChainObserverProxy {
@@ -546,7 +546,7 @@ impl ChainObserverProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(ChainObserverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?) })
+        Ok(ChainObserverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
     }
 }
 
@@ -584,7 +584,7 @@ pub struct LlmProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: ::lk_agents_runtime::host::python::Notifier,
+    notifier: crate::host::Notifier,
     label: ::std::string::String,
     model: ::std::string::String,
     id: ::lk_agents_abi::ProviderId,
@@ -619,7 +619,7 @@ impl LlmProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?), label, model, id, conn: None })
+        Ok(LlmProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, model, id, conn: None })
     }
 }
 
@@ -678,7 +678,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(req_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
@@ -694,7 +694,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (::lk_agents_runtime::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::LlmChunk>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::LlmChunk>()?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -740,7 +740,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_start: the call captured no host context"))));
         };
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -765,7 +765,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_send: the call captured no host context"))));
         };
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::lk_agents_abi::python::value_to_py(py, &message_arg)?];
                 Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -789,7 +789,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_receive: the call captured no host context"))));
         };
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_receive")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -813,7 +813,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_close: the call captured no host context"))));
         };
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -872,7 +872,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
             return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("McpProgress._core_update: the call captured no host context"))));
         };
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
                 Ok((host.bind(py).getattr("_core_update")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -899,7 +899,7 @@ pub struct HostToolRunnerProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: ::lk_agents_runtime::host::python::Notifier,
+    notifier: crate::host::Notifier,
 }
 
 impl HostToolRunnerProxy {
@@ -917,7 +917,7 @@ impl HostToolRunnerProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(HostToolRunnerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?) })
+        Ok(HostToolRunnerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?) })
     }
 }
 
@@ -932,7 +932,7 @@ impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(name_arg, py)?];
                 Ok((host.bind(py).getattr("_core_describe")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -958,7 +958,7 @@ impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?];
                 Ok((host.bind(py).getattr("_core_prepare")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -985,7 +985,7 @@ impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
                 Ok((host.bind(py).getattr("_core_read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -1011,7 +1011,7 @@ impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
                 Ok((host.bind(py).getattr("_core_run")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;

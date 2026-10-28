@@ -19,7 +19,7 @@ pub struct EotDetectorProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: ::lk_agents_runtime::host::python::Notifier,
+    notifier: crate::host::Notifier,
     id: ::lk_agents_abi::ProviderId,
 }
 
@@ -42,7 +42,7 @@ impl EotDetectorProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(EotDetectorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?), id })
+        Ok(EotDetectorProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), id })
     }
 }
 
@@ -91,7 +91,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(timeout_arg.map(|d| d.as_secs_f64()), py)?];
                 Ok((host.bind(py).getattr("_core_predict")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -114,7 +114,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        if let Err(e) = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await {

@@ -142,7 +142,7 @@ impl SessionJobProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())? })
+        Ok(SessionJobProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
     }
 }
 
@@ -156,7 +156,7 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_connect")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -205,7 +205,7 @@ impl SessionPortProxy {
             let v = obj.call_method0("_core_framework_info")?;
             (|| -> ::pyo3::PyResult<_> { let tuple = v.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_framework_info"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })()?
         };
-        Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, framework_info })
+        Ok(SessionPortProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, framework_info })
     }
 }
 
@@ -219,7 +219,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_chat_history")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -240,7 +240,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_agent_info")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -262,7 +262,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let text_arg = text.to_owned();
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((host.bind(py).getattr("_core_run_input")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -283,7 +283,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_session_state")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -304,7 +304,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_rtc_stats")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -325,7 +325,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_session_usage")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -351,7 +351,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let update_arg = update;
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(update_arg, py)?];
                 Ok((host.bind(py).getattr("_core_update_io")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -373,7 +373,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let provisional_arg = provisional;
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(provisional_arg, py)?];
                 Ok((host.bind(py).getattr("_core_finalize_simulation")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
@@ -416,7 +416,7 @@ impl DevServerProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())? })
+        Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
     }
 }
 
@@ -451,7 +451,7 @@ impl ::lk_agents_abi::worker::cli::DevServer for DevServerProxy {
         let jobs_arg = jobs;
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(jobs_arg, py)?];
                 Ok((host.bind(py).getattr("_core_reload_jobs")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;

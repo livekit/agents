@@ -18,6 +18,8 @@ extern crate lk_agents_voice as _;
 
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
+/// Entering the host: a call in its operation's captured context, host streams and notices.
+pub mod host;
 /// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
 pub mod avatar_output;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.

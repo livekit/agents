@@ -2,13 +2,8 @@
 //! An operation's [`Invocation`] is captured once, at its entry; each callback gets its own copy
 //! with the scopes it declares (tool call, approval) and a fresh operation id, runs as a task this
 //! invoker owns, is cancelled through the host (its call still settles), and releases its captured
-//! context when it settles. Entering the captured host context is [`python::call_in`]'s, which the
-//! generated proxies call per method.
-
-#[cfg(feature = "python")]
-pub mod python;
-#[cfg(feature = "python")]
-pub mod stream;
+//! context when it settles. Entering the captured host context is the language binding's
+//! (`lk-agents-py`'s `host::call_in`, decision 74).
 
 use std::collections::BTreeMap;
 

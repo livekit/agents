@@ -1,7 +1,7 @@
 //! The declared proxies (`#[host(proxy)]` traits whose methods declare their calls), written into
 //! their subject's adapter module: `<Trait>Proxy` implements the ABI trait over a host object.
 //!
-//! Each call enters a copy of a captured host context (`lk_agents_runtime::host::python::call_in`):
+//! Each call enters a copy of a captured host context (`crate::host::call_in`):
 //! the one its `#[host(context)]` parameter carries, else the one the proxy captured when it was
 //! taken from the host. Every parameter crosses by its declared kind and the result is read by its
 //! declared kind; a host failure becomes the declared error. `read_once` values are read when the
@@ -38,13 +38,13 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         fields.push(
             "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
         );
-        inits.push("context: ::lk_agents_runtime::host::python::capture_context(obj.py())?".into());
+        inits.push("context: crate::host::capture_context(obj.py())?".into());
     }
     if p.methods.iter().any(|m| m.kind == ProxyCall::Notify) {
         fields.push(
-            "    /// The `notify` calls, delivered in order.\n    notifier: ::lk_agents_runtime::host::python::Notifier,\n".into(),
+            "    /// The `notify` calls, delivered in order.\n    notifier: crate::host::Notifier,\n".into(),
         );
-        inits.push("notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?)".into());
+        inits.push("notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?)".into());
     }
     for m in p.methods.iter().filter(|m| m.kind == ProxyCall::ReadOnce) {
         let at = format!("{}::{}", tr, m.rust_name);
@@ -185,7 +185,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         _ => String::new(),
     };
     let call = format!(
-        "::lk_agents_runtime::host::python::call_in(context, move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n            }})",
+        "crate::host::call_in(context, move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n            }})",
         args.len(),
         args.join(", "),
         m.name
@@ -384,7 +384,7 @@ fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> 
             let read = from_object("o", item, &format!("{label:?}"), at)?;
             // The stream pulls in a copy of the context its call ran in.
             Ok(format!(
-                "::lk_agents_runtime::host::stream::HostStream::open(py, {o}, context, |o| Ok({read}?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as {})",
+                "crate::host::stream::HostStream::open(py, {o}, context, |o| Ok({read}?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as {})",
                 ty.rust()
             ))
         }
@@ -392,7 +392,7 @@ fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> 
             let read = from_object("o", output, &format!("{label:?}"), at)?;
             let write = to_host("v", input, at)?;
             Ok(format!(
-                "::lk_agents_runtime::host::stream::HostStream::duplex(py, {o}, context, |py, v| Ok({write}), |o| Ok({read}?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>))",
+                "crate::host::stream::HostStream::duplex(py, {o}, context, |py, v| Ok({write}), |o| Ok({read}?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>))",
                 input.rust(),
                 output.rust()
             ))

@@ -402,7 +402,7 @@ pub enum Ty {
         class: String,
     },
     /// `Box<dyn StreamSource<T>>` a host call returns: the host's async iterable of `T`, pulled
-    /// in its own context (`lk_agents_runtime::host::stream::HostStream`). Input only.
+    /// in its own context (`crate::host::stream::HostStream`). Input only.
     HostSource(Box<Ty>),
     /// `(Box<dyn StreamSink<I>>, Box<dyn StreamSource<T>>)` a host call returns: the host's duplex
     /// stream, input through its `_core_push`/`_core_flush`/`_core_end_input` and output by

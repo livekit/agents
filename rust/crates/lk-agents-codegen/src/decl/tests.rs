@@ -384,7 +384,7 @@ fn declared_proxies_call_the_host_in_their_context() {
         "impl ::lk_agents_abi::llm::class::Callbacks for CallbacksProxy {",
         "#[::async_trait::async_trait]",
         "let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(at).cloned() else {",
-        "let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {",
+        "let out = crate::host::call_in(context, move |py| {",
         "Ok((host.bind(py).getattr(\"render\")?",
         "::lk_agents_abi::python::extra_to_py(py, &args_arg)?.into_any()",
         "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
@@ -434,12 +434,12 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
         "let v = obj.call_method0(\"_core_label\")?;",
-        "context: ::lk_agents_runtime::host::python::capture_context(obj.py())?",
+        "context: crate::host::capture_context(obj.py())?",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
         "let context = ::std::clone::Clone::clone(&self.context);",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
-        "::lk_agents_runtime::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
+        "crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
         "DeclaredProxy::of::<dyn ::lk_agents_abi::llm::class::Callbacks>",
     ] {
         assert!(llm.contains(want), "{want}\n{llm}");

@@ -102,7 +102,7 @@ impl EvaluationHostProxy {
     }
 
     fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(EvaluationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())? })
+        Ok(EvaluationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())? })
     }
 }
 
@@ -117,7 +117,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
         let evaluator_arg = ::std::clone::Clone::clone(evaluator);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(evaluator_arg, py)?];
                 Ok((host.bind(py).getattr("evaluate")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;

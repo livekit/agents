@@ -19,7 +19,7 @@ pub struct SttProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: ::lk_agents_runtime::host::python::Notifier,
+    notifier: crate::host::Notifier,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::SttCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -54,7 +54,7 @@ impl SttProxy {
             let v = obj.call_method0("_core_id")?;
             v.extract::<::lk_agents_abi::ProviderId>()?
         };
-        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?), label, capabilities, id, conn: None })
+        Ok(SttProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: crate::host::capture_context(obj.py())?, notifier: crate::host::Notifier::new(crate::host::capture_context(obj.py())?), label, capabilities, id, conn: None })
     }
 }
 
@@ -135,7 +135,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(buffer_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
@@ -163,7 +163,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
-        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+        let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(language_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(start_time_offset_arg, py)?];
                 let mut args = args.to_vec();
                 if let Some(bound) = bound {
@@ -179,7 +179,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (::lk_agents_runtime::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(o.extract::<::lk_agents_abi::SpeechEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(o.extract::<::lk_agents_abi::SpeechEvent>()?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SpeechEvent>>))).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
