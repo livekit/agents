@@ -2413,6 +2413,85 @@ impl RoomAudioInput {
     }
 }
 
+/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
+/// stripped unless asked to keep it.
+#[napi(js_name = "BasicWordTokenizer")]
+pub struct BasicWordTokenizer {
+    pub(crate) inner: lk_agents_abi::tokenize::BasicWordTokenizer,
+}
+
+#[napi]
+impl BasicWordTokenizer {
+    #[napi(constructor)]
+    pub fn new(ignore_punctuation: Option<bool>, split_character: Option<bool>, retain_format: Option<bool>) -> Self {
+        let ignore_punctuation = ignore_punctuation.unwrap_or(true);
+        let split_character = split_character.unwrap_or(false);
+        let retain_format = retain_format.unwrap_or(false);
+        BasicWordTokenizer { inner: lk_agents_abi::tokenize::BasicWordTokenizer::new(ignore_punctuation, split_character, retain_format) }
+    }
+
+    #[napi(js_name = "tokenize")]
+    pub fn tokenize(&self, text: String, language: Option<String>) -> Vec<String> {
+        self.inner.tokenize(&text, language.as_deref())
+    }
+
+    #[napi(js_name = "_coreSplit")]
+    pub fn _core_split(&self, text: String) -> Vec<(String, i64, i64)> {
+        self.inner.split(&text).into_iter().map(|v| { let (t0, t1, t2,) = v; (t0, i64::try_from(t1).unwrap_or(i64::MAX), i64::try_from(t2).unwrap_or(i64::MAX)) }).collect::<Vec<_>>()
+    }
+
+    #[napi(getter, js_name = "_coreMinTokenLen")]
+    pub fn _core_min_token_len(&self) -> i64 {
+        i64::try_from(self.inner.min_token_len()).unwrap_or(i64::MAX)
+    }
+
+    #[napi(getter, js_name = "_coreMinCtxLen")]
+    pub fn _core_min_ctx_len(&self) -> i64 {
+        i64::try_from(self.inner.min_ctx_len()).unwrap_or(i64::MAX)
+    }
+}
+
+/// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
+/// tested.
+#[napi(js_name = "BasicSentenceTokenizer")]
+pub struct BasicSentenceTokenizer {
+    pub(crate) inner: lk_agents_abi::tokenize::BasicSentenceTokenizer,
+}
+
+#[napi]
+impl BasicSentenceTokenizer {
+    #[napi(constructor)]
+    pub fn new(env: Env, language: Option<String>, min_sentence_len: Option<i64>, stream_context_len: Option<i64>, retain_format: Option<bool>) -> napi::Result<Self> {
+        crate::host_error::run(&env, || {
+            let language = language.as_deref().unwrap_or("english");
+            let min_sentence_len = match min_sentence_len { Some(v) => <usize>::try_from(v).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("min_sentence_len: {e}")))?, None => 20 };
+            let stream_context_len = match stream_context_len { Some(v) => <usize>::try_from(v).map_err(|e| crate::host_error::JsError::new("OverflowError", format!("stream_context_len: {e}")))?, None => 10 };
+            let retain_format = retain_format.unwrap_or(false);
+            Ok(BasicSentenceTokenizer { inner: lk_agents_abi::tokenize::BasicSentenceTokenizer::new(&language, min_sentence_len, stream_context_len, retain_format) })
+        })
+    }
+
+    #[napi(js_name = "tokenize")]
+    pub fn tokenize(&self, text: String, language: Option<String>) -> Vec<String> {
+        self.inner.tokenize(&text, language.as_deref())
+    }
+
+    #[napi(js_name = "_coreSplit")]
+    pub fn _core_split(&self, text: String) -> Vec<(String, i64, i64)> {
+        self.inner.split(&text).into_iter().map(|v| { let (t0, t1, t2,) = v; (t0, i64::try_from(t1).unwrap_or(i64::MAX), i64::try_from(t2).unwrap_or(i64::MAX)) }).collect::<Vec<_>>()
+    }
+
+    #[napi(getter, js_name = "_coreMinTokenLen")]
+    pub fn _core_min_token_len(&self) -> i64 {
+        i64::try_from(self.inner.min_token_len()).unwrap_or(i64::MAX)
+    }
+
+    #[napi(getter, js_name = "_coreMinCtxLen")]
+    pub fn _core_min_ctx_len(&self) -> i64 {
+        i64::try_from(self.inner.min_ctx_len()).unwrap_or(i64::MAX)
+    }
+}
+
 #[napi(js_name = "EvaluationResult")]
 pub struct EvaluationResult {
     pub(crate) inner: lk_agents_abi::evals::EvaluationResult,

@@ -81,7 +81,7 @@ pub fn exposed_with(
                 let rust = f.sig.ident.to_string();
                 let at = format!("{label}: {rust}");
                 want_head(&at, &m, "export")?;
-                out.fns.push(export_fn(
+                let f = export_fn(
                     &at,
                     &m,
                     &f.sig,
@@ -89,7 +89,13 @@ pub fn exposed_with(
                     format!("{module}::{rust}"),
                     rust,
                     &al,
-                )?);
+                )?;
+                if let Some(target) = python_key(&at, &item_attrs(item), "forward", &["module"])?
+                    .and_then(|m| meta_str(&m, "python.forward.module"))
+                {
+                    out.forwards.push((target, f.name.clone(), label.to_owned()));
+                }
+                out.fns.push(f);
             }
             syn::Item::Const(c) => {
                 let Some(m) = host_attr_strict(label, &c.attrs)? else { continue };
@@ -114,7 +120,26 @@ pub fn exposed_with(
                 if head_of(&m) == "export" {
                     exported_impl(label, module, imp, &mut out, &al)?;
                 } else {
-                    out.objects.push(object(label, module, imp, &m, &al)?);
+                    let o = object(label, module, imp, &m, &al)?;
+                    let at = format!("{label}: {}", o.name);
+                    if let Some(w) =
+                        python_key(&at, &imp.attrs, "wrapper", &["module", "path", "name", "base"])?
+                    {
+                        let get = |k: &str| meta_str(&w, &format!("python.wrapper.{k}"));
+                        let need = |k: &str| {
+                            get(k).ok_or_else(|| format!("{at}: wrapper needs {k} = \"..\""))
+                        };
+                        out.wrappers.push(Wrapper {
+                            name: need("name")?,
+                            module: need("module")?,
+                            path: get("path"),
+                            source: label.to_owned(),
+                            doc: doc(&imp.attrs),
+                            base: need("base")?,
+                            core: o.name.clone(),
+                        });
+                    }
+                    out.objects.push(o);
                 }
             }
             // A `#[derive(Host)]` record's `#[host(..)]` is the record vocabulary, not this one.
@@ -223,6 +248,36 @@ pub fn exposed_with(
         }
     }
     Ok(out)
+}
+
+fn item_attrs(item: &syn::Item) -> Vec<syn::Attribute> {
+    match item {
+        syn::Item::Fn(f) => f.attrs.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// The item's `#[python(<head>(..))]` entries, if any; any other key is refused.
+fn python_key(at: &str, attrs: &[syn::Attribute], head: &str, keys: &[&str]) -> Res<Option<Vec<Meta>>> {
+    let m: Vec<Meta> = super::meta::metas(attrs)
+        .into_iter()
+        .filter(|m| m.key.starts_with("python."))
+        .collect();
+    if m.is_empty() {
+        return Ok(None);
+    }
+    for x in &m {
+        let key = x.key.strip_prefix(&format!("python.{head}")).unwrap_or("!");
+        let key = key.strip_prefix('.').unwrap_or(key);
+        if !(key.is_empty() || keys.contains(&key)) {
+            return Err(format!(
+                "{at}: #[python({head}(..))] takes {}, not `{}`",
+                keys.join(", "),
+                x.key
+            ));
+        }
+    }
+    Ok(Some(m))
 }
 
 /// A `#[host(string)]` struct's `#[python(str_class(..))]`, if it has one.

@@ -276,9 +276,13 @@ fn expand_host(
             Err(err) => return err.to_compile_error(),
         }
     }
-    // A `string` type's `#[python(str_class(..))]` is read by `lk-agents-codegen` only.
-    if let (I::Struct(st), Some("string")) = (&mut parsed, head.as_deref()) {
-        st.attrs.retain(|a| !a.path().is_ident("python"));
+    // A `string` type's `#[python(str_class(..))]`, an object's `#[python(wrapper(..))]` and an
+    // export's `#[python(forward(..))]` are read by `lk-agents-codegen` only.
+    match (&mut parsed, head.as_deref()) {
+        (I::Struct(st), Some("string")) => st.attrs.retain(|a| !a.path().is_ident("python")),
+        (I::Impl(imp), Some("object")) => imp.attrs.retain(|a| !a.path().is_ident("python")),
+        (I::Fn(f), Some("export")) => f.attrs.retain(|a| !a.path().is_ident("python")),
+        _ => {}
     }
     strip(&mut parsed, head.as_deref() == Some("group"));
     quote::quote!(#parsed #extra)

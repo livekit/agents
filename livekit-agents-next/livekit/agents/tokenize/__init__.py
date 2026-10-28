@@ -4,7 +4,7 @@ import unicodedata
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import overload
+from typing import Any, overload
 
 from .. import _core
 from ..utils import aio, shortuuid
@@ -275,5 +275,38 @@ def replace_words(
     return _replace_words()
 
 
+class _CoreSentenceTokenizer(SentenceTokenizer):
+    """A sentence tokenizer the core runs (``self._core``); a stream batches its spans."""
+
+    _core: Any
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return self._core.tokenize(text, language=language)  # type: ignore[no-any-return]
+
+    def stream(self, *, language: str | None = None) -> SentenceStream:
+        return BufferedSentenceStream(
+            tokenizer=self._core._core_split,
+            min_token_len=self._core._core_min_token_len,
+            min_ctx_len=self._core._core_min_ctx_len,
+        )
+
+
+class _CoreWordTokenizer(WordTokenizer):
+    """A word tokenizer the core runs (``self._core``); a stream batches its spans."""
+
+    _core: Any
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return self._core.tokenize(text, language=language)  # type: ignore[no-any-return]
+
+    def stream(self, *, language: str | None = None) -> WordStream:
+        return BufferedWordStream(
+            tokenizer=self._core._core_split,
+            min_token_len=self._core._core_min_token_len,
+            min_ctx_len=self._core._core_min_ctx_len,
+        )
+
+
 # the tokenizers build on the definitions above
-from . import basic, blingfire  # noqa: E402
+from .._generated import tokenize_basic as basic  # noqa: E402
+from . import blingfire  # noqa: E402

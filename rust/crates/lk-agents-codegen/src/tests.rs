@@ -946,6 +946,40 @@ pub fn normalize(code: &str) -> String { code.to_owned() }
     }
 }
 
+// Catches: a wrapper whose constructor drops the keyword-only star or a parameter's default, or a
+// forwarded export missing from the module's `__all__`.
+#[test]
+fn a_wrapper_builds_its_core_object_and_forwards_re_export() {
+    let src = r#"
+pub struct Tok { n: usize }
+
+/// A tokenizer.
+#[crate::host(object(name = "CoreTok", pid = false))]
+#[python(wrapper(module = "tok", path = "livekit.agents.tok", name = "Tok", base = "..base:_Base"))]
+impl Tok {
+    #[host(new(kw_only, defaults(n = 20)))]
+    pub fn new(n: usize) -> Self { Tok { n } }
+}
+
+#[crate::host(export(pid = false))]
+#[python(forward(module = "tok"))]
+pub fn split(text: &str) -> Vec<String> { Vec::new() }
+"#;
+    let x = parse::exposed("a.rs", "m", src).expect("parses");
+    let out = crate::forward::emit(&[], &x).expect("generates");
+    assert_eq!(out.len(), 1);
+    let text = &out[0].text;
+    for want in [
+        "from .. import _core\nfrom .._core import split\nfrom ..base import _Base\n",
+        "__all__ = [\n    \"Tok\",\n    \"split\",\n]\n",
+        "class Tok(_Base):\n    \"\"\"A tokenizer.\"\"\"\n",
+        "    def __init__(self, *, n: int = 20) -> None:\n        self._core = _core.CoreTok(n=n)\n",
+        "Tok.__module__ = \"livekit.agents.tok\"\n",
+    ] {
+        assert!(text.contains(want), "{want}: {text}");
+    }
+}
+
 // Catches: a constant's string written unescaped (a quote closing the Python literal early), its
 // docstring dropped, or a module of constants alone missing its `Final` import.
 #[test]

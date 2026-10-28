@@ -38,7 +38,6 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -1404,7 +1403,7 @@ def _to_timed_words(
 
     timestamps = start_times_ms + [start_times_ms[-1] + durations_ms[-1]]  # N+1
 
-    words = split_words(text, ignore_punctuation=False, split_character=True)
+    words = tokenize.basic.split_words(text, ignore_punctuation=False, split_character=True)
     if not words:
         return [], text
 

@@ -1,6 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[python(str_class(..))]` declaration in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the declarations in:
 #     rust/crates/lk-agents-abi/src/tokenize/language/code.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a

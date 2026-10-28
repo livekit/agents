@@ -390,6 +390,12 @@ pub fn split_paragraphs(text: String) -> Vec<(String, i64, i64)> {
     lk_agents_abi::tokenize::split_paragraphs(&text).into_iter().map(|v| { let (t0, t1, t2,) = v; (t0, i64::try_from(t1).unwrap_or(i64::MAX), i64::try_from(t2).unwrap_or(i64::MAX)) }).collect::<Vec<_>>()
 }
 
+/// The paragraphs of `text`.
+#[napi(js_name = "tokenizeParagraphs")]
+pub fn tokenize_paragraphs(text: String) -> Vec<String> {
+    lk_agents_abi::tokenize::tokenize_paragraphs(&text)
+}
+
 /// The turn detector a host constructs: `(model, cloud, warnings)`.
 #[napi(js_name = "eotSelect")]
 pub fn eot_select(env: Env, version: Option<String>, hosted: bool, dev: bool, url: String, key: String, secret: String, local_fallback: bool) -> napi::Result<(String, bool, Vec<String>)> {

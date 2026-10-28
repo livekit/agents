@@ -181,3 +181,10 @@ mod tests {
     }
 
 }
+
+/// The paragraphs of `text`.
+#[crate::host(export(pid = false))]
+#[python(forward(module = "tokenize_basic"))]
+pub fn tokenize_paragraphs(text: &str) -> Vec<String> {
+    split_paragraphs(text).into_iter().map(|(paragraph, _, _)| paragraph).collect()
+}

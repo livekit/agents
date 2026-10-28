@@ -246,6 +246,7 @@ def replace_words(
     hold_last_word: bool = False,
 ) -> tuple[str, int] | None: ...
 def split_paragraphs(text: str) -> list[tuple[str, int, int]]: ...
+def tokenize_paragraphs(text: str) -> list[str]: ...
 def eot_select(
     version: str | None,
     hosted: bool,
@@ -433,6 +434,7 @@ def encode_image(
 ) -> bytes: ...
 def split_words(
     text: str,
+    *,
     ignore_punctuation: bool = True,
     split_character: bool = False,
     retain_format: bool = False,
@@ -1907,6 +1909,47 @@ class RoomAudioInput:
     @property
     def reading(self) -> str | None: ...
     async def aclose(self) -> None: ...
+
+
+class BasicWordTokenizer:
+    """Really naive implementation of a word tokenizer: words split on whitespace, punctuation
+    stripped unless asked to keep it.
+    """
+
+    def __init__(
+        self,
+        *,
+        ignore_punctuation: bool = True,
+        split_character: bool = False,
+        retain_format: bool = False,
+    ) -> None: ...
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
+    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    @property
+    def _core_min_token_len(self) -> int: ...
+    @property
+    def _core_min_ctx_len(self) -> int: ...
+
+
+class BasicSentenceTokenizer:
+    """Really naive implementation of a sentence tokenizer: rule-based, and only English is really
+    tested.
+    """
+
+    def __init__(
+        self,
+        *,
+        language: str = "english",
+        min_sentence_len: int = 20,
+        stream_context_len: int = 10,
+        retain_format: bool = False,
+    ) -> None: ...
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
+    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    @property
+    def _core_min_token_len(self) -> int: ...
+    @property
+    def _core_min_ctx_len(self) -> int: ...
 
 
 class EvaluationResult:

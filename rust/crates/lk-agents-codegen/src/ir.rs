@@ -526,6 +526,24 @@ pub struct Exposed {
     pub proxies: Vec<Proxy>,
     pub providers: Vec<Provider>,
     pub str_classes: Vec<StrClass>,
+    pub wrappers: Vec<Wrapper>,
+    /// `#[python(forward(module = ..))]` on an export: `(module, exported name, source)`.
+    pub forwards: Vec<(String, String, String)>,
+}
+
+/// `#[python(wrapper(module, path, name, base))]` on a `#[host(object)]` impl: a host class
+/// subclassing `base` (`"module:Name"`) whose constructor takes the object's `new` parameters and
+/// keeps the core object as `self._core`; `base` reads it.
+#[derive(Debug, Clone)]
+pub struct Wrapper {
+    pub name: String,
+    pub module: String,
+    pub path: Option<String>,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub base: String,
+    /// The object's `_core` class name.
+    pub core: String,
 }
 
 /// `#[python(str_class(module, path, new, property(..), method(..)))]` on a `#[host(string)]`
@@ -565,6 +583,8 @@ impl Exposed {
         self.proxies.extend(other.proxies);
         self.providers.extend(other.providers);
         self.str_classes.extend(other.str_classes);
+        self.wrappers.extend(other.wrappers);
+        self.forwards.extend(other.forwards);
     }
 }
 

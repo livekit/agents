@@ -175,3 +175,73 @@ mod tests {
         }
     }
 }
+
+/// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
+/// tested.
+#[derive(Debug, Clone)]
+#[crate::class(name = "BasicSentenceTokenizer")]
+pub struct BasicSentenceTokenizer {
+    pub language: String,
+    pub min_sentence_len: usize,
+    pub stream_context_len: usize,
+    pub retain_format: bool,
+}
+
+/// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
+/// tested.
+#[crate::host(object(name = "BasicSentenceTokenizer", pid = false))]
+#[python(wrapper(
+    module = "tokenize_basic",
+    path = "livekit.agents.tokenize.basic",
+    name = "SentenceTokenizer",
+    base = "..tokenize:_CoreSentenceTokenizer"
+))]
+impl BasicSentenceTokenizer {
+    #[host(new(
+        kw_only,
+        defaults(
+            language = "english",
+            min_sentence_len = 20,
+            stream_context_len = 10,
+            retain_format = false
+        )
+    ))]
+    pub fn new(
+        language: &str,
+        min_sentence_len: usize,
+        stream_context_len: usize,
+        retain_format: bool,
+    ) -> Self {
+        BasicSentenceTokenizer {
+            language: language.to_owned(),
+            min_sentence_len,
+            stream_context_len,
+            retain_format,
+        }
+    }
+
+    /// The sentences of `text`; `language` is accepted and unused.
+    #[host(method(kw_only = "language", defaults(language = None)))]
+    pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
+        let _ = language;
+        self.split(text).into_iter().map(|(sentence, _, _)| sentence).collect()
+    }
+
+    /// `(sentence, start, end)` per sentence: what a stream batches.
+    #[host(method(name = "_core_split"))]
+    pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
+        basic_split_sentences(text, self.min_sentence_len, self.retain_format)
+    }
+
+    /// The shortest token a stream emits.
+    #[host(getter(name = "_core_min_token_len"))]
+    pub fn min_token_len(&self) -> usize {
+        self.min_sentence_len
+    }
+
+    /// The text a stream buffers before it splits.
+    #[host(getter(name = "_core_min_ctx_len"))]
+    pub fn min_ctx_len(&self) -> usize {
+        self.stream_context_len
+    }
+}

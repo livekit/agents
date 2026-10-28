@@ -69,8 +69,10 @@ struct Pos {
 #[crate::host(export(
     pid = false,
     name = "split_words",
+    kw_only = "ignore_punctuation",
     defaults(ignore_punctuation = true, split_character = false, retain_format = false)
 ))]
+#[python(forward(module = "tokenize_basic"))]
 pub fn split_words_of(
     text: &str,
     ignore_punctuation: bool,
@@ -306,5 +308,59 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
+/// stripped unless asked to keep it.
+#[derive(Debug, Clone)]
+#[crate::class(name = "BasicWordTokenizer")]
+pub struct BasicWordTokenizer {
+    pub opts: WordTokenizerOptions,
+}
+
+/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
+/// stripped unless asked to keep it.
+#[crate::host(object(name = "BasicWordTokenizer", pid = false))]
+#[python(wrapper(
+    module = "tokenize_basic",
+    path = "livekit.agents.tokenize.basic",
+    name = "WordTokenizer",
+    base = "..tokenize:_CoreWordTokenizer"
+))]
+impl BasicWordTokenizer {
+    #[host(new(
+        kw_only,
+        defaults(ignore_punctuation = true, split_character = false, retain_format = false)
+    ))]
+    pub fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Self {
+        BasicWordTokenizer {
+            opts: WordTokenizerOptions { ignore_punctuation, split_character, retain_format },
+        }
+    }
+
+    /// The words of `text`; `language` is accepted and unused.
+    #[host(method(kw_only = "language", defaults(language = None)))]
+    pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
+        let _ = language;
+        split_words(text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
+    }
+
+    /// `(word, start, end)` per word: what a stream batches.
+    #[host(method(name = "_core_split"))]
+    pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
+        split_words(text, self.opts).into_iter().map(|w| (w.text.into_owned(), w.start, w.end)).collect()
+    }
+
+    /// The shortest token a stream emits: each word once the next proves it whole.
+    #[host(getter(name = "_core_min_token_len"))]
+    pub fn min_token_len(&self) -> usize {
+        1
+    }
+
+    /// The text a stream buffers before it splits.
+    #[host(getter(name = "_core_min_ctx_len"))]
+    pub fn min_ctx_len(&self) -> usize {
+        1
     }
 }
