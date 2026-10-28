@@ -99,6 +99,7 @@ from .openai_utils import (
     AZURE_DEFAULT_TURN_DETECTION,
     DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
     DEFAULT_MAX_SESSION_DURATION,
+    _ItemIdMap,
     calculate_confidence_from_logprobs,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
@@ -940,6 +941,7 @@ class RealtimeSession(
         # the in-flight chat ctx events already sent, by event id, so a reconnection can send
         # again the ones the lost connection never confirmed
         self._sent_chat_ctx_events: dict[str, dict[str, Any]] = {}
+        self._item_ids = _ItemIdMap()
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
@@ -1028,6 +1030,7 @@ class RealtimeSession(
 
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(ev)
+                    self._item_ids.shorten(ev)
 
                     self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
@@ -1158,6 +1161,7 @@ class RealtimeSession(
                     # the new API uses "output_text" for assistant content.
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(msg)
+                    self._item_ids.shorten(msg)
 
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
@@ -1206,6 +1210,7 @@ class RealtimeSession(
                     normalized = _AZURE_EVENT_MAPPING.get(event_type)
                     if normalized is not None:
                         event["type"] = normalized
+                self._item_ids.restore(event)
 
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
