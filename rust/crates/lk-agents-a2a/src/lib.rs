@@ -14,6 +14,7 @@
 //! waits under `interrupt` or a client canceled its task.
 
 pub mod auth;
+pub mod attachments;
 pub mod caller_history;
 pub mod client;
 pub mod delegation;
@@ -68,6 +69,7 @@ impl Message {
         if message.message_id.is_empty() {
             return Err(StorageError::Invalid("an A2A message needs a messageId".into()));
         }
+        attachments::validate_received_parts(message)?;
         // a delegation's `chat_ctx` part is the caller's conversation, read by `caller_history_of`
         // before the message is parsed; it is not part of the turn's text
         let mut raw = message.clone();

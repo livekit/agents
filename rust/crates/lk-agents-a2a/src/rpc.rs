@@ -207,6 +207,7 @@ fn send(params: Map<String, Value>, streaming: bool) -> Result<Call, JsonRpcErro
     {
         return Err(invalid_params("a message needs a messageId"));
     }
+    crate::attachments::validate_wire_parts(&params["message"]).map_err(invalid_params)?;
     let r: SendMessageRequest = typed(params)?;
     let mut message = r.message;
     message.task_id = message.task_id.filter(|s| !s.is_empty());
