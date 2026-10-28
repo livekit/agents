@@ -34,6 +34,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -175,11 +176,7 @@ class STT(stt.STT):
 
     @staticmethod
     def _single_attempt(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return APIConnectOptions(
-            max_retry=0,
-            retry_interval=conn_options.retry_interval,
-            timeout=conn_options.timeout,
-        )
+        return replace(conn_options, max_retry=0)
 
     async def recognize(
         self,
@@ -201,6 +198,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        http_timeout = utils.http_context.client_timeout(conn_options)
         lang = language if is_given(language) else self._opts.language
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
@@ -224,10 +222,7 @@ class STT(stt.STT):
                 url=f"{self._opts.base_url}/stt/v3",
                 data=form_data,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=conn_options.timeout,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -300,6 +295,17 @@ class SpeechStream(stt.RecognizeStream):
         opts: GnaniSTTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "gnani streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(
             stt=stt,
             conn_options=conn_options,
@@ -337,11 +343,14 @@ class SpeechStream(stt.RecognizeStream):
             async with websockets.connect(
                 ws_url,
                 additional_headers=headers,
+                open_timeout=self._conn_options.connect_timeout,
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
+                connected_msg = await asyncio.wait_for(
+                    ws.recv(), timeout=self._conn_options.read_timeout
+                )
                 connected_data = json.loads(connected_msg)
                 if connected_data.get("type") != "connected":
                     logger.warning(
