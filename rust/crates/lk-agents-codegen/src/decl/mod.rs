@@ -40,6 +40,10 @@ pub struct RecordDecl {
     pub doc: Vec<String>,
     pub extract: bool,
     pub emit: bool,
+    /// `persisted`: application-saved state. The model's `to_json()`/`from_json()` go through
+    /// the record's own serde codec in Rust (`_core._core_persist_<name>`/`_core_restore_<name>`),
+    /// so every variant, empty ones included, round-trips by its tag.
+    pub persisted: bool,
     pub body: RecordBody,
 }
 
@@ -106,6 +110,14 @@ pub struct Proxy {
     /// `#[async_trait]` on the trait: the implementation carries it too.
     pub async_trait: bool,
     pub methods: Vec<ProxyMethod>,
+}
+
+impl RecordDecl {
+    /// The `_core` functions saving and restoring a persisted record.
+    pub fn persistence(&self) -> (String, String) {
+        let name = resolve::snake(&self.name);
+        (format!("_core_persist_{name}"), format!("_core_restore_{name}"))
+    }
 }
 
 impl Proxy {

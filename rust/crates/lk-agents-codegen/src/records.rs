@@ -388,7 +388,15 @@ fn model(
     match &r.body {
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
-            class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>())
+            let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>());
+            if r.persisted {
+                let (persist, restore) = r.persistence();
+                s.push_str(&format!(
+                    "\n    def to_json(self) -> str:\n        \"\"\"The saved form: restore it with ``from_json``.\"\"\"\n        from .. import _core\n\n        return _core.{persist}(self)\n\n    @classmethod\n    def from_json(cls, data: str) -> {name}:\n        \"\"\"The record ``to_json`` saved.\"\"\"\n        from .. import _core\n\n        return _core.{restore}(data)\n",
+                    name = r.name
+                ));
+            }
+            s
         }
         RecordBody::Variants(variants) => {
             runtime.add("dataclasses", "dataclass");

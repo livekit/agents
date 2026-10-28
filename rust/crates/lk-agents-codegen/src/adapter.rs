@@ -7,7 +7,7 @@
 //! lists, declared records) is a typed parameter; JSON, JSON objects and host proxies are taken as
 //! objects and converted here with the parameter's name as the error path.
 
-use crate::decl::{Class, Declarations, Form, Literal, Method, MethodKind, Param, Ty};
+use crate::decl::{Class, Declarations, Form, Literal, Method, MethodKind, Param, RecordDecl, Ty};
 use crate::python::Out;
 
 pub const DIR: &str = "rust/crates/lk-agents-py/src/generated";
@@ -21,6 +21,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         .iter()
         .map(|c| c.family.as_str())
         .chain(decls.proxies.iter().map(|p| p.family.as_str()))
+        .chain(decls.records.iter().filter(|r| r.persisted).map(|r| r.family.as_str()))
         .collect();
     sorted.sort();
     sorted.dedup();
@@ -52,6 +53,15 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             root.push_str(&format!("    m.add_class::<{}::{class}>()?;\n", c.family));
         }
     }
+    for r in decls.records.iter().filter(|r| r.persisted) {
+        let (persist, restore) = r.persistence();
+        for f in [persist, restore] {
+            root.push_str(&format!(
+                "    m.add_function(wrap_pyfunction!({}::{f}, m)?)?;\n",
+                r.family
+            ));
+        }
+    }
     root.push_str("    Ok(())\n}\n");
     out.push(Out { path: "mod.rs".into(), text: root });
     for family in &sorted {
@@ -70,6 +80,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         for p in decls.proxies.iter().filter(|p| p.family == *family) {
             text.push('\n');
             text.push_str(&crate::proxy::proxy(p)?);
+        }
+        for r in decls.records.iter().filter(|r| r.persisted && r.family == *family) {
+            text.push('\n');
+            text.push_str(&persistence(r));
         }
         out.push(Out { path: format!("{family}.rs"), text });
     }
@@ -209,6 +223,16 @@ fn doc(lines: &[String], indent: &str) -> String {
 }
 
 /// The stream classes a class's methods hand out, once each.
+/// A persisted record's codec: its serde form in Rust, crossing as its generated model.
+fn persistence(r: &RecordDecl) -> String {
+    let (persist, restore) = r.persistence();
+    let (rust, name) = (&r.rust, &r.name);
+    format!(
+        "// Declared in {source}.\n\n/// `{name}.to_json()`.\n#[pyfunction]\npub fn {persist}(record: {rust}) -> PyResult<String> {{\n    ::serde_json::to_string(&record)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))\n}}\n\n/// `{name}.from_json(data)`.\n#[pyfunction]\npub fn {restore}(data: &str) -> PyResult<{rust}> {{\n    ::serde_json::from_str(data)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))\n}}\n",
+        source = r.source
+    )
+}
+
 pub fn sources(c: &Class) -> Vec<(String, Ty)> {
     let mut out: Vec<(String, Ty)> = Vec::new();
     for m in &c.methods {

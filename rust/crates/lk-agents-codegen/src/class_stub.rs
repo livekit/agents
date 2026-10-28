@@ -5,7 +5,12 @@ use crate::decl::{Class, Declarations, Form, HostForm, Literal, Method, MethodKi
 use crate::python::Out;
 
 pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
-    let mut families: Vec<&str> = decls.classes.iter().map(|c| c.family.as_str()).collect();
+    let mut families: Vec<&str> = decls
+        .classes
+        .iter()
+        .map(|c| c.family.as_str())
+        .chain(decls.records.iter().filter(|r| r.persisted).map(|r| r.family.as_str()))
+        .collect();
     families.sort();
     families.dedup();
     let mut out = Vec::new();
@@ -26,6 +31,14 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
                 ));
                 own.push(name);
             }
+        }
+        for r in decls.records.iter().filter(|r| r.persisted && r.family == family) {
+            let (persist, restore) = r.persistence();
+            imports.add(&format!(".{}", r.module), &r.name);
+            body.push_str(&format!(
+                "\ndef {persist}(record: {name}) -> str: ...\ndef {restore}(data: str) -> {name}: ...\n",
+                name = r.name
+            ));
         }
         let own: Vec<&str> = own.iter().map(String::as_str).collect();
         let mut text = String::from(

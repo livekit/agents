@@ -880,6 +880,12 @@ impl Resolver<'_> {
             module.items.iter().position(|i| std::ptr::eq(i, item)).expect("read from here");
         let ident = item_ident(item);
         let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
+        let persisted = voc::find(&record.nested, "persisted").is_some();
+        if persisted && !(extract && emit && matches!(item, syn::Item::Struct(_))) {
+            return Err(format!(
+                "{at}: a persisted record is a struct crossing both ways (extract, emit): the application saves what it was given and restores it"
+            ));
+        }
         let entries = voc::read(item_attrs(item)).map_err(|e| format!("{at}: {e}"))?;
         voc::only(at, &entries, &["record", "wire_strs"])?;
         if derives_host(item_attrs(item)) {
@@ -928,6 +934,7 @@ impl Resolver<'_> {
             doc: doc(item_attrs(item)),
             extract,
             emit,
+            persisted,
             body,
         })
     }
@@ -1023,7 +1030,7 @@ fn record_target(
     record: &Entry,
     ident: &str,
 ) -> Result<(String, String, bool, bool), String> {
-    voc::only(at, &record.nested, &["module", "name", "extract", "emit"])?;
+    voc::only(at, &record.nested, &["module", "name", "extract", "emit", "persisted"])?;
     let module = voc::text(at, &record.nested, "module")?
         .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;
     let name = voc::text(at, &record.nested, "name")?.unwrap_or_else(|| ident.to_owned());
@@ -1083,7 +1090,7 @@ fn item_ident(item: &syn::Item) -> String {
 }
 
 /// `InputRequired` -> `input_required`.
-fn snake(s: &str) -> String {
+pub(crate) fn snake(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() {

@@ -591,3 +591,37 @@ fn records_carry_ordered_maps_sets_and_host_proxies() {
     .expect_err("an emitted proxy is refused");
     assert!(err.contains("Out") && err.contains("a host proxy is not returned"), "{err}");
 }
+
+// Catches: application-saved state serialized by the host (where empty variants of a union are
+// indistinguishable) instead of the record's own codec, or a persisted record that cannot cross
+// back the way it was saved.
+#[test]
+fn a_persisted_record_saves_and_restores_through_its_rust_codec() {
+    let decls = read(
+        r#"#[crate::host(record(module = "session", extract, emit, persisted))]
+        pub struct SessionState { pub active: String }"#,
+    )
+    .expect("resolves");
+    let adapters = crate::adapter::emit(&decls).expect("emits");
+    let llm = &adapters.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    let root = &adapters.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
+    assert!(
+        llm.contains("pub fn _core_persist_session_state(record: ::lk_agents_abi::llm::class::SessionState) -> PyResult<String> {\n    ::serde_json::to_string(&record)")
+            && llm.contains("pub fn _core_restore_session_state(data: &str) -> PyResult<::lk_agents_abi::llm::class::SessionState> {\n    ::serde_json::from_str(data)")
+            && root.contains("wrap_pyfunction!(llm::_core_restore_session_state, m)"),
+        "{llm}\n{root}"
+    );
+    let models = crate::records::python(&decls).expect("models");
+    let model = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        model.contains("return _core._core_persist_session_state(self)")
+            && model.contains("def from_json(cls, data: str) -> SessionState:"),
+        "{model}"
+    );
+    let err = read(
+        r#"#[crate::host(record(module = "session", emit, persisted))]
+        pub struct Out { pub active: String }"#,
+    )
+    .expect_err("an emit-only persisted record is refused");
+    assert!(err.contains("Out: a persisted record is a struct crossing both ways"), "{err}");
+}

@@ -25,6 +25,7 @@
 //! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
 //! | `#[derive(Host)]` record | `handwritten(extract)` | read through its own `FromPyObject` beside the derive's emit |
 //! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions written into `lk-agents-abi/src/python/generated/` |
+//! | record struct | `record(.., persisted)` | application-saved state: the model gains `to_json()`/`from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
 //! | record field, tuple variant | `skip` | does not cross (emit-only records) |
 //! | tuple variant | `field = "x"` | the name its one value crosses under |
