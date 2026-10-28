@@ -56,10 +56,7 @@ pub struct Turn {
 
 /// A turn's row data: the message it came from.
 fn turn_data(msg: &Message) -> TaskData {
-    TaskData {
-        history: vec![msg.to_a2a()],
-        ..TaskData::default()
-    }
+    TaskData { history: vec![msg.to_a2a()], ..TaskData::default() }
 }
 
 /// The early `submitted` row of a turn: its message as the task's history.
@@ -83,10 +80,7 @@ struct Outcome {
 /// The commit of a turn that ran: its answer task read back with the writes.
 fn answering(outcome: &Option<Outcome>) -> CommitOptions {
     let answer_task = outcome.as_ref().map(|o| o.task_id.clone());
-    CommitOptions {
-        answer_task,
-        ..CommitOptions::default()
-    }
+    CommitOptions { answer_task, ..CommitOptions::default() }
 }
 
 fn failed(task_id: &str, reason: &str) -> a2a::Message {
@@ -136,14 +130,7 @@ impl Turn {
         reason: &str,
     ) -> TaskRow {
         record.unwrap_or_else(|| {
-            unpersisted_failed(
-                task_id,
-                &self.lane,
-                msg,
-                reason,
-                now_ms(),
-                shortuuid("msg_"),
-            )
+            unpersisted_failed(task_id, &self.lane, msg, reason, now_ms(), shortuuid("msg_"))
         })
     }
 
@@ -163,19 +150,15 @@ impl Turn {
         let policy = self.policy_for(&msg.channel);
         let debounce = resolve_debounce(&self.opts.debounce, &msg.channel, policy);
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
-        let mut call = Call {
-            lane: self.thread.lane(&self.lane),
-            last_run_id: None,
-            caller_history,
-        };
+        let mut call =
+            Call { lane: self.thread.lane(&self.lane), last_run_id: None, caller_history };
         match policy {
             Policy::Batch => self.batch(&mut call, &msg, &task_id, debounce).await,
             Policy::Concurrent => self.concurrent(&call, &msg, &task_id).await,
             Policy::Reject => self.reject(&call, &msg, &task_id).await,
             Policy::Interrupt | Policy::Queue => {
                 let interrupt = policy == Policy::Interrupt;
-                self.exclusive(&call, &msg, &task_id, interrupt, debounce)
-                    .await
+                self.exclusive(&call, &msg, &task_id, interrupt, debounce).await
             }
         }
     }
@@ -216,8 +199,7 @@ impl Turn {
                 // was told failed
                 let db = call.lane.db();
                 if db.pickup(task_id).await?.is_some() {
-                    db.fail_orphan(task_id, &failed(task_id, REASON_LEASE_TIMEOUT))
-                        .await?;
+                    db.fail_orphan(task_id, &failed(task_id, REASON_LEASE_TIMEOUT)).await?;
                 }
                 let record = call.lane.task(task_id).await?;
                 let record =
@@ -237,12 +219,10 @@ impl Turn {
         {
             // a retried messageId: the task it created, awaited when a runner still has it, or
             // failed worker-lost when its holder died and the lease lapsed
-            self.close_run(&mut run, Ok(()), |_| CommitOptions::default())
-                .await?;
+            self.close_run(&mut run, Ok(()), |_| CommitOptions::default()).await?;
             if !existing.terminal()
-                && let Some(ended) = self
-                    .await_task(call, &existing.task_id.clone(), false, true)
-                    .await?
+                && let Some(ended) =
+                    self.await_task(call, &existing.task_id.clone(), false, true).await?
             {
                 existing = ended;
             }
@@ -253,15 +233,9 @@ impl Turn {
                 return Ok(None);
             }
             self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-            self.turn(
-                call,
-                &mut run,
-                std::slice::from_ref(msg),
-                &[task_id.to_owned()],
-                interrupt,
-            )
-            .await
-            .map(Some)
+            self.turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], interrupt)
+                .await
+                .map(Some)
         }
         .await;
         self.end_answered(call, run, msg, task_id, body).await
@@ -290,10 +264,7 @@ impl Turn {
                 return Err(e);
             }
         };
-        let answer = body
-            .as_ref()
-            .map_or(task_id, |o| o.task_id.as_str())
-            .to_owned();
+        let answer = body.as_ref().map_or(task_id, |o| o.task_id.as_str()).to_owned();
         match run.commit(answering(&body)).await {
             Ok(committed) => match body {
                 Some(outcome) => Ok(self.finish(outcome, task_id, &run, committed)),
@@ -319,8 +290,7 @@ impl Turn {
             Err(e) => {
                 log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = answer.as_str(); "the commit was rejected; the task fails storage-unavailable: {e}");
                 let db = call.lane.db();
-                db.fail_orphan(&answer, &failed(&answer, REASON_STORAGE_UNAVAILABLE))
-                    .await?;
+                db.fail_orphan(&answer, &failed(&answer, REASON_STORAGE_UNAVAILABLE)).await?;
                 let record = call.lane.task(&answer).await?;
                 let record =
                     self.record_or_failed(record, &answer, Some(msg), REASON_STORAGE_UNAVAILABLE);
@@ -385,12 +355,7 @@ impl Turn {
         let (received, lease) = call
             .lane
             .db()
-            .receive(
-                self.thread.holder(),
-                task_id,
-                &msg.to_a2a(),
-                &turn_data(msg),
-            )
+            .receive(self.thread.holder(), task_id, &msg.to_a2a(), &turn_data(msg))
             .await?;
         match (received, lease) {
             (lk_agents_storage::db::Receive::Duplicate(existing), _) => {
@@ -401,9 +366,7 @@ impl Turn {
                 {
                     // the first receive may have landed with its answer lost: nobody drains the
                     // row unless this worker does once the lease frees
-                    record = self
-                        .await_task(call, &r.task_id.clone(), true, true)
-                        .await?;
+                    record = self.await_task(call, &r.task_id.clone(), true, true).await?;
                 }
                 let record = self.record_or_failed(record, &existing_id, None, "not-written");
                 Ok(result_for(record, self.thread.id(), None))
@@ -416,20 +379,12 @@ impl Turn {
                 self.drain(call, Some(lease)).await?;
                 let record = call.lane.task(task_id).await?;
                 let record = self.record_or_failed(record, task_id, None, "not-written");
-                Ok(result_for(
-                    record,
-                    self.thread.id(),
-                    call.last_run_id.as_deref(),
-                ))
+                Ok(result_for(record, self.thread.id(), call.last_run_id.as_deref()))
             }
             (_, None) => {
                 let record = self.await_task(call, task_id, true, false).await?;
                 let record = self.record_or_failed(record, task_id, None, "not-written");
-                Ok(result_for(
-                    record,
-                    self.thread.id(),
-                    call.last_run_id.as_deref(),
-                ))
+                Ok(result_for(record, self.thread.id(), call.last_run_id.as_deref()))
             }
         }
     }
@@ -447,11 +402,8 @@ impl Turn {
         let epoch = tokio::time::Instant::now();
         let mut poll = LanePoll::new(epoch.elapsed(), self.opts.wait_timeout());
         // the drain never holds a lease across the loop; a fresh call per pass
-        let mut drain_call = Call {
-            lane: call.lane.clone(),
-            last_run_id: None,
-            caller_history: None,
-        };
+        let mut drain_call =
+            Call { lane: call.lane.clone(), last_run_id: None, caller_history: None };
         loop {
             let mut record = call.lane.task(task_id).await?;
             if record.as_ref().is_some_and(TaskRow::terminal) {
@@ -492,8 +444,7 @@ impl Turn {
                             Ok(())
                         }
                         .await;
-                        self.close_run(&mut run, body, |_| CommitOptions::default())
-                            .await?;
+                        self.close_run(&mut run, body, |_| CommitOptions::default()).await?;
                         record = call.lane.task(task_id).await?;
                         if record.as_ref().is_some_and(TaskRow::terminal) {
                             return Ok(record);
@@ -587,14 +538,9 @@ impl Turn {
             if let Some(r) = &existing
                 && !r.terminal()
             {
-                existing = self
-                    .await_task(call, &r.task_id.clone(), false, false)
-                    .await?;
+                existing = self.await_task(call, &r.task_id.clone(), false, false).await?;
             }
-            let id = existing
-                .as_ref()
-                .map_or(task_id, |r| r.task_id.as_str())
-                .to_owned();
+            let id = existing.as_ref().map_or(task_id, |r| r.task_id.as_str()).to_owned();
             let record = self.record_or_failed(existing, &id, None, "not-written");
             return Ok(result_for(record, self.thread.id(), None));
         }
@@ -607,16 +553,9 @@ impl Turn {
             })
             .await?;
         let body = self
-            .turn(
-                call,
-                &mut run,
-                std::slice::from_ref(msg),
-                &[task_id.to_owned()],
-                false,
-            )
+            .turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
             .await;
-        self.end_answered(call, run, msg, task_id, body.map(Some))
-            .await
+        self.end_answered(call, run, msg, task_id, body.map(Some)).await
     }
 
     async fn reject(
@@ -652,15 +591,9 @@ impl Turn {
                     return Ok(None);
                 }
                 self.fail_orphans(&run, &[task_id.to_owned()]).await?;
-                self.turn(
-                    call,
-                    &mut run,
-                    std::slice::from_ref(msg),
-                    &[task_id.to_owned()],
-                    false,
-                )
-                .await
-                .map(Some)
+                self.turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
+                    .await
+                    .map(Some)
             }
             .await;
             self.end_answered(call, run, msg, task_id, body).await
@@ -679,10 +612,7 @@ impl Turn {
     /// The task of the run holding the lane: the newest run with no `run_ended`.
     async fn running_task(&self, call: &Call) -> Result<Option<String>, StorageError> {
         let runs = call.lane.runs(RUNS_FOR_REJECT).await?;
-        Ok(runs
-            .into_iter()
-            .find(|r| r.interrupted())
-            .and_then(|r| r.task_id))
+        Ok(runs.into_iter().find(|r| r.interrupted()).and_then(|r| r.task_id))
     }
 
     /// A dead holder's `working` rows, found under this run's lease: each fails `worker-lost`
@@ -710,19 +640,13 @@ impl Turn {
         task_ids: &[String],
         interrupt: bool,
     ) -> Result<Outcome, StorageError> {
-        let last = batch
-            .last()
-            .ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
+        let last = batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
         let received = task_ids
             .last()
             .ok_or_else(|| StorageError::Invalid("a batch without task ids".into()))?;
 
         // what this turn adds goes after everything loaded, whatever the messages' own times
-        let after = run
-            .history
-            .iter()
-            .map(ItemRow::created_at)
-            .fold(0.0, f64::max);
+        let after = run.history.iter().map(ItemRow::created_at).fold(0.0, f64::max);
         let mut now = now_secs();
         if after >= now {
             now = after + 2e-6;
@@ -796,10 +720,7 @@ impl Turn {
         }
         run.outcome = settled.outcome;
         run.reason = settled.reason;
-        Ok(Outcome {
-            task_id: answer_task,
-            output: settled.output,
-        })
+        Ok(Outcome { task_id: answer_task, output: settled.output })
     }
 
     /// The host's stream to its output: each checkpoint answered `yield` once the turn should stop
@@ -835,11 +756,8 @@ impl Turn {
                                 None => {}
                             }
                         }
-                        let verdict = if stop.is_some() {
-                            Verdict::Yield
-                        } else {
-                            Verdict::Continue
-                        };
+                        let verdict =
+                            if stop.is_some() { Verdict::Yield } else { Verdict::Continue };
                         verdicts.push(verdict).map_err(host_error)?;
                     }
                     Some(TurnEvent::Output(o)) => {
