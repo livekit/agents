@@ -66,6 +66,7 @@ pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, Str
     Some((ATTRIBUTE_TRANSCRIPTION_EXPRESSION, json))
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// [`expression_attribute`] as the one-entry `{ATTRIBUTE_TRANSCRIPTION_EXPRESSION: json}` dict the
 /// reference returns.
 #[crate::host(export(pid = false, name = "expression_attribute"))]
@@ -73,6 +74,7 @@ pub fn expression_attribute_map(tags: Vec<ExpressiveTag>) -> Option<std::collect
     attribute_map(expression_attribute(&tags))
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 fn attribute_map(pair: Option<(&'static str, String)>) -> Option<std::collections::HashMap<String, String>> {
     pair.map(|(key, json)| std::collections::HashMap::from([(key.to_owned(), json)]))
 }
@@ -194,6 +196,7 @@ impl TranscriptMarkupStripper {
         expression_attribute(&self.tags)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// [`Self::expression_attribute`] as the host's one-entry dict.
     #[host(method(name = "expression_attribute"))]
     pub fn expression_attribute_map(&self) -> Option<std::collections::HashMap<String, String>> {

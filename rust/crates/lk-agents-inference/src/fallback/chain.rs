@@ -3,7 +3,9 @@
 //! one; probes re-issue the real request (`llm:174-200`, `stt:201-235`, `tts:504-531`).
 
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -125,15 +127,19 @@ impl std::error::Error for NoBackends {}
 pub struct FallbackChain<B: Backend> {
     entries: Vec<Arc<B>>,
     labels: Vec<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     status: Arc<Mutex<Vec<Status>>>,
     policy: ChainPolicy,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     observer: Arc<dyn ChainObserver>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_active_instance`, labelling metrics & traces. Starts at 0.
     active: AtomicUsize,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_attempt_id`, numbering every attempt.
     attempts: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `tts/fallback_adapter.py:102,155-159`. Set before the cancel sweep so an in-flight stream
     /// cannot start a probe nothing will cancel.
     closed: AtomicBool,
@@ -142,6 +148,7 @@ pub struct FallbackChain<B: Backend> {
 }
 
 impl<B: Backend> FallbackChain<B> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         entries: Vec<Arc<B>>,
         policy: ChainPolicy,

@@ -20,6 +20,7 @@ use crate::transport::{
     stream_closed, to_ws_url, within,
 };
 use lk_agents_abi::utils::connection_pool::ConnectionPool;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use crate::vad::machine::mono;
 use async_trait::async_trait;
@@ -29,7 +30,9 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, drop_bracket_cues, sentence_tokenizer_of};
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, TimedString};
 use lk_agents_media::blingfire::{SentenceBuffer, SentenceBufferOptions};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -95,13 +98,16 @@ impl std::ops::Deref for NativeTts {
 
 /// What every session's view of one client shares: its options and its pooled connections.
 pub struct TtsShared {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Mutex<TtsOptions>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_expressive`: the framework sets it before a synthesis opens.
     expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     /// Bound into, not rebuilt, so `update_options` state survives a session binding its own.
     clock: Arc<lk_agents_abi::BoundClock>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     connections: Arc<Mutex<Connections>>,
 }
 
@@ -115,11 +121,13 @@ struct Connection {
 /// `utils.ConnectionPool(max_session_duration=300, mark_refreshed_on_get=True)`.
 struct Connections {
     pool: ConnectionPool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     idle: HashMap<u64, Connection>,
     next_id: u64,
 }
 
 impl Default for Connections {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         Connections { pool: ConnectionPool::new(Some(300.0), true), idle: HashMap::new(), next_id: 0 }
     }
@@ -183,6 +191,7 @@ pub struct TtsClientConfig {
 }
 
 impl NativeTts {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let shared = TtsShared {
             opts: Mutex::new(opts),
@@ -331,6 +340,8 @@ impl NativeTts {
         Ok((Box::new(sink), Box::new(source)))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn open(
         &self,
         identification: Option<&Headers>,
@@ -462,7 +473,9 @@ enum TextCmd {
 }
 
 pub struct TtsSinkHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     text: mpsc::UnboundedSender<TextCmd>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     prep: Mutex<TextPrep>,
 }
 
@@ -509,6 +522,7 @@ impl StreamSink<String> for TtsSinkHandle {
 }
 
 pub struct TtsSourceHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     audio: mpsc::UnboundedReceiver<Result<SynthesizedAudio, ApiError>>,
     done: bool,
 }
@@ -532,6 +546,7 @@ impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
 // ---------------------------------------------------------------------------------------------
 
 struct Pump {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     connections: Arc<Mutex<Connections>>,
     /// Of a socket this synthesis opens; a reused one keeps its own.
     session_id: Option<String>,
@@ -548,11 +563,14 @@ struct Pump {
     sample_rate: u32,
     /// Bracket cues are dropped from the alignment: the provider aligned the converted text.
     expressive: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     text_rx: mpsc::UnboundedReceiver<TextCmd>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     audio_tx: mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
 }
 
 impl Pump {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn run(self) {
         let Pump {
             connections,
@@ -638,6 +656,7 @@ impl Pump {
     /// sent as it arrives; end of input is the one `session.flush`.
     async fn send_loop(
         sender: Arc<dyn WsSender>,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         mut text_rx: mpsc::UnboundedReceiver<TextCmd>,
         opts: &TtsOptions,
         clock: &dyn Clock,
@@ -676,6 +695,7 @@ impl Pump {
 
     async fn recv_loop(
         receiver: &mut dyn crate::transport::WsReceiver,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         audio_tx: &mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
         ctx: RecvCtx<'_>,
     ) -> Result<bool, ApiError> {

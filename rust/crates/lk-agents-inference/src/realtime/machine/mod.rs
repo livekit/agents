@@ -1,6 +1,7 @@
 //! `RealtimeSession`'s body as a synchronous state machine. A caller `req_id` goes out as
 //! `metadata.client_event_id`; a rejection, timeout or cancel must leave a late `response.created` recognisable as stale.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -35,6 +36,7 @@ const DELETED_CALLS_REMEMBERED: usize = 64;
 /// `_schedule_stale_say_cleanup`'s `call_later(10.0, ...)`.
 pub const STALE_SAY_CLEANUP: Duration = Duration::from_secs(10);
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct RealtimeMachine {
     dialect: Dialect,
     opts: SessionOptions,
@@ -105,6 +107,7 @@ pub struct RealtimeMachine {
 }
 
 impl RealtimeMachine {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         dialect: Dialect,
         opts: SessionOptions,
@@ -440,6 +443,7 @@ impl RealtimeMachine {
         step
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn command(&mut self, now: Ts, cmd: Command) -> Step {
         match cmd {
             Command::UpdateInstructions(lk_agents_abi::llm::realtime::UpdateInstructions { instructions }) => {
@@ -805,6 +809,7 @@ impl RealtimeMachine {
         ctx
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_create_update_chat_ctx_events`: what the server is being brought to (`expected_ctx`)
     /// diffed against the agent's context. Diffed against the bare mirror, an update sent while
     /// another was unconfirmed deleted again what that one had deleted, and was refused.
@@ -1206,6 +1211,7 @@ enum Generation {
     None,
     Active {
         response_id: String,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         messages: HashMap<String, MessageState>,
         /// Insertion order, so the flattened event stream is deterministic on close.
         order: Vec<String>,
@@ -1216,15 +1222,19 @@ enum Generation {
 
 #[derive(Debug)]
 struct CtxUpdate {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_item_create_future` / `_item_delete_future`, keyed by item id.
     awaiting_create: HashSet<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     awaiting_delete: HashSet<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_chat_ctx_event_futures`, keyed by client `event_id`: an update sends a delete and a
     /// create under the same item id, so only the event id says which one a rejection answers.
     by_event_id: HashMap<String, (bool, String)>,
     /// The context it brings the server to, and the items it deletes or creates: what a
     /// reconnection replays when the lost connection had not confirmed it.
     target: ChatContext,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     touched: HashSet<String>,
 }
 

@@ -90,6 +90,7 @@ impl Default for SttCapabilities {
 
 /// May drop: the driver feeds it from a `BoundedLossy`.
 pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Drained by `FallbackSttStream`: every frame fans out to the serving stream and recovery probes.
 #[crate::host(stream(name = "FallbackSttStream", doc = "One `RecognizeStream`'s worth of the chain: push audio in, pull `SpeechEvent`s out.", sink = dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>,
     push = "push_frame", input = AudioFrame,

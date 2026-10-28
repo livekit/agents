@@ -198,6 +198,7 @@ static NAME_TO_CODE: &[(&str, &str)] = &[
     ("zulu", "zu"),
 ];
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The reverse of [`NAME_TO_CODE`]. Two names map to `sl`, and it must be `"slovene"` (punkt only
 /// ships that one).
 static CODE_TO_NAME: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =

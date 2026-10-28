@@ -2,7 +2,9 @@
 //! [`connect_sse`], a subclass's `client_streams()` is [`McpTransport`]. An injected `_client` is
 //! [`McpClient`], which answers `list_tools`/`call_tool` itself.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -72,16 +74,21 @@ enum Backend {
 pub struct McpSession {
     /// `read_timeout_seconds`: `None` for a falsy `client_session_timeout_seconds`.
     timeout: Option<Duration>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     backend: Mutex<Option<Arc<Backend>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_raw_tools`; `None` is `_cache_dirty`.
     cache: Mutex<Option<Vec<Value>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `MCPServerHTTP`'s `allowed_tools`; empty is no filter, as `set(x) if x else None` is.
     allowed: Mutex<Vec<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     connecting: tokio::sync::Mutex<()>,
 }
 
 #[lk_agents_abi::host(object(cell = "arc"))]
 impl McpSession {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(new)]
     pub fn new(client_session_timeout_seconds: f64) -> Self {
         McpSession {
@@ -130,6 +137,7 @@ impl McpSession {
         self.invalidate_cache();
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `MCPServerHTTP.initialize()`: `httpx`'s client as `_create_http_client` builds it -- the
     /// headers on every request, redirects followed, `timeout` to connect and `sse_read_timeout`
     /// per read -- under streamable HTTP or SSE.
@@ -163,6 +171,8 @@ impl McpSession {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `MCPServerStdio.initialize()`. The child's environment is the SDK's: the few variables
     /// `get_default_environment()` inherits, then `env` -- not the whole parent environment.
     #[host(method)]
@@ -242,6 +252,7 @@ impl McpSession {
             .collect())
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `_tool_called` / `_tool_called_nonblocking`: the raw `CallToolResult`, as wire JSON. With
     /// `progress`, every non-empty progress message is awaited through `ctx.update` in order.
     #[host(method)]
@@ -420,6 +431,7 @@ async fn connect_sse(
 struct HostStreams(Arc<dyn McpTransport>, tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>);
 
 impl HostStreams {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn new(host: Arc<dyn McpTransport>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         let reader = Arc::clone(&host);
@@ -466,6 +478,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
     fn answer(m: &Value) -> Option<String> {
@@ -481,6 +494,8 @@ mod tests {
         Some(json!({"jsonrpc": "2.0", "id": m.get("id")?, "result": result}).to_string())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn serve(
         socket: tokio::net::TcpStream,
         heads: UnboundedSender<String>,
@@ -530,6 +545,8 @@ mod tests {
     // Catches: SSE refused or upgraded, the POST aimed anywhere but the `endpoint` event's URL, a
     // reply read from the POST body instead of the stream; streamable HTTP not driven; headers
     // dropped; `allowed_tools` ignored.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn round_trip(path: &str, transport: HttpTransport) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}{path}", listener.local_addr().unwrap());
@@ -558,6 +575,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_legacy_sse_transport_round_trips() {
         tokio::time::timeout(Duration::from_secs(10), round_trip("/sse", HttpTransport::Sse))
@@ -565,6 +583,7 @@ mod tests {
             .unwrap();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn streamable_http_round_trips() {
         tokio::time::timeout(

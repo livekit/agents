@@ -5,6 +5,7 @@
 pub mod fallback;
 
 use serde_json::Value;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 pub use gateway::*;
@@ -134,10 +135,14 @@ pub mod gateway {
             pub prefer_current_speaker: Option<bool>,
             pub enable_partials: Option<bool>, // default True (overridden by gateway)
             pub enable_entities: Option<bool>,
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             pub punctuation_overrides: Option<HashMap<String, Value>>,
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             pub additional_vocab: Option<Vec<HashMap<String, Value>>>,
             pub end_of_utterance_silence_trigger: Option<f64>, // seconds of silence before final
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             pub audio_filtering_config: Option<HashMap<String, Value>>,
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             pub transcript_filtering_config: Option<HashMap<String, Value>>,
         }
 
@@ -363,6 +368,7 @@ pub mod gateway {
         #[python(typed_dict, typed_dict_from = "typing_extensions")]
         pub struct ChatCompletionOptions {
             pub frequency_penalty: Option<Option<f64>>,
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             pub logit_bias: Option<Option<HashMap<String, i64>>>,
             pub logprobs: Option<Option<bool>>,
             pub max_completion_tokens: Option<Option<i64>>,

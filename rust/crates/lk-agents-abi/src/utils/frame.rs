@@ -1,9 +1,12 @@
 //! The ambient-frame protocol: the host reads its own ambient storage and passes the id in; Rust
 //! never reads host state, so Node's FFI-callback context bug (`warm_transfer.ts:176`) cannot occur.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::fmt;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// `i64`, not `u64`: napi maps `u64` to a `BigInt`.
@@ -52,10 +55,12 @@ pub struct Frame {
     pub inline_ok: bool,
     /// `agent_activity.py:1911`.
     pub idle_hold: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     stale: AtomicBool,
 }
 
 impl Frame {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn root() -> Self {
         Frame {
             traceparent: None,
@@ -100,9 +105,12 @@ impl Frame {
 /// Its own lock, guarding only a map read: an inbound lookup during an outbound call must not touch
 /// the driver's state lock.
 pub struct FrameTable {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     frames: Mutex<HashMap<FrameId, Arc<Frame>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Never reused, so a stale id always means "that frame's speech is done".
     next_id: AtomicI64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     current: AtomicI64,
 }
 
@@ -113,6 +121,7 @@ impl Default for FrameTable {
 }
 
 impl FrameTable {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         FrameTable {
             frames: Mutex::new(HashMap::new()),
@@ -122,6 +131,7 @@ impl FrameTable {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn lock(&self) -> MutexGuard<'_, HashMap<FrameId, Arc<Frame>>> {
         self.frames.lock().unwrap_or_else(|p| p.into_inner())
     }

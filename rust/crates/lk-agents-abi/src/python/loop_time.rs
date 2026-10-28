@@ -20,11 +20,14 @@
 //! synchronous wait on the core from the loop thread would deadlock, since the core runs there.
 
 use std::cell::RefCell;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::ThreadId;
@@ -66,6 +69,7 @@ fn loop_when(origin: f64, at: Ts) -> f64 {
 /// Monotone, and never below a deadline that fired: `origin + at` read back through `loop.time()`
 /// can round below `at`, and a driver that sees `now < at` after its timer fired re-arms forever.
 #[derive(Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 struct HighWater(AtomicU64);
 
 impl HighWater {
@@ -86,6 +90,7 @@ struct Entry {
     runtime: Option<Arc<LoopRuntime>>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Strong references, so a loop's id cannot be reused while it is listed; closed loops are swept
 /// (and their tasks dropped) when a new loop registers.
 static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
@@ -117,6 +122,7 @@ enum Mode {
     Auto,
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn mode() -> Mode {
     match std::env::var(VIRTUAL_TIME_ENV).map(|v| v.trim().to_ascii_lowercase()) {
         Ok(v) if matches!(v.as_str(), "on" | "1" | "true" | "yes") => Mode::On,
@@ -198,14 +204,21 @@ pub struct LoopRuntime {
     /// `time.time()` at `Ts::ZERO`, for a wall read off the loop thread.
     wall_origin: f64,
     high_water: HighWater,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     last_wall: Mutex<SystemTime>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queue: Mutex<VecDeque<Arc<Task>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Loop-thread work handed over from another thread (arming or cancelling a timer).
     ops: Mutex<Vec<LoopOp>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Every live task, so a closed loop can drop the parked ones too.
     tasks: Mutex<HashMap<u64, Arc<Task>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next_id: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pump_pending: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
     pump: OnceLock<Py<PyAny>>,
 }
@@ -223,6 +236,7 @@ impl LoopRuntime {
         lookup(py, &running)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> PyResult<Arc<Self>> {
         let origin: f64 = event_loop.call_method0("time")?.extract()?;
         let wall_origin: f64 = py.import("time")?.call_method0("time")?.extract()?;
@@ -268,6 +282,7 @@ impl LoopRuntime {
         self.closed.load(Ordering::Acquire)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn spawn_task(self: &Arc<Self>, fut: BoxFuture<'static, ()>) -> Arc<Task> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let task = Arc::new(Task {
@@ -297,6 +312,7 @@ impl LoopRuntime {
         self.request_pump();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// Queues one pump in the loop's `_ready`. From another thread the GIL is taken on a blocking
     /// thread, never inside the waker (the waker's caller may hold a lock the loop thread wants).
     fn request_pump(self: &Arc<Self>) {
@@ -396,6 +412,7 @@ impl LoopRuntime {
         *last
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Arms `loop.call_at` for `at` on the loop thread.
     fn arm(self: &Arc<Self>, py: Python<'_>, at: Ts, timer: &Arc<Mutex<Timer>>) {
         if lock(timer).dropped || self.is_closed() {
@@ -519,11 +536,15 @@ where
 
 struct Task {
     id: u64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `None` while polled (so an abort or a wake from inside the poll never locks it) and once done.
     fut: Mutex<Option<BoxFuture<'static, ()>>>,
     runtime: Weak<LoopRuntime>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queued: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     aborted: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     finished: AtomicBool,
 }
 
@@ -633,12 +654,14 @@ struct Timer {
 struct LoopWait {
     rt: Arc<LoopRuntime>,
     at: Ts,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     timer: Option<Arc<Mutex<Timer>>>,
 }
 
 impl Future for LoopWait {
     type Output = ();
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if self.rt.now() >= self.at {
             return Poll::Ready(());

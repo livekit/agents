@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::pin;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 use std::task::Poll;
 use std::time::{Duration, SystemTime};
@@ -12,6 +13,7 @@ pub fn unix_secs(t: SystemTime) -> f64 {
     t.duration_since(SystemTime::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `time.time()`, for code with no clock of its own.
 pub fn unix_now() -> f64 {
     unix_secs(SystemTime::now())
@@ -137,10 +139,13 @@ impl Clock for SimClock {
 /// Anchors `Ts::ZERO` at construction. Scheduling follows Tokio time; wall stamps use the OS clock.
 pub struct RealClock {
     origin: tokio::time::Instant,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     last_wall: Mutex<SystemTime>,
 }
 
 impl RealClock {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         RealClock {
             origin: tokio::time::Instant::now(),
@@ -166,15 +171,18 @@ impl RealClock {
 
 #[async_trait]
 impl Clock for RealClock {
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn now(&self) -> Ts {
         Ts(self.origin.elapsed().as_nanos().min(u64::MAX as u128) as u64)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn wall(&self) -> SystemTime {
         // Real time can repeat (coarse clocks) or go backwards (NTP): nudge it too.
         self.nudged(SystemTime::now())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn wait_until(&self, at: Ts) {
         let now = self.now();
         if at > now {
@@ -187,6 +195,7 @@ impl Clock for RealClock {
 const TICK_EPSILON: Duration = Duration::from_micros(1);
 
 pub struct VirtualClock {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<Virtual>,
     /// Woken by every `advance`.
     wake: Notify,
@@ -199,6 +208,7 @@ struct Virtual {
 }
 
 impl VirtualClock {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         let origin = simulated_epoch();
         VirtualClock {
@@ -367,6 +377,7 @@ mod tests {
     use super::*;
 
     // Catches: a virtual-clock wait that never returns, or returns before time moved.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_virtual_timeout_fires_only_when_time_moves() {
         let c = std::sync::Arc::new(VirtualClock::new());
@@ -449,6 +460,7 @@ mod tests {
 
 
     // Catches: `RealClock::wall` reporting the nudge origin instead of the real time.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn the_real_clock_wall_reports_real_time_and_never_repeats() {
         let c = RealClock::new();

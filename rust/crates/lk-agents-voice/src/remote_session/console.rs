@@ -4,6 +4,7 @@
 //! [`SessionTransport`] and [`ConsoleSink`] a [`RemoteSessionHost`](super::driver::HostRuntime)
 //! runs on, and the session's audio input and output legs.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use lk_agents_abi::{AudioFrame, Spawner, SpawnerExt};
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio::time::Instant;
 
@@ -27,14 +29,21 @@ const WIRE_SAMPLE_RATE: u32 = 48_000;
 /// The CLI's socket: transport, console sink and both audio legs. Connected by `start()`; what is
 /// sent before then is queued.
 pub struct ConsoleIo {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     socket: Mutex<Option<Socket>>,
     spawner: Arc<dyn Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     outgoing: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     outgoing_rx: Mutex<Option<mpsc::UnboundedReceiver<Vec<u8>>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     reader: AsyncMutex<Option<(Box<dyn AsyncRead + Send + Unpin>, FrameDecoder)>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     mic: Mutex<Option<mpsc::UnboundedSender<AudioFrame>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     mic_rx: AsyncMutex<mpsc::UnboundedReceiver<AudioFrame>>,
     tracker: Arc<PlaybackTracker>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     playback: Mutex<Playback>,
 }
 
@@ -55,6 +64,7 @@ struct Playback {
 }
 
 impl Playback {
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// Close the segment; `Some(position)` when it held audio.
     fn take(&mut self, interrupted: bool) -> Option<f64> {
         let started = self.started.take()?;
@@ -92,6 +102,8 @@ impl ConsoleIo {
         Self::on(Socket::Open(Box::new(stream)), spawner)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn on(socket: Socket, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let (mic, mic_rx) = mpsc::unbounded_channel();
@@ -257,6 +269,7 @@ impl AudioOutput for ConsoleIo {
         Some(WIRE_SAMPLE_RATE)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn capture(&self, f: &AudioFrame) -> Result<(), IoError> {
         let first = {
             let mut playback = self.playback.lock().unwrap();

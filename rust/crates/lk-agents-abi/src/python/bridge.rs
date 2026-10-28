@@ -242,6 +242,7 @@ impl HostHandle {
         self.call_soon(name, move |py| PyTuple::new(py, arg.map(|a| a.into_bound(py)))).map_err(|e| capture(py, &e))
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Never call it from the loop thread itself: the callback cannot run while the caller blocks.
     pub async fn run_on_loop<T, F>(&self, f: F) -> Result<T, ProviderError>
     where
@@ -384,6 +385,7 @@ impl HostBridge for CancellingHandle {
 mod cancelling {
     use std::future::Future;
     use std::pin::Pin;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
 
@@ -399,6 +401,7 @@ mod cancelling {
 
     type Outcome = PyResult<Py<PyAny>>;
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// In the captured context: the job's context variables are visible to it.
     pub(super) fn submit(locals: &pyo3_async_runtimes::TaskLocals, awaitable: Bound<'_, PyAny>) -> PyResult<Submitted> {
         let py = awaitable.py();
@@ -417,11 +420,13 @@ mod cancelling {
     struct Starter {
         awaitable: Option<Py<PyAny>>,
         tx: Option<oneshot::Sender<Outcome>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         slot: Arc<Mutex<Slot>>,
     }
 
     #[pymethods]
     impl Starter {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         fn __call__(&mut self, py: Python<'_>) -> PyResult<()> {
             let (Some(awaitable), Some(tx)) = (self.awaitable.take(), self.tx.take()) else { return Ok(()) };
             if self.slot.lock().expect("slot").cancelled {
@@ -453,6 +458,7 @@ mod cancelling {
 
     #[pyclass(frozen)]
     struct Completer {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         tx: Mutex<Option<oneshot::Sender<Outcome>>>,
     }
 
@@ -473,6 +479,7 @@ mod cancelling {
 
     pub(super) struct Submitted {
         rx: oneshot::Receiver<Outcome>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         slot: Arc<Mutex<Slot>>,
         event_loop: Py<PyAny>,
         done: bool,
@@ -684,6 +691,7 @@ pub fn bind_host_provider(py: Python<'_>, obj: &Bound<'_, PyAny>, clock: &std::s
 
 // --------------------------------------------------------------------- a host coroutine from any thread
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// From any thread, in the captured context. The guard cancels the Python task when dropped.
 ///
 /// The context is entered through a copy: a `Context` is entered by one thread at a time, and the

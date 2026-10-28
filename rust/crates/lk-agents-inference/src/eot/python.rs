@@ -3,6 +3,7 @@
 //! (`Arc<Mutex<ThresholdOptions>>`) that a cloud->local fallback rescales under all of them.
 
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel};
@@ -54,12 +55,14 @@ fn map_from_py(d: Option<&Bound<'_, PyAny>>) -> PyResult<Option<BTreeMap<String,
 /// cloud->local fallback in the stream is visible from the detector.
 #[pyclass(name = "EotThresholdOptions", module = "livekit.agents._core")]
 pub struct PyEotThresholdOptions {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Arc<Mutex<ThresholdOptions>>,
 }
 
 register_class!(PyEotThresholdOptions);
 
 impl PyEotThresholdOptions {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn shared(&self) -> Arc<Mutex<ThresholdOptions>> {
         Arc::clone(&self.inner)
     }
@@ -72,6 +75,7 @@ impl PyEotThresholdOptions {
 
 #[pymethods]
 impl PyEotThresholdOptions {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (model, overrides = None, backchannel_overrides = None))]
     fn new(model: &str, overrides: Option<&Bound<'_, PyAny>>, backchannel_overrides: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {

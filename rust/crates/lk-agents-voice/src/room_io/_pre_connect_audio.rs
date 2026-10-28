@@ -5,7 +5,9 @@ use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
 use lk_agents_media::{Decoder, pcm_bytes};
 use lk_agents_rtc::{ByteStream, RtcRoom, TrackSid};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -19,6 +21,7 @@ pub struct PreConnectBuffer {
 
 #[derive(Default)]
 struct Slot {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     value: Mutex<Option<std::result::Result<PreConnectBuffer, String>>>,
     wake: Notify,
 }
@@ -47,11 +50,14 @@ pub struct PreConnectAudioHandler {
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     buffers: Mutex<HashMap<TrackSid, Arc<Slot>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
 impl PreConnectAudioHandler {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         spawner: Arc<dyn Spawner>,

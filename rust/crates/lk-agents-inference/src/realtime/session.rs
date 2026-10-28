@@ -9,6 +9,7 @@ use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Clock, Elapsed};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_inference::transport::{TransportError, WsMessage, WsTransport};
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::BoundIdentity;
@@ -107,6 +108,7 @@ impl Connect {
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
 pub struct NativeRealtime {
     dialect: Dialect,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
     connect: Arc<Connect>,
@@ -120,11 +122,13 @@ pub struct NativeRealtime {
     turn_detection_given: bool,
     /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
     label: Option<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `self._sessions`: the live sessions an `update_options` reaches.
     sessions: std::sync::Mutex<Vec<Weak<mpsc::UnboundedSender<Cmd>>>>,
 }
 
 impl NativeRealtime {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -150,6 +154,7 @@ impl NativeRealtime {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `turn_detection_given` is `is_given(turn_detection)` before a default was applied.
     pub fn with_options(mut self, opts: SessionOptions, turn_detection_given: bool) -> Self {
         self.opts = std::sync::Mutex::new(opts);
@@ -288,6 +293,8 @@ impl NativeRealtime {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `session(turn_detection_disabled=...)`. Applied to the session's copy of the options; the
     /// model stays reusable.
     pub async fn session(&self, turn_detection_disabled: bool) -> SessionHandle {
@@ -357,7 +364,9 @@ impl NativeRealtime {
 struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
     closing: tokio::sync::Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     machine: Mutex<RealtimeMachine>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
 }
@@ -366,10 +375,13 @@ struct Shared {
 /// mutating method takes `&self`.
 pub struct SessionHandle {
     shared: Arc<Shared>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     commands: Arc<mpsc::UnboundedSender<Cmd>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// One consumer is the contract.
     events: Mutex<mpsc::UnboundedReceiver<Event>>,
     abort: lk_agents_abi::AbortHandle,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Resolves (closed) when the pump has ended.
     done: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     clock: Arc<dyn Clock>,
@@ -439,12 +451,15 @@ struct Pump {
     clock: Arc<dyn Clock>,
     provider_label: &'static str,
     label: String,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedSender<Event>,
 }
 
 impl Pump {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
     /// options' budget, until a terminal error or a close.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn run(self, mut commands: mpsc::UnboundedReceiver<Cmd>) {
         let max_retries = self.connect.conn.max_retry;
         let mut num_retries: u32 = 0;
@@ -499,6 +514,7 @@ impl Pump {
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         commands: &mut mpsc::UnboundedReceiver<Cmd>,
         reconnecting: bool,
         num_retries: &mut u32,
@@ -549,8 +565,10 @@ impl Pump {
         outcome
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn run_ws(
         &self,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         commands: &mut mpsc::UnboundedReceiver<Cmd>,
         sender: Arc<dyn lk_agents_inference::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_inference::transport::WsReceiver>,

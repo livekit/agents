@@ -3,6 +3,7 @@
 //! even with bytes unread, which is how the decode thread tells a teardown from a failure.
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Condvar, Mutex};
 
 /// The reference compacts after 5 MB; `VecDeque::drain` reclaims as it goes, so this is unused.
@@ -22,6 +23,7 @@ struct Inner {
 #[lk_agents_abi::class]
 #[derive(Default)]
 pub struct StreamBuffer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<Inner>,
     ready: Condvar,
 }
@@ -157,6 +159,7 @@ mod tests {
     // Catches: a non-blocking read. If `read` returned 0 on an empty-but-open buffer, ffmpeg's
     // AVIO would take it for end of stream and `avformat_open_input` would fail on any stream
     // whose first chunk lands after the demuxer's first probe read -- i.e. every network TTS.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_read_on_an_empty_open_buffer_waits_for_the_writer() {
         let b = Arc::new(StreamBuffer::new());

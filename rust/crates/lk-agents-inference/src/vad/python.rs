@@ -18,6 +18,7 @@ struct PyVadModel {
 }
 
 impl VadModel for PyVadModel {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `(probability, inference_time)`. A bare `float` (timed here, as the reference does) or a
     /// pair are both accepted; a failed call answers `(0.0, 0.0)`.
     fn predict(&mut self, window: &[i16]) -> (f32, f64) {

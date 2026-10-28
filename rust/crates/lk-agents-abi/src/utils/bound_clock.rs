@@ -1,6 +1,7 @@
 //! Native inference clients are built before any session, so the session binds its clock inside
 //! this one; otherwise a virtual-clock test would time out in wall seconds.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -11,10 +12,12 @@ use super::clock::{Clock, RealClock, Ts};
 /// [`RealClock`] at construction; [`bind`](Self::bind) replaces it. A wait already parked finishes
 /// on the previous clock.
 pub struct BoundClock {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: RwLock<Arc<dyn Clock>>,
 }
 
 impl BoundClock {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Arc<Self> {
         Arc::new(BoundClock { inner: RwLock::new(Arc::new(RealClock::new())) })
     }

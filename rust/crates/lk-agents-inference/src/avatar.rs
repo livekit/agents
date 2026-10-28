@@ -2,6 +2,7 @@
 //! gateway creates (retried under one idempotency key) and its terminate. The host keeps the room
 //! and the agent's audio sink.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -109,12 +110,14 @@ pub struct InferenceAvatar {
     api_key: String,
     api_secret: String,
     conn: ApiConnectOptions,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     created: Mutex<Created>,
     http: std::sync::OnceLock<reqwest::Client>,
 }
 
 #[lk_agents_abi::host(object(cell = "arc"))]
 impl InferenceAvatar {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `extra_kwargs` is copied, so a later change to the caller's dict does not reach the request.
     /// The identity defaults to `"<provider>-inference-avatar"`, the name to the identity.
     #[host(new(kw_only = "avatar_identity"))]
@@ -183,6 +186,7 @@ impl InferenceAvatar {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Create the provider session for the agent `agent_identity` in `room_name`; the gateway
     /// mints the avatar worker's token from these fields. Returns the audio sample rate the
     /// avatar takes. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are
@@ -269,6 +273,7 @@ impl InferenceAvatar {
 }
 
 impl InferenceAvatar {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// The create call under the connect options: a timeout, a connection failure and a
     /// retryable status are retried, one idempotency key for all, so a retry replays the first
     /// result rather than paying for a second provider session.
@@ -436,8 +441,10 @@ mod tests {
         assert!(matches!(err, AvatarError::CatalogIdAndImage(p) if p == "lemonslice"));
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     type Seen = Arc<Mutex<Vec<(String, String)>>>;
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// A gateway answering each request with the next scripted `(status, body)`, recording each
     /// request's head and body.
     async fn gateway(script: Vec<(u16, &'static str)>) -> (String, Seen) {

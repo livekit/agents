@@ -1,5 +1,6 @@
 //! Run the lock inversion in a child: a blocked native mutex cannot be cancelled by Tokio.
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,7 @@ impl EotTransport for CloudFailure {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Model(Arc<Mutex<Vec<Vec<i16>>>>);
 impl LocalEotModel for Model {
     fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
@@ -58,11 +60,14 @@ fn with_host_lock<T>(f: impl FnOnce() -> T) -> T {
 // The feature-free suite exercises the identical ordering with a host execution lock.
 #[cfg(not(feature = "python"))]
 fn with_host_lock<T>(f: impl FnOnce() -> T) -> T {
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     static HOST: Mutex<()> = Mutex::new(());
     let _host = HOST.lock().unwrap();
     f()
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[test]
 fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
     const CHILD: &str = "LK_EOT_LOCK_INVERSION_CHILD";

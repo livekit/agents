@@ -32,6 +32,7 @@ use serde_json::json;
 /// rather than as a hung CI job.
 const BOUND: Duration = Duration::from_secs(5);
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn next_event(session: &lk_agents_inference::realtime::SessionHandle) -> Event {
     tokio::time::timeout(BOUND, session.next_event())
         .await
@@ -39,6 +40,7 @@ async fn next_event(session: &lk_agents_inference::realtime::SessionHandle) -> E
         .expect("the event stream ended early")
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Wait until the fake has recorded at least `n` frames, or fail. Polling rather than sleeping:
 /// the send is a `tokio` task hop away, not a delay.
 async fn frames(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
@@ -251,6 +253,7 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
 // Catches: a dropped connection ending the session, or reconnecting without telling the caller
 // or without replaying the session. The reference's `_main_task` reports the drop as a recoverable
 // error, waits its first retry interval and reconnects, sending the session again.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());

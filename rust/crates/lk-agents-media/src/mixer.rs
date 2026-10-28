@@ -5,6 +5,7 @@
 //! when exhausted and empty. Sums stay in `f32` and clip.
 
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The reference keys on the iterator object, a host object; the host keeps the source.
@@ -14,14 +15,18 @@ pub struct StreamId(pub u64);
 /// The reference's one `logger.warning`, counted so a silently non-playing sound is observable.
 #[derive(Debug, Default)]
 pub struct MixerCounters {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `AudioMixer: stream {stream} timeout, ignoring`.
     pub stream_timeouts: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Routine at a sound's end; sustained means sources cannot keep up with the block rate.
     pub padded_contributions: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub empty_rounds: AtomicU64,
 }
 
 impl MixerCounters {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn bump(counter: &AtomicU64) {
         counter.fetch_add(1, Ordering::Relaxed);
     }

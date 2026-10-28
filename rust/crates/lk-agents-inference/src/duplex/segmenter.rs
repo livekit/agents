@@ -370,6 +370,7 @@ impl Segmenter {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn open_burst(&mut self, kind: Kind, out: &mut Vec<Event>) -> Burst {
         let id = (self.ids)();
         // the model answers on the one stream it has, so speech opening is the reply asked for;

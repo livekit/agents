@@ -2,7 +2,9 @@
 //! through; `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use crate::TimedString;
@@ -33,6 +35,7 @@ pub type SplitterFactory = Arc<dyn Fn(bool) -> Box<dyn SentenceSplitter> + Send 
 
 /// `utils.shortuuid()`'s shape; ids only need to be distinct within a session.
 fn stream_uid() -> String {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     static NEXT: AtomicU64 = AtomicU64::new(1);
     format!("{:012x}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
@@ -44,6 +47,7 @@ pub struct StreamAdapter {
     splitter: SplitterFactory,
     /// Bounds the per-sentence inner closes done inside `next()`.
     clock: Arc<dyn Clock>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_expressive`, set by the framework before each synthesis and snapshotted at `stream()`.
     expressive: AtomicBool,
     /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
@@ -52,6 +56,7 @@ pub struct StreamAdapter {
 }
 
 impl StreamAdapter {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// No sentence is retried; see [`with_budget`](Self::with_budget).
     pub fn new(tts: Arc<dyn Tts>, splitter: SplitterFactory, clock: Arc<dyn Clock>) -> Self {
         let budget = crate::ApiConnectOptions { max_retry: 0, ..crate::ApiConnectOptions::default() };
@@ -163,6 +168,8 @@ impl Tts for StreamAdapter {
         self.tts.synthesize(text).await
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
         // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
         let (tx, rx) = mpsc::unbounded_channel();
@@ -206,7 +213,9 @@ enum AdapterInput {
 }
 
 struct AdapterSink {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tx: Mutex<Option<mpsc::UnboundedSender<AdapterInput>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
 }
 
@@ -256,6 +265,7 @@ struct AdapterSource {
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<crate::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: mpsc::UnboundedReceiver<AdapterInput>,
     splitter: Box<dyn SentenceSplitter>,
     /// The markup lowered before synthesis; `None` when expressive is off or there is no dialect.
@@ -270,6 +280,7 @@ struct AdapterSource {
     /// Ride on the next frame sent (`tts/tts.py:1104`).
     pending_transcript: Vec<TimedString>,
     held: Option<SynthesizedAudio>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Each sentence metered as its own call; shared, so a node's reader can end the one in
     /// flight while the node's pump waits on it.
     ledger: Arc<Mutex<Ledger>>,
@@ -573,12 +584,14 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
 mod tests {
     use super::*;
     use crate::utils::audio::AudioFrame;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     // Every await is bounded: this file's bugs are hangs, and a bounded hang fails cleanly.
     const GUARD: Duration = Duration::from_secs(5);
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn bounded<F: std::future::Future>(what: &str, f: F) -> F::Output {
         match tokio::time::timeout(GUARD, f).await {
             Ok(v) => v,
@@ -593,7 +606,9 @@ mod tests {
     #[derive(Default)]
     struct DotSplitter {
         buf: String,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         seen: Arc<Mutex<Vec<String>>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         flushes: Arc<AtomicUsize>,
     }
 
@@ -616,10 +631,13 @@ mod tests {
     /// A `StreamAdapter` plus the two observation points its splitter exposes.
     struct Observed {
         adapter: StreamAdapter,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         seen: Arc<Mutex<Vec<String>>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         flushes: Arc<AtomicUsize>,
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn observed(tts: Arc<FakeTts>) -> Observed {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let flushes = Arc::new(AtomicUsize::new(0));
@@ -650,6 +668,7 @@ mod tests {
         frames: VecDeque<SynthesizedAudio>,
         fail_after: Option<usize>,
         emitted: usize,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         closed: Arc<AtomicUsize>,
     }
 
@@ -676,15 +695,19 @@ mod tests {
     struct FakeTts {
         /// Frames per `synthesize()` call, and the text it was called with.
         frames_per_call: usize,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         calls: Mutex<Vec<String>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         inner_closed: Arc<AtomicUsize>,
         fail_after: Option<usize>,
         /// `markup._provider_key()`, and what `set_expressive` last said.
         markup: &'static str,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         expressive: AtomicBool,
     }
 
     impl FakeTts {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         fn new(frames_per_call: usize) -> Arc<Self> {
             Arc::new(FakeTts {
                 frames_per_call,
@@ -1073,6 +1096,7 @@ mod tests {
     }
 
     // Catches: a sink that cannot be shared between the pump and drain tasks.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_two_halves_drive_from_two_tasks_at_once() {
         let tts = FakeTts::new(1);
@@ -1097,6 +1121,7 @@ mod tests {
     // Catches: a `next_sentence` that always returns a sentence, which spins `raw_next` with no
     // await. A wedged executor can only be reported from outside it: hence the second runtime,
     // `shutdown_timeout`, and the explicit exit.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_source_that_never_reaches_a_real_sentence_cannot_wedge_the_worker_it_runs_on() {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1131,6 +1156,7 @@ mod tests {
     // Catches: markup spoken aloud by a non-streaming TTS under expressive (the adapter is its
     // only lowering path), a sentence split inside a marker (the splitter not asked to be
     // xml-aware), the flag not reaching the wrapped TTS, and a turn with expressive off lowered.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn under_expressive_each_sentence_is_lowered_to_the_providers_markup() {
         let said = "<expr type=\"emotion\" label=\"happy\"/>Hi there.";

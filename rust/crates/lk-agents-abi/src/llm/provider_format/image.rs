@@ -58,6 +58,7 @@ pub trait ImageResolver {
 
 /// Keyed by `ImageContent.id`: one frame under two `ImageContent`s may have different resize hints.
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct PreResolved(pub std::collections::HashMap<String, SerializedImage>);
 
 impl PreResolved {

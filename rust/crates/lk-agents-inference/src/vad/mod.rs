@@ -37,6 +37,8 @@ impl NativeVad {
         NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, spawner }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The unboxed pair, for callers that need [`VadOutput`]'s audio and lag alongside the event.
     pub fn stream_native(&self) -> (VadSinkHandle, VadOutputSource) {
         let mut opts = self.opts.subscribe();
@@ -198,6 +200,7 @@ enum VadCmd {
 
 /// `end_input` drops the sender: the pump drains what is queued and ends, which ends the output.
 pub struct VadSinkHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     input: std::sync::Mutex<Option<mpsc::UnboundedSender<VadCmd>>>,
 }
 
@@ -225,12 +228,14 @@ impl VadSinkHandle {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The full output, including the PCM the event refers to.
 #[lk_agents_abi::host(stream(name = "InferenceVadStream", doc = "One VAD stream.", sink = crate::vad::VadSinkHandle,
     input = AudioFrame, input_py = "rtc.AudioFrame", end_input,
     stub_import = "from livekit import rtc",
     output = VadOutput))]
 pub struct VadOutputSource {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     outputs: mpsc::UnboundedReceiver<VadOutput>,
 }
 
@@ -315,6 +320,7 @@ mod tests {
 
     // Catches: `end_input` doing nothing, so a caller reading the stream to its end waits forever
     // (the reference's `end_input` closes the input channel and the stream finishes).
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn end_input_ends_the_stream_after_what_was_pushed() {
         let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_abi::TokioSpawner::current());

@@ -3,6 +3,7 @@
 //! warn-once state. The host executes the [`EotAction`]s. `now` is a wall-clock `f64` that only
 //! lands in [`EotPrediction::last_speaking_time`].
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
@@ -56,6 +57,7 @@ impl TransportPrediction {
 
 #[derive(Debug, Clone)]
 pub struct EotSession {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Shared with the detector, as in the reference (`base.py:137`), so the cloud->local rescale
     /// is visible to every reader.
     thresholds: Arc<Mutex<ThresholdOptions>>,
@@ -73,6 +75,7 @@ pub struct EotSession {
 }
 
 impl EotSession {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `local_fallback`: the caller allowed it and a local model is available.
     pub fn new(
         model: TurnDetectorModel,

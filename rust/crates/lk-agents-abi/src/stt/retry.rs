@@ -4,6 +4,7 @@
 //! stream that survives the attempts.
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -204,6 +205,7 @@ enum Pushed {
 
 #[derive(Default)]
 struct Input {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<InputState>,
 }
 
@@ -373,12 +375,16 @@ mod tests {
     /// Each attempt's offset and the frames it heard; the first attempt fails when read.
     #[derive(Default)]
     struct Flaky {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         opened: Mutex<Vec<f64>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         heard: Arc<Mutex<Vec<usize>>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         /// Each reported failure's `recoverable`.
         reports: Mutex<Vec<bool>>,
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     struct Count(Arc<Mutex<Vec<usize>>>, usize);
 
     impl StreamSink<AudioFrame> for Count {
@@ -452,6 +458,8 @@ mod tests {
 
     // Catches: a retried stream that loses what was pushed while no attempt was open, reports the
     // failure terminal, or reopens without moving its timestamps.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test(start_paused = true)]
     async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
         let inner = Arc::new(Flaky::default());

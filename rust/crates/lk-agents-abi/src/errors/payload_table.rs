@@ -1,18 +1,25 @@
 //! The binding-owned side table. `release` only queues the id; `drain` removes entries where
 //! dropping a payload is legal, opportunistically on insert, resolve and take.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use super::RefRegistry;
 
 struct Store<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     entries: Mutex<HashMap<u64, T>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Separate so `release` never contends with a lookup.
     pending: Mutex<Vec<u64>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// So "nothing to drain" is one atomic load.
     pending_len: AtomicUsize,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Never reused; shared by every key type into this table.
     next_id: AtomicU64,
 }
@@ -49,6 +56,7 @@ impl<T: Send + 'static> Default for PayloadTable<T> {
 }
 
 impl<T: Send + 'static> PayloadTable<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         let store = Arc::new(Store {
             entries: Mutex::new(HashMap::new()),
@@ -125,6 +133,7 @@ mod tests {
     use crate::HostRef;
 
     // Catches: release removing the entry inline instead of queueing, or the queue never draining.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_dropped_key_queues_its_entry_and_the_next_drain_removes_it() {
         let table = PayloadTable::<String>::new();

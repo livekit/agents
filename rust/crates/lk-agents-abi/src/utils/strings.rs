@@ -49,6 +49,7 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.shortuuid(prefix)`: `prefix + uuid.uuid4().hex[:12]`, twelve hex characters, all before
 /// the version nibble, so six random bytes are equivalent.
 pub fn shortuuid(prefix: &str) -> String {

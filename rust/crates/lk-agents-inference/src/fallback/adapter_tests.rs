@@ -3,7 +3,9 @@
 
 use std::collections::VecDeque;
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +35,7 @@ const NO_DEADLINE: Ts = Ts::from_nanos(u64::MAX);
 
 const LIMIT: Duration = Duration::from_secs(5);
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn within<F: std::future::Future>(what: &str, f: F) -> F::Output {
     match tokio::time::timeout(LIMIT, f).await {
         Ok(v) => v,
@@ -40,6 +43,7 @@ async fn within<F: std::future::Future>(what: &str, f: F) -> F::Output {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn until(what: &str, mut cond: impl FnMut() -> bool) {
     within(what, async {
         while !cond() {
@@ -94,16 +98,19 @@ struct FakeLlm {
     label: String,
     /// `None` leaves the trait default (`"unknown"`).
     model: Option<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     seen: Mutex<Vec<ApiConnectOptions>>,
     /// `None` means `chat()` itself raises.
     chunks: Option<Vec<LlmChunk>>,
     /// The stream dies after the scripted chunks instead of ending cleanly.
     fail_after: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// `chat()` raises this many more times before it serves.
     outages: AtomicUsize,
 }
 
 impl FakeLlm {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn build(label: &str, model: Option<&str>, chunks: Option<Vec<LlmChunk>>, fail_after: bool) -> Arc<Self> {
         let (label, model, seen) = (label.into(), model.map(Into::into), Mutex::new(vec![]));
         Arc::new(FakeLlm { label, model, seen, chunks, fail_after, outages: AtomicUsize::new(0) })
@@ -260,10 +267,13 @@ async fn a_content_chunk_does_block_the_failover() {
 
 /// An `Llm` whose stream never ends, recording when its chain task is dropped.
 struct HangingLlm {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     opened: Arc<AtomicBool>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     dropped: Arc<AtomicBool>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct HangingStream(Arc<AtomicBool>);
 
 #[async_trait]
@@ -357,6 +367,7 @@ async fn a_closed_llm_adapter_starts_no_more_recovery_probes() {
 }
 
 // Catches: the returned stream's `aclose` not aborting the task filling it.
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn closing_the_llm_stream_aborts_the_chain_task_and_releases_the_provider() {
     let opened = Arc::new(AtomicBool::new(false));
@@ -383,6 +394,7 @@ struct FakeStt {
     label: String,
     conn: ApiConnectOptions,
     fails: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     calls: Arc<Mutex<Vec<(String, ApiConnectOptions)>>>,
 }
 
@@ -424,6 +436,7 @@ impl Stt for FakeStt {
 }
 
 // Catches: an unbounded STT retry loop under the chain; also pins probe 0 vs attempt 1 retries.
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_wrapped_stt_sees_max_retry_one_on_an_attempt_and_zero_on_a_probe() {
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -460,10 +473,15 @@ async fn a_wrapped_stt_sees_max_retry_one_on_an_attempt_and_zero_on_a_probe() {
 
 #[derive(Default)]
 struct SttSess {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     frames: Mutex<Vec<AudioFrame>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     flushes: AtomicUsize,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     ended: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// Events this session handed to whoever was draining it.
     emitted: AtomicUsize,
 }
@@ -486,6 +504,7 @@ impl StreamSink<AudioFrame> for SttSessSink {
 
 struct SttSessSource {
     sess: Arc<SttSess>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     rx: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
 }
 
@@ -508,17 +527,21 @@ impl StreamSource<SpeechEvent> for SttSessSource {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 type SttSender = mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>;
 
 struct DuplexStt {
     label: String,
     streaming: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// `stream()` refuses this many times before it works.
     refusals: AtomicUsize,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     made: Mutex<Vec<(Arc<SttSess>, Option<SttSender>)>>,
 }
 
 impl DuplexStt {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn new(label: &str, refusals: usize) -> Arc<Self> {
         Arc::new(DuplexStt {
             label: label.into(),
@@ -527,6 +550,7 @@ impl DuplexStt {
             made: Mutex::new(Vec::new()),
         })
     }
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn batch_only(label: &str) -> Arc<Self> {
         Arc::new(DuplexStt {
             label: label.into(),
@@ -566,6 +590,7 @@ impl Stt for DuplexStt {
     ) -> Result<SpeechEvent, ProviderError> {
         Err(boom("this fake only has a streaming path"))
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     async fn stream(
         &self,
         _language: Option<&LanguageCode>,
@@ -851,10 +876,12 @@ struct FakeTts {
     rate: u32,
     channels: u16,
     frames: usize,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// `stream()` refuses this many times before it works; `usize::MAX` never comes back.
     refusals: AtomicUsize,
     /// The source raises after its scripted frames instead of ending cleanly.
     dies: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     pushed: Arc<Mutex<Vec<String>>>,
     /// Without a duplex path, `stream()` refuses.
     streaming: bool,
@@ -889,6 +916,7 @@ impl StreamSource<SynthesizedAudio> for Frames {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct RecordingSink(Arc<Mutex<Vec<String>>>);
 
 impl StreamSink<String> for RecordingSink {
@@ -945,6 +973,7 @@ impl FakeTts {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn built(
     label: &str,
     rate: u32,
@@ -970,6 +999,7 @@ fn built(
 }
 
 // Catches: a member without a duplex path failing every streamed request (`tts:384-395`).
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_batch_only_member_streams_through_sentences() {
     let pushed = Arc::new(Mutex::new(Vec::new()));
@@ -1177,6 +1207,7 @@ impl Tts for SpeaksOnEnd {
 // Catches: probing a skipped entry as the scan passes it, before any text has arrived, so the
 // streamed probe declines for want of text and the provider stays down for good (#6678,
 // `tts:417-420`).
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_text() {
     let (flaky, flaky_pushed) = built("flaky", 24_000, 1, 1, 2, false);

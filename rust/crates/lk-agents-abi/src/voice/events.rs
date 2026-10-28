@@ -1,6 +1,7 @@
 //! `voice/events.py`. Field types we do not own are spelled with `#[python(ty = .., import = ..)]`:
 //! the generator cannot see `ChatMessage` or `AgentMetrics` and must not invent a name for them.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 use lk_agents_host_derive::Host;
@@ -709,6 +710,7 @@ pub struct DiagnosticWire {
     /// `"debug"`, `"info"` or `"warning"` -- the name `logging` takes.
     pub level: String,
     pub message: String,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fields: HashMap<String, String>,
 }
 

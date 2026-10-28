@@ -511,8 +511,10 @@ mod tests {
     }
 
     // Catches: a flush not resetting the model's LSTM state.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_flush_resets_the_model_as_well_as_the_counters() {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Counting(std::sync::Arc<std::sync::atomic::AtomicUsize>);
         impl VadModel for Counting {
             fn predict(&mut self, _: &[i16]) -> (f32, f64) {

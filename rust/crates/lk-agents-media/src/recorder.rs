@@ -3,6 +3,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 
 use lk_agents_abi::AudioFrame;
@@ -480,20 +481,28 @@ impl From<std::io::Error> for RecorderError {
 /// Two locks: the audio path only touches the O(1) staging half, so a tens-of-ms encode never
 /// stalls it. Blocks are written and flushed to the OS as encoded, so a killed worker leaves a file.
 pub struct SessionRecorder<E: OggOpusEncoder> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     staging: Mutex<Staging>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     core: Mutex<Core<E>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Kept outside the recorder because `finish` consumes it and hosts read totals after closing.
     dropped: Mutex<[u64; 2]>,
     sample_rate: u32,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     t0: Mutex<Option<f64>>,
     path: PathBuf,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     file: Mutex<Option<std::fs::File>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     written: Mutex<u64>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The `now` of the last drain: where a host that has no session clock finishes.
     last: Mutex<Option<f64>>,
 }
 
 impl<E: OggOpusEncoder> SessionRecorder<E> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Creates `path` and its parents before returning.
     pub fn new(
         encoder: E,
@@ -1089,6 +1098,7 @@ mod python {
 
     #[derive(Default)]
     struct Busy {
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         on: std::sync::Mutex<bool>,
         idle: std::sync::Condvar,
     }
@@ -1140,6 +1150,7 @@ mod python {
             self.recorder.playback_finished(now, playback_position);
         }
 
+        #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
         fn flush(&self, now: f64) -> Result<(), RecorderError> {
             {
                 let mut on = self.busy.on.lock().unwrap_or_else(|p| p.into_inner());

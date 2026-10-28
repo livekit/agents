@@ -4,6 +4,13 @@
 //! `vendor/ffmpeg-<pin>/`, else `vendor/fetch.sh` unless `LK_CODECS_NO_FETCH=1`.
 //! The configure line is LGPL-only: never add `--enable-gpl` or `--enable-nonfree`.
 
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Build tooling reads native configuration; core purity applies to product code."
+)]
+
 #[path = "build/blingfire.rs"]
 mod blingfire;
 

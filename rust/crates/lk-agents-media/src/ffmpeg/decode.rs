@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate codec worker state to runtime")]
 #[derive(Default)]
 struct Shared {
     pcm: Mutex<Vec<i16>>,
@@ -90,6 +91,7 @@ impl FfmpegDecoder {
         *self.shared.src.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate codec worker launch to runtime")]
     fn start(&mut self) {
         if self.handle.is_some() {
             return;

@@ -2,6 +2,7 @@
 //! decoder in front of it.
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -37,6 +38,7 @@ fn cached<'py>(
 const USERDATA_TIMED_TRANSCRIPT: &str = lk_agents_abi::USERDATA_TIMED_TRANSCRIPT;
 const ATTR_PROVIDER_REQUEST_IDS: &str = lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS;
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `LK_DUMP_TTS`, read once; a non-integer value disables dumping.
 fn dump_default() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -68,11 +70,15 @@ pub struct AudioEmitter {
     driver: EmitterDriver,
     dst_ch: Py<PyAny>,
     label: String,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Host `TimedString`s kept verbatim so alignment fields survive; drained as the machine assigns.
     words: Mutex<VecDeque<Py<PyAny>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     event_loop: Mutex<Option<Py<PyAny>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Rebuilt per `initialize`, so one request never gets the tail of the previous one.
     decoder: Mutex<Option<crate::Decoder>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     timer: Mutex<Option<Py<PyAny>>>,
 }
 
@@ -112,6 +118,7 @@ impl EmitterHost for PyHost<'_, '_> {
 
 #[pymethods]
 impl AudioEmitter {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// No `check_pid()`: built per synthesis in whatever process imported the package, and the
     /// reference has no init requirement for `TTS`.
     #[new]

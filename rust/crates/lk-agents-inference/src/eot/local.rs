@@ -1,6 +1,7 @@
 //! `_LocalTransport` (`transports.py:398`): the in-process mini model behind [`LocalEotModel`], a
 //! 1.2 s ring buffer snapshotted at request time, and a failed prediction scored 0.0.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -68,13 +69,18 @@ type Job = (EotRequestId, Vec<i16>);
 pub struct LocalTransport {
     model: std::sync::Arc<dyn LocalEotModel>,
     sink: std::sync::Arc<dyn PredictionSink>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     buf: Mutex<AudioRingBuffer>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `None` once the input has ended, which is what lets [`run`](EotTransport::run) return.
     tx: Mutex<Option<mpsc::UnboundedSender<Job>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     rx: Mutex<Option<mpsc::UnboundedReceiver<Job>>>,
 }
 
 impl LocalTransport {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         model: std::sync::Arc<dyn LocalEotModel>,
         sink: std::sync::Arc<dyn PredictionSink>,
@@ -121,6 +127,7 @@ impl EotTransport for LocalTransport {
         self.end_input();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn run(&self) -> Result<(), ApiError> {
         let Some(mut rx) = self.rx.lock().expect("job receiver mutex").take() else {
             return Ok(());

@@ -28,6 +28,7 @@ pub struct TtsCapabilities {
 #[derive(Debug, Clone, Default, PartialEq, Host)]
 #[python(dataclass, module = "tts", path = "livekit.agents.tts", name = "MarkupInfo", with_bases)]
 pub struct MarkupInfo {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// ``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op
     #[python(default_factory = "dict")]
     pub nonverbals: std::collections::HashMap<String, Vec<String>>,
@@ -148,6 +149,7 @@ impl SynthesizedAudio {
 
 /// May not drop: a dropped token silently mangles speech.
 pub type TtsSink = Box<dyn StreamSink<String>>;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Both TTS paths yield this. Drained by the gateway's `InferenceTtsStream` and the fallback
 /// chain's `FallbackTtsStream` (no sink for a one-shot `synthesize()`).
 #[crate::host(stream(name = "InferenceTtsStream", doc = "One live synthesis.", sink = dyn lk_agents_abi::StreamSink<String>,

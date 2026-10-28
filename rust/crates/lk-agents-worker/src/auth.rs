@@ -128,6 +128,7 @@ mod tests {
     }
 
     // Catches: the reload dropping the SFU's claims, or accepting a foreign-signed original.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_reloaded_token_keeps_the_sfus_claims_and_moves_exp() {
         let original = AccessToken::with_api_key(KEY, SECRET)

@@ -145,9 +145,11 @@ impl IdGen for RandomIds {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct SeqIds(std::sync::atomic::AtomicU64);
 
 impl Default for SeqIds {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         SeqIds(std::sync::atomic::AtomicU64::new(0))
     }

@@ -4,6 +4,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
@@ -22,6 +23,7 @@ use crate::evals::*;
 
 const LIMIT: Duration = Duration::from_secs(10);
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Await `fut`, failing with `what` if it does not finish inside [`LIMIT`].
 async fn within<F: Future>(what: &str, fut: F) -> F::Output {
     match tokio::time::timeout(LIMIT, fut).await {
@@ -95,12 +97,15 @@ fn result_of(verdicts: &[(&str, Verdict)]) -> EvaluationResult {
 struct FakeLlm {
     /// `None`: answer with prose and no tool call, as providers do under load.
     arguments: Option<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     seen: std::sync::Mutex<Option<ChatRequest>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Arc<AtomicUsize>,
     fail: bool,
 }
 
 impl FakeLlm {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn verdict(arguments: &str) -> Arc<FakeLlm> {
         Arc::new(FakeLlm {
             arguments: Some(arguments.to_string()),
@@ -110,6 +115,7 @@ impl FakeLlm {
         })
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn silent() -> Arc<FakeLlm> {
         Arc::new(FakeLlm {
             arguments: None,
@@ -119,6 +125,7 @@ impl FakeLlm {
         })
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn broken() -> Arc<FakeLlm> {
         Arc::new(FakeLlm {
             arguments: None,
@@ -150,6 +157,7 @@ impl Llm for FakeLlm {
 
 struct FakeStream {
     arguments: Option<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Arc<AtomicUsize>,
 }
 

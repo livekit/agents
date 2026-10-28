@@ -1,3 +1,4 @@
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -11,10 +12,12 @@ impl<T: Copy + Eq + Hash + std::fmt::Debug> TimerId for T {}
 /// heap: ~12 live timers, and replace-on-arm would need tombstones.
 #[derive(Debug)]
 pub struct TimerSet<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     armed: HashMap<T, Ts>,
 }
 
 impl<T: TimerId> Default for TimerSet<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         TimerSet { armed: HashMap::new() }
     }

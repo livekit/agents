@@ -374,6 +374,7 @@ fn transcript_no_audio_ever_claims_is_emitted_after_three_seconds() {
     assert_eq!(f.seg.waiting_fragments(), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 fn call() -> FunctionCall {
     FunctionCall {
         id: "call_1".into(),
@@ -476,6 +477,7 @@ fn a_requested_reply_is_the_speech_that_follows_it_and_otherwise_fails() {
     assert!(matches!(&evs[..], [Event::GenerateReplyFailed(x)] if x.error.message.contains("closed")));
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is_new() {
     let mut f = Fake::new();
@@ -501,6 +503,7 @@ fn the_adapter_keeps_the_context_under_the_frameworks_ids_and_sends_only_what_is
     assert!(f.seg.update_chat_ctx(&ctx).is_empty(), "a removal is logged, never sent");
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn startup_history_seeds_both_the_adapter_and_the_model() {
     let mut f = Fake::new();

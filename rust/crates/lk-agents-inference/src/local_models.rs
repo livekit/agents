@@ -83,6 +83,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     static INITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     inventory::submit! {

@@ -11,6 +11,7 @@ pub mod segmenter;
 mod tests;
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -131,6 +132,7 @@ impl Realtime for DuplexModel {
         self.caps
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Turn detection is inherent to a duplex model, so it is never asked to be off.
     async fn session(&self, _turn_detection_disabled: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         let (host, gate) = self.host.open().await?;
@@ -164,6 +166,7 @@ pub struct DuplexSession {
     caps: RealtimeCapabilities,
     clock: Arc<dyn Clock>,
     anchor: WallAnchor,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<State>,
 }
 
@@ -172,6 +175,7 @@ impl DuplexSession {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn on_host_event(&self, st: &mut State, ev: DuplexEvent) {
         let now = self.clock.now();
         let events = match ev {
@@ -255,6 +259,7 @@ impl RealtimeSession for DuplexSession {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event(&self) -> Option<Event> {
         loop {
             let deadline = {

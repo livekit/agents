@@ -21,6 +21,7 @@ use lk_agents_abi::{
 use lk_agents_rtc::{ParticipantIdentity, ParticipantKind, RtcRoom};
 use std::fmt;
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// `save_prediction(label: AMDCategory)` (`classifier.save_prediction`).
@@ -111,7 +112,9 @@ impl fmt::Debug for AmdSetup {
 /// The host's end of the system: `Start`, `Verdict::Settle`, `Close`.
 #[derive(Clone)]
 pub struct AmdHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     listening: Arc<AtomicBool>,
 }
 
@@ -131,6 +134,7 @@ impl AmdHandle {
         self.listening.load(Ordering::Relaxed)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn detached() -> Self {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         AmdHandle { tx, listening: Arc::default() }
@@ -176,6 +180,7 @@ enum SttLeg {
     /// On the forwarder's `Amd` channel as `tap`, behind `gate`: frames flow while the machine
     /// listens.
     Installed {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         gate: Arc<AtomicBool>,
         tap: lk_agents_abi::resources::ResourceId,
     },
@@ -187,6 +192,7 @@ enum SttLeg {
 /// transcribed. `end_input` passes through.
 struct GatedSink {
     inner: Arc<dyn StreamSink<AudioFrame>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     open: Arc<AtomicBool>,
 }
 
@@ -206,6 +212,7 @@ impl StreamSink<AudioFrame> for GatedSink {
 
 pub struct AmdSystem {
     peer: PeerHandle,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     machine: Option<Amd>,
     timers: TimerSet<AmdTimer>,
@@ -217,11 +224,14 @@ pub struct AmdSystem {
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
     closed: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The machine's [`Amd::listening`], for the host's `AMD.started`.
     listening: Arc<AtomicBool>,
 }
 
 impl AmdSystem {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening and the
     /// callee awaited off the loop. Past the close request nothing is attached and the handle
     /// drops what it is sent.
@@ -253,6 +263,7 @@ impl AmdSystem {
         AmdHandle { tx, listening }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
@@ -281,11 +292,14 @@ impl AmdSystem {
         system
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The loop: a due deadline fires before same-instant items; ends at close or when the
     /// session's queue is gone.
     async fn run(
         mut self,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         mut msgs: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     ) {
         let time = self.peer.time.clone();
@@ -595,6 +609,7 @@ impl AmdSystem {
         });
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The tap's stream landed: into the gated row, drained onto this channel. Unwanted: closed
     /// unused; refused: the timers decide.
     fn on_tap_opened(&mut self, outcome: Result<(SttSink, SttSource), ProviderError>) {
@@ -703,11 +718,13 @@ async fn await_callee(
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
     peer: PeerHandle,
     mut source: SttSource,
     tap: lk_agents_abi::resources::ResourceId,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 ) {
     let mut closing = peer.closing.clone();
@@ -738,10 +755,12 @@ fn spawn_tap_drain(
     });
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The classification task. A cancelled run reports nothing. A native source may be abandoned
 /// mid-poll; a host stream may not, so the cancel waits for the chunk.
 async fn classify(
     time: crate::agent_session::Timebase,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     llm: Arc<dyn Llm>,
     request: lk_agents_abi::ChatRequest,

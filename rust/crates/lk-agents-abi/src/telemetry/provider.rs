@@ -88,6 +88,7 @@ pub struct LlmMetricState {
     request_id: String,
     usage: Option<CompletionUsage>,
 }
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`).
 #[crate::host(object(cell = "mutex", pid = false))]
 impl LlmMetricState {
@@ -176,6 +177,7 @@ pub struct TtsMetricState {
     segment_id: String,
     texts: VecDeque<String>,
 }
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The TTS streams' metric fold as the host drives it (`_core.TtsMetricState`).
 #[crate::host(object(cell = "mutex", pid = false))]
 impl TtsMetricState {

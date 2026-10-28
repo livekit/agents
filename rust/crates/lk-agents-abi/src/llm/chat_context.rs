@@ -808,6 +808,7 @@ chat_item_from!(
     AgentConfigUpdate => AgentConfigUpdate,
 );
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashSet;
 
 // The Python `module` and `path` of every record here that names none of its own.
@@ -959,6 +960,7 @@ impl<'a> ItemFacts<'a> {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `valid_call_ids`: the calls `opts.tools` keeps, which an output with no name is paired by.
 pub fn copy_excludes_facts(f: &ItemFacts<'_>, opts: &CopyOptions, valid_call_ids: &HashSet<&str>) -> bool {
     let is_message = f.kind == ItemKind::Message;
@@ -1006,6 +1008,7 @@ fn merge_excludes_facts(f: &ItemFacts<'_>, opts: &MergeOptions) -> bool {
 // The operations as index plans over the facts, applied by whoever owns the items. Positions, not
 // ids, so duplicate ids pick the right object.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub fn copy_plan(facts: &[ItemFacts<'_>], opts: &CopyOptions) -> Vec<usize> {
     let valid_call_ids: HashSet<&str> = match &opts.tools {
         Some(valid) => facts
@@ -1044,6 +1047,7 @@ pub fn truncate_plan(facts: &[ItemFacts<'_>], max_items: i64) -> Option<Vec<usiz
     Some(kept)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `merge`: `(index, j)` pairs -- insert `theirs[j]` at `index` of the growing list, in order.
 /// De-duplicated by id; ties go after.
 pub fn merge_plan(

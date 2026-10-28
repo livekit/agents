@@ -2,6 +2,7 @@
 //! and the mirrored conversation.
 
 use super::{Generation, MessageState, RealtimeMachine, SPOKEN_REMEMBERED, Step};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -239,6 +240,7 @@ impl RealtimeMachine {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn on_response_created(
         &mut self,
         response_id: String,

@@ -78,6 +78,7 @@ pub fn merge_capabilities(
 // ---------------------------------------------------------------------------------------------
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::ProviderError;
@@ -141,12 +142,15 @@ pub struct RealtimeFallbackModel {
     regenerate_on_swap: bool,
     observer: Arc<dyn ChainObserver>,
     anchor: WallAnchor,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     sessions: Mutex<Vec<std::sync::Weak<FallbackSession>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The model serving the newest session, for the metrics label.
     active: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl RealtimeFallbackModel {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         children: Vec<RealtimeChild>,
         cooldown: f64,
@@ -201,6 +205,8 @@ impl Realtime for RealtimeFallbackModel {
         self.caps
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A fresh session always starts on the primary, even after an earlier failover.
     async fn session(&self, turn_detection_disabled: bool) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         let first = self.children[0].open(turn_detection_disabled, self.anchor).await?;
@@ -262,9 +268,13 @@ pub struct FallbackSession {
     observer: Arc<dyn ChainObserver>,
     anchor: WallAnchor,
     turn_detection_disabled: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     model_active: Arc<std::sync::atomic::AtomicUsize>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<SessionState>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     restart_tx: tokio::sync::mpsc::UnboundedSender<bool>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Polled by `next_event` only (one consumer).
     restart_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<bool>>,
 }
@@ -445,6 +455,7 @@ impl RealtimeSession for FallbackSession {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event(&self) -> Option<Event> {
         loop {
             let active = {
@@ -656,8 +667,11 @@ mod fallback_session_tests {
 
     /// A scripted session: events to hand out, then parked; every command recorded.
     struct Scripted {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         events: Mutex<VecDeque<Event>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         sent: Mutex<Vec<String>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         closed: std::sync::atomic::AtomicBool,
     }
 
@@ -703,6 +717,7 @@ mod fallback_session_tests {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn scripted(events: Vec<Event>) -> Arc<Scripted> {
         Arc::new(Scripted { events: Mutex::new(events.into()), sent: Mutex::default(), closed: Default::default() })
     }
@@ -725,6 +740,7 @@ mod fallback_session_tests {
     // Catches: a fatal child error passed on as fatal while a fallback exists, the dead child's
     // open generation left open, a swap reported as a reconnect (the driver then gives the new
     // model nothing), or a request reaching the new model before its frame.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_again() {
         let primary = scripted(vec![
@@ -734,6 +750,7 @@ mod fallback_session_tests {
         ]);
         let backup = scripted(vec![]);
         let changes = Arc::new(Mutex::new(Vec::new()));
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Record(Arc<Mutex<Vec<(usize, bool)>>>);
         impl ChainObserver for Record {
             fn availability_changed(&self, ev: AvailabilityChanged) {

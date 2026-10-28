@@ -5,6 +5,7 @@ pub use crate::agent_session::effects::{GateCause, GateOp};
 use crate::audio_recognition::CommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 /// The exhaustive match in `Step::speech` makes a new variant say whether it names a speech.
@@ -1030,6 +1031,7 @@ pub fn folded(steps: &[Step]) -> Vec<Step> {
 /// Where the driver's decisions go: to the observer the simulation or a test installed, or nowhere.
 /// Production installs none, so a session keeps no record of its steps.
 #[derive(Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct Journal(Option<Arc<Mutex<dyn FnMut(&Step) + Send>>>);
 
 impl std::fmt::Debug for Journal {
@@ -1039,6 +1041,7 @@ impl std::fmt::Debug for Journal {
 }
 
 impl Journal {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn observed(observer: impl FnMut(&Step) + Send + 'static) -> Self {
         Journal(Some(Arc::new(Mutex::new(observer))))
     }

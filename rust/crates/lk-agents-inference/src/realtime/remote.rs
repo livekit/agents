@@ -3,6 +3,7 @@
 //! it is read whole on every update. The id map, the `previous_item_id: None` => head convention
 //! and both `ValueError` cases are preserved.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 use lk_agents_abi::{ChatContext, ChatItem};
@@ -22,6 +23,7 @@ pub enum RemoteError {
 #[derive(Debug, Clone, Default)]
 pub struct RemoteChatContext {
     items: Vec<ChatItem>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// id -> index, rebuilt on every structural change.
     index: HashMap<String, usize>,
 }

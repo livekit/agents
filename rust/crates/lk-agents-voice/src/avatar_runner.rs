@@ -9,7 +9,9 @@
 //! and the [`AvatarRunner`] queue owner) runs each [`IoOp`] against the host proxies and answers it
 //! with an [`Event`]; it decides nothing.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{BTreeMap, HashMap};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -566,14 +568,17 @@ impl AvatarIo {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 type Answers = Arc<Mutex<HashMap<CallId, oneshot::Sender<Result<(), RunnerError>>>>>;
 
 /// `AvatarRunner`: the queue owner of one [`RunnerCore`]. Host calls and the room become events,
 /// each effect runs as a task whose answer is the next event.
 pub struct AvatarRunner {
     room: Arc<dyn RtcRoom>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedSender<Event>,
     answers: Answers,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next_call: std::sync::atomic::AtomicU64,
     spawner: Arc<dyn Spawner>,
     io_tasks: Arc<TaskSet>,
@@ -588,6 +593,7 @@ impl Drop for AvatarRunner {
 }
 
 impl AvatarRunner {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// The runner, its ready events taken in the order `order(ready)` picks (an index into
     /// `ready`): arrival order in production, the simulation's own choice under test.
     pub fn scheduled(

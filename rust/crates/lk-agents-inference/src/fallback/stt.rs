@@ -4,7 +4,9 @@
 //! recovery slots, hence one [`FallbackChain`] with a [`RecoverySlot`] argument. Each entry runs
 //! through the two views [`bound_views`] builds.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -32,10 +34,15 @@ use crate::fallback::policy::{ChainPolicy, bound_views};
 /// Fans the audio-in leg out to the serving stream and every probe. `end` is recorded so a stream
 /// installed by a later failover still gets it (the reference's hole at `stt:363-365`).
 pub struct InputTee {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     main: Mutex<Option<SttSink>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     probes: Mutex<Vec<(u64, SttSink)>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next_id: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ended: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Replayed into the next serving stream.
     preroll: Mutex<std::collections::VecDeque<PreFrame>>,
 }
@@ -48,6 +55,7 @@ enum PreFrame {
 }
 
 impl Default for InputTee {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         InputTee {
             main: Mutex::new(None),
@@ -588,7 +596,9 @@ mod preroll_tests {
     /// A sink that records what it was handed, in order.
     #[derive(Default)]
     struct Log {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         got: Mutex<Vec<String>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         ended: AtomicBool,
     }
 

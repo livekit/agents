@@ -57,6 +57,7 @@ mod tests {
     }
 
     // Catches: an observer subscribing after the publish waiting forever (`oneshot`/`Notify`).
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn wait_for_sees_a_value_published_before_it_was_called() {
         let m = Monotone::new(Step::Pending);
@@ -69,6 +70,7 @@ mod tests {
     }
 
     // Catches: waking only the first waiter (`SpeechHandle` is awaited from several places).
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn every_observer_is_woken_not_just_the_first() {
         let m = Arc::new(Monotone::new(Step::Pending));
@@ -90,6 +92,7 @@ mod tests {
     }
 
     // Catches: losing a transition when a `select!` branch is dropped and rebuilt.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_dropped_and_retried_wait_for_still_observes_the_transition() {
         let m = Monotone::new(Step::Pending);

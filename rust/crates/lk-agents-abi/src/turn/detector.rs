@@ -85,12 +85,17 @@ pub struct EotRequest {
 pub struct EotLeg<D: EotDetector + ?Sized> {
     detector: Arc<D>,
     spawner: Arc<dyn Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<LegEvent<EotPrediction>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<LegEvent<EotPrediction>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     in_flight: std::sync::Mutex<Vec<crate::AbortHandle>>,
 }
 
 impl<D: EotDetector + ?Sized> EotLeg<D> {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(detector: Arc<D>, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         EotLeg { detector, spawner, tx, rx: tokio::sync::Mutex::new(rx), in_flight: std::sync::Mutex::new(Vec::new()) }

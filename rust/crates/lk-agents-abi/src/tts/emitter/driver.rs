@@ -3,7 +3,9 @@
 //! frames pushed before `aclose()` have already reached the consumer, where the reference drops them.
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -48,8 +50,11 @@ pub enum PumpError<E> {
 }
 
 pub struct EmitterDriver {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     machine: Mutex<AudioEmitter>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     intake: Mutex<VecDeque<Cmd>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A re-entrant call leaves its command in `intake` and returns.
     draining: AtomicBool,
     /// So the machine's `Ts` is a virtualisable number rather than a wall clock.
@@ -57,6 +62,8 @@ pub struct EmitterDriver {
 }
 
 impl EmitterDriver {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(machine: AudioEmitter) -> Self {
         EmitterDriver {
             machine: Mutex::new(machine),
@@ -66,6 +73,7 @@ impl EmitterDriver {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     pub fn now(&self) -> Ts {
         Ts::from_nanos(self.origin.elapsed().as_nanos().min(u64::MAX as u128) as u64)
     }

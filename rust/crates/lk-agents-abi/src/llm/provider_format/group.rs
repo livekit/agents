@@ -2,6 +2,7 @@
 //! the context.
 
 use std::borrow::Cow;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, HashSet};
 
 use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role};
@@ -101,6 +102,7 @@ pub struct Grouping<'a> {
     pub dropped: Vec<Dropped>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.py:54`. Messages and calls group by `group_id` when set (#4170), else by the `id` before
 /// the first `/`; outputs attach by `call_id`.
 pub fn group_tool_calls<'a>(
@@ -172,6 +174,7 @@ pub fn group_tool_calls<'a>(
     Ok(Grouping { groups: keys, dropped })
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 fn upsert<'g, 'a>(
     keys: &'g mut Vec<ChatItemGroup<'a>>,
     index: &mut HashMap<&'a str, usize>,
@@ -184,6 +187,7 @@ fn upsert<'g, 'a>(
     &mut keys[i]
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.py:126`. Keep the equal-length early return: a balanced but mismatched group is left as
 /// it is.
 fn remove_invalid_tool_calls(group: &mut ChatItemGroup<'_>, dropped: &mut Vec<Dropped>) {

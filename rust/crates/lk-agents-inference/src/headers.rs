@@ -112,6 +112,7 @@ pub fn default_inference_url(inference_url: Option<&str>, livekit_url: Option<&s
     DEFAULT_INFERENCE_URL.to_owned()
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 #[lk_agents_abi::host(export(name = "inference_default_url", pid = false))]
 pub fn default_inference_url_from_env() -> String {
     default_inference_url(
@@ -212,6 +213,7 @@ pub fn gateway_headers(
 /// hands the client to a session. Each connection carries them with a fresh session id, as the
 /// reference mints one per call; unbound, the native headers.
 #[derive(Debug, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct BoundIdentity(std::sync::Mutex<Option<Headers>>);
 
 impl BoundIdentity {

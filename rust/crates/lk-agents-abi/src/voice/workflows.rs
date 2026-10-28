@@ -3,6 +3,7 @@
 
 use crate::utils::dates::{Date, Time};
 use lk_agents_host_derive::Host;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 // Each task's `complete(..)` value (a frozen dataclass in the reference). `GetDtmfResult` and
@@ -255,6 +256,7 @@ pub struct SipParticipantRequest {
     pub participant_identity: String,
     pub wait_until_answered: bool,
     pub sip_number: Option<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub headers: HashMap<String, String>,
     pub dtmf: String,
     pub ringing_timeout: Option<f64>,

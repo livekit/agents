@@ -3,6 +3,7 @@
 //! fresh input on failover (`tts:428-434`) and into the streaming probe (`tts:504-531`). A failure
 //! after output returns success ([`crate::fallback::policy::AfterOutput`], `tts:293-297`).
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -46,12 +47,14 @@ pub enum Token {
 /// here is lossy or bounded.
 #[lk_agents_abi::class(name = "TtsTokenLog")]
 pub struct TokenLog {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<TokenLogState>,
     /// Raised once no more text can arrive; what a streamed probe waits for.
     settled: watch::Sender<bool>,
 }
 
 impl Default for TokenLog {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
         TokenLog { inner: Mutex::default(), settled: watch::channel(false).0 }
     }
@@ -372,6 +375,7 @@ impl FallbackTts {
         self.needs_resampling.get(index).copied().unwrap_or(false)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn spawn_pump(&self, req: TtsReq, slot: RecoverySlot, log: Option<Arc<TokenLog>>) -> TtsSource {
         let (tx, rx) = mpsc::channel::<Result<SynthesizedAudio, ProviderError>>(32);
         let chain = Arc::clone(&self.chain);

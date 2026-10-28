@@ -13,6 +13,7 @@ use crate::{
     TtsCapabilities, Vad, VadCapabilities,
 };
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,6 +96,7 @@ struct Table {
 
 /// Shared by the host side that registers and the side that performs, until the runtime owns it.
 #[derive(Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct Resources(Arc<Mutex<Table>>);
 
 impl Resources {

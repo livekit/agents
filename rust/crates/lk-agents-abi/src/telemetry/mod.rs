@@ -2,6 +2,7 @@
 //! OTel SDK. Timestamps cross as `HrTime`: epoch nanos do not fit a JS `number`. Span attributes
 //! are flat and log attributes are not; don't unify them, the type rejects a nested span attribute.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 pub mod provider;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +20,7 @@ pub fn epoch_nanos(t: HrTime) -> u128 {
     t.0.max(0) as u128 * 1_000_000_000 + t.1 as u128
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 pub fn now_epoch_nanos() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
 }
@@ -181,6 +183,7 @@ impl Record {
 
 /// Bounded, drop-oldest, `dropped` counting the loss: a host that stops draining must not grow it.
 pub struct TelemetryBuffer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<Buffer>,
     capacity: usize,
 }
@@ -197,6 +200,7 @@ impl Default for TelemetryBuffer {
 }
 
 impl TelemetryBuffer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(capacity: usize) -> Self {
         TelemetryBuffer { inner: Mutex::new(Buffer { records: Vec::new(), dropped: 0 }), capacity }
     }
@@ -253,6 +257,7 @@ pub struct SpanBuilder {
 }
 
 impl SpanBuilder {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn start(name: impl Into<String>, frame: FrameId, parent: Option<String>) -> Self {
         SpanBuilder {
             name: name.into(),
@@ -290,6 +295,7 @@ impl SpanBuilder {
         self
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     pub fn end(self, buffer: &TelemetryBuffer) {
         let end_epoch = self.start_epoch + self.start_instant.elapsed().as_nanos();
         buffer.push_span(

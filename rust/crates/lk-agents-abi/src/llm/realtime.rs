@@ -742,6 +742,7 @@ pub struct HostRealtimeModel {
     caps: RealtimeCapabilities,
     anchor: crate::WallAnchor,
     spawner: std::sync::Arc<dyn crate::Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     session: tokio::sync::Mutex<Option<std::sync::Arc<HostRealtimeLeg>>>,
 }
 
@@ -798,7 +799,9 @@ impl Realtime for HostRealtimeModel {
 /// sent, or its pending future cancelled after.
 #[derive(Default)]
 struct Requests {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     cancelled: std::collections::HashSet<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pending: std::collections::HashMap<String, crate::HostRef>,
 }
 
@@ -808,14 +811,20 @@ struct Requests {
 pub struct HostRealtimeLeg {
     host: std::sync::Arc<dyn HostRealtimeSession>,
     caps: RealtimeCapabilities,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     requests: std::sync::Arc<std::sync::Mutex<Requests>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Event>>,
     spawner: std::sync::Arc<dyn crate::Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: std::sync::Mutex<Vec<crate::AbortHandle>>,
 }
 
 impl HostRealtimeLeg {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn open(
         host: std::sync::Arc<dyn HostRealtimeSession>,
         caps: RealtimeCapabilities,
@@ -848,6 +857,7 @@ impl HostRealtimeLeg {
     }
 
     /// The host's events, in order; a server-started generation is drained instead.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn forward(
         leg: std::sync::Weak<Self>,
         host: std::sync::Arc<dyn HostRealtimeSession>,
@@ -874,6 +884,7 @@ impl HostRealtimeLeg {
     }
 
     /// Updates and reply requests, in the order the driver sent them.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn run_lane(
         leg: std::sync::Weak<Self>,
         mut lane: tokio::sync::mpsc::UnboundedReceiver<RealtimeCommand>,

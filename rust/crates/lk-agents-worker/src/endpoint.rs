@@ -5,13 +5,16 @@
 //! Every outcome is reported the way the data plane expects: a reset code before any response
 //! byte, `x-lk-completion`/`x-lk-error` trailers after (chunked responses only), FIN on success.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio_tungstenite::tungstenite::{
     self, Message,
@@ -153,7 +156,9 @@ pub trait AsgiApp: Send + Sync {
 /// The open WebSockets, for draining.
 #[derive(Default)]
 pub struct Registry {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next: AtomicU64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     open: std::sync::Mutex<HashMap<u64, Weak<WsExchange>>>,
 }
 
@@ -164,6 +169,7 @@ impl Registry {
         futures_util::future::join_all(open.iter().map(|ws| ws.close(code, reason))).await;
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Weak<WsExchange>>> {
         self.open.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -434,14 +440,18 @@ pub struct HttpExchange {
     io: Arc<dyn StreamIo>,
     is_head: bool,
     http10: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     req: Mutex<RequestSide>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     resp: Mutex<ResponseSide>,
     head_sent: watch::Sender<bool>,
     done: watch::Sender<bool>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     peer_gone: AtomicBool,
 }
 
 impl HttpExchange {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new(io: Arc<dyn StreamIo>, head: &Head) -> Result<Self, String> {
         let te = head.tokens(b"transfer-encoding");
         let body = if !te.is_empty() {
@@ -706,6 +716,8 @@ fn kind_of(msg: &Sent) -> &str {
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 async fn serve_http(io: Arc<dyn StreamIo>, info: RequestInfo, head: Head, app: &dyn AsgiApp) {
     let ex = match HttpExchange::new(io.clone(), &head) {
         Ok(ex) => Arc::new(ex),
@@ -824,12 +836,18 @@ pub struct WsExchange {
     io: Arc<dyn StreamIo>,
     key: Vec<u8>,
     subprotocols: Vec<String>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ws: std::sync::Mutex<WebSocket<Pipe>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Holds the order of writes: bytes are taken from the pipe and written under it.
     write_lock: Mutex<()>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedSender<Received>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     inbox: Mutex<mpsc::UnboundedReceiver<Received>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     accepted: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
 }
 
@@ -1017,6 +1035,8 @@ impl WsExchange {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 async fn serve_ws(
     io: Arc<dyn StreamIo>,
     info: RequestInfo,

@@ -1,10 +1,12 @@
 //! `replace_words` and `split_paragraphs`, with the reference's arithmetic. Characters, not bytes.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 use crate::tokenize::py_strip;
 use crate::tokenize::word::{WordTokenizerOptions, is_punctuation, split_words};
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `replace_words`, case-insensitively, over one string. Returns the text and `processed_index`.
 // `hold_last_word` holds the final word for the next chunk and returns `None` below two words.
 // An empty replacement deletes the word. Trailing punctuation is stripped one character at a
@@ -128,11 +130,13 @@ fn char_find(haystack: &str, needle: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The non-streaming call, which cannot return `None`.
     fn replace_words_all(text: &str, replacements: &HashMap<String, String>) -> (String, usize) {
         replace_words(text, replacements.clone(), false).expect("only the streaming mode holds back")
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
     }

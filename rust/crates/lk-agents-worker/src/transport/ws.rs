@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
@@ -21,6 +22,8 @@ pub struct WsTransport {
 
 #[async_trait]
 impl WorkerTransport for WsTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn connect(
         &self,
         url: &str,
@@ -84,6 +87,7 @@ impl WorkerTransport for WsTransport {
 
 struct WsSink {
     pinger: tokio::task::JoinHandle<()>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     write: Arc<Mutex<futures_util::stream::SplitSink<Ws, Message>>>,
 }
 
@@ -122,6 +126,7 @@ struct WsStream {
 
 #[async_trait]
 impl WorkerStream for WsStream {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
         loop {
             let next = match tokio::time::timeout_at(self.idle_deadline, self.read.next()).await {
@@ -182,6 +187,7 @@ mod tests {
         assert_eq!(truncate_ws_data("short"), "short");
         assert_eq!(truncate_ws_data(&"x".repeat(128)), "x".repeat(128));
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn control_messages_hide_websocket_frames_and_preserve_close_details() {
         use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
@@ -218,6 +224,7 @@ mod tests {
         sink.close().await;
         server.await.unwrap();
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test(start_paused = true)]
     async fn cancelling_receive_does_not_restart_the_liveness_deadline() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

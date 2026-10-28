@@ -57,6 +57,7 @@ pub struct ModelUsageCollector {
     eot: OrderedByModel<EotModelUsage>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `metrics.ModelUsageCollector` -- the live per-model rollup.
 #[crate::host(object(
     pid = false,

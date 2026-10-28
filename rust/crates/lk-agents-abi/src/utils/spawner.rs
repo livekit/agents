@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
@@ -105,6 +106,7 @@ impl TokioSpawner {
 }
 
 impl Spawner for TokioSpawner {
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn spawn(&self, f: BoxFuture<'static, ()>) -> AbortHandle {
         self.handle.spawn(f).abort_handle().into()
     }
@@ -114,6 +116,7 @@ impl Spawner for TokioSpawner {
 /// before spawning and removed by a guard the task owns.
 #[derive(Default)]
 pub struct TaskSet {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<TaskEntries>,
     changed: Notify,
 }
@@ -169,6 +172,7 @@ impl TaskSet {
         self.inner.lock().expect("task table").tasks.is_empty()
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `true` when the table emptied.
     pub async fn wait_empty(&self, clock: &dyn Clock, deadline: Option<Ts>) -> bool {
         loop {
@@ -228,6 +232,7 @@ impl TaskSet {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
@@ -239,6 +244,7 @@ mod tests {
     }
 
     impl Background {
+        #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
         fn start() -> Self {
             let (ready_tx, ready_rx) = std::sync::mpsc::channel();
             let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -270,6 +276,7 @@ mod tests {
 
     // Catches: bare `tokio::spawn` on a host-reachable path (the calling thread has no reactor,
     // asserted first).
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn spawning_works_from_a_thread_with_no_runtime() {
         let rt = Background::start();
@@ -293,9 +300,11 @@ mod tests {
     }
 
     // Catches: handing back something that cannot stop the task (a `JoinHandle`, or a unit).
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_returned_handle_aborts_what_it_spawned() {
         /// Set when the spawned future is dropped, which is what an abort does.
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Cancelled(Arc<AtomicBool>);
         impl Drop for Cancelled {
             fn drop(&mut self) {

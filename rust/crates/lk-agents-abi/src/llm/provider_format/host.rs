@@ -1,6 +1,7 @@
 //! `to_provider_format` and `to_fnc_ctx` as the host calls them. Images arrive pre-serialised, so
 //! each is encoded once; dropped items are logged with the reference's warning, not raised.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
@@ -10,6 +11,7 @@ use super::{
 };
 use crate::{ChatContext, ChatItem};
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `ChatContext.to_provider_format(format, ...)` -> `(messages, data)`. `data` is `None` for OpenAI
 /// and a dict for the dialects that hoist something out of band.
 #[crate::host(export(

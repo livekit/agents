@@ -178,7 +178,9 @@ impl IvrSystem {
         spawner.spawn_unboxed(system.run(rx));
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The loop: a due deadline fires before same-instant feed items; ends at close.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn run(mut self, mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>) {
         let time = self.peer.time.clone();
         let api = self.peer.queue.clone();

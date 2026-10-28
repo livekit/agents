@@ -3,9 +3,13 @@ use super::*;
 /// The node's side of one stream, in memory.
 #[derive(Default)]
 struct Fake {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     inbox: std::sync::Mutex<VecDeque<Vec<u8>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     out: std::sync::Mutex<Vec<u8>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     finished: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     reset: std::sync::Mutex<Option<Reset>>,
 }
 
@@ -51,6 +55,7 @@ struct Echo {
 
 #[async_trait]
 impl AsgiApp for Echo {
+    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     async fn call(&self, scope: Scope, conn: Conn) -> Result<(), AppError> {
         assert_eq!(scope.kind, "http");
         let mut n = 0;

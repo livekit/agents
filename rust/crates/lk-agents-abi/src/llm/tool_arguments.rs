@@ -164,6 +164,7 @@ mod tests {
     // repaired value, the strict error), which is all a reader of that warning has to go on.
     #[test]
     fn a_repair_is_logged_with_the_raw_payload_the_repair_and_the_error() {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Keys(std::sync::Mutex<Vec<(String, String)>>);
         impl log::Log for Keys {
             fn enabled(&self, _: &log::Metadata<'_>) -> bool {

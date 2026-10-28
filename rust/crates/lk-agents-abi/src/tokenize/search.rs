@@ -1,4 +1,5 @@
 //! Built-in tool discovery, including native regex matching shared by all hosts.
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, HashSet};
 
 /// One tool as the search sees it; identity stays with the host.
@@ -8,6 +9,7 @@ pub struct Document {
     pub name: String,
     pub description: String,
     pub parameters: String,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub frequencies: HashMap<String, usize>,
     pub length: usize,
 }
@@ -21,6 +23,7 @@ fn words(text: &str, identifiers: bool) -> Vec<String> {
 /// One tool as the search sees it; identity stays with the host.
 #[crate::host(object(name = "SearchDocument", pid = false))]
 impl Document {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(new)]
     pub fn new(name: &str, description: &str, parameters: &[(String, String)]) -> Self {
         let mut tokens = Vec::new();
@@ -97,6 +100,7 @@ impl KeywordQuery {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub fn keyword_terms(query: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     words(query, false).into_iter().filter(|s| seen.insert(s.clone())).collect()
@@ -129,15 +133,18 @@ pub struct Bm25 {
     k1: f64,
     b: f64,
     average_length: f64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     idf: HashMap<String, f64>,
 }
 
 #[crate::host(object(name = "BM25Index", pid = false))]
 impl Bm25 {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(new)]
     pub fn new(k1: f64, b: f64) -> Self {
         Self { k1, b, average_length: 0.0, idf: HashMap::new() }
     }
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(method)]
     pub fn build(&mut self, documents: &[Document]) {
         self.clear();

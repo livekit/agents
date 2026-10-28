@@ -155,6 +155,7 @@ impl Tokenize for Words {
 // The `SentenceTokenizer`/`WordTokenizer` ABCs stay Python (subclassed and `isinstance`-checked).
 #[cfg(feature = "python")]
 mod python {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::Mutex;
 
     use pyo3::prelude::*;
@@ -166,6 +167,7 @@ mod python {
     /// reference swallows it there); either way the text comes back as one span.
     pub struct HostTokenizer {
         fnc: Py<PyAny>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         failed: Mutex<Option<PyErr>>,
     }
 
@@ -212,6 +214,7 @@ mod python {
 
     #[pymethods]
     impl PyTokenBuffer {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         #[new]
         #[pyo3(signature = (tokenize_fnc, *, min_token_len, min_ctx_len, max_token_len=None, xml_aware=false))]
         pub(super) fn new(
@@ -250,6 +253,7 @@ mod python {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `SentenceTokenizer.tokenize` with `xml_aware`: [`crate::tokenize::xml::tokenize_aware`] over a
     /// host tokenizer. A tokenizer error leaves the text as one span, as on the streaming path.
     #[pyfunction]

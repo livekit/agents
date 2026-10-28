@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::Notify;
@@ -18,9 +20,11 @@ pub enum Pushed {
 }
 
 struct Shared<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     q: Mutex<Queue<T>>,
     /// `Notify` stores one permit, so an early push is not lost.
     ready: Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     dropped: AtomicU64,
 }
 
@@ -71,6 +75,7 @@ pub struct LossyTx<T> {
 }
 
 impl<T> BoundedLossy<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// No separate sender, for a Rust producer; a host producer uses [`channel`](Self::channel).
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "a zero-capacity lossy queue would drop everything");
@@ -176,6 +181,7 @@ mod tests {
     /// Real-time guard: these hazards fail as hangs.
     const GUARD: Duration = Duration::from_secs(2);
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn within<F: std::future::Future>(f: F) -> F::Output {
         tokio::time::timeout(GUARD, f).await.expect("the queue hung instead of answering")
     }
@@ -212,6 +218,7 @@ mod tests {
 
     // Catches a lost wakeup: checking before registering for notification. Real OS thread: the
     // push side is synchronous host code.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_push_racing_the_receiver_still_wakes_it() {
         let (tx, mut rx) = BoundedLossy::audio();
@@ -242,6 +249,7 @@ mod tests {
     }
 
     // Catches: a `select!` arm dropping the in-flight `recv` and taking a frame with it.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn an_abandoned_recv_does_not_consume_a_frame() {
         let (tx, mut rx) = BoundedLossy::audio();

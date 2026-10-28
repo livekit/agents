@@ -29,6 +29,7 @@ use lk_agents_inference::realtime::{
     AudioDelta, Event, GenerationCreated, GenerationDone, NativeRealtime, OPENAI,
 };
 
+#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY and reaches the network"]
 async fn a_real_session_accepts_our_opening_update_and_answers() {

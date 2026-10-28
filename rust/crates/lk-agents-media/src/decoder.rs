@@ -50,6 +50,7 @@ impl std::fmt::Debug for Decoder {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `AudioStreamDecoder`'s engine: bytes in, interleaved 16-bit PCM out, one decoder per stream.
 #[lk_agents_abi::host(object(
     name = "AudioDecoder",

@@ -1,6 +1,7 @@
 //! Minimal edit script between two `ChatContext`s (`llm/utils.py`): a realtime server can only be
 //! told "insert this after that" or "delete this".
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, HashSet};
 
 use crate::{ChatContext, ItemKind};
@@ -56,6 +57,7 @@ pub fn compute_chat_ctx_diff_of(old: Vec<crate::ChatItem>, new: Vec<crate::ChatI
     (ops.to_remove, ops.to_create, ops.to_update)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub fn compute_chat_ctx_diff(old: &ChatContext, new: &ChatContext) -> DiffOps {
     let old_ids: Vec<&str> = old.items.iter().map(|i| i.id()).collect();
     let new_ids: Vec<&str> = new.items.iter().map(|i| i.id()).collect();

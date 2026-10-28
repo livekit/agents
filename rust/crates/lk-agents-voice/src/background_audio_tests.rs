@@ -14,6 +14,7 @@ fn file(path: &str, probability: f64) -> Sound {
 }
 
 /// A host stream of `frames` short frames.
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Frames(Mutex<u32>);
 
 #[async_trait]
@@ -45,6 +46,7 @@ async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_rtc::FakeRoom>)
 
 // Catches: a sound played before `start()` or after `aclose()` queued where nothing mixes it, and
 // a looping iterator accepted (it can only play once).
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn play_refuses_what_cannot_play() {
     let idle = BackgroundAudioPlayer::for_host(48_000, 1, 4_800, 200);
@@ -73,6 +75,7 @@ async fn play_refuses_what_cannot_play() {
 
 // Catches: a clip that cannot be opened or decoded (a wrong path, or a format this build cannot
 // read) leaving its handle pending forever, so `await handle` never returns.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn a_clip_that_cannot_be_read_ends_its_playback() {
     let (player, _room) = started().await;

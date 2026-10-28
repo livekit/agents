@@ -38,6 +38,7 @@ pub struct InterruptionDetector {
     /// `http_session=`: an `aiohttp.ClientSession` every stream dials through (`ws_connect`), as
     /// the reference's `_connect_ws` does; `None` dials natively.
     http_session: Option<Py<PyAny>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// One receiver: one detector object per model.
     events: Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<DetectorEvent>>>,
 }
@@ -57,6 +58,8 @@ lk_agents_abi::python::inventory::submit! {
 
 #[pymethods]
 impl InterruptionDetector {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (
         *,
@@ -155,6 +158,7 @@ impl InterruptionDetector {
         })
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Open a detection stream, whose events reach only its own `recv`, for one attempt of the
     /// host's `_main_task` (which owns the retries). Awaitable -- see the type docs for why.
     fn stream<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -228,8 +232,10 @@ fn overlap_to_py<'py>(py: Python<'py>, ev: &OverlappingSpeechEvent) -> PyResult<
 /// One detection stream.
 #[pyclass(frozen, name = "InterruptionDetectorStream", module = "livekit.agents._core")]
 pub struct InterruptionDetectorStream {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// The verdict half, held across an await by `recv`.
     inner: Arc<tokio::sync::Mutex<Option<InterruptionStream>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The input half. Synchronous so 50 fps pushes never queue behind a verdict. Dropped by
     /// `end_input`, which lets the receive half observe the end.
     sender: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<InputEvent>>>>,
@@ -413,6 +419,8 @@ fn io(err: PyErr) -> TransportError {
 
 #[async_trait::async_trait]
 impl WsTransport for HostWs {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn connect(
         &self,
         url: &str,
@@ -443,6 +451,7 @@ impl WsTransport for HostWs {
 /// it never starts a second receive.
 async fn pump_receive(
     ws: Arc<CancellingHandle>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Result<(WsMessage, Option<u16>), TransportError>>,
 ) {
     loop {
@@ -495,6 +504,7 @@ impl WsSender for HostWsSender {
 }
 
 struct HostWsReceiver {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: tokio::sync::mpsc::UnboundedReceiver<Result<(WsMessage, Option<u16>), TransportError>>,
     pump: tokio::task::JoinHandle<()>,
     close_code: Option<u16>,

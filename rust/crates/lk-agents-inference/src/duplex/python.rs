@@ -2,6 +2,7 @@
 //! model's host is a `_core_view.Duplex` view, and a gate is either one of these classes or any
 //! object with `update(frame) -> bool` and `deactivate()`.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 
 /// A gate the host holds and the session drives: one state, whoever calls.
 #[derive(Clone)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 struct SharedGate(Arc<Mutex<dyn AudioGate>>);
 
 impl AudioGate for SharedGate {
@@ -51,6 +53,7 @@ register_class!(PyFixedGate, PyAdaptiveNoiseGate);
 
 #[pymethods]
 impl PyFixedGate {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (silence, *, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5))]
     fn new(silence: f64, activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64) -> Self {
@@ -71,6 +74,7 @@ impl PyFixedGate {
 
 #[pymethods]
 impl PyAdaptiveNoiseGate {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (*, activation_ratio = 3.0, deactivation_ratio = 1.8, min_silence_duration = 0.5, window = 10.0))]
     fn new(activation_ratio: f64, deactivation_ratio: f64, min_silence_duration: f64, window: f64) -> Self {
@@ -166,11 +170,15 @@ impl DuplexHost for PyDuplexHost {
 /// output audio is pulled here, and the session's callbacks report the rest one event at a time.
 struct PyDuplexSession {
     view: Arc<CancellingHandle>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     lane: mpsc::UnboundedSender<DuplexCommand>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Every event, the audio and the refused replies among them; `None` once the session closed.
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Option<DuplexEvent>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     spawner: Arc<dyn Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
@@ -222,6 +230,8 @@ fn describe(py: Python<'_>, e: &PyErr) -> String {
 }
 
 impl PyDuplexSession {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn open(view: CancellingHandle, audio: CancellingHandle, label: String, spawner: &Arc<dyn Spawner>) -> Arc<Self> {
         let (lane, lane_rx) = mpsc::unbounded_channel();
         let (tx, events) = mpsc::unbounded_channel();
@@ -246,6 +256,7 @@ impl PyDuplexSession {
     }
 
     /// The session callbacks' events, until the view reports the end.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn forward(view: Arc<CancellingHandle>, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
         loop {
             let Ok(ev) = view.await_call(|s| s.call_method0("_core_next_event")).await else { return };
@@ -270,6 +281,7 @@ impl PyDuplexSession {
     }
 
     /// The model's output audio, then how it ended.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn pump_audio(audio: CancellingHandle, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
         let error = loop {
             match audio.anext().await {
@@ -299,8 +311,10 @@ impl PyDuplexSession {
     /// cannot carry its startup configuration is unusable: it reports the error and closes.
     async fn run_lane(
         view: Arc<CancellingHandle>,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         mut lane: mpsc::UnboundedReceiver<DuplexCommand>,
         label: String,
+        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     ) {
         while let Some(cmd) = lane.recv().await {
@@ -319,6 +333,7 @@ impl PyDuplexSession {
     }
 
     /// A reply the plugin refused is reported, so the turn waiting for it fails.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn generate(view: Arc<CancellingHandle>, cmd: DuplexCommand, req_id: String, tx: mpsc::UnboundedSender<Option<DuplexEvent>>) {
         let asked = view.await_call(|s| s.call_method1("_core_generate", (command_to_py(s.py(), cmd)?,))).await;
         if let Err(e) = asked {

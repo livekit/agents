@@ -3,12 +3,14 @@
 //! error check is dead code (we check a real out-param); its quality ordinal is passed straight as
 //! the recipe, one notch low for HIGH/VERY_HIGH, and we reproduce that to match the SDK.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::{
     ffi::{CStr, c_char},
     os::raw::{c_ulong, c_void},
     sync::RwLock,
 };
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// libsoxr's FFT coefficient cache is process-global and unlocked without OpenMP; growing it under
 /// a running transform crashes or silently corrupts output. Only `soxr_create` grows it, so `new`
 /// takes this for writing and `push`/`flush` (`soxr_clear`) for reading.
@@ -284,6 +286,7 @@ mod tests {
         assert!((total as i64 - expected as i64).abs() <= 2, "produced {total}, want ~{expected}");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn concurrent_sessions_neither_crash_nor_corrupt_each_others_audio() {
         // The B25 shape, run as a stress test with **no test-side lock**: libsoxr's FFT cache is

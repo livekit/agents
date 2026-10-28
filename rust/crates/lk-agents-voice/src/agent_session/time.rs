@@ -75,6 +75,7 @@ impl Timebase {
         self.virt.is_some()
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// For a host that stopped moving time (awaiting `aclose()`). Paced on real time (1 ms per
     /// step) so host tasks can run between steps. Panics on a real clock.
     pub async fn advance_until(

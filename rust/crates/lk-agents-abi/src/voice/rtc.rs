@@ -1,6 +1,7 @@
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -395,6 +396,7 @@ impl VideoFrameRef {
 pub const VIDEO_QUEUE_FRAMES: usize = 4;
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[crate::class]
 pub struct StreamTextOptions {
@@ -417,6 +419,7 @@ impl StreamTextOptions {
     pub fn sender_identity(&self) -> Option<ParticipantIdentity> {
         self.sender_identity.clone()
     }
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(getter)]
     pub fn attributes(&self) -> HashMap<String, String> {
         self.attributes.clone()
@@ -424,6 +427,7 @@ impl StreamTextOptions {
 }
 
 /// `LocalParticipant.stream_bytes(...)`'s keyword arguments.
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[crate::class]
 pub struct StreamBytesOptions {
@@ -449,6 +453,7 @@ impl StreamBytesOptions {
     pub fn destination_identities(&self) -> Vec<ParticipantIdentity> {
         self.destination_identities.clone()
     }
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(getter)]
     pub fn attributes(&self) -> HashMap<String, String> {
         self.attributes.clone()
@@ -531,6 +536,7 @@ impl PlaybackInfo {
 }
 
 /// Header of an incoming byte or text stream: `rtc.ByteStreamInfo` / `rtc.TextStreamInfo`.
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
 #[binding(extract, emit)]
 pub struct StreamInfo {

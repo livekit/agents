@@ -124,6 +124,7 @@ mod tests {
     }
 
     // Catches: a wedged host teardown hanging the pump, or a bound on tokio's clock, not the session's.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_close_that_never_resolves_is_timed_out_at_the_deadline_on_the_clock() {
         let clock = Arc::new(VirtualClock::new());

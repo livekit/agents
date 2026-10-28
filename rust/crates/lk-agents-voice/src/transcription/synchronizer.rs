@@ -11,7 +11,9 @@ use lk_agents_abi::voice::io::{
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, Clock, Monotone, Spawner, SpawnerExt, TimedString};
 use lk_agents_voice::io::AudioSinkProxy;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, VecDeque};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -503,6 +505,7 @@ impl Default for PacerOptions {
 
 #[derive(Default)]
 struct Node {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     children: HashMap<char, Node>,
     /// The pattern's points when a pattern ends at this node (`t[None]`).
     points: Option<Vec<u8>>,
@@ -510,10 +513,12 @@ struct Node {
 
 struct Table {
     tree: Node,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     exceptions: HashMap<String, Vec<u8>>,
 }
 
 impl Table {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn build() -> Table {
         let mut tree = Node::default();
         for pattern in PATTERNS.split_whitespace() {
@@ -643,7 +648,9 @@ struct SyncState {
 struct SyncCore {
     opts: PacerOptions,
     clock: Arc<dyn Clock>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<SyncState>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `None` once closed: dropping the sender is what ends the forwarder.
     tx: Mutex<Option<mpsc::UnboundedSender<Out>>>,
     /// Shared with the forwarder task, which must not keep the core alive (or it never ends).
@@ -722,6 +729,7 @@ impl SyncCore {
     }
 
     /// The forwarder: the only task and the only place the text sink is awaited.
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn forward(next: Option<Arc<dyn TextOutput>>, mut rx: mpsc::UnboundedReceiver<Out>) {
         while let Some(out) = rx.recv().await {
             let Some(next) = &next else { continue };
@@ -741,6 +749,7 @@ pub struct SyncedAudioOutput {
     core: Arc<SyncCore>,
     tracker: Arc<PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     observer: Mutex<Option<Arc<dyn PlaybackObserver>>>,
 }
 
@@ -756,6 +765,7 @@ impl PlaybackObserver for AudioEvents {
 }
 
 impl SyncedAudioOutput {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new(core: Arc<SyncCore>, next: Arc<dyn AudioOutput>) -> Arc<Self> {
         let node = Arc::new(SyncedAudioOutput {
             tracker: Arc::clone(&core.tracker),
@@ -1038,6 +1048,8 @@ impl TranscriptSynchronizer {
         sync
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn build(config: SyncConfig) -> Self {
         let SyncConfig { audio_next, text_next, speed, hyphenator, clock, spawner } = config;
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);

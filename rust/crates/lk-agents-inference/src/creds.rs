@@ -17,6 +17,7 @@ pub fn resolve_credential(
     inference_env.or(livekit_env).unwrap_or("").to_owned()
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 pub fn resolve_api_key(explicit: Option<&str>) -> Result<String, TokenError> {
     let inference = std::env::var("LIVEKIT_INFERENCE_API_KEY").ok();
     let livekit = std::env::var("LIVEKIT_API_KEY").ok();
@@ -27,6 +28,7 @@ pub fn resolve_api_key(explicit: Option<&str>) -> Result<String, TokenError> {
     Ok(key)
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 pub fn resolve_api_secret(explicit: Option<&str>) -> Result<String, TokenError> {
     let inference = std::env::var("LIVEKIT_INFERENCE_API_SECRET").ok();
     let livekit = std::env::var("LIVEKIT_API_SECRET").ok();

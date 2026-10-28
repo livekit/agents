@@ -2,7 +2,9 @@
 //! is a [`WebSocketConnector`]; this file owns the protocol, metrics and error taxonomy.
 
 use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -49,6 +51,7 @@ fn eot_url(base_url: &str) -> String {
     format!("{}/eot", crate::transport::to_ws_url(base_url))
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn now_timestamp() -> pbjson_types::Timestamp {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     pbjson_types::Timestamp { seconds: now.as_secs() as i64, nanos: now.subsec_nanos() as i32 }
@@ -65,6 +68,7 @@ fn duration_millis(d: Option<&pbjson_types::Duration>) -> i64 {
 
 #[derive(Default)]
 struct CloudState {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     send: Option<mpsc::UnboundedSender<proto::ClientMessage>>,
     session_id: Option<String>,
 }
@@ -73,11 +77,13 @@ pub struct CloudTransport {
     opts: CloudOptions,
     sink: Arc<dyn PredictionSink>,
     connector: Arc<dyn WebSocketConnector>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<CloudState>,
     clock: Arc<dyn Clock>,
 }
 
 impl CloudTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         opts: CloudOptions,
         sink: Arc<dyn PredictionSink>,
@@ -243,6 +249,9 @@ impl CloudTransport {
         Ok((sink, stream))
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn run_once(&self) -> Result<(), ApiError> {
         let (mut ws_sink, mut ws_stream) = self.connect().await?;
         let (send, mut send_rx) = mpsc::unbounded_channel();
@@ -303,6 +312,7 @@ impl CloudTransport {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 fn f32_map(map: &std::collections::HashMap<String, f32>) -> BTreeMap<String, f64> {
     map.iter().map(|(k, v)| (k.clone(), f64::from(*v))).collect()
 }

@@ -1,6 +1,7 @@
 //! `_provider_format/google.py`. Results accumulate under a synthetic `tool` role (so they never
 //! share a turn with a user message), later rewritten to `user`. Gemini needs a final user turn.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 use lk_agents_abi::ChatContext;
@@ -16,6 +17,7 @@ pub struct GoogleFormatData {
     pub system_messages: Vec<String>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Keyed by `call_id`; the follow-up is rejected without them.
 pub type ThoughtSignatures = HashMap<String, Vec<u8>>;
 

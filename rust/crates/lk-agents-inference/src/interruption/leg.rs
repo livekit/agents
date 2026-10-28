@@ -13,9 +13,11 @@ use super::{
 };
 
 pub struct InterruptionLeg {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// The input half, cloned out of the stream: synchronous and unbounded, since `signal` may not
     /// block.
     input: tokio::sync::mpsc::UnboundedSender<InputEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Held across an await by `next_event`, hence a `tokio` mutex.
     stream: tokio::sync::Mutex<InterruptionStream>,
     /// Converts sentinel `Ts`s to the gateway's `time.time()` seconds, on the session's anchor.
@@ -23,6 +25,7 @@ pub struct InterruptionLeg {
 }
 
 impl InterruptionLeg {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// **Must be called on the tokio runtime.**
     pub fn open(detector: &AdaptiveInterruptionDetector, anchor: WallAnchor) -> Arc<Self> {
         let stream = detector.stream();
@@ -107,6 +110,7 @@ fn verdict(ev: &OverlappingSpeechEvent, anchor: WallAnchor) -> OverlapVerdict {
 
 /// The detector's audio leg, as the loop's fan-out sees it. `AudioWindow::push_frame` resamples to
 /// 16 kHz itself.
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 struct InterruptionAudioSink(tokio::sync::mpsc::UnboundedSender<InputEvent>);
 
 impl StreamSink<AudioFrame> for InterruptionAudioSink {

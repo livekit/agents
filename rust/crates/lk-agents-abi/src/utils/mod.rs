@@ -1,6 +1,7 @@
 //! The runtime utilities every crate above the purity line shares. Nothing here performs I/O.
 pub mod audio;
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// A poisoned lock is taken anyway: the guarded state is kept consistent by its critical sections.
 pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())

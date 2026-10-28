@@ -74,6 +74,7 @@ pub fn create_access_token(
     .map_err(|e| TokenError::Sign(e.to_string()))
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Seconds since the Unix epoch, for callers with no clock of their own (a JWT `exp` is wall
 /// time).
 pub fn now_unix() -> u64 {

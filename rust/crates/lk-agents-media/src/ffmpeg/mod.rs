@@ -4,6 +4,7 @@
 //! but the total over `push`* + `flush` is deterministic.
 
 use std::ffi::{CString, c_char, c_int, c_uint, c_void};
+#[allow(clippy::disallowed_types, reason = "S0: migrate codec worker state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use crate::AudioFormat;
