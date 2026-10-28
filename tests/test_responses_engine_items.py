@@ -109,6 +109,27 @@ def _fc_done(call_id: str, name: str) -> dict:
     }
 
 
+def _web_search_call(item_id: str) -> list[dict]:
+    added = {
+        "type": "response.output_item.added",
+        "sequence_number": 0,
+        "output_index": 0,
+        "item": {"id": item_id, "type": "web_search_call", "status": "in_progress"},
+    }
+    done = {
+        "type": "response.output_item.done",
+        "sequence_number": 0,
+        "output_index": 0,
+        "item": {
+            "id": item_id,
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "query": "weather"},
+        },
+    }
+    return [added, done]
+
+
 def _completed(usage: dict | None = None) -> dict:
     response = {**_RESPONSE, "status": "completed"}
     if usage is not None:
@@ -353,6 +374,43 @@ async def test_final_answer_owner_after_commentary_drops_next(
     ]
     assert len(records) == 1
     assert records[0].__dict__["dropped_item_ids"] == ["m3"]
+
+
+async def test_message_after_hosted_tool_call_is_kept(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(
+            _message("m1", "Let me look that up."),
+            _web_search_call("ws_1"),
+            _message("m2", "It's sunny."),
+        )
+    )
+
+    assert reply.text == "Let me look that up. It's sunny."
+    assert reply.prev_resp_id == "resp_1"
+    assert not [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+
+
+async def test_second_message_without_hosted_call_still_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    reply = await _reply_over_ws(
+        _stream(_message("m1", "Let me look that up."), _message("m2", "It's sunny."))
+    )
+
+    assert reply.text == "Let me look that up."
+    records = [
+        r for r in caplog.records if r.getMessage() == "dropped extra Responses output items"
+    ]
+    assert len(records) == 1
+    assert records[0].__dict__["dropped_item_ids"] == ["m2"]
 
 
 async def test_dropped_message_phase_is_not_emitted() -> None:
