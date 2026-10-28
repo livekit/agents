@@ -967,7 +967,7 @@ pub mod events {
     pub fn __type_discriminator_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::TypeDiscriminator) -> PyResult<Bound<'py, PyAny>> {
             let ::lk_agents_abi::voice::events::TypeDiscriminator {  } = value;
             let kwargs = ::pyo3::types::PyDict::new(py);
-            __TYPE_DISCRIMINATOR.import(py, "livekit.agents._generated.events", "_TypeDiscriminator")?.call((), Some(&kwargs))
+            crate::host::construct(__TYPE_DISCRIMINATOR.import(py, "livekit.agents._generated.events", "_TypeDiscriminator")?.as_any(), (), Some(&kwargs))
     }
 }
 
