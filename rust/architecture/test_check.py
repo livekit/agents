@@ -114,7 +114,10 @@ class DependencyContracts(unittest.TestCase):
                 metadata(
                     {
                         "lk-agents-voice": ["lk-agents-core", "lk-agents-abi", "lk-agents-media"],
-                        "lk-agents-inference": ["lk-agents-abi", "lk-agents-media"],
+                        "lk-agents-inference": ["lk-agents-abi", "lk-agents-net", "tokio"],
+                        "lk-agents-worker": ["lk-agents-abi", "lk-agents-net", "reqwest"],
+                        "lk-agents-net": ["lk-agents-abi", "tokio"],
+                        "lk-agents-runtime": ["lk-agents-inference", "lk-agents-worker"],
                         "lk-agents-core": ["lk-agents-abi", "livekit-protocol"],
                         "lk-agents-a2a": ["lk-agents-storage"],
                         "lk-agents-fuzz": ["lk-agents-voice", "lk-agents-abi"],
@@ -122,6 +125,23 @@ class DependencyContracts(unittest.TestCase):
                 )
             ),
             set(),
+        )
+
+    def test_async_crates_never_reach_the_runtime_or_each_other_upward(self):
+        self.assertEqual(
+            dependency_violations(
+                metadata(
+                    {
+                        "lk-agents-core": ["lk-agents-abi"],
+                        "lk-agents-inference": ["lk-agents-runtime"],
+                        "lk-agents-net": ["lk-agents-inference"],
+                    }
+                )
+            ),
+            {
+                "direction:lk-agents-inference:lk-agents-runtime",
+                "direction:lk-agents-net:lk-agents-inference",
+            },
         )
 
     def test_incomplete_metadata_cannot_pass(self):

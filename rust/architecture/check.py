@@ -15,9 +15,11 @@ import tomllib
 
 CORES = {
     f"lk-agents-{name}"
-    for name in ("core", "voice", "worker", "inference", "storage", "a2a", "media", "rtc")
+    for name in ("core", "voice", "storage", "a2a", "media", "rtc")
 }
 PURE = CORES | {"lk-agents-abi"}
+# Async I/O crates (decisions 69, 77): exempt from the purity bans; their edges are still checked.
+ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net"}
 BANNED = {
     "async-trait",
     "async-std",
@@ -78,16 +80,18 @@ def dependency_violations(metadata: dict) -> set[str]:
                     violations.add(f"dependency:{owner}:{packages[dep]}")
                 pending.extend((child, owner) for child in nodes[dep])
         # Workspace edges also enforce layering independently of external dependencies.
-        if name not in PURE | {"lk-agents-fuzz", "lk-agents-runtime", "lk-agents-py"}:
+        if name not in PURE | ASYNC | {"lk-agents-fuzz", "lk-agents-runtime", "lk-agents-py"}:
             continue
         allowed = {
             "lk-agents-abi": set(),
             "lk-agents-core": {"lk-agents-abi"},
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
-            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media"},
+            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"},
+            "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-a2a": {"lk-agents-abi", "lk-agents-storage"},
-            "lk-agents-fuzz": PURE - {"lk-agents-rtc"},
-            "lk-agents-runtime": PURE - {"lk-agents-rtc"},
+            # The realtime and duplex fakes still run inference's realtime machine (decision 70).
+            "lk-agents-fuzz": PURE - {"lk-agents-rtc"} | {"lk-agents-inference"},
+            "lk-agents-runtime": PURE - {"lk-agents-rtc"} | ASYNC,
             "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
         }.get(name, {"lk-agents-abi"})
         for dep in nodes[root]:
