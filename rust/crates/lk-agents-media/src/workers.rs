@@ -28,7 +28,6 @@ pub struct MediaWorkerLimits {
     pub formatting: usize,
     pub eot_models: usize,
     pub vad_models: usize,
-    pub uploads: usize,
     pub worker_io: usize,
 }
 
@@ -42,7 +41,6 @@ impl Default for MediaWorkerLimits {
             formatting: 8,
             eot_models: 1,
             vad_models: 32,
-            uploads: 2,
             worker_io: 4,
         }
     }
@@ -57,13 +55,12 @@ impl MediaWorkerLimits {
             MediaWorkerClass::Formatting => self.formatting,
             MediaWorkerClass::EotModel => self.eot_models,
             MediaWorkerClass::VadModel => self.vad_models,
-            MediaWorkerClass::Upload => self.uploads,
             MediaWorkerClass::WorkerIo => self.worker_io,
         }
     }
 }
 
-const CLASSES: usize = 8;
+const CLASSES: usize = 7;
 
 fn index(class: MediaWorkerClass) -> usize {
     class as usize
@@ -202,7 +199,6 @@ impl MediaWorkers {
             limits.formatting,
             limits.eot_models,
             limits.vad_models,
-            limits.uploads,
             limits.worker_io,
         ];
         if limits.total == 0 || classes.into_iter().any(|limit| limit == 0 || limit > limits.total)

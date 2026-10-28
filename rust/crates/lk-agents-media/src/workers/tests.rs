@@ -37,7 +37,6 @@ fn workers(total: usize) -> MediaWorkers {
         formatting: 1,
         eot_models: 1,
         vad_models: 1,
-        uploads: 1,
         worker_io: 1,
     })
     .unwrap()
@@ -111,7 +110,7 @@ fn a_panicking_job_reports_and_releases_its_capacity() {
 }
 
 #[test]
-fn models_and_uploads_share_the_payload_ceiling() {
+fn models_and_decoders_share_the_payload_ceiling() {
     let workers = workers(3);
     let (release_decoder, decoder_wait) = mpsc::channel::<()>();
     let (release_model, model_wait) = mpsc::channel::<()>();
@@ -119,12 +118,12 @@ fn models_and_uploads_share_the_payload_ceiling() {
         workers.try_spawn(MediaWorkerClass::Decoder, move || decoder_wait.recv()).unwrap();
     let model = workers.try_spawn(MediaWorkerClass::EotModel, move || model_wait.recv()).unwrap();
     assert!(matches!(
-        workers.try_spawn(MediaWorkerClass::Upload, || ()),
-        Err(MediaWorkerError::Exhausted(MediaWorkerClass::Upload))
+        workers.try_spawn(MediaWorkerClass::Image, || ()),
+        Err(MediaWorkerError::Exhausted(MediaWorkerClass::Image))
     ));
     release_decoder.send(()).unwrap();
     block_on(decoder).unwrap().unwrap();
-    block_on(workers.try_spawn(MediaWorkerClass::Upload, || ()).unwrap()).unwrap();
+    block_on(workers.try_spawn(MediaWorkerClass::Image, || ()).unwrap()).unwrap();
     release_model.send(()).unwrap();
     block_on(model).unwrap().unwrap();
 }

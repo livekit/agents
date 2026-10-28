@@ -8,7 +8,6 @@ pub enum WorkerClass {
     Formatting,
     EotModel,
     VadModel,
-    Upload,
     WorkerIo,
 }
 

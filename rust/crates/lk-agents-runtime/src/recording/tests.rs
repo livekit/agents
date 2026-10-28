@@ -15,7 +15,6 @@ fn workers(total: usize) -> MediaWorkers {
         formatting: 1,
         eot_models: 1,
         vad_models: 1,
-        uploads: 1,
         worker_io: 1,
     })
     .unwrap()
