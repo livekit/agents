@@ -9,12 +9,16 @@ use tokio::net::TcpListener;
 struct Isolated;
 
 impl Env for Isolated {
+    type Services = ();
+
+    fn services() {}
+
     fn runtime() -> Result<tokio::runtime::Handle, String> {
-        Standalone::runtime()
+        Standalone::<()>::runtime()
     }
 
     fn clock() -> std::sync::Arc<dyn lk_agents_abi::Clock> {
-        Standalone::clock()
+        Standalone::<()>::clock()
     }
 
     fn report_admission() -> Result<ReportAdmission, String> {
