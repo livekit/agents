@@ -24,6 +24,7 @@ use lk_agents_abi::python::{
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyList};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use pyo3_async_runtimes::TaskLocals;
 
@@ -546,6 +547,7 @@ impl WorkerHost for PyWorkerHost {
         Python::attach(|py| v.extract::<Option<f32>>(py).ok()).flatten()
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn serve_endpoint(&self, request: EndpointRequest) {
         let EndpointRequest { preamble, stream } = request;
         let request_id = preamble.request_id.clone();
@@ -637,6 +639,7 @@ fn endpoint_from_py(item: &Bound<'_, PyAny>) -> PyResult<protocol::AgentEndpoint
     Ok(protocol::AgentEndpoint { path, methods, kind: kind as i32, public })
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).unwrap_or_default().to_lowercase().as_str(), "1" | "true" | "yes")
 }
@@ -713,7 +716,9 @@ fn apply(s: &mut ServerSettings, options: &Bound<'_, PyDict>) -> PyResult<()> {
 /// where an option was left empty. Writable until the server starts.
 #[pyclass(name = "ServerConfig", module = "livekit.agents._core")]
 pub struct PyServerConfig {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     settings: Arc<std::sync::Mutex<ServerSettings>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     running: Arc<AtomicBool>,
 }
 
@@ -725,6 +730,8 @@ impl PyServerConfig {
 
 #[pymethods]
 impl PyServerConfig {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `options`: `AgentServer`'s arguments by name; `http_proxy` left out reads `HTTPS_PROXY`,
     /// else `HTTP_PROXY`.
     #[new]
@@ -822,10 +829,10 @@ struct HostHealth(PyWorkerHost);
 
 #[async_trait]
 impl server::HealthProbe for HostHealth {
-    async fn health(&self) -> (bool, usize) {
+    async fn health(&self) -> usize {
         match self.0.open("health", |py| Ok(PyDict::new(py).into_any())).await {
-            Ok(v) => Python::attach(|py| v.extract::<(bool, usize)>(py)).unwrap_or((true, 0)),
-            Err(_) => (true, 0),
+            Ok(v) => Python::attach(|py| v.extract::<usize>(py)).unwrap_or(0),
+            Err(_) => 0,
         }
     }
 
@@ -835,6 +842,7 @@ impl server::HealthProbe for HostHealth {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Whatever `run()` started, stopped: the connection, the load loop, the host's job processes
 /// (`close`) and the listeners; `run()` returns.
 async fn shut_down(life: &mut Life, host: &PyWorkerHost, running: &AtomicBool, outcome: &Outcome) -> PyResult<()> {
@@ -867,17 +875,24 @@ fn empty(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 /// `close`.
 #[pyclass(name = "ServerRuntime", module = "livekit.agents._core")]
 pub struct PyServer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     settings: Arc<std::sync::Mutex<ServerSettings>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     running: Arc<AtomicBool>,
     host: PyWorkerHost,
     life: Arc<tokio::sync::Mutex<Life>>,
     status: Arc<ServerStatus>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     worker_id: Arc<std::sync::Mutex<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     draining: Arc<AtomicBool>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     http_port: Arc<std::sync::atomic::AtomicU16>,
     outcome: Arc<Outcome>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The registered worker, for the job statuses the host reports.
     worker: Arc<std::sync::Mutex<Option<WorkerHandle>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Set by `run()`: only a voice door runs jobs.
     has_rtc: Arc<AtomicBool>,
 }
@@ -894,6 +909,7 @@ impl PyServer {
 
 #[pymethods]
 impl PyServer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Constructed on the host's loop, where every `open` runs.
     #[new]
     fn new(py: Python<'_>, config: &PyServerConfig, host: Py<PyAny>) -> PyResult<Self> {
@@ -946,6 +962,8 @@ impl PyServer {
         self.http_port.load(Ordering::Acquire)
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Start the job processes (the host's `start`), the health listener and the load loop,
     /// register unless `unregistered`, and serve until `aclose()`; raises when the connection fails
     /// for good. `routes` is the endpoint manifest; `publisher` the voice door's job type. Job
@@ -1146,6 +1164,7 @@ impl PyServer {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Stop taking jobs and wait for the running ones, within `timeout` seconds (0 or `None`: no
     /// deadline; `TimeoutError` past it). Once; a server never run has nothing to drain.
     #[pyo3(signature = (timeout=None))]

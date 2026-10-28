@@ -428,8 +428,8 @@ class _ServerHost:
     async def _metrics(self, _: Any) -> tuple[str, str]:
         return await asyncio.get_running_loop().run_in_executor(None, telemetry.metrics.exposition)
 
-    async def _health(self, _: Any) -> tuple[bool, int]:
-        return True, len(self.active_jobs())
+    async def _health(self, _: Any) -> int:
+        return len(self.active_jobs())
 
     async def _close_websockets(self, _: Any) -> None:
         # clients of an open WebSocket get a close frame and reconnect to another worker

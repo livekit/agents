@@ -4,6 +4,7 @@
 //! processes and the user's callbacks.
 
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use livekit_protocol as proto;
@@ -203,6 +204,7 @@ impl ServerSettings {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// The Prometheus multiprocess directory a run uses: the configured one, else the inherited
 /// `PROMETHEUS_MULTIPROC_DIR`; created, and emptied of a previous run's files.
 pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
@@ -337,8 +339,8 @@ pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, String> {
 /// What the health and metrics listeners read from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
-    /// `(inference process alive or absent, active jobs)`.
-    async fn health(&self) -> (bool, usize);
+    /// The active jobs, for `/worker`.
+    async fn health(&self) -> usize;
     /// The Prometheus exposition, `(content type, body)`; `None` when it cannot be rendered.
     async fn metrics(&self) -> Option<(String, String)>;
 }
@@ -346,7 +348,9 @@ pub trait HealthProbe: Send + Sync {
 /// The server state the listener and `/worker` read.
 #[derive(Default)]
 pub struct ServerStatus {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub connection_failed: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `f32` bits.
     pub worker_load: AtomicU32,
 }
@@ -404,11 +408,7 @@ async fn health_route(
     if method != "GET" && method != "HEAD" {
         return text(405, "Method Not Allowed", "405: Method Not Allowed");
     }
-    let (inference_alive, active_jobs) = probe.health().await;
     if path == "/" {
-        if !inference_alive {
-            return text(503, "Service Unavailable", "inference process not running");
-        }
         if status.connection_failed.load(Ordering::Relaxed) {
             return text(503, "Service Unavailable", "failed to connect to livekit");
         }
@@ -421,7 +421,7 @@ async fn health_route(
         }
         .into(),
         agent_name: settings.agent_name.clone(),
-        active_jobs: active_jobs as f32,
+        active_jobs: probe.health().await as f32,
         sdk_version: settings.version.clone(),
         worker_load: status.load(),
         protocol_version: WORKER_PROTOCOL_VERSION as i32,
@@ -467,6 +467,7 @@ pub async fn serve_metrics(listener: tokio::net::TcpListener, probe: Arc<dyn Hea
     .await
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Serves `listener` until dropped: one request per connection, answered by
 /// `respond(method, path)`, then closed.
 async fn serve<F, R>(listener: tokio::net::TcpListener, respond: F)
@@ -577,8 +578,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl HealthProbe for Probe {
-        async fn health(&self) -> (bool, usize) {
-            (true, 0)
+        async fn health(&self) -> usize {
+            0
         }
 
         async fn metrics(&self) -> Option<(String, String)> {

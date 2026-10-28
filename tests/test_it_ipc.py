@@ -22,8 +22,6 @@ from typing import Any
 
 import pytest
 
-from livekit.agents.inference_runner import _InferenceRunner
-
 SCENARIO = os.environ.get("IT_SCENARIO", "")
 MARKERS = Path(os.environ.get("IT_DIR", "."))
 
@@ -220,19 +218,6 @@ def test_job_processes_exit_when_the_worker_is_killed(worker) -> None:
     assert not lingering, f"processes outlived their worker: {lingering}"
 
 
-@pytest.mark.parametrize("context", ["spawn", "forkserver"])
-def test_inference_process_round_trip(worker, context: str) -> None:
-    """Guards a job's inference requests (the turn detector's path) not reaching the shared
-    inference process or coming back corrupted, for small and multi-megabyte payloads, under both
-    start methods (forkserver is Linux's default)."""
-    w = worker("inference", jobs=1, multiprocessing_context=context)
-    result = json.loads(w.marker("room-0.shutdown"))
-    assert result["small"] == "ok:hello"
-    assert result["large"] is True
-    assert result["inference_pid"] != result["pid"]
-    assert w.wait() == 0, w.tail()
-
-
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
 def test_forkserver_job_processes_run_from_a_single_threaded_forkserver(worker) -> None:
     """Guards job processes forked from the forkserver (Linux's default) failing on state they
@@ -251,20 +236,6 @@ def _write(name: str, data: dict[str, Any]) -> None:
     tmp = MARKERS / f".{name}"
     tmp.write_text(json.dumps(data))
     tmp.rename(MARKERS / name)
-
-
-class EchoRunner(_InferenceRunner):
-    INFERENCE_METHOD = "it_echo"
-
-    def initialize(self) -> None:
-        pass
-
-    def run(self, data: bytes) -> bytes | None:
-        if data == b"pid":
-            return str(os.getpid()).encode()
-        if data.startswith(b"hello"):
-            return b"ok:" + data
-        return data[::-1]
 
 
 async def _entrypoint(ctx: Any) -> None:
@@ -292,12 +263,6 @@ async def _entrypoint(ctx: Any) -> None:
         for i in range(0, len(hog), 4096):
             hog[i] = 1
         await asyncio.sleep(600)
-    elif scenario == "inference":
-        small = await ctx.inference_executor.do_inference("it_echo", b"hello")
-        payload = os.urandom(4 * 1024 * 1024)
-        large = await ctx.inference_executor.do_inference("it_echo", payload)
-        pid = await ctx.inference_executor.do_inference("it_echo", b"pid")
-        extra.update(small=small.decode(), large=large == payload[::-1], inference_pid=int(pid))
     elif scenario == "forkserver":
         parent = psutil.Process(os.getppid())
         extra.update(parent=parent.pid, parent_threads=parent.num_threads())
@@ -351,8 +316,6 @@ def _worker_main() -> None:
     options.setdefault("num_idle_processes", 1)
     options.setdefault("multiprocessing_context", "spawn")
     options.setdefault("port", 0)
-    if SCENARIO == "inference":
-        _InferenceRunner.register_runner(EchoRunner)
 
     server = AgentServer(**options)
     server.rtc_session()(_entrypoint)

@@ -11,14 +11,14 @@ use pyo3::prelude::*;
 pub use lk_agents_abi::python::*;
 
 // ============================================================================================
-// Process roles and fork safety (§1.13).
+// Process roles and fork safety.
 //
 // Importing `livekit.agents._core` must start nothing: everything starts in `init(role)`. The
 // forkserver imports the plugin set and then forks, and `fork()` clones only the calling thread, so
 // a runtime started at import would hang the child on its first `block_on`.
 //
 // The host need not call `init`: a process that never declares a role is a `Job` (the reference
-// has no initialisation call; see DECISIONS-FOR-REVIEW N402).
+// has no initialisation call).
 // ============================================================================================
 
 /// Which process this is. The host knows; Rust is told.
@@ -30,8 +30,6 @@ pub enum Role {
     /// One or more `AgentSession`s. **No worker connection** -- this is also the `console` and
     /// `connect` CLI path, so nothing here may assume a registration or a job assignment.
     Job,
-    /// The `_InferenceRunner`s.
-    Inference,
 }
 
 // The pid a process declared, and the guard every entry point calls, live in

@@ -27,7 +27,7 @@ logging.setLoggerClass(_logger_class)
 
 
 # LiveKit Cloud injects LIVEKIT_REGION_NAME into deployed agents (e.g. "ca-central").
-# The variable is inherited by the job and inference processes, so every process reads
+# The variable is inherited by the job processes, so every process reads
 # it directly. It is unset outside of LiveKit Cloud, in which case no field is added.
 _deployed_region = os.environ.get("LIVEKIT_REGION_NAME") or None
 
