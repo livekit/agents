@@ -29,6 +29,7 @@ from receptionist import (
     outbound_caller_script,
     outbound_greeting,
 )
+from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
 
 logger = logging.getLogger("agent")
@@ -41,7 +42,7 @@ MODELS = {"voice": f"openai/{VOICE_MODEL}", "backend": f"openai/{BACKEND_MODEL}"
 server = AgentServer()
 
 
-@server.rtc_session(agent_name=AGENT_NAME)
+@server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
 async def front_desk(ctx: JobContext) -> None:
     meta = json.loads(ctx.job.metadata or "{}")
     outbound = meta.get("direction") == "outbound"
@@ -77,7 +78,7 @@ async def front_desk(ctx: JobContext) -> None:
 
     session = AgentSession[CallState](
         vad=inference.VAD(),
-        userdata=CallState(),
+        userdata=CallState(clinic=clinic),
         tools=[EndCallTool(end_instructions=None)],
     )
     confirming = clinic.appointments[0]

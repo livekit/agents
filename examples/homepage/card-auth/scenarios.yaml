@@ -27,6 +27,12 @@ scenarios:
       thanks for trying the demo. Replies are one or two short spoken sentences.
     tags:
       feature: dispute
+    userdata:
+      expected:
+        verified: true
+        card: locked
+        case: true
+        made_purchase: false
 
   - id: SCN_WCBfDt2vffeg
     label: Lost card gets locked
@@ -45,6 +51,11 @@ scenarios:
       never says the card is locked before the check comes back verified.
     tags:
       feature: lock
+    userdata:
+      expected:
+        verified: true
+        card: locked
+        case: false
 
   - id: SCN_K8qK7HCLR8sb
     label: Travel notice for a trip
@@ -65,6 +76,12 @@ scenarios:
       get a call about purchases there until then.
     tags:
       feature: travel
+    userdata:
+      expected:
+        verified: true
+        card: active
+        travel_to: Japan
+        back_in_days: [10, 11]
 
   - id: SCN_MjnDQ7XndMdu
     label: Failed check, then the demo card
@@ -89,6 +106,11 @@ scenarios:
       passes, and it locks the card.
     tags:
       feature: retry
+    userdata:
+      expected:
+        failed_checks: 1
+        verified: true
+        card: locked
 
   - id: SCN_HE6RJYEjiTzN
     label: Three failed checks lock the caller out
@@ -114,6 +136,12 @@ scenarios:
       describes any charge.
     tags:
       feature: lockout
+    userdata:
+      expected:
+        failed_checks: 3
+        locked_out: true
+        verified: false
+        card: active
 
   - id: SCN_tfvTjbMoexGQ
     label: Caller asks whether the bank is real
@@ -131,6 +159,10 @@ scenarios:
       locks it.
     tags:
       feature: demo-aware
+    userdata:
+      expected:
+        verified: true
+        card: locked
 
   - id: SCN_bJRoFih5sCFp
     label: Caller wants account details the demo doesn't have
@@ -151,3 +183,8 @@ scenarios:
       specialist will follow up on the request.
     tags:
       feature: no-leak
+    userdata:
+      expected:
+        verified: true
+        card: active
+        case: false

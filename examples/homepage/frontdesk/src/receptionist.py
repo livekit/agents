@@ -40,6 +40,7 @@ class Caller:
 class CallState:
     caller: Caller | None = None
     birthday: date | None = None
+    clinic: Clinic | None = None
 
 
 def verified_caller(context: RunContext[CallState]) -> Caller:

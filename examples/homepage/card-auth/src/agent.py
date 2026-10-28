@@ -28,6 +28,7 @@ from card_services import (
     outbound_greeting,
 )
 from phone import outbound_line, ring
+from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
 
 logger = logging.getLogger("agent")
@@ -40,7 +41,7 @@ MODELS = {"voice": f"openai/{VOICE_MODEL}", "backend": f"openai/{BACKEND_MODEL}"
 server = AgentServer()
 
 
-@server.rtc_session(agent_name=AGENT_NAME)
+@server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
 async def card_verification(ctx: JobContext) -> None:
     meta = json.loads(ctx.job.metadata or "{}")
     outbound = meta.get("direction") == "outbound"
@@ -75,8 +76,9 @@ async def card_verification(ctx: JobContext) -> None:
         },
     )
 
-    session = AgentSession(
+    session = AgentSession[Bank](
         vad=inference.VAD(),
+        userdata=bank,
         tools=[EndCallTool(end_instructions=None)],
     )
     if outbound:

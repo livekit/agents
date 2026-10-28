@@ -26,6 +26,8 @@ join the room.
 - `src/clinic.py` is the made-up clinic: its charts, calendar, and appointments. It publishes each
   change as a `clinic.*` attribute for the demo page.
 - `src/schedule.json` seeds the clinic, its patients, open times, and appointments.
+- `src/simulation.py` grades a simulated call on what the clinic ended up with, against the
+  scenario's `expected` userdata.
 - `src/suggested_replies.py` suggests what the caller could say next after each of Riley's turns,
   for the page's "try saying" line.
 - `src/phone.py` rings a real phone for an outbound call.
@@ -57,7 +59,9 @@ uv run pytest
 lk agent simulate audio --scenarios scenarios.yaml
 ```
 
-Run the simulations in audio: GPT-Live doesn't work in text simulations.
+Run the simulations in audio: GPT-Live doesn't work in text simulations. Each scenario's
+`expected` userdata says what the clinic should end up with, and `src/simulation.py` fails the run
+if it doesn't.
 
 ## Deploy
 
