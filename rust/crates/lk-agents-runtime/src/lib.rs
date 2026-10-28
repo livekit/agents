@@ -26,6 +26,7 @@ pub mod a2a;
 pub mod a2a_client;
 pub mod http;
 pub mod llm;
+pub mod mcp;
 pub mod process;
 pub mod source;
 pub mod storage;

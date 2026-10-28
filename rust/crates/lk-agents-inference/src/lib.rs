@@ -63,5 +63,4 @@ pub use token::{TokenError, create_access_token};
 extern crate self as lk_agents_inference;
 
 // Two network clients over this crate's transport.
-pub mod mcp;
 pub mod realtime;

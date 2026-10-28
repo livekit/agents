@@ -1,55 +1,22 @@
-//! `llm/mcp.py` over the official Rust SDK (`rmcp`): the session and its transports are
-//! [`session`], result rendering is [`render`], and the small decisions the shells ask for are here.
-//! The Python classes forward to these; wrapping tools in `function_tool` stays host code.
+//! MCP options and interpretation over upstream SDK records; execution is in `session`.
 
-pub mod render;
-pub mod session;
+mod http_client;
+mod render;
+mod session;
+mod transport;
 
-// The generated readers resolve `McpToolOptions`' field types through this root glob.
-pub use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
-pub use lk_agents_abi::llm::mcp::{McpToolOptions, McpToolOptionsPatch};
-pub use render::{check_result, render_result};
+pub use lk_agents_abi::llm::mcp::{
+    McpCleanup, McpCleanupStatus, McpError, McpProgress, McpTransport,
+};
+use lk_agents_abi::llm::mcp::{McpToolOptions, McpToolOptionsPatch, McpTools as McpToolsPort};
 use serde_json::{Map, Value, json};
-pub use session::{McpClient, McpProgress, McpSession, McpTransport};
+pub use session::McpSession;
 
-/// Every failure the adapter raises. The first three are `ToolError`s whose text the model reads.
-/// `ToolError` for what the model reads, `ValueError` for a bad `transport_type`, else
-/// `RuntimeError` (the reference raises the SDK's error).
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum McpError {
-    #[error(
-        "Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running."
-    )]
-    #[host(kind = "livekit.agents.llm.tool_context.ToolError")]
-    Unavailable,
-    #[error(
-        "Tool '{0}' completed without producing a result. This might indicate an issue with internal processing."
-    )]
-    #[host(kind = "livekit.agents.llm.tool_context.ToolError")]
-    EmptyResult(String),
-    #[error("{0}")]
-    #[host(kind = "livekit.agents.llm.tool_context.ToolError")]
-    ToolFailed(String),
-    #[error("MCPServer isn't initialized")]
-    NotInitialized,
-    #[error("transport_type must be 'sse' or 'streamable_http', got '{0}'")]
-    #[host(kind = "ValueError")]
-    InvalidTransport(String),
-    /// A failed connection or request; the reference raises the SDK's own error.
-    #[error("{0}")]
-    Connection(String),
-}
-
-pub(crate) fn conn(e: impl std::fmt::Display) -> McpError {
-    McpError::Connection(e.to_string())
+pub(crate) fn conn(e: impl std::error::Error + Send + Sync + 'static) -> McpError {
+    McpError::Transport(std::sync::Arc::new(e))
 }
 
 /// `_resolve_tool_options`: `{**defaults, **config}`, key by key.
-#[lk_agents_abi::host(export(
-    name = "resolve_mcp_tool_options",
-    pid = false
-))]
 pub fn resolve_tool_options(config: Option<&McpToolOptionsPatch>) -> McpToolOptions {
     let (d, p) = (McpToolOptions::default(), config.copied().unwrap_or_default());
     McpToolOptions {
@@ -60,14 +27,11 @@ pub fn resolve_tool_options(config: Option<&McpToolOptionsPatch>) -> McpToolOpti
     }
 }
 
-/// `_make_function_tool`'s `raw_schema`: `description` always present (null when absent), `meta`
-/// only when truthy.
-#[lk_agents_abi::host(export(name = "mcp_raw_schema", pid = false))]
 pub fn raw_schema(
     name: &str,
     description: Option<&str>,
     input_schema: &Map<String, Value>,
-    #[host(required)] meta: Option<&Map<String, Value>>,
+    meta: Option<&Map<String, Value>>,
 ) -> Value {
     let mut schema = json!({"name": name, "description": description, "parameters": input_schema});
     if let Some(meta) = meta.filter(|m| !m.is_empty()) {
@@ -76,8 +40,15 @@ pub fn raw_schema(
     schema
 }
 
-/// `MCPToolset.setup(reload=)`'s branch.
-#[lk_agents_abi::host(wire_enum)]
+pub fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> SetupPlan {
+    match (reload, toolset_initialized, server_connected) {
+        (false, true, true) => SetupPlan::Skip,
+        (_, _, false) => SetupPlan::ConnectThenList,
+        (true, _, true) => SetupPlan::InvalidateThenList,
+        (false, false, true) => SetupPlan::ListOnly,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupPlan {
     Skip,
@@ -86,18 +57,6 @@ pub enum SetupPlan {
     ListOnly,
 }
 
-#[lk_agents_abi::host(export(name = "mcp_plan_setup", pid = false))]
-pub fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> SetupPlan {
-    match (reload, toolset_initialized, server_connected) {
-        (false, true, _) => SetupPlan::Skip,
-        (_, _, false) => SetupPlan::ConnectThenList,
-        (true, _, true) => SetupPlan::InvalidateThenList,
-        (false, false, true) => SetupPlan::ListOnly,
-    }
-}
-
-/// `Literal["sse", "streamable_http"]`.
-#[lk_agents_abi::host(wire_enum)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpTransport {
     Sse,
@@ -106,10 +65,6 @@ pub enum HttpTransport {
 
 /// `transport_type` when given, else streamable HTTP only for a `urlparse` path ending in `/mcp`
 /// (case- and trailing-slash-insensitive); everything else is SSE.
-#[lk_agents_abi::host(export(
-    name = "mcp_http_transport",
-    pid = false
-))]
 pub fn http_transport(url: &str, transport_type: Option<&str>) -> Result<HttpTransport, McpError> {
     match transport_type {
         Some("sse") => Ok(HttpTransport::Sse),
@@ -156,7 +111,7 @@ fn url_path(url: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod transport_selection_tests {
     use super::*;
 
     // Catches: detecting on anything but `urlparse`'s path (`;params` only for schemes that use
@@ -176,3 +131,43 @@ mod tests {
         }
     }
 }
+
+pub struct McpTools;
+impl McpToolsPort for McpTools {
+    fn resolve_tool_options(config: Option<McpToolOptionsPatch>) -> McpToolOptions {
+        resolve_tool_options(config.as_ref())
+    }
+    fn raw_schema(
+        name: String,
+        description: Option<String>,
+        input_schema: Map<String, Value>,
+        meta: Option<Map<String, Value>>,
+    ) -> Value {
+        raw_schema(&name, description.as_deref(), &input_schema, meta.as_ref())
+    }
+    fn plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> String {
+        match plan_setup(reload, toolset_initialized, server_connected) {
+            SetupPlan::Skip => "skip",
+            SetupPlan::ConnectThenList => "connect_then_list",
+            SetupPlan::InvalidateThenList => "invalidate_then_list",
+            SetupPlan::ListOnly => "list_only",
+        }
+        .into()
+    }
+    fn http_transport(url: String, transport_type: Option<String>) -> Result<String, McpError> {
+        Ok(match http_transport(&url, transport_type.as_deref())? {
+            HttpTransport::Sse => "sse",
+            HttpTransport::StreamableHttp => "streamable_http",
+        }
+        .into())
+    }
+    fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
+        render::render_result(&tool_name, &result)
+    }
+    fn check_result(result: Value) -> Result<(), McpError> {
+        render::check_result(&result)
+    }
+}
+
+#[cfg(test)]
+mod tests;

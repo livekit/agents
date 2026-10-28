@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -50,7 +51,7 @@ class _Progress:
     def __init__(self, ctx: RunContext) -> None:
         self._ctx = ctx
 
-    async def _core_update(self, message: str) -> None:
+    async def _core_update(self, _invocation: object, message: str) -> None:
         await self._ctx.update(message)
 
 
@@ -61,12 +62,13 @@ class _Streams:
         self._cm = cm
         self._read: Any = None
         self._write: Any = None
+        self._reader_task: asyncio.Task[Any] | None = None
 
-    async def _core_start(self) -> None:
+    async def _core_start(self, _invocation: object) -> None:
         streams = await self._cm.__aenter__()
         self._read, self._write = streams[0], streams[1]
 
-    async def _core_send(self, message: dict[str, Any]) -> None:
+    async def _core_send(self, _invocation: object, message: dict[str, Any]) -> None:
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
         from pydantic import TypeAdapter
@@ -74,9 +76,10 @@ class _Streams:
         parsed = TypeAdapter(JSONRPCMessage).validate_python(message)
         await self._write.send(SessionMessage(parsed))
 
-    async def _core_receive(self) -> dict[str, Any] | None:
+    async def _core_receive(self, _invocation: object) -> dict[str, Any] | None:
         import anyio
 
+        self._reader_task = asyncio.current_task()
         try:
             message = await self._read.receive()
         except (anyio.EndOfStream, anyio.ClosedResourceError):
@@ -85,7 +88,10 @@ class _Streams:
             raise message
         return message.message.model_dump(by_alias=True, exclude_none=True, mode="json")  # type: ignore[no-any-return]
 
-    async def _core_close(self) -> None:
+    async def _core_close(self, _invocation: object) -> None:
+        if self._reader_task is not None and not self._reader_task.done():
+            self._reader_task.cancel()
+            await asyncio.gather(self._reader_task, return_exceptions=True)
         await self._cm.__aexit__(None, None, None)
 
 
@@ -109,7 +115,10 @@ class MCPServer:
         self._session.invalidate_cache()
 
     async def initialize(self) -> None:
-        await self._session.connect_host(_Streams(self.client_streams()))
+        await self._session.connect_host(
+            _Streams(self.client_streams()),
+            (asyncio.get_running_loop(), contextvars.copy_context()),
+        )
 
     def client_streams(self) -> AbstractAsyncContextManager[Any]:
         raise NotImplementedError
@@ -139,7 +148,12 @@ class MCPServer:
         options: dict[str, Any],
     ) -> MCPTool:
         async def _call(raw_arguments: dict[str, Any], progress: _Progress | None) -> Any:
-            result = await self._session.call_tool(name, raw_arguments, progress)
+            result = await self._session.call_tool(
+                name,
+                raw_arguments,
+                progress,
+                (asyncio.get_running_loop(), contextvars.copy_context()),
+            )
             if self._tool_result_resolver is None:
                 return _core.mcp_render_result(name, result)
             _core.mcp_check_result(result)
@@ -207,12 +221,12 @@ class MCPServerHTTP(MCPServer):
         self._sse_read_timeout = sse_read_timeout
         self._transport = _core.mcp_http_transport(url, transport_type)
         self._allowed_tools = list(allowed_tools or [])
-        self._session.allowed_tools = self._allowed_tools
+        self._session.set_allowed_tools(self._allowed_tools)
 
     async def initialize(self) -> None:
         await self._session.connect_http(
             self.url,
-            {k: str(v) for k, v in self.headers.items()},
+            [(k, str(v)) for k, v in self.headers.items()],
             self._transport,
             self._timeout,
             self._sse_read_timeout,
@@ -247,7 +261,9 @@ class MCPServerStdio(MCPServer):
 
     async def initialize(self) -> None:
         cwd = str(self.cwd) if self.cwd is not None else None
-        await self._session.connect_stdio(self.command, self.args, self.env or {}, cwd)
+        await self._session.connect_stdio(
+            self.command, self.args, list((self.env or {}).items()), cwd
+        )
 
     def __repr__(self) -> str:
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
@@ -266,7 +282,7 @@ class MCPToolset(AsyncToolset):
             mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
             tool_options={
                 "book_flight": MCPToolOptions(
-                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", report_progress=True
+                    on_duplicate="confirm", report_progress=True
                 ),
             },
         )
@@ -293,11 +309,19 @@ class MCPToolset(AsyncToolset):
             plan = _core.mcp_plan_setup(reload, self._initialized, self._mcp_server.initialized)
             if plan == "skip":
                 return self
-            if plan == "connect_then_list":
-                await self._mcp_server.initialize()
-            elif plan == "invalidate_then_list":
-                self._mcp_server.invalidate_cache()
-            self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
+            try:
+                if plan == "connect_then_list":
+                    await self._mcp_server.initialize()
+                elif plan == "invalidate_then_list":
+                    self._mcp_server.invalidate_cache()
+                self._tools = list(
+                    await self._mcp_server.list_tools(tool_options=self._tool_options)
+                )
+            except BaseException:
+                await self._mcp_server.aclose()
+                self._initialized = False
+                self._tools = []
+                raise
             self._initialized = True
             return self
 
@@ -309,7 +333,9 @@ class MCPToolset(AsyncToolset):
     async def aclose(self) -> None:
         try:
             await super().aclose()
-            await self._mcp_server.aclose()
         finally:
-            self._initialized = False
-            self._tools = []
+            try:
+                await self._mcp_server.aclose()
+            finally:
+                self._initialized = False
+                self._tools = []

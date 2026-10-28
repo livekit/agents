@@ -73,11 +73,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 bytes = "1"
-# `llm/mcp.py`'s session, over the official SDK (see the workspace entry). `sse-stream` parses the
-# legacy SSE transport rmcp does not ship, `url` joins its `endpoint` event onto the connection URL
-# and is pydantic's `AnyUrl` normalisation for rendering, `log` is the reference's three log lines.
-rmcp.workspace = true
-sse-stream = "0.2"
 url = "2"
 log.workspace = true
 # `local_models`: the link-time slot a native provider of the local VAD and end-of-turn models

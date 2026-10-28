@@ -14,10 +14,10 @@ from ..llm.tool_context import DuplicateMode, DuplicateScope, ToolFlag
 
 
 class MCPToolOptions(TypedDict, total=False):
-    """Per-tool behavior for MCP tools exposed by an :class:`MCPToolset`."""
+    """Per-tool behavior for MCP tools exposed by an MCPToolset."""
 
     flags: ToolFlag
-    """Flags passed to the @function_tool decorator, e.g. ToolFlag.CANCELLABLE."""
+    """Flags passed to the @function_tool decorator, using ToolFlag."""
     on_duplicate: DuplicateMode
     """Behavior when a tool is called multiple times in the same context."""
     duplicate_scope: DuplicateScope

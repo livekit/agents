@@ -146,3 +146,335 @@ pub fn llm_usage_chunk(chunk: Bound<'_, PyAny>) -> PyResult<::std::option::Optio
     let out = <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+type McpSessionImpl = <crate::Selected as super::Implementations>::McpSession;
+
+/// An SDK session whose owner cancels and joins independently of request borrowers.
+#[pyclass(frozen, name = "McpSession", module = "livekit.agents._core")]
+pub struct McpSession(::std::sync::Arc<McpSessionImpl>);
+
+#[pymethods]
+impl McpSession {
+    #[new]
+    #[pyo3(signature = (client_session_timeout_seconds))]
+    fn new(client_session_timeout_seconds: f64) -> PyResult<McpSession> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds);
+        Ok(McpSession(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn connected(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connected(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (allowed))]
+    fn set_allowed_tools(&self, allowed: ::std::vec::Vec<::std::string::String>) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::set_allowed_tools(&self.0, allowed);
+        Ok(())
+    }
+
+    fn invalidate_cache(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::invalidate_cache(&self.0);
+        Ok(())
+    }
+
+    #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
+    fn connect_http<'py>(&self, py: Python<'py>, url: ::std::string::String, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, transport: ::std::string::String, timeout: f64, sse_read_timeout: f64) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(&this, url, headers, transport, timeout, sse_read_timeout)
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (command, args, env, cwd))]
+    fn connect_stdio<'py>(&self, py: Python<'py>, command: ::std::string::String, args: ::std::vec::Vec<::std::string::String>, env: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, cwd: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_stdio(&this, command, args, env, cwd)
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (transport, host_context))]
+    fn connect_host<'py>(&self, py: Python<'py>, transport: Bound<'_, PyAny>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let transport = super::llm::McpTransportProxy::from_host(&transport)?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_host(&this, transport, host_context)
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    fn list_tools<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::list_tools(&this, )
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::lk_agents_abi::python::value_to_py(py, &out)?, py))
+        })
+    }
+
+    #[pyo3(signature = (name, arguments, progress, host_context))]
+    fn call_tool<'py>(&self, py: Python<'py>, name: ::std::string::String, arguments: Bound<'_, PyAny>, progress: Option<Bound<'_, PyAny>>, host_context: ::std::option::Option<::lk_agents_abi::HostRef>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let arguments = match ::lk_agents_abi::python::value_from_py(&arguments, "arguments")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("arguments", ": expected a dict"))) }?;
+        let progress = progress.map(|v| super::llm::McpProgressProxy::from_host(&v)).transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::call_tool(&this, name, arguments, progress, host_context)
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::lk_agents_abi::python::value_to_py(py, &out)?, py))
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::close(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[getter]
+    fn cleanup(&self) -> PyResult<::lk_agents_abi::llm::mcp::McpCleanup> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::cleanup(&self.0);
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+type McpToolsImpl = <crate::Selected as super::Implementations>::McpTools;
+
+#[pyfunction]
+#[pyo3(signature = (config))]
+pub fn resolve_mcp_tool_options(config: ::std::option::Option<::lk_agents_abi::llm::mcp::McpToolOptionsPatch>) -> PyResult<::lk_agents_abi::llm::mcp::McpToolOptions> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::resolve_tool_options(config);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (name, description, input_schema, meta))]
+pub fn mcp_raw_schema<'py>(py: Python<'py>, name: ::std::string::String, description: ::std::option::Option<::std::string::String>, input_schema: Bound<'_, PyAny>, meta: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let input_schema = match ::lk_agents_abi::python::value_from_py(&input_schema, "input_schema")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("input_schema", ": expected a dict"))) }?;
+    let meta = meta.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "meta")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("meta", ": expected a dict"))) }).transpose()?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::raw_schema(name, description, input_schema, meta);
+    Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+}
+
+#[pyfunction]
+#[pyo3(signature = (reload, toolset_initialized, server_connected))]
+pub fn mcp_plan_setup(reload: bool, toolset_initialized: bool, server_connected: bool) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::plan_setup(reload, toolset_initialized, server_connected);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (url, transport_type))]
+pub fn mcp_http_transport(url: ::std::string::String, transport_type: ::std::option::Option<::std::string::String>) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(url, transport_type).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (tool_name, result))]
+pub fn mcp_render_result(tool_name: ::std::string::String, result: Bound<'_, PyAny>) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
+    let out = <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (result))]
+pub fn mcp_check_result(result: Bound<'_, PyAny>) -> PyResult<()> {
+    ::lk_agents_abi::python::check_pid()?;
+    let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
+    <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::check_result(result).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(())
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+/// [`::lk_agents_abi::llm::mcp::McpTransport`] over a host `livekit.agents.llm.mcp._Streams`:
+/// each call runs in a copy of the host context its `#[host(context)]` parameter captured.
+pub struct McpTransportProxy(::std::sync::Arc<Py<PyAny>>);
+
+impl McpTransportProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(McpTransportProxy(::std::sync::Arc::new(obj.clone().unbind()))))
+    }
+}
+
+#[::async_trait::async_trait]
+impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
+    async fn start(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.0);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
+        let out = match context {
+            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
+            })
+            .await,
+            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_start: the call captured no host context")),
+        };
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn send(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &::serde_json::Value) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.0);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let message_arg = ::std::clone::Clone::clone(message);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
+        let out = match context {
+            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::lk_agents_abi::python::value_to_py(py, &message_arg)?];
+                Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
+            })
+            .await,
+            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_send: the call captured no host context")),
+        };
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn receive(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.0);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
+        let out = match context {
+            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                Ok((host.bind(py).getattr("_core_receive")?, ::pyo3::types::PyTuple::new(py, args)?))
+            })
+            .await,
+            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_receive: the call captured no host context")),
+        };
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (::lk_agents_abi::python::value_from_py(&o, "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    async fn close(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.0);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
+        let out = match context {
+            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+            })
+            .await,
+            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("McpTransport._core_close: the call captured no host context")),
+        };
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+/// [`::lk_agents_abi::llm::mcp::McpProgress`] over a host `livekit.agents.llm.mcp._Progress`:
+/// each call runs in a copy of the host context its `#[host(context)]` parameter captured.
+pub struct McpProgressProxy(::std::sync::Arc<Py<PyAny>>);
+
+impl McpProgressProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(McpProgressProxy(::std::sync::Arc::new(obj.clone().unbind()))))
+    }
+}
+
+#[::async_trait::async_trait]
+impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
+    async fn update(&self, invocation: &::lk_agents_abi::llm::mcp::McpInvocation, message: &str) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.0);
+        let invocation_arg = ::std::clone::Clone::clone(invocation);
+        let message_arg = message.to_owned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
+        let out = match context {
+            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
+                Ok((host.bind(py).getattr("_core_update")?, ::pyo3::types::PyTuple::new(py, args)?))
+            })
+            .await,
+            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("McpProgress._core_update: the call captured no host context")),
+        };
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
