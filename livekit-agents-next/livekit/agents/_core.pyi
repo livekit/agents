@@ -66,7 +66,6 @@ from ._generated._core_classes import (
     ChatContent as ChatContent,
     ChatItem as ChatItem,
     ChatRequest as ChatRequest,
-    ConnectionPoolState as ConnectionPoolState,
     CoreTextOutput as CoreTextOutput,
     FrameDecoder as FrameDecoder,
     GetAddressResult as GetAddressResult,
@@ -345,6 +344,7 @@ from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,
 )
 from ._generated._core_utils import (
+    ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
 )

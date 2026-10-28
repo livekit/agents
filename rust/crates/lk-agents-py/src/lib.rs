@@ -47,6 +47,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type ConnectionPoolState = lk_agents_runtime::net::connection_pool::ConnectionPool;
     type MediaTokenization = lk_agents_runtime::codecs::MediaTokenization;
     type AudioDecoder = lk_agents_runtime::codecs::StreamDecoder;
     type StreamBuffer = lk_agents_runtime::codecs::StreamBuffer;

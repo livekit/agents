@@ -27,3 +27,5 @@ pub mod token;
 pub mod transport;
 pub mod websocket;
 pub mod webtransport;
+
+pub mod connection_pool;

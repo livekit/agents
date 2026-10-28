@@ -28,7 +28,8 @@ use futures_util::future::{Either, select};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::tts::text::{TranscriptProcessor, TtsTextProcessorFactory};
-use lk_agents_abi::utils::connection_pool::ConnectionPool;
+use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
+use lk_agents_net::connection_pool::ConnectionPool;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_abi::{Spawner, SpawnerExt};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]

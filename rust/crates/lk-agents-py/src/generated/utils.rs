@@ -10,6 +10,126 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/utils/connection_pool.rs.
+type ConnectionPoolStateImpl = <crate::Selected as super::Implementations>::ConnectionPoolState;
+
+fn _extract_connection_pool_state_new_maximum_age(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "maximum_age")).map(Some) }
+}
+
+fn _extract_connection_pool_state_connected_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+}
+
+fn _extract_connection_pool_state_connected_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_connection_pool_state_connected_generation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "generation")
+}
+
+fn _extract_connection_pool_state_connected_acquire_time(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "acquire_time")).map(Some) }
+}
+
+fn _extract_connection_pool_state_get_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+}
+
+fn _extract_connection_pool_state_put_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+}
+
+fn _extract_connection_pool_state_remove_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+}
+
+fn _extract_connection_pool_state_closed_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
+    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+}
+
+#[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
+pub struct ConnectionPoolState(pub(crate) ConnectionPoolStateImpl);
+
+#[pymethods]
+impl ConnectionPoolState {
+    #[new]
+    #[pyo3(signature = (maximum_age, refresh_on_get))]
+    fn new(#[pyo3(from_py_with = _extract_connection_pool_state_new_maximum_age)] maximum_age: ::std::option::Option<f64>, refresh_on_get: bool) -> PyResult<ConnectionPoolState> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::new(maximum_age, refresh_on_get);
+        Ok(ConnectionPoolState(out))
+    }
+
+    #[getter]
+    fn generation(&self) -> PyResult<u64> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::generation(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn last_acquire_time(&self) -> PyResult<f64> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_acquire_time(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn last_connection_reused(&self) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::last_connection_reused(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (id, now, generation, acquire_time))]
+    fn connected(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_connected_id)] id: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_now)] now: f64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_generation)] generation: u64, #[pyo3(from_py_with = _extract_connection_pool_state_connected_acquire_time)] acquire_time: ::std::option::Option<f64>) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::connected(&mut self.0, id, now, generation, acquire_time);
+        Ok(out)
+    }
+
+    fn empty(&self) -> PyResult<bool> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::empty(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (now))]
+    fn get(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_get_now)] now: f64) -> PyResult<::std::option::Option<u64>> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::get(&mut self.0, now);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (id))]
+    fn put(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_put_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::put(&mut self.0, id);
+        Ok(())
+    }
+
+    #[pyo3(signature = (id))]
+    fn remove(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_remove_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::remove(&mut self.0, id);
+        Ok(())
+    }
+
+    fn invalidate(&mut self) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::invalidate(&mut self.0);
+        Ok(())
+    }
+
+    fn close_all(&mut self) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::close_all(&mut self.0);
+        Ok(())
+    }
+
+    fn next_closing(&self) -> PyResult<::std::option::Option<u64>> {
+        let out = <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::next_closing(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (id))]
+    fn closed(&mut self, #[pyo3(from_py_with = _extract_connection_pool_state_closed_id)] id: u64) -> PyResult<()> {
+        <ConnectionPoolStateImpl as ::lk_agents_abi::utils::connection_pool::ConnectionPoolState>::closed(&mut self.0, id);
+        Ok(())
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/utils/filters.rs.
 type ExpFilterImpl = <crate::Selected as super::Implementations>::ExpFilter;
 

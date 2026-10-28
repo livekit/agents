@@ -93,6 +93,7 @@ pub trait Implementations: 'static {
     type InferenceTtsStream: ::lk_agents_abi::tts::streams::InferenceTtsStream;
     type FallbackTtsStream: ::lk_agents_abi::tts::streams::FallbackTtsStream;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
+    type ConnectionPoolState: ::lk_agents_abi::utils::connection_pool::ConnectionPoolState;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
@@ -264,6 +265,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::InferenceTtsStream>()?;
     m.add_class::<tts::FallbackTtsStream>()?;
     m.add_class::<types::_core_ProviderAttempts>()?;
+    m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;
     m.add_class::<vad::InferenceVad>()?;
