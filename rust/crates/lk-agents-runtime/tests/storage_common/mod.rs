@@ -30,17 +30,28 @@ pub struct Fixture {
     dir: Option<PathBuf>,
 }
 
+/// A backend with no thread yet, removed (with its directory) at `close`.
+pub struct Store {
+    pub storage: Arc<dyn Storage>,
+    pub dir: Option<PathBuf>,
+}
+
+impl Store {
+    pub async fn close(self) {
+        self.storage.close().await;
+        if let Some(dir) = self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 impl Backend {
-    /// A fresh thread; `lease` overrides the default lease timing.
-    pub async fn fixture(self, lease: Option<(Duration, Duration)>) -> Fixture {
-        let lease = match lease {
-            Some((ttl, interval)) => LeaseTiming::new(ttl, interval).unwrap(),
-            None => LeaseTiming::default(),
-        };
-        let (storage, dir): (Arc<dyn Storage>, _) = match self {
+    pub async fn store(self, lease: LeaseTiming) -> Store {
+        match self {
             Backend::Sqlite => {
                 let dir = std::env::temp_dir().join(shortuuid("lk-agents-storage-"));
-                (Arc::new(SqliteStorage::open(&dir, lease).await.unwrap()), Some(dir))
+                let storage = Arc::new(SqliteStorage::open(&dir, lease).await.unwrap());
+                Store { storage, dir: Some(dir) }
             }
             Backend::AgentDb => {
                 let env = |name: &str| {
@@ -50,9 +61,18 @@ impl Backend {
                 opts.lease = lease;
                 let minter =
                     TokenMinter::new(env("LIVEKIT_API_KEY"), env("LIVEKIT_API_SECRET")).unwrap();
-                (Arc::new(AgentDbStorage::new(opts, minter).unwrap()), None)
+                Store { storage: Arc::new(AgentDbStorage::new(opts, minter).unwrap()), dir: None }
             }
+        }
+    }
+
+    /// A fresh thread; `lease` overrides the default lease timing.
+    pub async fn fixture(self, lease: Option<(Duration, Duration)>) -> Fixture {
+        let lease = match lease {
+            Some((ttl, interval)) => LeaseTiming::new(ttl, interval).unwrap(),
+            None => LeaseTiming::default(),
         };
+        let Store { storage, dir } = self.store(lease).await;
         let thread = storage.create_thread(CreateRequest::default()).await.unwrap();
         Fixture { storage, thread_id: thread.thread_id, lease, dir }
     }
