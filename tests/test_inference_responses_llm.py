@@ -380,15 +380,3 @@ async def test_rest_read_timeout_defaults_to_conn_timeout(monkeypatch: pytest.Mo
     await _drain(model, conn_options=APIConnectOptions(max_retry=0, timeout=3.0))
 
     assert transport.requests[0].extensions["timeout"]["read"] == 3.0
-
-
-async def test_rest_read_timeout_uses_stream_idle_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    transport = _GatewayTransport()
-    model = _make_llm(monkeypatch, transport, stream_idle_timeout=30.0)
-
-    await _drain(model, conn_options=APIConnectOptions(max_retry=0, timeout=3.0))
-
-    assert transport.requests[0].extensions["timeout"]["read"] == 30.0
-    assert transport.requests[0].extensions["timeout"]["connect"] == 3.0

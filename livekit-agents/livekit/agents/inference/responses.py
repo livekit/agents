@@ -24,13 +24,12 @@ from typing_extensions import TypedDict
 from yarl import URL
 
 from .. import llm
-from .._exceptions import APIConnectionError, APIStatusError
+from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice
 from ..llm._responses_engine import (
     _WS_HEARTBEAT,
     ResponsesLLMStream,
     ResponsesWebsocket,
-    check_idle_timeout,
 )
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -110,11 +109,9 @@ class LLM(llm.LLM):
     With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
     ``inference_class`` and the other upgrade headers are fixed per connection.
 
-    ``stream_idle_timeout`` bounds the silence between Responses events once a request is
-    sent, over both WebSocket and HTTP. WebSocket pings don't count as events; the gateway's
-    keepalive frames do, and the gateway bounds upstream silence itself. ``None`` uses
-    ``conn_options.timeout``; raise it for models that reason or run hosted tools for long
-    stretches without emitting events.
+    Each read waits ``conn_options.timeout`` for the next event. The gateway sends keepalives
+    while a model reasons silently, and fails the turn itself (a retryable timeout) when the
+    upstream goes quiet for too long.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
@@ -131,7 +128,6 @@ class LLM(llm.LLM):
         extra_kwargs: ResponsesOptions | dict[str, Any] | None = None,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
         use_websocket: bool = False,
-        stream_idle_timeout: float | None = None,
     ) -> None:
         super().__init__()
 
@@ -148,7 +144,8 @@ class LLM(llm.LLM):
             use_websocket=use_websocket,
         )
         self._ws: ResponsesWebsocket | None = None
-        self._stream_idle_timeout = check_idle_timeout(stream_idle_timeout)
+        # the gateway bounds upstream silence, so reads only need to outlast its keepalives
+        self._stream_idle_timeout: float | None = None
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
@@ -163,7 +160,9 @@ class LLM(llm.LLM):
                 api_secret=self._opts.api_secret,
                 provider=self._opts.provider,
                 inference_class=self._opts.inference_class,
-                extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
+                extra_headers=lambda: dict(
+                    cast(dict[str, str], self._opts.extra_kwargs.get("extra_headers") or {})
+                ),
                 timeout=None,
             )
         else:
@@ -366,6 +365,8 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
         return super()._parse_ws_event(event)
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
+        if event.code == "upstream_timeout":
+            raise APITimeoutError(f"{event.message} ({event.code})", retryable=True)
         mapped = _GATEWAY_ERROR_STATUS.get(event.code or "")
         if mapped is None:
             super()._handle_error(event)
