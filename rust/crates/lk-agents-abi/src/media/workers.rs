@@ -8,7 +8,6 @@ pub enum WorkerClass {
     Formatting,
     EotModel,
     VadModel,
-    WorkerIo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

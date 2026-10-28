@@ -28,7 +28,6 @@ pub struct MediaWorkerLimits {
     pub formatting: usize,
     pub eot_models: usize,
     pub vad_models: usize,
-    pub worker_io: usize,
 }
 
 impl Default for MediaWorkerLimits {
@@ -41,7 +40,6 @@ impl Default for MediaWorkerLimits {
             formatting: 8,
             eot_models: 1,
             vad_models: 32,
-            worker_io: 4,
         }
     }
 }
@@ -55,12 +53,11 @@ impl MediaWorkerLimits {
             MediaWorkerClass::Formatting => self.formatting,
             MediaWorkerClass::EotModel => self.eot_models,
             MediaWorkerClass::VadModel => self.vad_models,
-            MediaWorkerClass::WorkerIo => self.worker_io,
         }
     }
 }
 
-const CLASSES: usize = 7;
+const CLASSES: usize = 6;
 
 fn index(class: MediaWorkerClass) -> usize {
     class as usize
@@ -71,8 +68,6 @@ type Job = Box<dyn FnOnce() + Send>;
 struct State {
     used: [usize; CLASSES],
     total: usize,
-    /// Payload classes together leave `limits.total - payload` slots for worker I/O sampling.
-    payload: usize,
     jobs: VecDeque<Job>,
     idle: usize,
     capacity_waiters: Vec<Waker>,
@@ -80,7 +75,6 @@ struct State {
 
 struct Shared {
     limits: MediaWorkerLimits,
-    payload_limit: usize,
     state: Mutex<State>,
     work: Condvar,
 }
@@ -91,9 +85,7 @@ impl Shared {
     }
 
     fn fits(&self, state: &State, class: MediaWorkerClass) -> bool {
-        state.used[index(class)] < self.limits.of(class)
-            && state.total < self.limits.total
-            && (class == MediaWorkerClass::WorkerIo || state.payload < self.payload_limit)
+        state.used[index(class)] < self.limits.of(class) && state.total < self.limits.total
     }
 }
 
@@ -116,9 +108,6 @@ impl Drop for MediaWorkerPermit {
             let mut state = self.shared.lock();
             state.used[index(self.class)] -= 1;
             state.total -= 1;
-            if self.class != MediaWorkerClass::WorkerIo {
-                state.payload -= 1;
-            }
             std::mem::take(&mut state.capacity_waiters)
         };
         waiters.into_iter().for_each(Waker::wake);
@@ -199,22 +188,17 @@ impl MediaWorkers {
             limits.formatting,
             limits.eot_models,
             limits.vad_models,
-            limits.worker_io,
         ];
         if limits.total == 0 || classes.into_iter().any(|limit| limit == 0 || limit > limits.total)
         {
             return Err(MediaWorkerError::InvalidLimits);
         }
-        // Keep health sampling serviceable even when long-lived payload classes fill their caps.
-        let reserved = limits.worker_io.min(limits.total - 1);
         Ok(Self {
             shared: Arc::new(Shared {
                 limits,
-                payload_limit: limits.total - reserved,
                 state: Mutex::new(State {
                     used: [0; CLASSES],
                     total: 0,
-                    payload: 0,
                     jobs: VecDeque::new(),
                     idle: 0,
                     capacity_waiters: Vec::new(),
@@ -235,9 +219,6 @@ impl MediaWorkers {
         }
         state.used[index(class)] += 1;
         state.total += 1;
-        if class != MediaWorkerClass::WorkerIo {
-            state.payload += 1;
-        }
         Ok(MediaWorkerPermit { shared: self.shared.clone(), class })
     }
 

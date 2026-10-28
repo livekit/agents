@@ -853,7 +853,7 @@ impl<H: ServerHost> ServerRuntime<H> {
                             ))
                         }));
                     }
-                    Err(lk_agents_abi::utils::workers::WorkerError::Exhausted(_)) => {
+                    Err(crate::io::WorkerIoError::Exhausted) => {
                         tokio::time::sleep(crate::ipc::pool::REFILL_INTERVAL).await;
                     }
                     Err(error) => break Err(error.to_string()),

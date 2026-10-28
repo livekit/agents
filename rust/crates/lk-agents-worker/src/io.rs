@@ -5,9 +5,17 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use lk_agents_abi::utils::workers::{WorkerClass, WorkerError};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
+
+/// Why worker I/O was not admitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum WorkerIoError {
+    #[error("worker I/O capacity must be positive")]
+    InvalidCapacity,
+    #[error("worker I/O capacity exhausted")]
+    Exhausted,
+}
 
 #[derive(Clone)]
 pub struct WorkerIo {
@@ -65,9 +73,9 @@ impl<T: Send + 'static> Drop for WorkerIoTask<T> {
 }
 
 impl WorkerIo {
-    pub fn new(runtime: tokio::runtime::Handle, capacity: usize) -> Result<Self, WorkerError> {
+    pub fn new(runtime: tokio::runtime::Handle, capacity: usize) -> Result<Self, WorkerIoError> {
         if capacity == 0 || capacity > Semaphore::MAX_PERMITS {
-            return Err(WorkerError::InvalidLimits);
+            return Err(WorkerIoError::InvalidCapacity);
         }
         Ok(Self {
             runtime,
@@ -80,12 +88,9 @@ impl WorkerIo {
         self.runtime.clone()
     }
 
-    pub fn try_admit(&self) -> Result<WorkerIoPermit, WorkerError> {
-        let permit = self
-            .capacity
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| WorkerError::Exhausted(WorkerClass::WorkerIo))?;
+    pub fn try_admit(&self) -> Result<WorkerIoPermit, WorkerIoError> {
+        let permit =
+            self.capacity.clone().try_acquire_owned().map_err(|_| WorkerIoError::Exhausted)?;
         Ok(WorkerIoPermit { permit: Some(permit), released: self.released.clone() })
     }
 
@@ -105,7 +110,7 @@ impl WorkerIo {
     pub fn try_spawn<T: Send + 'static>(
         &self,
         work: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<WorkerIoTask<T>, WorkerError> {
+    ) -> Result<WorkerIoTask<T>, WorkerIoError> {
         Ok(self.spawn_admitted(self.try_admit()?, work))
     }
 
@@ -156,7 +161,7 @@ mod tests {
         let caller = tokio::spawn(task);
         caller.abort();
         let _ = caller.await;
-        assert!(matches!(workers.try_admit(), Err(WorkerError::Exhausted(WorkerClass::WorkerIo))));
+        assert!(matches!(workers.try_admit(), Err(WorkerIoError::Exhausted)));
         release.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(1), workers.wait_for_capacity()).await.unwrap();
         assert_eq!(workers.try_spawn(|| 42).unwrap().await.unwrap(), 42);
@@ -168,7 +173,7 @@ mod tests {
         let _permit = workers.try_admit().unwrap();
         assert!(matches!(
             workers.try_spawn(|| panic!("work was admitted while capacity was exhausted")),
-            Err(WorkerError::Exhausted(WorkerClass::WorkerIo))
+            Err(WorkerIoError::Exhausted)
         ));
     }
 }

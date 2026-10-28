@@ -37,7 +37,6 @@ fn workers(total: usize) -> MediaWorkers {
         formatting: 1,
         eot_models: 1,
         vad_models: 1,
-        worker_io: 1,
     })
     .unwrap()
 }
@@ -52,19 +51,6 @@ fn capacity_notification_observes_released_reservations() {
     drop(permit);
     block_on(available);
     let _admitted = workers.try_admit(MediaWorkerClass::Recording).unwrap();
-}
-
-#[test]
-fn native_payload_saturation_reserves_health_sampling_capacity() {
-    let workers = workers(4);
-    let _decoder = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
-    let _recording = workers.try_admit(MediaWorkerClass::Recording).unwrap();
-    let _image = workers.try_admit(MediaWorkerClass::Image).unwrap();
-    assert!(matches!(
-        workers.try_admit(MediaWorkerClass::EotModel),
-        Err(MediaWorkerError::Exhausted(MediaWorkerClass::EotModel))
-    ));
-    let _health = workers.try_admit(MediaWorkerClass::WorkerIo).unwrap();
 }
 
 #[test]
@@ -110,8 +96,8 @@ fn a_panicking_job_reports_and_releases_its_capacity() {
 }
 
 #[test]
-fn models_and_decoders_share_the_payload_ceiling() {
-    let workers = workers(3);
+fn models_and_decoders_share_the_total_ceiling() {
+    let workers = workers(2);
     let (release_decoder, decoder_wait) = mpsc::channel::<()>();
     let (release_model, model_wait) = mpsc::channel::<()>();
     let decoder =
