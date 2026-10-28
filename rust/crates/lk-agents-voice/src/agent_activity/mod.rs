@@ -22,7 +22,6 @@ use crate::agent_session::effects::{AudioOp, Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, InterruptCause, PlayoutStep, ToolStep};
-use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatItem, Modality, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -368,8 +367,8 @@ impl Driver {
             ActivityCommand::Drain { call } => self.drain(call.into_iter().collect(), out),
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
-                // A segment in flight keeps the sink it started with; an unstarted speech reads the
-                // new one at its next segment.
+                // Replacement takes effect at a segment boundary and interrupts nothing: a segment
+                // in flight finishes on the sink it started with; the next one reads the new sink.
                 let next = output.as_ref().map(|o| o.id);
                 let now = self.step.now;
                 self.release_pause_before_swap(now, out);
@@ -378,10 +377,9 @@ impl Driver {
                     (previous.map(|o| o.id), self.session.outputs.audio_enabled);
                 let op = AudioOp::SetAudioOutput { previous, next, enabled };
                 out.machine().push(Effect::Audio(op));
-                let playing = self.session.states.agent_state() == AgentState::Speaking;
-                if !audio || playing {
-                    // A segment playing into the old sink can't move: force-interrupt it (and the
-                    // realtime socket, once), rather than report a playout nobody received.
+                if !audio {
+                    // Removed with no replacement: nobody hears what plays, so it is cut (and the
+                    // realtime socket's response, once) rather than reported as a playout.
                     let socket_told = match self.activity.speech_scheduler.current_speech() {
                         Some(speech) => {
                             let realtime = self.is_realtime_speech(speech);
