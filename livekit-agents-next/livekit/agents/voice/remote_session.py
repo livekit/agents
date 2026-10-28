@@ -57,7 +57,7 @@ class SessionPort:
             else str(instructions)
         )
         tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.id, rendered, tools, to_core_items(self._session.history.items)
+        return agent.name, rendered, tools, to_core_items(self._session.history.items)
 
     async def _core_run_input(self, text: str) -> tuple[list[_core.ChatItem] | None, str | None]:
         try:
@@ -73,7 +73,7 @@ class SessionPort:
         return (
             self._session.agent_state,
             self._session.user_state,
-            self._session.current_agent.id,
+            self._session.current_agent.name,
             {k: str(options.get(k)) for k, _ in _core.session_state_option_fields()},
             self._session._started_at,
         )

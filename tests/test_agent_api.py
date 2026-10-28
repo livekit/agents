@@ -56,15 +56,9 @@ class RecordingLLM(FakeLLM):
 
 
 def test_agent_name_inference() -> None:
-    assert module_agent.id == "module_agent"
-    assert Agent(instructions="x", name="named").id == "named"
-
-    class Sub(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="x")
-
-    assert Sub().id == "sub"
-    assert Agent(instructions="unassigned").id == "default_agent"
+    assert module_agent.name == "module_agent"
+    assert Agent(instructions="x", name="named").name == "named"
+    assert Agent(instructions="unassigned").name == "default_agent"
 
 
 def test_agent_tool_decorator() -> None:
@@ -372,8 +366,8 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     state = Patient()
     deps = Deps(greeting="hey")
     storage = thread_storage
-    sid = await new_session(storage, agent.id)
-    thread = Thread(storage, sid, agent_name=agent.id)
+    sid = await new_session(storage, agent.name)
+    thread = Thread(storage, sid, agent_name=agent.name)
     app = AppContext(settings=deps, patient=state)
     async with VoiceSession(llm=llm, context=app, thread=thread) as session:
         assert session.context is app
@@ -395,7 +389,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
         "message",
     ]
     db = await storage.open(sid)
-    row = await db.lane_info(agent.id)
+    row = await db.lane_info(agent.name)
     db.close()
     assert row is not None
     from livekit.agents.storage.context_store import ContextStore

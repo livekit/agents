@@ -136,7 +136,7 @@ class _TextRun(Generic[Context_T]):
     def llm(self) -> llm.LLM:
         model = self.agent.llm
         if not isinstance(model, llm.LLM):
-            raise RuntimeError(f"agent `{self.agent.id}` has no LLM to run on")
+            raise RuntimeError(f"agent `{self.agent.name}` has no LLM to run on")
         return model
 
     @property

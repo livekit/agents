@@ -719,7 +719,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             "dynamic_instructions": (
                 _DynamicInstructions(self, agent) if agent._instruction_fns else None
             ),
-            "agent": agent.id,
+            "agent": agent.name,
             "agent_host": agent,
             "tools_host": pool,
             "tool_runner": ToolRunner(self, agent, pool),

@@ -56,7 +56,7 @@ from ..types import (
     NotGivenOr,
     TimedString,
 )
-from ..utils import is_given, misc
+from ..utils import is_given
 from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
@@ -80,7 +80,7 @@ _OnEnterFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 
-DEFAULT_AGENT_ID = "default_agent"
+DEFAULT_AGENT_NAME = "default_agent"
 
 # what runs the agents of this context: a voice session, or a text run
 _BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
@@ -164,7 +164,6 @@ class Agent(Generic[Context_T, Output_T]):
         *,
         instructions: str | Instructions,
         name: str | None = None,
-        id: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         output_type: type[Output_T]
         | Callable[..., Awaitable[Output_T]]
@@ -183,15 +182,13 @@ class Agent(Generic[Context_T, Output_T]):
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         tools = tools or []
-        # a plain Agent is named after the variable it is assigned to: the assigning frame's
-        # namespace is kept and scanned the first time the name is read, since the assignment completes only after the constructor returns
-        self._id: str | None = name or id
-        self._defining_namespace: dict[str, Any] | None = None
-        if self._id is None:
-            if type(self) is Agent:
-                self._defining_namespace = _assignment_namespace(sys._getframe(1))
-            else:
-                self._id = misc.camel_to_snake_case(type(self).__name__)
+        # an unnamed agent takes the name of the module-level variable it is assigned to: the
+        # assigning frame's namespace is kept and scanned the first time the name is read, since
+        # the assignment completes only after the constructor returns
+        self._name = name
+        self._defining_namespace = (
+            _assignment_namespace(sys._getframe(1)) if name is None else None
+        )
 
         self._instructions = instructions
         self._tools = [*tools, *find_function_tools(self)]
@@ -231,18 +228,16 @@ class Agent(Generic[Context_T, Output_T]):
         self._turn_handling: TurnHandlingOptions = turn_handling if is_given(turn_handling) else {}
 
     @property
-    def id(self) -> str:
-        if self._id is None and self._defining_namespace is not None:
+    def name(self) -> str:
+        """The agent's identity (agents.md "Definition"): ``name=``, else the module-level
+        variable it is assigned to, else ``default_agent``."""
+        if self._name is None and self._defining_namespace is not None:
             for var_name, value in self._defining_namespace.items():
                 if value is self:
-                    self._id = var_name
+                    self._name = var_name
                     self._defining_namespace = None
                     break
-        return self._id or DEFAULT_AGENT_ID
-
-    @property
-    def label(self) -> str:
-        return self.id
+        return self._name or DEFAULT_AGENT_NAME
 
     @property
     def instructions(self) -> _InstructionsView[Context_T]:
@@ -369,7 +364,7 @@ class Agent(Generic[Context_T, Output_T]):
                 cleanup=run.release_toolsets,
             )
 
-        return RunStream(start, agent_name=self.id)
+        return RunStream(start, agent_name=self.name)
 
     def output_validator(
         self,
@@ -405,7 +400,7 @@ class Agent(Generic[Context_T, Output_T]):
         if isinstance(static, Instructions):
             static = static.render(modality="text")
         return AgentDefinition(
-            name=self.id,
+            name=self.name,
             instructions=static,
             dynamic_instructions=bool(self._instruction_fns),
             tools=tool_infos(tools),
@@ -429,7 +424,7 @@ class Agent(Generic[Context_T, Output_T]):
     def _check_not_frozen(self, what: str) -> None:
         if self._frozen:
             raise RuntimeError(
-                f"cannot register {what} on agent `{self.id}`: it is already bound to a session"
+                f"cannot register {what} on agent `{self.name}`: it is already bound to a session"
             )
 
     @overload
@@ -753,7 +748,7 @@ class Agent(Generic[Context_T, Output_T]):
         binding = self._bound_binding()
         if binding is None:
             raise RuntimeError(
-                f"agent `{self.id}` is not running in this context; its session and history "
+                f"agent `{self.name}` is not running in this context; its session and history "
                 "are only available inside its hooks and tools"
             )
         return binding
@@ -765,7 +760,7 @@ class Agent(Generic[Context_T, Output_T]):
         binding = self._get_binding_or_raise()
         if not isinstance(binding, _VoiceBinding):
             raise RuntimeError(
-                f"agent `{self.id}` is running in agent.run(), which has no live session"
+                f"agent `{self.name}` is running in agent.run(), which has no live session"
             )
         return binding
 
