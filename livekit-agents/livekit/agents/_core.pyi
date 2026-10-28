@@ -205,9 +205,15 @@ class Streams:
     def flush(self, stream_id: str) -> Awaitable[None]: ...
     def close(self, stream_id: str) -> Awaitable[None]: ...
     def delete(self, stream_id: str) -> Awaitable[None]: ...
-    def read(self, stream_id: str, after: str | None = None, live: bool = False) -> StreamReader:
+    def forget(self, stream_id: str) -> None:
+        """Stops keeping the stream's records here while it stays open."""
+
+    def read(
+        self, stream_id: str, after: str | None = None, live: bool = False, local: bool = False
+    ) -> StreamReader:
         """From ``after`` (an offset token; ``None`` is the beginning); ``live`` follows the tail
-        until the stream closes."""
+        until the stream closes, and with ``local``, as this worker writes it, from the records
+        kept here."""
 
 class StreamReader:
     """A read position over one stream."""
@@ -331,6 +337,13 @@ class TurnHostProtocol(Protocol):
     ) -> Awaitable[HandlerOutput]: ...
     def on_update(self, task_id: str, text: str) -> Awaitable[None]: ...
     def on_token(self, task_id: str, delta: str) -> Awaitable[None]: ...
+    def accepted(self, task_id: str, local: bool) -> Awaitable[None]:
+        """Rust calls it under ``live`` once the message is in the inbox as ``task_id``'s, with
+        ``local`` when this worker runs the lane."""
+    def on_end(self, task: TaskRecord, output: Any) -> Awaitable[None]:
+        """Rust calls it under ``live`` after each commit, for every task the turn carried."""
+    def background(self, wait: float) -> Awaitable[storage_turn.Background]:
+        """Rust calls it under ``live`` between turns, to learn what runs and what is ready."""
 
 class Turn:
     """One text door's turns (``TurnRunner``); ``options`` left out or ``None`` is the Rust

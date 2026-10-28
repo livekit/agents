@@ -144,7 +144,6 @@ class Busy:
 
 
 @pytest.mark.rule("R5")
-@pytest.mark.xfail(strict=True, reason="R5: no live inbox, which reads livekit/interrupt")
 async def test_a_message_interrupts_the_reply_by_default(door: Callable[..., Door]) -> None:
     busy = Busy()
     stopped, ran = await busy.send(door(busy, inbox="live"), "tell me everything", "never mind")
@@ -156,7 +155,6 @@ async def test_a_message_interrupts_the_reply_by_default(door: Callable[..., Doo
 
 
 @pytest.mark.rule("R5", "R10")
-@pytest.mark.xfail(strict=True, reason="R5, R10: no live inbox, which reads livekit/interrupt")
 async def test_messages_that_do_not_interrupt_wait_and_run_as_one_turn(
     door: Callable[..., Door],
 ) -> None:
@@ -183,7 +181,6 @@ async def test_only_the_live_inbox_reads_the_interrupt_flag(door: Callable[..., 
 
 
 @pytest.mark.rule("R5")
-@pytest.mark.xfail(strict=True, reason="R5: a delegation sends no livekit/interrupt; no live inbox")
 async def test_a_delegation_never_interrupts_the_experts_reply(
     door: Callable[..., Door], agentdb_storage: AgentDBStorage
 ) -> None:
@@ -240,7 +237,6 @@ async def test_a_delegation_never_interrupts_the_experts_reply(
 
 
 @pytest.mark.rule("R2")
-@pytest.mark.xfail(strict=True, reason="R2: no live inbox; a waiting task's progress is dropped")
 async def test_a_message_that_waited_answers_on_its_own_stream(door: Callable[..., Door]) -> None:
     busy = Busy()
     _, waited = await busy.send(door(busy, inbox="live"), "one", "two", **NO_INTERRUPT)
@@ -260,7 +256,6 @@ async def test_a_message_that_waited_answers_on_its_own_stream(door: Callable[..
 
 
 @pytest.mark.rule("R2")
-@pytest.mark.xfail(strict=True, reason="R2: no live inbox")
 async def test_an_answer_continues_its_task_on_the_tasks_own_stream(
     door: Callable[..., Door],
 ) -> None:

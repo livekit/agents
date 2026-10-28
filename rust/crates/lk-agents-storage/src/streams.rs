@@ -11,7 +11,9 @@
 //!   `text/event-stream` with `data` and `control` events, and rotates about every minute, so the
 //!   reader reconnects from its offset until the stream closes.
 //!
-//! Records are JSON: the A2A event frames the worker sent.
+//! Records are JSON: the A2A event frames the worker sent. A stream this worker created keeps
+//! what it appended here in memory too, until the stream closes or its task waits on a question,
+//! and a live read here that the caller marks `local` follows that log instead of the store.
 
 use lk_agents_host_derive::Host;
 use std::collections::HashMap;
@@ -45,6 +47,28 @@ struct Queue {
     pending: watch::Sender<usize>,
 }
 
+/// The records this worker appended to a stream it created, for its readers here.
+#[derive(Default)]
+struct Log {
+    state: Mutex<LogState>,
+    changed: watch::Sender<()>,
+}
+
+#[derive(Default)]
+struct LogState {
+    records: Vec<Vec<u8>>,
+    /// `Some(true)` once the stream closed, `Some(false)` once the log was let go while the
+    /// stream stays open: a reader goes on from the store.
+    ended: Option<bool>,
+}
+
+impl Log {
+    fn update(&self, f: impl FnOnce(&mut LogState)) {
+        f(&mut self.state.lock().expect("log"));
+        self.changed.send_replace(());
+    }
+}
+
 /// The streams client, shared by every session a worker serves.
 #[derive(Clone)]
 pub struct Streams {
@@ -52,6 +76,7 @@ pub struct Streams {
     base: String,
     minter: TokenMinter,
     queues: Arc<Mutex<HashMap<String, Arc<Queue>>>>,
+    logs: Arc<Mutex<HashMap<String, Arc<Log>>>>,
 }
 
 impl Streams {
@@ -61,6 +86,7 @@ impl Streams {
             base: base.into().trim_end_matches('/').to_owned(),
             minter,
             queues: Arc::new(Mutex::new(HashMap::new())),
+            logs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -93,11 +119,17 @@ impl Streams {
             .await
             .map_err(transport)?;
         let resp = ok(resp).await?;
-        resp.json::<StreamInfo>().await.map_err(|e| StorageError::Decode(e.to_string()))
+        let info =
+            resp.json::<StreamInfo>().await.map_err(|e| StorageError::Decode(e.to_string()))?;
+        self.logs.lock().expect("logs").insert(info.stream_id.clone(), Arc::default());
+        Ok(info)
     }
 
     /// Hands one record to the stream's queue; sent in order, failures logged.
     pub fn append(&self, stream_id: &str, record: Vec<u8>) {
+        if let Some(log) = self.logs.lock().expect("logs").get(stream_id) {
+            log.update(|state| state.records.push(record.clone()));
+        }
         let queue = self.queue(stream_id);
         queue.pending.send_modify(|n| *n += 1);
         if queue.tx.send(record).is_err() {
@@ -154,6 +186,7 @@ impl Streams {
 
     /// Flushes the queue, then closes the stream: its terminal frame marks the commit.
     pub async fn close(&self, stream_id: &str) -> Result<(), StorageError> {
+        self.let_go(stream_id, true);
         self.flush(stream_id).await;
         self.queues.lock().expect("queues").remove(stream_id);
         let resp = self
@@ -165,6 +198,18 @@ impl Streams {
             .await
             .map_err(transport)?;
         ok(resp).await.map(|_| ())
+    }
+
+    /// Stops keeping the stream's records here while it stays open, as when its task waits on a
+    /// question; readers here go on from the store.
+    pub fn forget(&self, stream_id: &str) {
+        self.let_go(stream_id, false);
+    }
+
+    fn let_go(&self, stream_id: &str, closed: bool) {
+        if let Some(log) = self.logs.lock().expect("logs").remove(stream_id) {
+            log.update(|state| state.ended = Some(closed));
+        }
     }
 
     /// Deletes the stream and its records.
@@ -180,9 +225,21 @@ impl Streams {
     }
 
     /// Reads from `from` (`None`: the beginning). With `live`, follows the tail until the stream
-    /// closes; without, ends at the tail.
-    pub fn read(&self, stream_id: &str, from: Option<&str>, live: bool) -> StreamReader {
+    /// closes; without, ends at the tail. With `local` too, the caller knows this worker writes
+    /// the stream, and a read from the beginning follows the records kept here while they are.
+    pub fn read(
+        &self,
+        stream_id: &str,
+        from: Option<&str>,
+        live: bool,
+        local: bool,
+    ) -> StreamReader {
+        let kept = (live && local && from.is_none())
+            .then(|| self.logs.lock().expect("logs").get(stream_id).cloned())
+            .flatten();
         StreamReader {
+            local: kept.map(|log| (log, 0)),
+            skip: 0,
             streams: self.clone(),
             id: stream_id.to_owned(),
             from: from.unwrap_or(START).to_owned(),
@@ -204,6 +261,10 @@ pub struct StreamReader {
     buffered: VecDeque<Vec<u8>>,
     closed: bool,
     sse: Option<Sse>,
+    /// The log kept here and how much of it was read, while the read follows it.
+    local: Option<(Arc<Log>, usize)>,
+    /// Records of the store already read from the log.
+    skip: usize,
 }
 
 struct Sse {
@@ -225,8 +286,37 @@ impl StreamReader {
 
     /// The next record, or `None` at the end: the tail for a catch-up read, the close for a live one.
     pub async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
+        if let Some((log, read)) = &mut self.local {
+            let mut changed = log.changed.subscribe();
+            loop {
+                let ended = {
+                    let state = log.state.lock().expect("log");
+                    if let Some(record) = state.records.get(*read) {
+                        *read += 1;
+                        return Ok(Some(record.clone()));
+                    }
+                    state.ended
+                };
+                match ended {
+                    Some(true) => {
+                        self.closed = true;
+                        return Ok(None);
+                    }
+                    Some(false) => break,
+                    None => {
+                        let _ = changed.changed().await;
+                    }
+                }
+            }
+            // the log was let go: the store from the beginning, past what was read here
+            self.skip = self.local.take().map_or(0, |(_, read)| read);
+        }
         loop {
             if let Some(r) = self.buffered.pop_front() {
+                if self.skip > 0 {
+                    self.skip -= 1;
+                    continue;
+                }
                 return Ok(Some(r));
             }
             if self.closed {
