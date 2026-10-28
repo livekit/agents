@@ -53,10 +53,8 @@ impl<'py> pyo3::IntoPyObject<'py> for &HostRef {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        if !self.belongs_to(crate::python::media().registry()) {
-            return Err(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() }));
-        }
-        Ok(crate::python::resolve_key(py, self.id())?.into_bound(py))
+        let owned = self.belongs_to(crate::python::media().registry());
+        Ok(resolve_owned(py, self.id(), owned)?.into_bound(py))
     }
 }
 
@@ -89,10 +87,8 @@ impl<'py> pyo3::IntoPyObject<'py> for &MediaRef {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        if !self.belongs_to(crate::python::media().registry()) {
-            return Err(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() }));
-        }
-        Ok(crate::python::resolve_key(py, self.id())?.into_bound(py))
+        let owned = self.belongs_to(crate::python::media().registry());
+        Ok(resolve_owned(py, self.id(), owned)?.into_bound(py))
     }
 }
 
@@ -112,17 +108,16 @@ impl MediaRef {
         {
             use pyo3::types::PyAnyMethods as _;
             pyo3::Python::attach(|py| {
-                if !self.belongs_to(crate::python::media().registry()) {
-                    return Err(crate::python::captured(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() })));
-                }
-                let list = crate::python::resolve_key(py, self.id()).map_err(crate::python::captured)?;
-                let list = list.bind(py);
+                let owned = self.belongs_to(crate::python::media().registry());
+                let list = resolve_owned(py, self.id(), owned).map_err(crate::python::captured)?;
                 let mut frames = Vec::new();
-                for (index, item) in list.try_iter().map_err(crate::python::captured)?.enumerate() {
-                    let frame = item.and_then(|item| item.extract::<crate::AudioFrame>()).map_err(|e| {
-                        crate::python::captured(crate::python::at_path(py, e, &format!("frames[{index}]")))
-                    })?;
-                    frames.push(frame);
+                for (index, item) in
+                    list.bind(py).try_iter().map_err(crate::python::captured)?.enumerate()
+                {
+                    let frame = item
+                        .and_then(|item| item.extract::<crate::AudioFrame>())
+                        .map_err(|e| crate::python::at_path(py, e, &format!("frames[{index}]")));
+                    frames.push(frame.map_err(crate::python::captured)?);
                 }
                 Ok(frames)
             })
@@ -131,15 +126,32 @@ impl MediaRef {
         Err(crate::errors::ApiError {
             retryable: false,
             ..crate::errors::ApiError::new("host media cannot be read without a host runtime")
-        }.into())
+        }
+        .into())
     }
+}
+
+/// The host object `id` names, provided its handle was issued by this runtime's registry.
+#[cfg(feature = "python")]
+fn resolve_owned(
+    py: pyo3::Python<'_>,
+    id: u64,
+    owned: bool,
+) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+    if !owned {
+        return Err(crate::python::HostException::to_py_err(&StaleHostRef { id }));
+    }
+    crate::python::resolve_key(py, id)
 }
 
 /// Submitted (`inventory`) beside the class, so [`CoreObject`]'s `IntoPyObject` needs no table of
 /// every crate's types.
 #[cfg(feature = "python")]
 pub struct CoreObjectClass {
-    pub to_host: for<'py> fn(pyo3::Python<'py>, &std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Option<pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>>>,
+    pub to_host: for<'py> fn(
+        pyo3::Python<'py>,
+        &std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Option<pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>>>,
 }
 
 #[cfg(feature = "python")]
