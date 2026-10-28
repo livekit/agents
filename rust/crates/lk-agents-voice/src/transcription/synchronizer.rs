@@ -364,6 +364,12 @@ impl Pacer {
     fn release(&mut self, position: Duration, out: &mut Vec<PaceEffect>) {
         self.position = position;
         let now = position.as_secs_f64();
+        // The aligned delta's audio is over: its held word is whole, as any continuation would
+        // be a later delta starting at a new onset.
+        if self.limit.is_some_and(|end| now >= end) {
+            let held = self.words.flush();
+            self.plan_tokens(held);
+        }
         while let Some(front) = self.queue.front() {
             let (start, end) = match (self.front, front.base) {
                 (Some(timed), _) => timed,
