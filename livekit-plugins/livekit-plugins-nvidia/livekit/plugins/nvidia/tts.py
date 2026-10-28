@@ -49,7 +49,7 @@ class TTS(tts.TTS):
         )
 
         if api_key:
-            self.nvidia_api_key = api_key
+            self.nvidia_api_key: str | None = api_key
         else:
             self.nvidia_api_key = os.getenv("NVIDIA_API_KEY")
             if use_ssl and not self.nvidia_api_key:
@@ -80,12 +80,12 @@ class TTS(tts.TTS):
             self._tts_service = riva.client.SpeechSynthesisService(riva_auth)
         return self._tts_service
 
-    def list_voices(self) -> dict:
+    def list_voices(self) -> dict[str, dict[str, list[str]]]:
         service = self._ensure_session()
         config_response = service.stub.GetRivaSynthesisConfig(
             riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
         )
-        tts_models = {}
+        tts_models: dict[str, dict[str, list[str]]] = {}
         for model_config in config_response.model_config:
             language_code = model_config.parameters.get("language_code", "unknown")
             voice_name = model_config.parameters.get("voice_name", "unknown")
@@ -119,12 +119,13 @@ class TTS(tts.TTS):
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
         super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
         self._opts = opts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         context_id = utils.shortuuid()
         sent_tokenizer_stream = self._opts.word_tokenizer.stream()
-        token_q: queue.Queue = queue.Queue()
+        token_q: queue.Queue[tokenize.TokenData | None] = queue.Queue()
         event_loop = asyncio.get_running_loop()
 
         output_emitter.initialize(
@@ -136,7 +137,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=context_id)
 
-        done_fut = asyncio.Future()
+        done_fut: asyncio.Future[None] = asyncio.Future()
 
         async def _input_task() -> None:
             async for data in self.input:

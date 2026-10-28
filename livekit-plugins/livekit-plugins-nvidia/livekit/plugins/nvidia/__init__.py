@@ -14,13 +14,14 @@
 
 
 import typing  # noqa: I001
+from types import ModuleType
 
 
 if typing.TYPE_CHECKING:
     from .experimental import realtime
 
 
-def __getattr__(name: str) -> typing.Any:
+def __getattr__(name: str) -> ModuleType:
     if name == "realtime":
         try:
             from .experimental import realtime

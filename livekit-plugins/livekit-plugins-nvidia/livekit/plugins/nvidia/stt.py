@@ -8,7 +8,7 @@ from collections.abc import Generator
 from dataclasses import dataclass
 
 import riva.client
-from riva.client.proto.riva_asr_pb2 import SpeakerDiarizationConfig
+from riva.client.proto import riva_asr_pb2 as asr_proto
 
 from livekit import rtc
 from livekit.agents import (
@@ -98,7 +98,7 @@ class STT(stt.STT):
             max_speaker_count=max_speaker_count,
         )
 
-    def _recognize_impl(
+    async def _recognize_impl(
         self,
         buffer: AudioBuffer,
         *,
@@ -118,12 +118,14 @@ class STT(stt.STT):
         )
         return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
 
-    def log_asr_models(self, asr_service: riva.client.ASRService) -> dict:
+    def log_asr_models(
+        self, asr_service: riva.client.ASRService
+    ) -> dict[str, list[dict[str, list[str]]]]:
         config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
-            riva.client.RivaSpeechRecognitionConfigRequest()
+            asr_proto.RivaSpeechRecognitionConfigRequest()
         )
 
-        asr_models = {}
+        asr_models: dict[str, list[dict[str, list[str]]]] = {}
         for model_config in config_response.model_config:
             if model_config.parameters.get("type") == "online":
                 language_code = model_config.parameters["language_code"]
@@ -140,12 +142,12 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: str):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
-        self._stt = stt
+        self._stt: STT = stt
         self._language = language
 
-        self._audio_queue = queue.Queue()
+        self._audio_queue: queue.Queue[bytes | None] = queue.Queue()
         self._shutdown_event = threading.Event()
-        self._recognition_thread = None
+        self._recognition_thread: threading.Thread | None = None
 
         self._speaking = False
         self._request_id = ""
@@ -159,7 +161,7 @@ class SpeechStream(stt.SpeechStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
         self._event_loop = asyncio.get_running_loop()
-        self._done_fut = asyncio.Future()
+        self._done_fut: asyncio.Future[None] = asyncio.Future()
 
     async def _run(self) -> None:
         config = self._create_streaming_config()
@@ -192,7 +194,7 @@ class SpeechStream(stt.SpeechStream):
         )
 
         if self._stt._opts.enable_diarization:
-            diarization_config = SpeakerDiarizationConfig(
+            diarization_config = asr_proto.SpeakerDiarizationConfig(
                 enable_speaker_diarization=True,
                 max_speaker_count=self._stt._opts.max_speaker_count,
             )
@@ -241,18 +243,18 @@ class SpeechStream(stt.SpeechStream):
 
             yield audio_chunk
 
-    def _handle_response(self, response) -> None:
+    def _handle_response(self, response: asr_proto.StreamingRecognizeResponse) -> None:
         try:
-            if not hasattr(response, "results") or not response.results:
+            if not response.results:
                 return
 
             for result in response.results:
-                if not hasattr(result, "alternatives") or not result.alternatives:
+                if not result.alternatives:
                     continue
 
                 alternative = result.alternatives[0]
-                transcript = getattr(alternative, "transcript", "")
-                is_final = getattr(result, "is_final", False)
+                transcript = alternative.transcript
+                is_final = result.is_final
 
                 if not transcript.strip():
                     continue
@@ -296,20 +298,22 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             logger.exception("Error handling response")
 
-    def _convert_to_speech_data(self, alternative, *, is_final: bool) -> stt.SpeechData:
-        transcript = getattr(alternative, "transcript", "")
-        confidence = getattr(alternative, "confidence", 0.0)
-        words = getattr(alternative, "words", [])
+    def _convert_to_speech_data(
+        self, alternative: asr_proto.SpeechRecognitionAlternative, *, is_final: bool
+    ) -> stt.SpeechData:
+        transcript = alternative.transcript
+        confidence = alternative.confidence
+        words = alternative.words
 
         start_time = 0.0
         end_time = 0.0
         speaker_id: str | None = None
         if words:
-            start_time = getattr(words[0], "start_time", 0) / 1000.0 + self.start_time_offset
-            end_time = getattr(words[-1], "end_time", 0) / 1000.0 + self.start_time_offset
+            start_time = words[0].start_time / 1000.0 + self.start_time_offset
+            end_time = words[-1].end_time / 1000.0 + self.start_time_offset
 
             if self._stt._opts.enable_diarization and is_final:
-                speaker_tags = [getattr(word, "speaker_tag", 0) for word in words]
+                speaker_tags = [word.speaker_tag for word in words]
                 if speaker_tags:
                     speaker = Counter(speaker_tags).most_common(1)[0][0]
                     speaker_id = f"S{speaker}"
@@ -323,9 +327,9 @@ class SpeechStream(stt.SpeechStream):
             speaker_id=speaker_id,
             words=[
                 TimedString(
-                    text=getattr(word, "word", ""),
-                    start_time=getattr(word, "start_time", 0) + self.start_time_offset,
-                    end_time=getattr(word, "end_time", 0) + self.start_time_offset,
+                    text=word.word,
+                    start_time=word.start_time / 1000.0 + self.start_time_offset,
+                    end_time=word.end_time / 1000.0 + self.start_time_offset,
                 )
                 for word in words
             ]
