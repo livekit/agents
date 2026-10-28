@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, InputRequired, RunContext, VoiceSession
+from livekit.agents import Agent, RunContext, VoiceSession
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.voice.events import (
     ToolCallEnded,
@@ -71,19 +71,3 @@ async def test_tool_progress_and_completion_reach_session_listeners() -> None:
     assert [(ev.call_id, ev.message, ev.status) for ev in ended] == [
         ("booking-1", "Confirmed.", "done")
     ]
-
-
-async def test_run_question_preserves_the_verbatim_request() -> None:
-    agent = Agent(instructions="Ask for the missing booking detail.")
-
-    @agent.tool
-    async def ask() -> InputRequired:
-        """Ask the caller for their booking reference."""
-        return InputRequired("What is your booking reference?", verbatim=True)
-
-    async with VoiceSession(llm=_tool_model("ask"), vad=None, turn_detection="manual") as session:
-        await session.start(agent)
-        result = await asyncio.wait_for(session.run(user_input="check my booking"), timeout=5)
-        assert result.status == "input_required"
-        assert result.question == "What is your booking reference?"
-        assert result.verbatim == result.question

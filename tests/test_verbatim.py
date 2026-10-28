@@ -3,9 +3,11 @@ unless verbatim; verbatim results reach the person as written."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from livekit.agents import Agent, InputRequired, RunContext
+from livekit.agents import Agent, InputRequired, RunContext, VoiceSession
 from livekit.agents.llm import FunctionToolCall, ToolResult
 from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS, DELIVERED
 
@@ -85,3 +87,27 @@ async def test_a_verbatim_result_leads_the_answer_and_the_model_continues() -> N
     assert result.verbatim == DISCLAIMER
     outputs = [i for i in result.new_messages() if i.type == "function_call_output"]
     assert outputs[0].output == DELIVERED.format(text=DISCLAIMER)
+
+
+async def test_a_call_question_keeps_its_verbatim_request() -> None:
+    """On a call, a verbatim ``InputRequired`` settles the run with the question as written."""
+    agent = Agent(instructions="Ask for the missing booking detail.")
+
+    @agent.tool
+    async def ask() -> InputRequired:
+        """Ask the caller for their booking reference."""
+        return InputRequired("What is your booking reference?", verbatim=True)
+
+    llm = FakeLLM(
+        fake_responses=[
+            respond(
+                "check my booking", "", FunctionToolCall(name="ask", arguments="{}", call_id="a1")
+            )
+        ]
+    )
+    async with VoiceSession(llm=llm, vad=None, turn_detection="manual") as session:
+        await session.start(agent)
+        result = await asyncio.wait_for(session.run(user_input="check my booking"), timeout=5)
+        assert result.status == "input_required"
+        assert result.question == "What is your booking reference?"
+        assert result.verbatim == result.question

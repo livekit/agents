@@ -223,15 +223,14 @@ class FakeSynthesizeStream(SynthesizeStream):
         )
 
         input_text = ""
-        async for data in self._input_ch:
+        async for data in self.input:
             if isinstance(data, str):
                 input_text += data
                 continue
-            elif isinstance(data, SynthesizeStream._FlushSentinel) and not input_text:
+            elif isinstance(data, SynthesizeStream.Flush) and not input_text:
                 continue
 
             start_time = time.perf_counter()
-            self._mark_started()
             if not (resp := self._tts.fake_response_map.get(input_text)):
                 resp = FakeTTSResponse(
                     input=input_text,
