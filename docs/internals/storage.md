@@ -52,8 +52,9 @@ The engine has three layers:
 | Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission/deduplication, lane acquisition, inbox policy, fencing and managed commit decisions |
 | Internal `SqliteConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
 
-The pure storage core decides plans and outcomes. Runtime adapters execute I/O,
-schedule renewals, and own pools and resources. The backends share the schema
+The pure storage core decides plans and outcomes. The storage backends, async I/O
+code outside that core, execute I/O, schedule renewals, and own pools and resources;
+the DST replaces them with an in-memory fake. The backends share the schema
 and turn state machine. Host-visible records and bindings are generated from
 Rust declarations through the ABI machinery.
 
@@ -98,7 +99,7 @@ expired threads invisible.
 
 ### SQLite execution
 
-`SqliteConnection` is internal to the Rust runtime. AgentDB executes over its
+`SqliteConnection` is internal to the storage backends. AgentDB executes over its
 WebSocket data plane; local SQLite executes against a file without blocking the
 async executor. Statements, bound values and results are independent of either
 backend's wire format or driver types.
@@ -116,7 +117,7 @@ pub trait SqliteConnection: Send + Sync {
 | --- | --- |
 | `query` | Execute a read and return typed columns and rows, without changing the database. |
 | `batch` | Execute ordered statements in one atomic transaction, returning each statement's rows, including `RETURNING`, and affected-row count. Success means the transaction committed. |
-| `close` | Release this connection; repeated close is safe. Runtime cleanup also handles cancellation and exceptional exit. |
+| `close` | Release this connection; repeated close is safe. Backend cleanup also handles cancellation and exceptional exit. |
 
 Connections preserve the distinction between a rejected write and a commit
 whose acknowledgment was lost. A timeout or disconnect must not be reported as

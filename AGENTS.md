@@ -122,15 +122,21 @@ specification; implementation cleanup must follow the agreed contracts.
   are explicit. Runtime services remain application-supplied objects.
 - **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with configured handler lanes,
   histories and transport tasks stored in its database (agent-db, or local SQLite).
-- **Rust core** (`rust/crates/`, see `docs/internals/rust-core.md`): decision cores are
-  synchronous sans-I/O state machines (events and time in, effects out); `lk-agents-runtime`
-  executes every effect, owns I/O, Tokio, queues and the host/RTC proxies; `lk-agents-abi`
-  declares the boundary once and codegen emits the Python bindings from it.
+- **Rust core** (`rust/crates/`, see `docs/internals/rust-core.md`): the sans-I/O crates
+  (`lk-agents-core` with its `a2a` and MCP logic, `-voice`, `-storage` decisions, `-media`) are
+  synchronous state machines (events and time in, effects out). `lk-agents-runtime` is only the
+  I/O layer of voice and text: the voice executor, AgentRun/TextSession drivers, A2A door and
+  thin MCP I/O, HostInvoker, the process runtime and the host stream adapter. Everything that
+  can be faked at its boundary is ordinary async Rust in its own crate, tested on its own and
+  faked in the DST: `lk-agents-inference` (providers, retry/fallback/reconnect), `lk-agents-worker`
+  (registration, IPC, supervision), storage backends, telemetry exporters, evaluation judges,
+  media workers and the delegation A2A client. `lk-agents-abi` declares the boundary once and
+  codegen emits the Python bindings from it; pyo3 exists only in `lk-agents-py`.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
   `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `VoiceSession`) and
   `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
   with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
-  Registration, job, process-pool and supervision decisions live in `lk-agents-worker`.
+  Registration, jobs, IPC, the process pool and supervision run in `lk-agents-worker`.
 - **Approval and verbatim**: `needs_approval=` holds approval in the framework (the body runs
   only on a repeat of the call after the person answered its read-back). The agent facing the
   person words questions and results unless they are `verbatim=True`.
@@ -169,17 +175,16 @@ livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 
 rust/crates/            # The Rust core, built into livekit.agents._core; see docs/internals/rust-core.md
 ├── lk-agents-abi       # Export declarations and typed boundary records
-├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession routing
+├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession, A2A and MCP logic
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
-├── lk-agents-worker    # Registration, jobs, IPC messages, supervision and pool policy
-├── lk-agents-inference # Reconnect, retry and fallback machines for model clients
 ├── lk-agents-storage   # Schema, statement plans, lease/fence and commit rules
-├── lk-agents-a2a       # Endpoint policies and A2A task transitions
 ├── lk-agents-media     # Codecs, resampling, filters and sample arithmetic
-├── lk-agents-runtime   # All I/O: effects, connections, Tokio, queues, host and RTC proxies
-├── lk-agents-py        # Python module registration shell
+├── lk-agents-inference # Async I/O: provider clients, transports, retry/fallback/reconnect
+├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
+├── lk-agents-runtime   # The I/O layer of voice and text: executors, drivers, HostInvoker
+├── lk-agents-py        # Module registration, generated bindings; the only crate with pyo3
 ├── lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen   # Declarations IR, markers, generation
-└── lk-agents-fuzz      # Deterministic simulation of the cores with realistic fakes
+└── lk-agents-fuzz      # Deterministic simulation of the sans-I/O crates with realistic fakes
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
 docs/                   # The 2.0 design, one feature per page
@@ -189,7 +194,7 @@ tests/                  # Test suite with fakes (fake_stt.py, fake_vad.py)
 ```
 
 ### Plugin System
-Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`. Plugins stay Python; the Rust core reaches them through host proxies.
+Plugins in `livekit-plugins/` provide STT, TTS, LLM, and specialized services. Each plugin is a separate package following the pattern `livekit-plugins-<provider>`. Plugins register via the `Plugin` base class in `plugin.py`. Plugins stay Python; Rust reaches them through generated proxies and HostInvoker.
 
 ### Model Interface Pattern
 STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
@@ -220,21 +225,29 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Use `make check` and `make fix` before committing
 
 ## Rust architecture rules
-- Dependency direction is `lk-agents-py -> lk-agents-runtime -> subject cores -> lk-agents-abi`;
-  `voice -> core`, `voice -> media`, `inference -> media`, `a2a -> storage`, `py -> abi`
-  and `fuzz -> subject cores + abi` are allowed composition edges.
-  ABI never depends on subjects or runtime; cores never depend on runtime or host adapters.
-- The subject cores (`lk-agents-core`, `-voice`, `-worker`, `-inference`, `-storage`, `-a2a`,
-  `-media`) and `lk-agents-abi` have no executor, async transport or SDK dependency in their
-  all-features resolved dependency closure: no tokio, futures, pyo3, async-trait, reqwest,
-  tungstenite, rusqlite, `livekit` or `livekit-ffi`. `livekit-protocol` records remain allowed. These
-  dependency bans do not apply to runtime, fuzz support, language bindings or build tools.
+- Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
+  lk-agents-abi`; `voice -> core`, `core -> storage`, `voice -> media`, `inference -> media`,
+  `py -> abi` and `fuzz -> sans-I/O crates + abi` are allowed composition edges. `lk-agents-py`
+  depends only on the runtime and ABI (the runtime re-exports the implementations generated
+  adapters select). ABI never depends on subjects or runtime; cores and async I/O crates never
+  depend on runtime, `lk-agents-py` or host adapters.
+- The sans-I/O crates (`lk-agents-core`, `-voice`, `-storage`, `-media`) and `lk-agents-abi`
+  have no executor, async transport or SDK dependency in their all-features resolved dependency
+  closure: no tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
+  `livekit-ffi`. `livekit-protocol` records remain allowed. These dependency bans do not apply
+  to runtime, the async I/O crates (`lk-agents-inference`, `-worker`, storage backends,
+  telemetry exporters, evaluation judges, media workers, the delegation client), fuzz support,
+  language bindings or build tools.
+- pyo3 exists only in `lk-agents-py`. Every Rust-to-host call goes through HostInvoker with
+  the Invocation captured at its operation's entry and its declared scopes; async I/O crates
+  hold only ABI-declared proxy traits.
 - `lk-agents-rtc` follows the same dependency and Clippy policy until its dissolution;
   this does not authorize new incoming crate edges.
-- Per-core `clippy.toml` uses `disallowed-methods`, `disallowed-types` and `disallowed-macros`
+- Each sans-I/O crate's `clippy.toml` uses `disallowed-methods`, `disallowed-types` and `disallowed-macros`
   to reject spawns, `select!`/`join!`, ambient clocks/entropy/environment/process reads,
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.
-  Supply time and IDs as inputs; keep live resources and execution in runtime.
+  Supply time and IDs as inputs; keep live resources and execution in runtime or the async I/O
+  crates.
 - Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
   marker are skipped. Split by responsibility when moving code.
 - Handwritten export declarations (`#[host]`, `#[derive(Host)]`, `#[class]`, `#[binding]` and

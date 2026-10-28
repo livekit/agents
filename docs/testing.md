@@ -189,8 +189,9 @@ agent context.
 ## Implementation ownership
 
 The shared agent core owns deterministic run/event assertions. Evaluation
-helpers follow the owning subject's pure-algorithm rules; model calls, async
-judge orchestration and application callbacks execute through runtime support.
+helpers follow the owning subject's pure-algorithm rules; model calls and judge
+orchestration are async Rust outside the agent core, and application callbacks run
+through HostInvoker.
 The SDK judge API remains supported without requiring a separate scenario or
 judging subsystem inside the agent core. Simulation verdicts and SDK judgments
 keep their distinct result types and meanings.
