@@ -17,13 +17,10 @@ from __future__ import annotations
 import gzip
 import json
 import os
-from typing import Any
 
 import httpx2 as httpx
 import msgpack
 import openai
-from openai._models import FinalRequestOptions
-from openai._utils import is_mapping
 from openai.types import ReasoningEffort
 
 from livekit.agents.llm import ToolChoice
@@ -37,66 +34,43 @@ from livekit.plugins.openai import LLM as OpenAILLM
 from .models import CerebrasChatModels
 
 
-class _CerebrasClient(openai.AsyncClient):
-    """AsyncClient subclass that compresses request payloads via msgpack and/or gzip.
+class _PayloadTransport(httpx.AsyncBaseTransport):
+    """Re-encodes JSON request bodies as msgpack and/or gzip before they are sent.
 
-    Overrides _build_request() to serialize json_data directly to the target
-    format, avoiding a JSON->dict->msgpack round-trip when msgpack is enabled.
-
-    See https://inference-docs.cerebras.ai/payload-optimization
+    Lives below the SDK client, so every per-request copy the SDK makes (``with_options``)
+    shares it. See https://inference-docs.cerebras.ai/payload-optimization
     """
 
     def __init__(
-        self,
-        *,
-        use_msgpack: bool = False,
-        use_gzip: bool = True,
-        **kwargs: Any,
+        self, inner: httpx.AsyncBaseTransport, *, use_msgpack: bool, use_gzip: bool
     ) -> None:
-        super().__init__(**kwargs)
+        self._inner = inner
         self._use_msgpack = use_msgpack
         self._use_gzip = use_gzip
 
-    def _build_request(
-        self,
-        options: FinalRequestOptions,
-        *,
-        retries_taken: int = 0,
-    ) -> httpx.Request:
-        if not (self._use_msgpack or self._use_gzip):
-            return super()._build_request(options, retries_taken=retries_taken)
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.aread()
+            if body:
+                headers = request.headers.copy()
+                del headers["content-length"]
+                if self._use_msgpack:
+                    body = msgpack.packb(json.loads(body))
+                    headers["content-type"] = "application/vnd.msgpack"
+                if self._use_gzip:
+                    body = gzip.compress(body, compresslevel=5)
+                    headers["content-encoding"] = "gzip"
+                request = httpx.Request(
+                    request.method,
+                    request.url,
+                    headers=headers,
+                    content=body,
+                    extensions=request.extensions,
+                )
+        return await self._inner.handle_async_request(request)
 
-        json_data = options.json_data
-        if json_data is not None:
-            # merge extra_json (same logic as base class)
-            if options.extra_json is not None:
-                if is_mapping(json_data):
-                    json_data = {**json_data, **options.extra_json}
-
-            if self._use_msgpack:
-                body = msgpack.packb(json_data)
-                content_type = "application/vnd.msgpack"
-            else:
-                body = json.dumps(json_data, separators=(",", ":"), ensure_ascii=False).encode()
-                content_type = "application/json"
-
-            if self._use_gzip:
-                body = gzip.compress(body, compresslevel=5)
-
-            # bypass openapi_dumps() by switching to the content path
-            options.json_data = None
-            options.extra_json = None
-            options.content = body
-
-            existing = (
-                dict(options.headers) if is_given(options.headers) and options.headers else {}
-            )
-            overrides: dict[str, str] = {"Content-Type": content_type}
-            if self._use_gzip:
-                overrides["Content-Encoding"] = "gzip"
-            options.headers = existing | overrides
-
-        return super()._build_request(options, retries_taken=retries_taken)
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 class LLM(OpenAILLM):
@@ -138,9 +112,18 @@ class LLM(OpenAILLM):
 
         created_client = False
         if client is None and (gzip_compression or msgpack_encoding):
-            client = _CerebrasClient(
+            transport = _PayloadTransport(
+                httpx.AsyncHTTPTransport(
+                    limits=httpx.Limits(
+                        max_connections=50,
+                        max_keepalive_connections=50,
+                        keepalive_expiry=120,
+                    )
+                ),
                 use_msgpack=msgpack_encoding,
                 use_gzip=gzip_compression,
+            )
+            client = openai.AsyncClient(
                 api_key=cerebras_api_key,
                 base_url=base_url if is_given(base_url) else None,
                 max_retries=max_retries if is_given(max_retries) else 0,
@@ -149,11 +132,7 @@ class LLM(OpenAILLM):
                     if timeout
                     else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                     follow_redirects=True,
-                    limits=httpx.Limits(
-                        max_connections=50,
-                        max_keepalive_connections=50,
-                        keepalive_expiry=120,
-                    ),
+                    transport=transport,
                 ),
             )
             created_client = True

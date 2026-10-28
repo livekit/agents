@@ -6,12 +6,13 @@ from typing import Any, get_args
 
 import httpx2 as httpx
 import msgpack
+import openai
 import pytest
 
 from livekit.agents import llm
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.cerebras import LLM, CerebrasChatModels
-from livekit.plugins.cerebras.llm import _CerebrasClient
+from livekit.plugins.cerebras.llm import _PayloadTransport
 
 pytestmark = pytest.mark.unit
 
@@ -42,12 +43,14 @@ class _MockChatCompletionsTransport(httpx.AsyncBaseTransport):
 
 async def _capture_chat_request(max_completion_tokens: int | None = None) -> httpx.Request:
     transport = _MockChatCompletionsTransport()
-    client = _CerebrasClient(
-        use_gzip=True,
-        use_msgpack=True,
+    # The request goes through the SDK's per-request `with_options` copy, which must keep the
+    # payload encoding.
+    client = openai.AsyncClient(
         api_key="test-key",
         base_url="https://api.cerebras.ai/v1",
-        http_client=httpx.AsyncClient(transport=transport),
+        http_client=httpx.AsyncClient(
+            transport=_PayloadTransport(transport, use_msgpack=True, use_gzip=True)
+        ),
     )
     if max_completion_tokens is None:
         model = LLM(model="gpt-oss-120b", api_key="test-key", client=client)
