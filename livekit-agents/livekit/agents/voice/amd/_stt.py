@@ -51,6 +51,11 @@ class AMDTranscriber:
         self._session_enabled = session_stt or model is None
         self._amd_enabled = model is not None
         self._current = AMDTurnTranscriptAccumulator()
+        # the turn just ended before its AMD final arrived: the AMD STT finalizes a sentence
+        # a little after the session commits it, so a final within the wait belongs to it
+        self._late: AMDTurnTranscriptAccumulator | None = None
+        self._late_until = 0.0
+        self._late_final = asyncio.Event()
         self._stream: stt.RecognizeStream | None = None
 
         self._reading = False
@@ -81,7 +86,15 @@ class AMDTranscriber:
                 async for event in stream:
                     if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT and event.alternatives:
                         transcript = event.alternatives[0].text.strip()
-                        self.push_transcript(transcript=transcript, source="amd")
+                        late = self._late is not None
+                        if late and asyncio.get_running_loop().time() > self._late_until:
+                            self._late = None
+                        if self._late is not None:
+                            self._late.add("amd", transcript)
+                            self._late = None
+                            self._late_final.set()
+                        else:
+                            self.push_transcript(transcript=transcript, source="amd")
         except Exception as exc:
             self.fail(exc)
 
@@ -90,13 +103,46 @@ class AMDTranscriber:
     ) -> None:
         self._current.add(source, transcript, replace=replace)
 
-    def end_turn(self, session_transcript: str) -> AMDTranscript:
+    def end_turn(self, session_transcript: str, *, late_wait: float = 0.0) -> AMDTranscript:
+        """End the turn. Within `late_wait` seconds, the next AMD final still belongs to it
+        when it has no AMD text yet."""
         self.push_transcript(session_transcript, replace=True, source="session")
         turn, self._current = self._current, AMDTurnTranscriptAccumulator()
+        # without session STT the turn has no text until its AMD final arrives
+        late = (
+            late_wait > 0
+            and self.amd_stt_active
+            and not turn.get("amd")
+            and (bool(turn.get("session")) or not self._session_enabled)
+        )
+        self._late = turn if late else None
+        self._late_final = asyncio.Event()
+        if late:
+            self._late_until = asyncio.get_running_loop().time() + late_wait
         return AMDTranscript(
             session=turn.get("session") if self._session_enabled else None,
             amd=turn.get("amd") if self._amd_enabled else None,
         )
+
+    @property
+    def awaits_late_final(self) -> bool:
+        """Whether the turn just ended still waits for its AMD final."""
+        return self._late is not None
+
+    async def late_amd_transcript(self) -> str | None:
+        """The AMD transcript of the turn just ended, once its final arrives or the wait
+        passes. None when that turn needs no wait."""
+        late, arrived = self._late, self._late_final
+        if late is None:
+            return None
+        remaining = self._late_until - asyncio.get_running_loop().time()
+        try:
+            await asyncio.wait_for(arrived.wait(), max(0.0, remaining))
+        except asyncio.TimeoutError:
+            pass
+        if self._late is late:
+            self._late = None
+        return late.get("amd") or None
 
     def close_stream(self) -> None:
         self._amd_enabled = False

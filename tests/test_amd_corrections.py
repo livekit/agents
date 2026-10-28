@@ -6,7 +6,7 @@ import json
 import pytest
 
 from livekit.agents import llm
-from livekit.agents.voice.amd import AMDCategory, AMDLifecycle, AMDReason
+from livekit.agents.voice.amd import AMDCategory, AMDLifecycle, AMDReason, _fsm
 from livekit.agents.voice.amd.detector import (
     _DEFAULT_IVR_INSTRUCTIONS,
     _DEFAULT_SCREENING_INSTRUCTIONS,
@@ -16,6 +16,7 @@ from .amd_test_utils import detector_clock  # noqa: F401
 from .test_amd_detector import (
     commit,
     commit_turn,
+    confirm_human,
     dtmf_calls,
     dtmf_executed,
     end_of_turn,
@@ -103,6 +104,9 @@ async def test_correction_uses_current_turn_and_persists(
         assert AMDCategory.HUMAN in request.recommended_next_categories
         classifier.prediction(current_turn + 1, AMDCategory.HUMAN)
         assert await human.should_reply(llm.ChatContext())
+        if corrected in _fsm.LIKELY_HUMAN_STAGES:
+            assert detector._turns[current_turn + 1].prediction.category is AMDCategory.UNCERTAIN
+            assert await (await confirm_human(detector, classifier)).should_reply(llm.ChatContext())
         assert (await detector.execute()).category == AMDCategory.HUMAN
 
 

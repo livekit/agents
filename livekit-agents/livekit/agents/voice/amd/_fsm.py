@@ -48,6 +48,12 @@ RECOMMENDED = {
 }
 
 
+# After a menu or a screener, the next speaker can be a person or a voicemail greeting,
+# and a short greeting fits both. In these stages a first human prediction is likely
+# human: it counts as uncertain, and the next turn decides.
+LIKELY_HUMAN_STAGES = frozenset({AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_IVR})
+
+
 class Effect(Enum):
     EXTRACT_MENU = auto()
     COMPLETE = auto()

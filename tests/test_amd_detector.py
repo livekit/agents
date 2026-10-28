@@ -34,6 +34,7 @@ from livekit.agents.voice.amd.detector import (
     _DEFAULT_IVR_INSTRUCTIONS,
     _DEFAULT_SCREENING_INSTRUCTIONS,
     _DEFAULT_VOICEMAIL_INSTRUCTIONS,
+    _LATE_AMD_FINAL_WAIT,
 )
 from livekit.agents.voice.audio_recognition import (
     _EndOfTurnInfo,
@@ -312,6 +313,18 @@ async def commit(
     return hooks
 
 
+async def confirm_human(
+    detector: AMD, classifier: ClassifierLLM, text: str = "Hello, who is this?"
+) -> TurnHooks:
+    """Commit and classify the turn that confirms a human after a menu or screener."""
+    held = detector._turn_id
+    await eventually(lambda: detector._turns[held].prediction is not None)
+    hooks = commit_turn(detector, end_of_turn(text))
+    request = await classifier.request()
+    classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.HUMAN)
+    return hooks
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow_reply", [False, True])
 async def test_turn_hooks_control_replies_without_amd(allow_reply: bool) -> None:
@@ -552,11 +565,12 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
     [
         (AMDCategory.MACHINE_SCREENING, _DEFAULT_SCREENING_INSTRUCTIONS),
         (AMDCategory.MACHINE_VM, _DEFAULT_VOICEMAIL_INSTRUCTIONS),
-        (AMDCategory.HUMAN, _DEFAULT_HUMAN_INSTRUCTIONS),
+        # a first human after screening is likely human, counted as uncertain, with no stage instructions
+        (AMDCategory.HUMAN, None),
     ],
 )
 async def test_turn_hooks_keep_their_turn_while_an_older_hook_is_blocked(
-    category: AMDCategory, instructions: str
+    category: AMDCategory, instructions: str | None
 ) -> None:
     agent = CustomerAgent()
     agent.hook_release.clear()
@@ -573,9 +587,6 @@ async def test_turn_hooks_keep_their_turn_while_an_older_hook_is_blocked(
             assert (await classifier.request()).current_turn.extra["turn_id"] == 2
             classifier.prediction(2, category)
             await eventually(lambda: detector._turns[2].prediction is not None)
-            if category == AMDCategory.HUMAN:
-                await asyncio.wait_for(detector.execute(), 2)
-                assert session.amd is None
             assert len(agent.hooks) == 1
             assert model.calls.empty()
         finally:
@@ -584,7 +595,10 @@ async def test_turn_hooks_keep_their_turn_while_an_older_hook_is_blocked(
         await asyncio.wait_for(activity._user_turn_completed_atask, 2)
         call = await asyncio.wait_for(model.calls.get(), 2)
         messages = [m for m in call["chat_ctx"].items if m.type == "message"]
-        assert messages[-1].text_content == instructions
+        if instructions is None:
+            assert not any(m.id.startswith(detector._control_prefix) for m in messages)
+        else:
+            assert messages[-1].text_content == instructions
         assert any(m.text_content == "Can you hear me?" for m in messages)
         assert len(agent.hooks) == 2
         if category == AMDCategory.MACHINE_VM:
@@ -883,6 +897,8 @@ async def test_a_goodbye_after_the_voicemail_message_keeps_the_stage(
             await hooks.should_reply(llm.ChatContext())
         await commit(detector, session, classifier)
         classifier.prediction(detector._turn_id, last)
+        if menu and last is AMDCategory.HUMAN:
+            await confirm_human(detector, classifier)
 
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.reason == "finished"
@@ -989,6 +1005,26 @@ async def test_human_takeover_updates_the_reply_context_during_machine_speech(
         classifier.prediction(1, category)
         await asyncio.wait_for(model.calls.get(), 2)
         await eventually(lambda: session.agent_state == "speaking")
+        held = category in _fsm.LIKELY_HUMAN_STAGES
+        if held:
+            # the first human after a menu or screener is likely human, counted as uncertain; its reply
+            # is the machine-stage speech that the confirming turn interrupts
+            # the held turn's reply carries no AMD instructions: the hook's edit is last
+            model.fake_response_map["Customer hook edit"] = FakeLLMResponse(
+                input="Customer hook edit", content="Hi, this is Alex.", ttft=0, duration=0
+            )
+            first_speech = activity._current_speech
+            activity.on_end_of_turn(end_of_turn("Hello?"))
+            await classifier.request()
+            classifier.prediction(2, AMDCategory.HUMAN)
+            await asyncio.wait_for(model.calls.get(), 2)
+            await eventually(
+                lambda: (
+                    activity._current_speech not in (None, first_speech)
+                    and session.agent_state == "speaking"
+                )
+            )
+            assert detector.lifecycle is AMDLifecycle.ACTIVE
         machine_speech = activity._current_speech
         assert machine_speech is not None and not machine_speech.done()
         activity.tts.update_options(fake_audio_duration=0.05)
@@ -999,7 +1035,7 @@ async def test_human_takeover_updates_the_reply_context_during_machine_speech(
         activity.on_end_of_turn(end_of_turn("Can you hear me?"))
         await classifier.request()
         await asyncio.wait_for(agent.hook_started.wait(), 2)
-        classifier.prediction(2, AMDCategory.HUMAN)
+        classifier.prediction(3 if held else 2, AMDCategory.HUMAN)
         if hook_finishes_after_cleanup:
             await asyncio.wait_for(detector.execute(), 2)
             assert session.amd is None
@@ -1017,7 +1053,7 @@ async def test_human_takeover_updates_the_reply_context_during_machine_speech(
         assert any(m.text_content == prompt for m in messages)
         assert any(m.text_content == "Can you hear me?" for m in messages)
         assert machine_speech.interrupted
-        assert len(agent.hooks) == 2
+        assert len(agent.hooks) == (3 if held else 2)
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.category == AMDCategory.HUMAN
         assert not result.voicemail_message_played
@@ -1027,7 +1063,7 @@ async def test_human_takeover_updates_the_reply_context_during_machine_speech(
         activity.on_end_of_turn(end_of_turn("Thank you."))
         normal = await asyncio.wait_for(model.calls.get(), 2)
         assert not any(m.id.startswith(detector._control_prefix) for m in normal["chat_ctx"].items)
-        assert detector._turn_id == 2
+        assert detector._turn_id == (3 if held else 2)
 
 
 @pytest.mark.asyncio
@@ -1760,6 +1796,35 @@ async def test_agent_reply_keeps_speaking_order_when_a_turn_commits_during_it() 
 
 
 @pytest.mark.asyncio
+async def test_classifier_sees_the_agent_words_while_a_human_is_held() -> None:
+    async with running() as (detector, session, classifier, _):
+        await commit(detector, session, classifier)
+        classifier.prediction(1, AMDCategory.MACHINE_IVR)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        session._conversation_item_added(
+            llm.ChatMessage(role="assistant", content=["Pressing one."])
+        )
+        commit_turn(detector, end_of_turn("Hello?"))
+        await classifier.request()
+        classifier.prediction(2, AMDCategory.HUMAN)
+        await eventually(lambda: detector._turns[2].prediction is not None)
+        session._conversation_item_added(
+            llm.ChatMessage(role="assistant", content=["Hi Sam, can you make it tomorrow?"])
+        )
+        commit_turn(detector, end_of_turn("Yes. Goodbye."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "hello"),
+            ("assistant", AGENT_REPLY),
+            ("user", "Hello?"),
+            ("assistant", "Hi Sam, can you make it tomorrow?"),
+            ("user", "Yes. Goodbye."),
+        ]
+
+
+@pytest.mark.asyncio
 async def test_dtmf_tool_works_without_amd() -> None:
     from livekit.agents.beta.tools.send_dtmf import send_dtmf_events
     from livekit.agents.beta.workflows.utils import DtmfEvent
@@ -1950,6 +2015,9 @@ async def test_transcript_received_after_eot_is_kept_in_next_request() -> None:
     async with running(stt=stt) as (detector, _, classifier, _):
         stream = push_audio(detector, stt)
         commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(
+            _LATE_AMD_FINAL_WAIT + 0.01
+        )  # after the wait, a final is the next turn's
         assert detector._turns[1].prediction.transcript == ""
         stream.send_fake_transcript("Please state your name.")
         await eventually(
@@ -1978,6 +2046,23 @@ async def test_transcript_received_after_eot_is_kept_in_next_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_without_session_stt_a_turn_is_classified_when_its_final_arrives() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(0.1)
+        assert detector._turns[1].prediction is None
+        stream.send_fake_transcript("Please state your name.")
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 1
+        assert request.current_turn.text_content == "Please state your name."
+        classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        assert detector._turns[1].prediction.transcript == "Please state your name."
+
+
+@pytest.mark.asyncio
 async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, _, classifier, _):
@@ -1986,6 +2071,9 @@ async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() 
         commit_turn(detector, end_of_turn(""))
         for _ in range(20):
             commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(
+            _LATE_AMD_FINAL_WAIT + 0.01
+        )  # after the wait, a final is the next turn's
         assert detector._turn_id == 21
         assert all(detector._turns[turn_id].prediction is not None for turn_id in range(1, 22))
         stream.send_fake_transcript("Hello, can you hear me?")
@@ -2003,6 +2091,91 @@ async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() 
         assert request.earlier_turns == []
         classifier.prediction(22, AMDCategory.HUMAN)
         assert (await detector.execute()).category == AMDCategory.HUMAN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", sorted(_fsm.LIKELY_HUMAN_STAGES))
+async def test_a_first_human_after_a_menu_or_screener_waits_for_the_next_turn(
+    stage: AMDCategory,
+) -> None:
+    async with running() as (detector, session, classifier, _):
+        await commit(detector, session, classifier)
+        classifier.prediction(1, stage)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        hooks = await commit(detector, session, classifier)
+        classifier.prediction(2, AMDCategory.HUMAN)
+        context = llm.ChatContext()
+        assert await hooks.should_reply(context)
+        assert not context.items  # no stage instructions while it may be a person
+        held = detector._turns[2].prediction
+        assert held.category is AMDCategory.UNCERTAIN
+        assert held.stage is stage
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+
+        hooks = commit_turn(detector, end_of_turn("Hello, who is this?"))
+        request = await classifier.request()
+        # the model is told the held turn is likely a person
+        assert request.previous_prediction["category"] == _inference.LIKELY_HUMAN
+        assert request.stage == stage
+        classifier.prediction(3, AMDCategory.HUMAN)
+        context = llm.ChatContext()
+        assert await hooks.should_reply(context)
+        assert context.items[-1].text_content == _DEFAULT_HUMAN_INSTRUCTIONS
+        result = await detector.execute()
+        assert result.category is AMDCategory.HUMAN
+        assert result.last_prediction.turn_id == 3
+
+
+@pytest.mark.asyncio
+async def test_a_held_human_followed_by_a_voicemail_greeting_is_voicemail() -> None:
+    async with running() as (detector, session, classifier, _):
+        for turn_id, category in enumerate(
+            (AMDCategory.MACHINE_IVR, AMDCategory.WAIT, AMDCategory.HUMAN), start=1
+        ):
+            await commit(detector, session, classifier)
+            classifier.prediction(turn_id, category)
+            await eventually(lambda t=turn_id: detector._turns[t].prediction is not None)
+        hooks = await commit(detector, session, classifier)
+        classifier.prediction(4, AMDCategory.MACHINE_VM)
+        context = llm.ChatContext()
+        assert await hooks.should_reply(context)
+        assert context.items[-1].text_content == _DEFAULT_VOICEMAIL_INSTRUCTIONS
+        assert detector._state is AMDCategory.MACHINE_VM
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+        # a person after the voicemail stage is not held
+        await commit(detector, session, classifier)
+        classifier.prediction(5, AMDCategory.HUMAN)
+        assert (await detector.execute()).category is AMDCategory.HUMAN
+
+
+@pytest.mark.asyncio
+async def test_a_human_at_call_start_completes_at_once() -> None:
+    async with running() as (detector, session, classifier, _):
+        await commit(detector, session, classifier)
+        classifier.prediction(1, AMDCategory.HUMAN)
+        assert (await detector.execute()).category is AMDCategory.HUMAN
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_waits_briefly_for_a_late_amd_final() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt, session_options={"stt": FakeSTT()}) as (
+        detector,
+        _,
+        classifier,
+        _,
+    ):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn("Sam Lee speaking."))
+        await asyncio.sleep(0.1)
+        assert classifier.requests.empty()
+        stream.send_fake_transcript("Sam Lee speaking.")
+        request = await classifier.request()
+        assert json.loads(request.current_turn.text_content) == {
+            "transcript_1": "Sam Lee speaking.",
+            "transcript_2": "Sam Lee speaking.",
+        }
+        assert detector._turns[1].transcript.amd == "Sam Lee speaking."
 
 
 @pytest.mark.asyncio
@@ -2271,6 +2444,7 @@ async def test_unexpected_menu_error_does_not_end_detection(
         assert menus == []
         await commit(detector, session, classifier)
         classifier.prediction(2, AMDCategory.HUMAN)
+        await confirm_human(detector, classifier)
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.category == AMDCategory.HUMAN
         assert result.reason == "finished"
@@ -2307,6 +2481,7 @@ async def test_slow_menu_does_not_block_classification_or_next_turn() -> None:
         await commit(detector, session, classifier)
         assert menu_response.cancelled()
         classifier.prediction(2, AMDCategory.HUMAN)
+        await confirm_human(detector, classifier)
         assert (await detector.execute()).category == AMDCategory.HUMAN
 
 
@@ -2329,6 +2504,7 @@ async def test_prediction_listener_next_turn_cancels_the_previous_menu(
         await asyncio.sleep(0.01)
         extract_menu.assert_not_called()
         classifier.prediction(2, AMDCategory.HUMAN)
+        await confirm_human(detector, classifier)
         assert (await asyncio.wait_for(detector.execute(), 2)).category == AMDCategory.HUMAN
 
 
@@ -2733,6 +2909,11 @@ async def test_human_instructions_remember_machine_history(bridge: AMDCategory) 
                     assert not ctx.items
                 else:
                     assert ctx.items[-1].extra["amd_stage"] == "machine-screening"
+        # the first human after screening is likely human, counted as uncertain, with no stage instructions
+        assert not ctx.items
+        hooks = await confirm_human(detector, classifier)
+        ctx = llm.ChatContext()
+        assert await hooks.should_reply(ctx)
         assert ctx.items[-1].text_content == _DEFAULT_HUMAN_INSTRUCTIONS
         await detector.execute()
         assert detector._previous_stage == AMDCategory.MACHINE_SCREENING
@@ -2821,6 +3002,7 @@ async def test_empty_turns_preserve_wait_until_new_classification(pending: bool)
         hooks = await commit(detector, session, classifier)
         classifier.prediction(detector._turn_id, AMDCategory.HUMAN)
         assert await hooks.should_reply(llm.ChatContext())
+        await confirm_human(detector, classifier)
         assert (await detector.execute()).category is AMDCategory.HUMAN
 
 

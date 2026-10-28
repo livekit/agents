@@ -10,12 +10,15 @@ import pytest
 from livekit import rtc
 from livekit.agents import AMD, Agent, AgentSession, UserStateChangedEvent, llm, stt, vad
 from livekit.agents.voice.amd import AMDCategory, AMDLifecycle, _inference
-from livekit.agents.voice.amd.detector import _DEFAULT_SCREENING_INSTRUCTIONS
+from livekit.agents.voice.amd.detector import (
+    _DEFAULT_SCREENING_INSTRUCTIONS,
+    _LATE_AMD_FINAL_WAIT,
+)
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .amd_test_utils import detector_clock, next_deadline  # noqa: F401
 from .fake_io import FakeAudioOutput
-from .fake_llm import FakeLLM
+from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import DrainingSTT, FakeSTT
 from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
@@ -508,6 +511,7 @@ async def test_empty_turn_does_not_delay_the_next_prediction() -> None:
         stream = push_audio(detector, stt)
         speech_ended(detector, 0)
         commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(_LATE_AMD_FINAL_WAIT + 0.01)  # no AMD final arrives for the empty turn
         assert [(e.turn_id, e.reason) for e in events] == [(1, "reused")]
         assert detector._turns[1].prediction.reason == "reused"
 
@@ -993,6 +997,12 @@ async def test_newer_turn_cancels_a_held_reply(category: AMDCategory) -> None:
         assert len(speeches) == 1
         held = speeches[0]
 
+        if category is AMDCategory.HUMAN:
+            # a first human after screening is likely human, counted as uncertain: its reply carries no
+            # AMD instructions, so the hook's edit is the model's last input
+            model.fake_response_map["Customer hook edit"] = FakeLLMResponse(
+                input="Customer hook edit", content="Please call me back.", ttft=0, duration=0
+            )
         speech_started(detector)
         speech_ended(detector, 1.5)
         await commit(detector, session, classifier, reply=True)

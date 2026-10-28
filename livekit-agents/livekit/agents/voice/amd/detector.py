@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import time
 import uuid
@@ -19,7 +20,7 @@ from ...utils import EventEmitter, aio, is_given
 from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _fsm, _inference
-from ._chat_context import AMDChatContext, AMDRequest, Turn
+from ._chat_context import AMDChatContext, AMDRequest, Turn, update_transcript
 from ._stt import AMDTranscriber
 from .events import (
     AMDCategory,
@@ -49,6 +50,9 @@ _DEFAULT_MAX_INFERENCE_TIMEOUTS = 3  # Allow transient delays before abandoning 
 _MACHINE_SILENCE_THRESHOLD = 1.5  # Wait for a pause before replying to machines.
 _MENU_TIMEOUT = 5.0  # Stop optional menu work before it becomes stale.
 _TRACK_PUBLICATION_TIMEOUT = 5.0
+# The AMD STT finalizes a sentence a little after the session commits it (about 0.1 to 0.2 s
+# for cartesia/ink-whisper). Classify the turn once that final arrives, or after this wait.
+_LATE_AMD_FINAL_WAIT = 0.3
 _MACHINE_CATEGORIES = frozenset(
     {
         AMDCategory.MACHINE_SCREENING,
@@ -292,6 +296,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._completion_reason = AMDReason.CANCELLED
         self._previous_stage: AMDCategory | None = None
         self._had_machine_stage = False
+        self._likely_human = False  # a likely human prediction, counted as uncertain
         self._state = AMDCategory.UNCERTAIN
         self._category = AMDCategory.UNCERTAIN  # latest prediction, may be wait
         self._should_wait = False
@@ -536,7 +541,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and item.text_content
             and item.created_at >= self._started_at
         ):
-            self._chat_ctx.add_agent_reply(item.created_at)
+            self._chat_ctx.add_agent_reply(
+                item.created_at, item.text_content, words=self._likely_human
+            )
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE:
@@ -574,7 +581,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self._held_reply is not None:
             self._held_reply._cancel()
         self._held_turn_id = self._held_reply = None
-        turn_transcript = self._resources.stt.end_turn(transcript)
+        turn_transcript = self._resources.stt.end_turn(transcript, late_wait=_LATE_AMD_FINAL_WAIT)
         now = time.monotonic()
         speaking = self._session.user_state == "speaking"
         if not speaking and not self._speech_since_commit:
@@ -595,37 +602,62 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._turns[turn.turn_id] = turn
         self._voicemail_turn_id = None
         if turn_transcript.transcript:
-            self._chat_ctx.add_transcript(turn)
-            self._cancel_classification()
-            self._pending_turn = turn
-            self._inference_deadline = now + self._options.inference_timeout
-            request = self._chat_ctx.create_request(
-                turn,
-                stage=self._state,
-                recommended=sorted(_fsm.RECOMMENDED[self._state]),
-                previous_prediction=self._latest,
-            )
-            if self._menu_atask is not None:
-                self._menu_atask.cancel()
-                self._menu_atask = None
-            self._classifier_atask = self._spawn(self._classify(turn, request))
+            self._start_classification(turn)
+            self._add_realtime_transcript(turn)
+        elif self._resources.stt.awaits_late_final:
+            # no text yet, without session STT: classify once the AMD final arrives
+            self._spawn(self._classify_when_heard(turn))
         elif self._pending_turn is None:
             self._record_prediction(turn, AMDReason.REUSED)
         self._prediction_changed.set()
         self._update_idle()
+        return _AMDTurnHooks(self, turn.turn_id)
+
+    def _start_classification(self, turn: Turn) -> None:
+        self._chat_ctx.add_transcript(turn)
+        self._cancel_classification()
+        self._pending_turn = turn
+        self._inference_deadline = time.monotonic() + self._options.inference_timeout
+        request = self._chat_ctx.create_request(
+            turn,
+            stage=self._state,
+            recommended=sorted(_fsm.RECOMMENDED[self._state]),
+            previous_prediction=self._latest,
+            likely_human=self._likely_human,
+        )
+        if self._menu_atask is not None:
+            self._menu_atask.cancel()
+            self._menu_atask = None
+        self._classifier_atask = self._spawn(self._classify(turn, request))
+
+    async def _classify_when_heard(self, turn: Turn) -> None:
+        late = await self._resources.stt.late_amd_transcript()
+        if self.lifecycle is not AMDLifecycle.ACTIVE:
+            return
+        if late is not None:
+            turn.transcript = dataclasses.replace(turn.transcript, amd=late)
+            self._start_classification(turn)
+            self._add_realtime_transcript(turn)
+        elif turn.prediction is None and self._pending_turn is None:
+            self._record_prediction(turn, AMDReason.REUSED)
+        self._prediction_changed.set()
+        self._update_idle()
+
+    def _add_realtime_transcript(self, turn: Turn) -> None:
+        """A realtime model without user transcription gets the user turn from AMD."""
+        activity = self._session._activity
         if (
             activity is not None
             and isinstance(activity.llm, llm.RealtimeModel)
             and not activity.llm.capabilities.user_transcription
             and activity.stt is None
-            and turn_transcript.transcript
+            and turn.transcript.transcript
         ):
             message = llm.ChatMessage(
-                role="user", content=[turn_transcript.transcript], transcript_confidence=0.0
+                role="user", content=[turn.transcript.transcript], transcript_confidence=0.0
             )
             activity.agent._chat_ctx.insert(message)
             self._session._conversation_item_added(message)
-        return _AMDTurnHooks(self, turn.turn_id)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         self._update_idle()
@@ -725,6 +757,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._finish(AMDReason.INTERNAL_ERROR)
 
     async def _classify(self, turn: Turn, request: AMDRequest) -> None:
+        late = await self._resources.stt.late_amd_transcript()
+        if late is not None:
+            turn.transcript = dataclasses.replace(turn.transcript, amd=late)
+            update_transcript(self._chat_ctx, turn)
+            update_transcript(request.chat_ctx, turn)
         started = time.monotonic()
         response: _inference.AMDResponse | None = None
         try:
@@ -758,6 +795,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
             def _accept_prediction(turn: Turn, response: _inference.AMDResponse) -> None:
                 category = response.category
+                if (
+                    category is AMDCategory.HUMAN
+                    and self._state in _fsm.LIKELY_HUMAN_STAGES
+                    and not self._likely_human
+                ):
+                    self._likely_human = True
+                    category = AMDCategory.UNCERTAIN
+                elif category is not AMDCategory.UNCERTAIN:
+                    self._likely_human = False
                 result = _fsm.transition(self._state, category)
                 state_changed = result.next_state != self._state
                 if state_changed:
@@ -876,6 +922,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             )
         if self._turns[turn_id].prediction is None:
             return ReplyDecision(allow=False)
+        if self._likely_human:
+            # possibly a person: reply without the stage's instructions
+            return ReplyDecision(allow=True)
         if category is AMDCategory.MACHINE_VM:
             if (
                 self._voicemail_message_played

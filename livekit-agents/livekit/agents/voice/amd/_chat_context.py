@@ -47,6 +47,14 @@ class Turn:
     inference_duration: float | None = None
 
 
+def update_transcript(chat_ctx: llm.ChatContext, turn: Turn) -> None:
+    """Replace a turn's transcript message, as when its AMD final arrives late."""
+    for item in chat_ctx.items:
+        if item.type == "message" and item.extra.get("turn_id") == turn.turn_id:
+            item.content = [turn.transcript.for_classifier()]
+            return
+
+
 @dataclass(frozen=True)
 class AMDRequest:
     """Conversation snapshot and constraints for one classification."""
@@ -56,6 +64,8 @@ class AMDRequest:
     previous_prediction: AMDPredictionEvent | None
     chat_ctx: llm.ChatContext
     speech_duration: float
+    likely_human: bool = False
+    """The previous prediction is likely human, counted as uncertain."""
 
 
 class AMDChatContext(llm.ChatContext):
@@ -68,13 +78,17 @@ class AMDChatContext(llm.ChatContext):
             extra={"turn_id": turn.turn_id},
         )
 
-    def add_agent_reply(self, started_at: float) -> None:
-        """Mark that the agent spoke, never its words, at the time its speech started.
+    def add_agent_reply(self, started_at: float, text: str, *, words: bool = False) -> None:
+        """Mark that the agent spoke, at the time its speech started.
 
         The session adds a reply when its speech ends, so a participant turn committed
         during that speech can arrive first. Inserting by start time keeps speaking order.
+        With `words`, keep what it said: after a likely human turn, a reply to the agent
+        shows a person. The prompt still says the words are hidden; rewording it moved
+        machine goodbyes between categories.
         """
-        self.insert(llm.ChatMessage(role="assistant", content=[AGENT_REPLY], created_at=started_at))
+        content = text if words else AGENT_REPLY
+        self.insert(llm.ChatMessage(role="assistant", content=[content], created_at=started_at))
 
     def add_tool_result(self, call: llm.FunctionCall, output: llm.FunctionCallOutput) -> None:
         if (
@@ -93,6 +107,7 @@ class AMDChatContext(llm.ChatContext):
         stage: AMDCategory,
         recommended: list[AMDCategory],
         previous_prediction: AMDPredictionEvent | None,
+        likely_human: bool = False,
     ) -> AMDRequest:
         return AMDRequest(
             stage=stage,
@@ -100,4 +115,5 @@ class AMDChatContext(llm.ChatContext):
             previous_prediction=previous_prediction.model_copy() if previous_prediction else None,
             chat_ctx=self.truncate(max_items=_HISTORY_LIMIT).copy(),
             speech_duration=turn.speech_duration,
+            likely_human=likely_human,
         )

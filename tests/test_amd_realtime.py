@@ -287,6 +287,8 @@ async def test_stage_instructions_expire_after_first_human_reply() -> None:
     async with running() as (_, session, classifier, rt):
         for category, instructions in (
             (AMDCategory.MACHINE_SCREENING, _DEFAULT_SCREENING_INSTRUCTIONS),
+            # a first human after screening is likely human, counted as uncertain, with no stage instructions
+            (AMDCategory.HUMAN, NOT_GIVEN),
             (AMDCategory.HUMAN, _DEFAULT_HUMAN_INSTRUCTIONS),
         ):
             handle = await reply(session, classifier, rt, category)
@@ -297,7 +299,7 @@ async def test_stage_instructions_expire_after_first_human_reply() -> None:
         assert session.amd is None
         assert session._turn_hooks is None
         handle = session.generate_reply()
-        await eventually(lambda: rt.generate_reply_calls == 3)
+        await eventually(lambda: rt.generate_reply_calls == 4)
         assert rt.reply_instructions[-1] is NOT_GIVEN
         respond(rt)
         await asyncio.wait_for(handle, 2)
@@ -611,6 +613,11 @@ async def test_ivr_dtmf_only_generates_a_reply_on_failure(
         assert outputs[0].reply_required == publish_fails
         assert session.agent_state == "listening"
 
+        held = await reply(session, classifier, rt, AMDCategory.HUMAN)
+        # a first human after a menu is likely human, counted as uncertain and keeps the keypad
+        assert [tool.info.name for tool in rt.reply_tools[-1]] == ["send_dtmf_events"]
+        respond(rt)
+        await asyncio.wait_for(held, 2)
         human = await reply(session, classifier, rt, AMDCategory.HUMAN)
         assert rt.reply_tools[-1] is NOT_GIVEN
         respond(rt)

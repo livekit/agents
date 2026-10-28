@@ -97,6 +97,10 @@ Use at most 20 options. Do not invent keys, spoken choices, or a menu tree.
 """
 
 
+# the previous prediction's category when it is likely human, counted as uncertain
+LIKELY_HUMAN = "uncertain (likely human)"
+
+
 class AMDResponse(BaseModel):
     category: AMDCategory
 
@@ -148,6 +152,15 @@ async def classify(
     *,
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
 ) -> AMDResponse:
+    previous = (
+        request.previous_prediction.model_dump(
+            mode="json", include={"turn_id", "category", "reason"}
+        )
+        if request.previous_prediction is not None
+        else None
+    )
+    if previous is not None and request.likely_human:
+        previous["category"] = LIKELY_HUMAN
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="system", content=CLASSIFY_PROMPT)
     chat_ctx.add_message(
@@ -155,11 +168,7 @@ async def classify(
         content=json.dumps(
             {
                 "stage": request.stage,
-                "previous_prediction": request.previous_prediction.model_dump(
-                    mode="json", include={"turn_id", "category", "reason"}
-                )
-                if request.previous_prediction is not None
-                else None,
+                "previous_prediction": previous,
                 "recommended_next_categories": request.recommended_next_categories,
                 "speech_duration": request.speech_duration,
             }
