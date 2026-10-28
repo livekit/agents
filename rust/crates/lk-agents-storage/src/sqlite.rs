@@ -53,8 +53,24 @@ fn cell(v: ValueRef<'_>) -> Result<SqlValue, StorageError> {
 }
 
 /// One statement: its rows when it has columns (`SELECT`, `RETURNING`), else what it changed.
-fn run(conn: &rusqlite::Connection, s: &Statement) -> Result<StatementResult, StorageError> {
-    let mut stmt = conn.prepare_cached(&s.sql).map_err(sqlite_error)?;
+fn run(
+    conn: &rusqlite::Connection,
+    s: &Statement,
+    read_only: bool,
+) -> Result<StatementResult, StorageError> {
+    // SQLite parses trigger bodies and quoted/comment semicolons itself. Preparing the
+    // complete tail before stepping prevents silently accepting only the first statement.
+    let mut statements = rusqlite::Batch::new(conn, &s.sql);
+    let mut stmt = statements
+        .next()
+        .map_err(sqlite_error)?
+        .ok_or_else(|| StorageError::Invalid("expected one SQL statement".into()))?;
+    if statements.next().map_err(sqlite_error)?.is_some() {
+        return Err(StorageError::Invalid("expected one SQL statement".into()));
+    }
+    if read_only && (!stmt.readonly() || stmt.column_count() == 0) {
+        return Err(StorageError::Invalid("query requires a read-only SQL statement".into()));
+    }
     bind(&mut stmt, &s.params)?;
     let width = stmt.column_count();
     if width == 0 {
@@ -76,7 +92,7 @@ fn run(conn: &rusqlite::Connection, s: &Statement) -> Result<StatementResult, St
 }
 
 pub fn query(conn: &rusqlite::Connection, s: &Statement) -> Result<Vec<Row>, StorageError> {
-    match run(conn, s)? {
+    match run(conn, s, true)? {
         StatementResult::Rows(rows) => Ok(rows),
         StatementResult::Exec { .. } => Ok(Vec::new()),
     }
@@ -90,7 +106,76 @@ pub fn batch(
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(sqlite_error)?;
-    let results = statements.iter().map(|s| run(&tx, s)).collect::<Result<Vec<_>, _>>()?;
+    let results = statements.iter().map(|s| run(&tx, s, false)).collect::<Result<Vec<_>, _>>()?;
     tx.commit().map_err(sqlite_error)?;
     Ok(BatchResult { results })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queries_cannot_change_data_or_schema() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        batch(
+            &mut conn,
+            &[
+                Statement::raw("CREATE TABLE notes (body TEXT)"),
+                Statement::raw("INSERT INTO notes VALUES ('saved')"),
+            ],
+        )
+        .unwrap();
+        for sql in [
+            "UPDATE notes SET body = 'changed' RETURNING body",
+            "DELETE FROM notes RETURNING body",
+            "INSERT INTO notes VALUES ('new')",
+            "CREATE TABLE unwanted (body TEXT)",
+            "DROP TABLE notes",
+        ] {
+            assert!(query(&conn, &Statement::raw(sql)).is_err(), "accepted {sql}");
+            assert_eq!(
+                query(&conn, &Statement::raw("SELECT body FROM notes")).unwrap(),
+                vec![vec![SqlValue::Text("saved".into())]]
+            );
+        }
+        assert_eq!(
+            query(
+                &conn,
+                &Statement::raw("SELECT name FROM sqlite_master WHERE name = 'unwanted'"),
+            )
+            .unwrap(),
+            Vec::<Row>::new(),
+        );
+    }
+
+    #[test]
+    fn a_statement_tail_is_refused_before_either_write() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        batch(&mut conn, &[Statement::raw("CREATE TABLE notes (body TEXT)")]).unwrap();
+        let sql = "INSERT INTO notes VALUES ('first'); INSERT INTO notes VALUES ('second')";
+        assert!(batch(&mut conn, &[Statement::raw(sql)]).is_err());
+        assert!(query(&conn, &Statement::raw(sql)).is_err());
+        assert!(query(&conn, &Statement::raw("SELECT body FROM notes")).unwrap().is_empty());
+
+        // SQLite owns parsing: semicolons in identifiers, strings, comments and trigger
+        // bodies remain part of the single statement.
+        batch(
+            &mut conn,
+            &[
+                Statement::raw("CREATE TABLE audit (body TEXT)"),
+                Statement::raw(
+                    "CREATE TRIGGER \"changed;\" AFTER INSERT ON notes BEGIN \
+                     INSERT INTO audit VALUES ('first;'); \
+                     INSERT INTO audit VALUES ('second;'); END; -- tail;",
+                ),
+                Statement::raw("INSERT INTO notes VALUES ('one;two'); /* comment; */ ;"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            query(&conn, &Statement::raw("SELECT body FROM audit ORDER BY rowid")).unwrap(),
+            vec![vec![SqlValue::Text("first;".into())], vec![SqlValue::Text("second;".into())]]
+        );
+    }
 }
