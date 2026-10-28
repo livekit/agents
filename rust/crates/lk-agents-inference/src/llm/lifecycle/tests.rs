@@ -1,7 +1,9 @@
 //! `request_lifecycle_vectors`: the request machine stepped directly on supplied time.
 
+use std::time::Duration;
+
 use super::*;
-use lk_agents_abi::errors::ApiErrorKind;
+use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 
 const LLM: ResourceId = ResourceId(7);
 const ID: LlmRequestId = LlmRequestId(1);

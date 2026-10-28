@@ -9,6 +9,8 @@
 /// docs/CONTRACTS.md §4.7's provider traits, re-exported so a call site names one crate.
 pub use lk_agents_abi as abi;
 
+// The attempts of one gateway request: phase limits, retries, total deadline, cleanup.
+pub mod attempts;
 pub mod creds;
 pub mod extra;
 pub mod headers;
