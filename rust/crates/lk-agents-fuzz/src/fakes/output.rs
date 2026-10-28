@@ -708,25 +708,30 @@ impl FakeSoundStream {
     }
 }
 
-#[async_trait::async_trait]
 impl lk_agents_voice::background_audio::FrameStream for FakeSoundStream {
-    async fn next(&self) -> Result<Option<AudioFrame>, lk_agents_abi::errors::ProviderError> {
+    fn next(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<AudioFrame>, lk_agents_abi::errors::ProviderError>,
+    > {
         let mut left = self.left.lock().unwrap();
-        if *left == 0 {
-            return Ok(None);
-        }
-        *left -= 1;
         let samples = super::SAMPLE_RATE / 50;
-        Ok(Some(AudioFrame::new(
-            1000i16.to_le_bytes().repeat(samples as usize),
-            super::SAMPLE_RATE,
-            1,
-            samples,
-        )))
+        let frame = (*left > 0).then(|| {
+            *left -= 1;
+            AudioFrame::new(
+                1000i16.to_le_bytes().repeat(samples as usize),
+                super::SAMPLE_RATE,
+                1,
+                samples,
+            )
+        });
+        Box::pin(std::future::ready(Ok(frame)))
     }
     fn cancel_pending(&self) {}
-    async fn close(&self) {
+    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
         *self.left.lock().unwrap() = 0;
+        Box::pin(std::future::ready(()))
     }
 }
 

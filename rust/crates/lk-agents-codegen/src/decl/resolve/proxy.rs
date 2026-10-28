@@ -47,6 +47,14 @@ impl Resolver<'_> {
         if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
             return Err(format!("{at}: a proxy binds one value"));
         }
+        let async_trait =
+            tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
+        let awaits = methods.iter().filter(|m| m.kind == ProxyCall::Await);
+        if awaits.clone().any(|m| m.boxed.is_some() == async_trait) {
+            return Err(format!(
+                "{at}: an awaited call is an `async fn` under #[async_trait], else `fn .. -> BoxFuture<'_, T>`"
+            ));
+        }
         Ok(Proxy {
             rust_name: tr.ident.to_string(),
             trait_path,
@@ -56,10 +64,7 @@ impl Resolver<'_> {
             source: module.file.clone(),
             host,
             view,
-            async_trait: tr
-                .attrs
-                .iter()
-                .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait")),
+            async_trait,
             methods,
         })
     }
@@ -90,10 +95,12 @@ impl Resolver<'_> {
         let shared_receiver =
             receiver.is_some_and(shared) || (consumes && kind == ProxyCall::Await);
         let sync = f.sig.asyncness.is_none();
+        // `fn ..(..) -> BoxFuture<'lt, T>`: an awaited call without `async-trait`.
+        let boxed = if kind == ProxyCall::Await && sync { boxed_future(&f.sig.output) } else { None };
         let inputs = f.sig.inputs.iter().filter(|i| matches!(i, syn::FnArg::Typed(_))).count();
         let fits = shared_receiver
             && match kind {
-                ProxyCall::Await => !sync,
+                ProxyCall::Await => !sync || boxed.is_some(),
                 ProxyCall::Call => sync,
                 ProxyCall::Notify => sync && matches!(f.sig.output, syn::ReturnType::Default),
                 ProxyCall::ReadOnce => sync && inputs == 0,
@@ -101,7 +108,7 @@ impl Resolver<'_> {
             };
         if !fits {
             return Err(format!(
-                "{at}: the signature does not fit `{key}` (await: `async fn(&self | self: Box<Self>, ..) -> Result<T, E>`; call: `fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing; read_once: `fn(&self) -> T` or `-> &T`; bind: `fn(&self, x: &X) -> Option<Arc<dyn Self>>`)"
+                "{at}: the signature does not fit `{key}` (await: `async fn(&self | self: Box<Self>, ..) -> Result<T, E>`, or `fn(..) -> BoxFuture<'_ | 'static, Result<T, E>>` without async-trait; call: `fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing; read_once: `fn(&self) -> T` or `-> &T`; bind: `fn(&self, x: &X) -> Option<Arc<dyn Self>>`)"
             ));
         }
         let mut params = Vec::new();
@@ -137,13 +144,19 @@ impl Resolver<'_> {
             params.push(Param { name, ty, by_ref, kw_only: false, default: None });
         }
         let mut lends = false;
+        let output = match &boxed {
+            Some((_, t)) => syn::ReturnType::Type(Default::default(), Box::new(t.clone())),
+            None => f.sig.output.clone(),
+        };
+        let unit = matches!(&output, syn::ReturnType::Type(_, t) if matches!(&**t, syn::Type::Tuple(u) if u.elems.is_empty()));
+        let output = if unit { syn::ReturnType::Default } else { output };
         let ret = match kind {
             ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
             // An awaited call returning nothing (a close): its failure is logged, as a notify's is.
-            ProxyCall::Await if matches!(f.sig.output, syn::ReturnType::Default) => {
+            ProxyCall::Await if matches!(output, syn::ReturnType::Default) => {
                 ProxyRet { ok: Ty::Unit, refusal: None, err: None }
             }
-            ProxyCall::Await | ProxyCall::Call => self.proxy_ret(&f.sig.output, &at)?,
+            ProxyCall::Await | ProxyCall::Call => self.proxy_ret(&output, &at)?,
             ProxyCall::ReadOnce => {
                 let syn::ReturnType::Type(_, t) = &f.sig.output else {
                     return Err(format!("{at}: read_once returns the value it reads"));
@@ -217,6 +230,7 @@ impl Resolver<'_> {
             consumes,
             lends,
             lossy,
+            boxed: boxed.map(|(lifetime, _)| lifetime),
         })
     }
 
@@ -284,4 +298,18 @@ fn optional_ref(t: &syn::Type) -> Option<&syn::Type> {
 fn boxed_self(r: &syn::Receiver) -> bool {
     r.reference.is_none()
         && matches!(&*r.ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Box"))
+}
+
+/// `BoxFuture<'lt, T>` (any path ending in `BoxFuture`): its lifetime and output type.
+fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)> {
+    let syn::ReturnType::Type(_, t) = out else { return None };
+    let syn::Type::Path(p) = &**t else { return None };
+    let last = p.path.segments.last().filter(|s| s.ident == "BoxFuture")?;
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None };
+    match (args.args.first(), args.args.get(1), args.args.len()) {
+        (Some(syn::GenericArgument::Lifetime(l)), Some(syn::GenericArgument::Type(t)), 2) => {
+            Some((l.to_string(), t.clone()))
+        }
+        _ => None,
+    }
 }

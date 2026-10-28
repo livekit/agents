@@ -9,18 +9,19 @@ fn file(path: &str, probability: f64) -> Sound {
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Frames(Mutex<u32>);
 
-#[async_trait::async_trait]
 impl FrameStream for Frames {
-    async fn next(&self) -> Result<Option<AudioFrame>, ProviderError> {
+    fn next(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
         let mut left = self.0.lock().unwrap();
-        if *left == 0 {
-            return Ok(None);
-        }
-        *left -= 1;
-        Ok(Some(AudioFrame::new(1000i16.to_le_bytes().repeat(480), 48_000, 1, 480)))
+        let frame = (*left > 0).then(|| {
+            *left -= 1;
+            AudioFrame::new(1000i16.to_le_bytes().repeat(480), 48_000, 1, 480)
+        });
+        Box::pin(std::future::ready(Ok(frame)))
     }
     fn cancel_pending(&self) {}
-    async fn close(&self) {}
+    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(std::future::ready(()))
+    }
 }
 
 async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_rtc::FakeRoom>) {
@@ -53,8 +54,7 @@ async fn play_refuses_what_cannot_play() {
     assert!(matches!(looping, Err(PlaybackError::LoopingStream(_))));
     assert!(LoopingStreamError.to_string().contains("loop=False"));
     // The draw picked silence: the handle is born done.
-    let silent =
-        player.play_for_host(vec![file("a.ogg", 0.0)], 0.5, false, false, true).unwrap();
+    let silent = player.play_for_host(vec![file("a.ogg", 0.0)], 0.5, false, false, true).unwrap();
     assert!(silent.done());
 
     player.close().await;

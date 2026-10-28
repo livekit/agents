@@ -164,6 +164,9 @@ pub struct ProxyMethod {
     pub lends: bool,
     /// `notify(lossy)`: a frame of a stream, dropped while the host loop is far behind.
     pub lossy: bool,
+    /// An awaited call declared `fn ..(..) -> BoxFuture<'lt, T>` (a trait without
+    /// `#[async_trait]`): the future's lifetime, `'_`, or `'static` for a consuming call.
+    pub boxed: Option<String>,
 }
 
 /// How the core calls the host: declared, then checked against the signature.

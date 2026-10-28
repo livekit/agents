@@ -724,6 +724,42 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
     assert!(llm.contains("Value::Object(map) => Ok(map)"), "{llm}");
 }
 
+// Catches: an awaited call of a trait without async-trait (`-> BoxFuture<'_, T>`) refused or
+// implemented as an `async fn` (which would not match the trait), a consuming one losing its
+// `'static` future, or the two forms mixed in one trait.
+#[test]
+fn a_proxy_without_async_trait_returns_boxed_futures() {
+    let decls = read(
+        r#"use super::chat::Chunk;
+        use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Callbacks"))]
+        pub trait Callbacks: Send + Sync {
+            #[host(await)] fn next(&self, id: &str) -> crate::BoxFuture<'_, Result<Chunk, HostError>>;
+            #[host(await)] fn close(self: Box<Self>) -> crate::BoxFuture<'static, ()>;
+        }"#,
+    )
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(!llm.contains("async_trait") && !llm.contains("async fn"), "{llm}");
+    assert!(
+        llm.contains("fn next(&self, id: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>> {")
+            && llm.contains("fn close(self: ::std::boxed::Box<Self>) -> ::lk_agents_abi::BoxFuture<'static, ()> {")
+            && llm.contains("::std::boxed::Box::pin(async move {"),
+        "{llm}"
+    );
+    let mixed = read(
+        r#"use crate::errors::HostError;
+        #[crate::host(proxy(host = "livekit.agents.Callbacks"))]
+        #[async_trait]
+        pub trait Callbacks: Send + Sync {
+            #[host(await)] fn next(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+        }"#,
+    )
+    .expect_err("a boxed call under async-trait is refused");
+    assert!(mixed.contains("BoxFuture"), "{mixed}");
+}
+
 // Catches: a host lookup answering an optional proxy refused at generation (a room's participant
 // by identity), or its absence read as a refused object instead of `None`.
 #[test]

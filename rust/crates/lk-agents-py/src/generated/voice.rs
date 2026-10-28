@@ -455,11 +455,11 @@ impl FrameStreamProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::background_audio::FrameStream>(|obj| FrameStreamProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy {
-    async fn next(&self) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::errors::ProviderError> {
+    fn next(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -476,6 +476,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
             let out = (o.extract::<::std::option::Option<::lk_agents_abi::AudioFrame>>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
     fn cancel_pending(&self) {
@@ -487,9 +488,10 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
         });
     }
 
-    async fn close(&self) {
+    fn close(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -497,6 +499,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
             }).await {
             ::lk_agents_abi::python::log::warn!("FrameStream._core_close failed: {e}");
         }
+        })
     }
 }
 

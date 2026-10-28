@@ -208,17 +208,41 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             args.join(", "),
             m.name
         )),
-        ProxyCall::Await if m.ret.err.is_none() => Ok(format!(
-            "    async {sig} {{\n{head}        let context = &context;\n        if let Err(e) = {call}.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n    }}\n",
+        ProxyCall::Await if m.ret.err.is_none() => Ok(awaited(
+            m,
+            &sig,
+            "()",
+            &head,
+            &format!(
+                "        let context = &context;\n        if let Err(e) = {call}.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
+            ),
         )),
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
             let read = from_host("o", &m.ret.ok, &label, &at)?;
-            Ok(format!(
-                "    async {sig} -> {ret} {{\n{head}        let context = &context;\n        let out = {call}.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
+            Ok(awaited(
+                m,
+                &sig,
+                &ret,
+                &head,
+                &format!(
+                    "        let context = &context;\n        let out = {call}.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                ),
             ))
         }
         ProxyCall::ReadOnce | ProxyCall::Bind | ProxyCall::Call => unreachable!("answered above"),
+    }
+}
+
+/// An awaited call: an `async fn` under `#[async_trait]`, else a `fn` returning the boxed future
+/// of `body`, whose owned values (`head`) are taken before it so it borrows nothing of the call.
+fn awaited(m: &ProxyMethod, sig: &str, ret: &str, head: &str, body: &str) -> String {
+    match &m.boxed {
+        None if ret == "()" => format!("    async {sig} {{\n{head}{body}    }}\n"),
+        None => format!("    async {sig} -> {ret} {{\n{head}{body}    }}\n"),
+        Some(lifetime) => format!(
+            "    {sig} -> ::lk_agents_abi::BoxFuture<{lifetime}, {ret}> {{\n{head}        ::std::boxed::Box::pin(async move {{\n{body}        }})\n    }}\n"
+        ),
     }
 }
 
