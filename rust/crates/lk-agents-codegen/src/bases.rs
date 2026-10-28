@@ -950,7 +950,11 @@ impl Writer<'_> {
             .and_then(|x| x.ret.clone())
             .ok_or_else(|| format!("{}: a realtime model has init capabilities", m.rust))?;
         let caps = self.core_ty(m, &caps)?;
-        let event = if self.p.events.is_empty() { "TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n" } else { "" };
+        let event = if self.p.events.is_empty() {
+            "TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n"
+        } else {
+            ""
+        };
         let text = REALTIME
             .replace("{TEVENT}", event)
             .replace("{Stream}", &s.name)

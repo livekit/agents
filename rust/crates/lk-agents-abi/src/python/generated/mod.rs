@@ -2,18 +2,13 @@
 //!
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
 //! `#[host(record)]` declarations of `lk-agents-abi`.
-//!
-//! Each record crosses as an instance of its generated model.
 
 mod a2a;
 mod agent;
 mod evals;
 mod llm;
-mod recorder;
-mod storage;
 mod stt;
 mod telemetry;
-mod text_session;
 mod tts;
 mod turn;
 mod vad;

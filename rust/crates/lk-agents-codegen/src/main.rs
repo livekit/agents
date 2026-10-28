@@ -297,6 +297,9 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let declared = decl::resolve::declarations(&abi)?;
+    records::check_in_place(&declared)?;
+    let conversions = records::conversions(&declared)?;
+    o.add(Path::new(adapter::DIR).join(&conversions.path), &conversions.text);
     for (dir, outs) in
         [(adapter::DIR, adapter::emit(&declared)?), (records::DIR, records::rust(&declared)?)]
     {

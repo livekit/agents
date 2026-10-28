@@ -41,6 +41,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
             }
         }
     }
+    crate::records::mark_in_place(&mut out);
     Ok(out)
 }
 
@@ -561,6 +562,7 @@ impl Resolver<'_> {
                 host: HostForm::Record { module: module_name, name },
                 extract,
                 emit,
+                in_place: false,
             }));
         }
         if voc::find(&entries, "error").is_some() {
@@ -573,6 +575,7 @@ impl Resolver<'_> {
                 host: HostForm::Annotation("str".into()),
                 extract: true,
                 emit: true,
+                in_place: false,
             }));
         }
         // Beside a derive (for another binding's record), `host` says Python crosses it by its own
@@ -590,6 +593,7 @@ impl Resolver<'_> {
                 host: HostForm::Annotation(host),
                 extract: has("extract"),
                 emit: has("emit"),
+                in_place: false,
             }));
         }
         if derives_host(attrs) {
@@ -634,6 +638,7 @@ impl Resolver<'_> {
                 host,
                 extract: unit || own_extract || words.iter().any(|w| w == "extract"),
                 emit: unit || words.iter().any(|w| w == "emit"),
+                in_place: false,
             }));
         }
         for i in &k.modules[module].items {
@@ -655,6 +660,7 @@ impl Resolver<'_> {
                     host: HostForm::CoreClass(ident.clone()),
                     extract: class_from_py_object(it),
                     emit: true,
+                    in_place: false,
                 }));
             }
             if let Some(object) = voc::find(&entries, "object")
@@ -672,6 +678,7 @@ impl Resolver<'_> {
                     host,
                     extract: pyclass.iter().any(|w| w == "from_py_object"),
                     emit: !input,
+                    in_place: false,
                 }));
             }
         }
@@ -761,6 +768,7 @@ impl Resolver<'_> {
             doc: doc(item_attrs(item)),
             extract,
             emit,
+            in_place: false,
             persisted,
             members,
             body,

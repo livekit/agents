@@ -23,6 +23,7 @@ pub mod types;
 pub mod vad;
 pub mod voice;
 pub mod worker;
+pub mod records;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {

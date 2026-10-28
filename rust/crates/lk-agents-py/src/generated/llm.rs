@@ -97,7 +97,7 @@ pub struct InferenceLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_age
 impl InferenceLlmChunks {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.recv(py)
+        self.0.recv(py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -252,10 +252,10 @@ impl McpSession {
     }
 
     #[getter]
-    fn cleanup(&self) -> PyResult<::lk_agents_abi::llm::mcp::McpCleanup> {
+    fn cleanup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::cleanup(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::mcp_session::mcp_cleanup_to_py(py, out)?)
     }
 }
 
@@ -324,8 +324,9 @@ pub struct NativeRealtimeModel(::std::sync::Arc<NativeRealtimeModelImpl>);
 impl NativeRealtimeModel {
     #[new]
     #[pyo3(signature = (config))]
-    fn new(config: ::lk_agents_abi::llm::realtime_native::NativeRealtimeConfig) -> PyResult<NativeRealtimeModel> {
+    fn new(config: Bound<'_, PyAny>) -> PyResult<NativeRealtimeModel> {
         ::lk_agents_abi::python::check_pid()?;
+        let config = crate::generated::records::realtime_options::native_realtime_config_from_py(&config)?;
         let out = <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::new(config).map_err(|e: ::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime_native::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(NativeRealtimeModel(::std::sync::Arc::new(out)))
     }
@@ -358,8 +359,9 @@ impl NativeRealtimeModel {
     }
 
     #[pyo3(signature = (options))]
-    fn update_options(&self, options: ::lk_agents_abi::llm::realtime_native::RealtimeOptions) -> PyResult<()> {
+    fn update_options(&self, options: Bound<'_, PyAny>) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
+        let options = crate::generated::records::realtime_options::realtime_options_from_py(&options)?;
         <NativeRealtimeModelImpl as ::lk_agents_abi::llm::realtime_native::NativeRealtimeModel>::update_options(&self.0, options);
         Ok(())
     }
@@ -479,7 +481,7 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
         let ev_arg = ev;
         let context = ::std::clone::Clone::clone(&self.context);
         self.notifier.notify(context, "ChainObserver._core_availability_changed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::llm_fallback::availability_changed_to_py(py, ev_arg)?];
             Ok((host.bind(py).getattr("_core_availability_changed")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
@@ -660,7 +662,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -685,7 +687,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::lk_agents_abi::python::value_to_py(py, &message_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::lk_agents_abi::python::value_to_py(py, &message_arg)?];
                 Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -709,7 +711,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_receive")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -733,7 +735,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -792,7 +794,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::mcp_session::mcp_invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?];
                 Ok((host.bind(py).getattr("_core_update")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {

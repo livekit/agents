@@ -301,6 +301,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         {
             return Err(format!("{at}: `{}` has no host conversion yet", ty.rust()));
         }
+        ty if crate::records::holds_record(ty) => crate::records::emit(ty, v)?,
         _ => format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}, py)?"),
     })
 }

@@ -192,7 +192,7 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
 // None accepted for a field that is not optional, or a default applied to anything but omission.
 #[test]
 fn records_cross_as_their_models_with_declared_presence() {
-    use lk_agents_abi::agent::{ReadBackAnswer, Retries};
+    use lk_agents_abi::agent::Retries;
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     Python::initialize();
     Python::attach(|py| {
@@ -209,32 +209,42 @@ fn records_cross_as_their_models_with_declared_presence() {
 
         let accepted = eval("models.ValidatedOutputAccepted(text=None, value=None)");
         assert!(matches!(
-            accepted.extract::<ValidatedOutput>().unwrap(),
+            _core::generated::records::agent_run::validated_output_from_py(&accepted).unwrap(),
             ValidatedOutput::Accepted { text: None, value: None, serialized: None }
         ));
-        let dict =
-            eval("{'kind': 'retry', 'reason': 'no'}").extract::<ValidatedOutput>().unwrap_err();
+        let dict = _core::generated::records::agent_run::validated_output_from_py(&eval(
+            "{'kind': 'retry', 'reason': 'no'}",
+        ))
+        .unwrap_err();
         assert!(dict.is_instance_of::<pyo3::exceptions::PyTypeError>(py), "{dict}");
         assert!(
             dict.to_string().contains("ValidatedOutputAccepted | ValidatedOutputRetry"),
             "{dict}"
         );
 
-        let null = eval("models.ReadBackAnswerInputRequired(question=None, verbatim=False)")
-            .extract::<ReadBackAnswer>()
-            .unwrap_err();
+        let null = _core::generated::records::agent_run::read_back_answer_from_py(&eval(
+            "models.ReadBackAnswerInputRequired(question=None, verbatim=False)",
+        ))
+        .unwrap_err();
         assert!(null.to_string().contains("ReadBackAnswerInputRequired.question"), "{null}");
 
         assert_eq!(
-            eval("models.Retries()").extract::<Retries>().unwrap(),
+            _core::generated::records::agent_run::retries_from_py(&eval("models.Retries()"))
+                .unwrap(),
             Retries { tool: 1, output: 1 }
         );
         assert_eq!(
-            eval("models.Retries(output=0)").extract::<Retries>().unwrap(),
+            _core::generated::records::agent_run::retries_from_py(&eval(
+                "models.Retries(output=0)"
+            ))
+            .unwrap(),
             Retries { tool: 1, output: 0 }
         );
         assert!(
-            eval("models.Retries(tool=None)").extract::<Retries>().is_err(),
+            _core::generated::records::agent_run::retries_from_py(&eval(
+                "models.Retries(tool=None)"
+            ))
+            .is_err(),
             "None is not omission"
         );
     });

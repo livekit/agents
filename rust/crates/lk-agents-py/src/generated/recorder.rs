@@ -66,7 +66,7 @@ impl SessionRecorder {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::flush(&this, now)
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::recorder::recording_summary_to_py(py, out)?, py))
         })
     }
 

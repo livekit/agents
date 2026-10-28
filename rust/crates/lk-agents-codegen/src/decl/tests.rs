@@ -564,15 +564,18 @@ fn records_carry_ordered_maps_sets_and_host_proxies() {
         "#,
     )
     .expect("resolves");
-    let rust = crate::records::rust(&decls).expect("emits");
-    let llm = &rust.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    // The conversions are the registration shell's functions; ABI holds none of them.
+    let abi = crate::records::rust(&decls).expect("emits");
+    assert!(abi.iter().all(|o| !o.text.contains("FromPyObject")), "a record conversion in ABI");
+    let shell = crate::records::conversions(&decls).expect("emits").text;
     for want in [
+        "pub fn state_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::class::State>",
         "cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)|",
         "collect::<PyResult<::std::collections::BTreeSet<_>>>()",
         "::pyo3::types::PyFrozenSet::new(py,",
-        "<dyn ::lk_agents_abi::llm::chat::Llm as crate::python::HostProxy>::from_host(",
+        "<dyn ::lk_agents_abi::llm::chat::Llm as ::lk_agents_abi::python::HostProxy>::from_host(",
     ] {
-        assert!(llm.contains(want), "{want}\n{llm}");
+        assert!(shell.contains(want), "{want}\n{shell}");
     }
     let models = crate::records::python(&decls).expect("models");
     let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
@@ -605,8 +608,9 @@ fn a_persisted_record_saves_and_restores_through_its_rust_codec() {
     let llm = &adapters.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     let root = &adapters.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
     assert!(
-        llm.contains("pub fn _core_persist_session_state(record: ::lk_agents_abi::llm::class::SessionState) -> PyResult<String> {\n    ::serde_json::to_string(&record)")
-            && llm.contains("pub fn _core_restore_session_state(data: &str) -> PyResult<::lk_agents_abi::llm::class::SessionState> {\n    ::serde_json::from_str(data)")
+        llm.contains("pub fn _core_persist_session_state(record: Bound<'_, PyAny>) -> PyResult<String> {\n    let record = crate::generated::records::session::session_state_from_py(&record)?;\n    ::serde_json::to_string(&record)")
+            && llm.contains("let record: ::lk_agents_abi::llm::class::SessionState = ::serde_json::from_str(data)")
+            && llm.contains("crate::generated::records::session::session_state_to_py(py, record)")
             && root.contains("wrap_pyfunction!(llm::_core_restore_session_state, m)"),
         "{llm}\n{root}"
     );

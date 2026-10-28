@@ -43,8 +43,9 @@ impl Storage {
     }
 
     #[pyo3(signature = (config, host))]
-    fn _core_a2a_door<'py>(&self, py: Python<'py>, config: ::lk_agents_abi::a2a::door::DoorConfig, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    fn _core_a2a_door<'py>(&self, py: Python<'py>, config: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let config = crate::generated::records::a2a_door::door_config_from_py(&config)?;
         let host = super::a2a::TurnHostProxy::from_host(&host)?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
@@ -72,7 +73,7 @@ impl Storage {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::create_thread(&this, scope, attributes, idle_ttl_seconds)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
         })
     }
 
@@ -84,7 +85,7 @@ impl Storage {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread(&this, thread_id)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
         })
     }
 
@@ -96,7 +97,7 @@ impl Storage {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, before, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_page_to_py(py, out)?, py))
         })
     }
 
@@ -110,7 +111,7 @@ impl Storage {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::update_thread(&this, thread_id, attributes, idle_ttl_seconds)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_info_to_py(py, out)?, py))
         })
     }
 
@@ -134,19 +135,20 @@ impl Storage {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread_items(&this, thread_id, agent, after, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_class::thread_item_page_to_py(py, out)?, py))
         })
     }
 
     /// The thread's A2A tasks, of one `status` when given.
     #[pyo3(signature = (thread_id, *, status = None))]
-    fn get_thread_tasks<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, status: ::std::option::Option<::lk_agents_abi::storage::TaskState>) -> PyResult<Bound<'py, PyAny>> {
+    fn get_thread_tasks<'py>(&self, py: Python<'py>, thread_id: ::std::string::String, status: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let status = status.map(|v| crate::generated::records::storage_class::task_state_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::get_thread_tasks(&this, thread_id, status)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_class::thread_task_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
         })
     }
 
@@ -208,8 +210,9 @@ pub struct _core_ContextActivation(::std::sync::Arc<_core_ContextActivationImpl>
 impl _core_ContextActivation {
     #[new]
     #[pyo3(signature = (scopes, routing_state, read_only))]
-    fn new(scopes: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextScope>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<_core_ContextActivation> {
+    fn new(scopes: Bound<'_, PyAny>, routing_state: Option<Bound<'_, PyAny>>, read_only: bool) -> PyResult<_core_ContextActivation> {
         ::lk_agents_abi::python::check_pid()?;
+        let scopes = scopes.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_scope_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let routing_state = routing_state.map(|v| ::lk_agents_abi::python::value_from_py(&v, "routing_state")).transpose()?;
         let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::new(scopes, routing_state, read_only).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(_core_ContextActivation(::std::sync::Arc::new(out)))
@@ -217,33 +220,35 @@ impl _core_ContextActivation {
 
     /// Check manifests before restoring values or accepting defaults for absent fields.
     #[pyo3(signature = (scope_id, identity, fields))]
-    fn load<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, fields: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextField>) -> PyResult<Bound<'py, PyAny>> {
+    fn load<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, fields: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let fields = fields.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_field_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::load(&this, scope_id, identity, fields)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_context::context_values_to_py(py, out)?, py))
         })
     }
 
     /// Stage the validated fields; a stale activation cannot overwrite a newer revision.
     #[pyo3(signature = (scope_id, identity, revision, fields))]
-    fn save<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, revision: i64, fields: ::std::vec::Vec<::lk_agents_abi::storage::context::ContextField>) -> PyResult<Bound<'py, PyAny>> {
+    fn save<'py>(&self, py: Python<'py>, scope_id: ::std::string::String, identity: ::std::string::String, revision: i64, fields: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let fields = fields.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::storage_context::context_field_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::save(&this, scope_id, identity, revision, fields)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::storage_context::context_values_to_py(py, out)?, py))
         })
     }
 
     #[getter]
-    fn writes(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::storage::context::ContextScopeWrite>> {
+    fn writes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_ContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::writes(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::storage_context::context_scope_write_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     fn acknowledge(&self) -> PyResult<()> {

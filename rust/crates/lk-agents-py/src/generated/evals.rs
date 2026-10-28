@@ -33,13 +33,14 @@ impl _core_JudgeRunner {
     /// Runs `judges` concurrently on `chat_ctx`, judged against `reference` when given: their
     /// outcomes in judge order. An unknown built-in judge is refused before any runs.
     #[pyo3(signature = (judges, chat_ctx, reference))]
-    fn evaluate<'py>(&self, py: Python<'py>, judges: ::std::vec::Vec<::lk_agents_abi::evals::JudgeSpec>, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, reference: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+    fn evaluate<'py>(&self, py: Python<'py>, judges: Bound<'_, PyAny>, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, reference: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
+        let judges = judges.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::evals::judge_spec_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let this = ::std::sync::Arc::clone(&self.0);
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::evals::judge_outcome_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any(), py))
         })
     }
 
@@ -51,7 +52,7 @@ impl _core_JudgeRunner {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <_core_JudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::evals::intent_judgment_to_py(py, out)?, py))
         })
     }
 }
@@ -62,10 +63,10 @@ type EvaluationsImpl = <crate::Selected as super::Implementations>::Evaluations;
 /// The aggregates of `verdicts`; a verdict other than pass, fail or maybe is refused.
 #[pyfunction]
 #[pyo3(signature = (verdicts))]
-pub fn _core_evaluation_score(verdicts: ::std::vec::Vec<::std::string::String>) -> PyResult<::lk_agents_abi::evals::EvaluationScore> {
+pub fn _core_evaluation_score<'py>(py: Python<'py>, verdicts: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
     let out = <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
+    Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
 }
 
 /// The judge tools' raw schemas, which the host offers a model it implements.
@@ -128,7 +129,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::evals::Judgment>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

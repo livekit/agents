@@ -52,10 +52,10 @@ type WorkerCliImpl = <crate::Selected as super::Implementations>::WorkerCli;
 
 #[pyfunction]
 #[pyo3(signature = (argv))]
-pub fn parse_cli(argv: ::std::vec::Vec<::std::string::String>) -> PyResult<::lk_agents_abi::worker::cli::CliArgs> {
+pub fn parse_cli<'py>(py: Python<'py>, argv: ::std::vec::Vec<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
     let out = <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::parse_cli(argv).map_err(|e: ::lk_agents_abi::worker::cli::CliError| <::lk_agents_abi::worker::cli::CliError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(out)
+    Ok(crate::generated::records::worker_cli::cli_args_to_py(py, out)?)
 }
 
 #[pyfunction]
@@ -294,7 +294,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 }
             };
             let o = out.bind(py);
-            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "SessionPort._core_session_state"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.extract::<::std::collections::BTreeMap<::std::string::String, ::std::string::String>>())?, (item_4.extract::<::std::option::Option<f64>>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "SessionPort._core_session_state"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.extract::<::std::string::String>()?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()))?, (item_4.extract::<::std::option::Option<f64>>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

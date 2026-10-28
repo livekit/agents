@@ -1,7 +1,8 @@
-//! The `#[host(record)]` records: their pyo3 conversions, written into the ABI crate
-//! (`lk-agents-abi/src/python/generated/`, one module per ABI subject), and their models, written
-//! into `_generated/<module>.py` as frozen keyword-only dataclasses. The declared proxies'
-//! `HostProxy` bridges for the in-place exports go into the same modules.
+//! The `#[host(record)]` records: their pyo3 conversions, free functions in the registration shell
+//! (`lk-agents-py/src/generated/records.rs`, a module per model module: the ABI crate holds no host
+//! code), and their models, written into `_generated/<module>.py` as frozen keyword-only
+//! dataclasses. The declared proxies' `HostProxy` bridges for the in-place exports are written into
+//! the ABI crate (`lk-agents-abi/src/python/generated/`) until those exports are declarations.
 //!
 //! A record crosses as an instance of its model, never a dict: a struct is one class; a
 //! data-variant enum one class per variant, the class being the tag, plus a union alias; a
@@ -10,8 +11,10 @@
 //! applies to an omitted keyword only.
 
 use crate::class_stub::{Imports, docstring, py_literal};
+use std::collections::BTreeSet;
+
 use crate::decl::{
-    Declarations, Field, HostForm, RecordBody, RecordDecl, Ty, Variant, VariantShape,
+    Declarations, Field, HostForm, Record, RecordBody, RecordDecl, Ty, Variant, VariantShape,
 };
 use crate::python::Out;
 
@@ -21,31 +24,35 @@ const PACKAGE: &str = "livekit.agents._generated";
 
 const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `#[host(record)]` declarations of `lk-agents-abi`.\n";
 
-/// The conversions: `mod.rs` and one module per subject.
+/// What stays in ABI until the in-place exports are declarations: the declared proxies'
+/// `HostProxy` bridges and the in-place records' trait impls, `mod.rs` and one module per subject.
 pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
+    let in_place = || decls.records.iter().filter(|r| r.in_place);
     let mut families: Vec<&str> = decls
-        .records
+        .proxies
         .iter()
-        .map(|r| r.family.as_str())
-        .chain(decls.proxies.iter().map(|p| p.family.as_str()))
+        .map(|p| p.family.as_str())
+        .chain(in_place().map(|r| r.family.as_str()))
         .collect();
     families.sort();
     families.dedup();
-    let mut root =
-        format!("{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n\n");
+    let mut root = format!("{HEADER}\n");
     for family in &families {
         root.push_str(&format!("mod {family};\n"));
     }
-    root.push_str("\n/// `obj` is not an instance of the model(s) `expected` names.\nfn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {\n    use ::pyo3::types::{PyAnyMethods as _, PyTypeMethods as _};\n    let got = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();\n    ::pyo3::exceptions::PyTypeError::new_err(format!(\"expected {expected}, got {got}\"))\n}\n");
+    if in_place().next().is_some() {
+        root.push_str(NOT_A);
+    }
     let mut out = vec![Out { path: "mod.rs".into(), text: root }];
     for family in families {
-        let mut text = format!("{HEADER}//!\n//! The `{family}` records.\n");
-        if decls.records.iter().any(|r| r.family == family) {
+        let mut text =
+            format!("{HEADER}//!\n//! The `{family}` proxy bridges and in-place records.\n");
+        if in_place().any(|r| r.family == family) {
             text.push_str("\nuse pyo3::prelude::*;\n");
         }
-        for r in decls.records.iter().filter(|r| r.family == family) {
+        for r in in_place().filter(|r| r.family == family) {
             text.push_str(&format!("\n// Declared in {}.\n", r.source));
-            text.push_str(&record_rust(r)?);
+            text.push_str(&record_rust(r, true)?);
         }
         for p in decls.proxies.iter().filter(|p| p.family == family) {
             text.push_str(&format!("\n// Declared in {}.\n", p.source));
@@ -56,7 +63,195 @@ pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
     Ok(out)
 }
 
-fn record_rust(r: &RecordDecl) -> Result<String, String> {
+/// The conversions of every record, `records.rs` of the registration shell's generated adapters:
+/// one module per model module, `<record>_from_py` and `<record>_to_py` in each.
+pub fn conversions(decls: &Declarations) -> Result<Out, String> {
+    let mut modules: Vec<&str> = decls.records.iter().map(|r| r.module.as_str()).collect();
+    modules.sort();
+    modules.dedup();
+    let mut text = format!(
+        "{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n{NOT_A}"
+    );
+    for module in modules {
+        text.push_str(&format!("\npub mod {module} {{\n    use pyo3::prelude::*;\n"));
+        for r in decls.records.iter().filter(|r| r.module == module) {
+            text.push_str(&format!("\n    // Declared in {}.\n", r.source));
+            let body = if r.in_place { in_place_rust(r) } else { record_rust(r, false)? };
+            for line in body.lines() {
+                text.push_str(&if line.is_empty() {
+                    "\n".to_owned()
+                } else {
+                    format!("    {line}\n")
+                });
+            }
+        }
+        text.push_str("}\n");
+    }
+    Ok(Out { path: "records.rs".into(), text })
+}
+
+/// Records the in-place exports still convert by pyo3 trait (an in-place export's parameter, a
+/// `#[derive(Host)]` record's field): their conversions stay trait impls written into ABI, which
+/// the shell's functions call. Only shrinks, as those exports become declarations; the records
+/// their fields hold follow them.
+pub const IN_PLACE: &[&str] = &[
+    "::lk_agents_abi::a2a::client::Message",
+    "::lk_agents_abi::agent::run::RunError",
+    "::lk_agents_abi::LogRecordWire",
+    "::lk_agents_abi::llm::tool_executor::ToolOutcome",
+    "::lk_agents_abi::llm::tool_executor::ToolReport",
+    "::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission",
+    "::lk_agents_abi::telemetry::transport::TraceCarrier",
+    "::lk_agents_abi::worker::endpoint::EndpointRequest",
+    "::lk_agents_abi::worker::ipc::ProcessCompletion",
+    "::lk_agents_abi::worker::worker::RegisteredInfo",
+];
+
+/// Marks the in-place records, and the records their fields hold, wherever a type names them.
+pub fn mark_in_place(decls: &mut Declarations) {
+    let mut held: BTreeSet<String> = IN_PLACE
+        .iter()
+        .filter(|rust| decls.records.iter().any(|r| r.rust == **rust))
+        .map(|rust| (*rust).to_owned())
+        .collect();
+    loop {
+        let before = held.len();
+        let mut found = Vec::new();
+        for r in decls.records.iter().filter(|r| held.contains(&r.rust)) {
+            for f in fields(&r.body) {
+                records_in(&f.ty, &mut found);
+            }
+        }
+        held.extend(found);
+        if held.len() == before {
+            break;
+        }
+    }
+    for r in &mut decls.records {
+        r.in_place = held.contains(&r.rust);
+        for f in fields_mut(&mut r.body) {
+            mark(&mut f.ty, &held);
+        }
+    }
+    for c in &mut decls.classes {
+        for m in &mut c.methods {
+            m.params.iter_mut().for_each(|p| mark(&mut p.ty, &held));
+            mark(&mut m.ret.ok, &held);
+        }
+    }
+    for p in &mut decls.proxies {
+        for m in &mut p.methods {
+            m.params.iter_mut().for_each(|q| mark(&mut q.ty, &held));
+            mark(&mut m.ret.ok, &held);
+        }
+    }
+}
+
+/// Every [`IN_PLACE`] entry is a declared record: the list shrinks as its records leave it.
+pub fn check_in_place(decls: &Declarations) -> Result<(), String> {
+    match IN_PLACE.iter().find(|rust| !decls.records.iter().any(|r| r.rust == **rust)) {
+        Some(rust) => Err(format!("records::IN_PLACE: `{rust}` is not a declared record")),
+        None => Ok(()),
+    }
+}
+
+fn records_in(ty: &Ty, out: &mut Vec<String>) {
+    match ty {
+        Ty::Record(r) if matches!(r.host, HostForm::Record { .. }) => out.push(r.rust.clone()),
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => records_in(t, out),
+        Ty::Map(k, t) => {
+            records_in(k, out);
+            records_in(t, out);
+        }
+        Ty::Tuple(ts) => ts.iter().for_each(|t| records_in(t, out)),
+        _ => {}
+    }
+}
+
+fn mark(ty: &mut Ty, held: &BTreeSet<String>) {
+    match ty {
+        Ty::Record(r) => r.in_place = held.contains(&r.rust),
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => mark(t, held),
+        Ty::Map(k, t) => {
+            mark(k, held);
+            mark(t, held);
+        }
+        Ty::Tuple(ts) => ts.iter_mut().for_each(|t| mark(t, held)),
+        Ty::Source { item, .. } => mark(item, held),
+        Ty::HostDuplex { input, output } => {
+            mark(input, held);
+            mark(output, held);
+        }
+        _ => {}
+    }
+}
+
+fn fields(body: &RecordBody) -> Vec<&Field> {
+    match body {
+        RecordBody::Struct(fields) => fields.iter().collect(),
+        RecordBody::Variants(variants) => variants
+            .iter()
+            .flat_map(|v| match &v.shape {
+                VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
+                VariantShape::Tuple(Some(f)) => vec![f],
+                VariantShape::Named(fields) => fields.iter().collect(),
+            })
+            .collect(),
+        RecordBody::Literals(_) => Vec::new(),
+    }
+}
+
+fn fields_mut(body: &mut RecordBody) -> Vec<&mut Field> {
+    match body {
+        RecordBody::Struct(fields) => fields.iter_mut().collect(),
+        RecordBody::Variants(variants) => variants
+            .iter_mut()
+            .flat_map(|v| match &mut v.shape {
+                VariantShape::Unit | VariantShape::Tuple(None) => Vec::new(),
+                VariantShape::Tuple(Some(f)) => vec![f],
+                VariantShape::Named(fields) => fields.iter_mut().collect(),
+            })
+            .collect(),
+        RecordBody::Literals(_) => Vec::new(),
+    }
+}
+
+/// An in-place record's shell functions: calls of its ABI trait impls.
+fn in_place_rust(r: &RecordDecl) -> String {
+    let (rust, snake) = (&r.rust, cell(&r.name).to_lowercase());
+    let mut s = String::new();
+    if r.extract {
+        s.push_str(&format!(
+            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n    obj.extract::<{rust}>()\n}}\n"
+        ));
+    }
+    if r.emit {
+        s.push_str(&format!(
+            "\npub fn {snake}_to_py<'py>(py: Python<'py>, value: {rust}) -> PyResult<Bound<'py, PyAny>> {{\n    ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)\n}}\n"
+        ));
+    }
+    s
+}
+
+const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` names.\nfn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {\n    use ::pyo3::types::{PyAnyMethods as _, PyTypeMethods as _};\n    let got = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();\n    ::pyo3::exceptions::PyTypeError::new_err(format!(\"expected {expected}, got {got}\"))\n}\n";
+
+/// Whether `ty` holds a declared record: it then crosses by the records' conversion functions.
+pub(crate) fn holds_record(ty: &Ty) -> bool {
+    match ty {
+        Ty::Record(r) => matches!(r.host, HostForm::Record { .. }) && !r.in_place,
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
+        Ty::Map(k, t) => holds_record(k) || holds_record(t),
+        Ty::Tuple(ts) => ts.iter().any(holds_record),
+        _ => false,
+    }
+}
+
+/// The path of a declared record's conversions, less their `_from_py` / `_to_py` suffix.
+pub(crate) fn conversion(module: &str, name: &str) -> String {
+    format!("crate::generated::records::{module}::{}", cell(name).to_lowercase())
+}
+
+fn record_rust(r: &RecordDecl, as_trait: bool) -> Result<String, String> {
     let module = format!("{PACKAGE}.{}", r.module);
     let rust = &r.rust;
     let mut s = String::new();
@@ -132,15 +327,38 @@ fn record_rust(r: &RecordDecl) -> Result<String, String> {
     for c in &classes {
         s.push_str(&format!("static {}: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =\n    ::pyo3::sync::PyOnceLock::new();\n", cell(c)));
     }
+    if as_trait {
+        if r.extract {
+            s.push_str(&format!(
+                "\nimpl<'a, 'py> FromPyObject<'a, 'py> for {rust} {{\n    type Error = PyErr;\n\n    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {{\n        let obj = &*obj;\n{}{extract}    }}\n}}\n",
+                if classes.is_empty() { "" } else { "        let py = obj.py();\n" }
+            ));
+        }
+        if r.emit {
+            s.push_str(&format!(
+                "\nimpl<'py> IntoPyObject<'py> for {rust} {{\n    type Target = PyAny;\n    type Output = Bound<'py, PyAny>;\n    type Error = PyErr;\n\n    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{emit}    }}\n}}\n"
+            ));
+        }
+        return Ok(s);
+    }
+    let snake = cell(&r.name).to_lowercase();
     if r.extract {
+        let extract = extract
+            .replace("Ok(Self {", &format!("Ok({rust} {{"))
+            .replace("Self::", &format!("{rust}::"));
         s.push_str(&format!(
-            "\nimpl<'a, 'py> FromPyObject<'a, 'py> for {rust} {{\n    type Error = PyErr;\n\n    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {{\n        let obj = &*obj;\n{}{extract}    }}\n}}\n",
-            if classes.is_empty() { "" } else { "        let py = obj.py();\n" }
+            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{}{extract}}}\n",
+            if classes.is_empty() { "" } else { "    let py = obj.py();\n" }
         ));
     }
     if r.emit {
+        let emit = emit
+            .replace("let Self {", &format!("let {rust} {{"))
+            .replace("} = self;", "} = value;")
+            .replace("match self {", "match value {")
+            .replace("Self::", &format!("{rust}::"));
         s.push_str(&format!(
-            "\nimpl<'py> IntoPyObject<'py> for {rust} {{\n    type Target = PyAny;\n    type Output = Bound<'py, PyAny>;\n    type Error = PyErr;\n\n    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{emit}    }}\n}}\n"
+            "\npub fn {snake}_to_py<'py>(py: Python<'py>, value: {rust}) -> PyResult<Bound<'py, PyAny>> {{\n{emit}}}\n"
         ));
     }
     Ok(s)
@@ -262,6 +480,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             "{v}.try_iter()?.map(|item| {{ let item = &item?; {} }}).collect::<PyResult<::std::collections::BTreeSet<_>>>()",
             read(t, "item", path)?
         ),
+        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+            format!("{}_from_py({v})", conversion(module, name))
+        }
         Ty::Record(r) => {
             format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)
         }
@@ -271,15 +492,29 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             ));
         }
         Ty::Proxy { rust, .. } => {
-            format!("<dyn {rust} as crate::python::HostProxy>::from_host({v}, None)")
+            format!("<dyn {rust} as ::lk_agents_abi::python::HostProxy>::from_host({v}, None)")
         }
         other => return Err(format!("{path}: `{}` is not a record field", other.rust())),
     })
 }
 
-/// A `Bound<'py, PyAny>` expression of the owned value `x` (fallible steps use `?`).
-fn emit(ty: &Ty, x: &str) -> Result<String, String> {
+/// A `Bound<'py, PyAny>` expression of the owned value `x` (fallible steps use `?`, `py` in scope):
+/// what a declared record field, an adapter's result or a proxy's argument crosses as.
+pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
     Ok(match ty {
+        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+            format!("{}_to_py(py, {x})?", conversion(module, name))
+        }
+        Ty::Tuple(ts) => {
+            let names: Vec<String> = (0..ts.len()).map(|i| format!("x{i}")).collect();
+            let items =
+                ts.iter().zip(&names).map(|(t, n)| emit(t, n)).collect::<Result<Vec<_>, _>>()?;
+            format!(
+                "{{ let ({},) = {x}; ::pyo3::types::PyTuple::new(py, [{}])?.into_any() }}",
+                names.join(", "),
+                items.join(", ")
+            )
+        }
         Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{x})?"),
         Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{x})?.into_any()"),
         Ty::Optional(t) => format!(

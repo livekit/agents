@@ -90,16 +90,18 @@ mod python {
     use super::{NativeSource, PullError, Pulled};
 
     /// The host face the generated stream classes forward to: `recv()` resolves to the next item
-    /// or `None` at the end; `aclose()` releases the source.
-    impl<T> NativeSource<T>
-    where
-        T: for<'py> IntoPyObject<'py> + Send + 'static,
-    {
-        pub fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// (crossing by `to_py`, the item's generated conversion) or `None` at the end; `aclose()`
+    /// releases the source.
+    impl<T: Send + 'static> NativeSource<T> {
+        pub fn recv<'py>(
+            &self,
+            py: Python<'py>,
+            to_py: fn(Python<'_>, T) -> PyResult<Py<PyAny>>,
+        ) -> PyResult<Bound<'py, PyAny>> {
             let source = self.clone();
             lk_agents_abi::python::future_into_py(py, async move {
                 match source.pull().await {
-                    Ok(Pulled::Item(item)) => Ok(Some(item)),
+                    Ok(Pulled::Item(item)) => Python::attach(|py| to_py(py, item)).map(Some),
                     Ok(Pulled::End | Pulled::Cancelled) => Ok(None),
                     Err(PullError::Overlap) => Err(lk_agents_abi::python::host_exception(
                         "livekit.agents._exceptions",

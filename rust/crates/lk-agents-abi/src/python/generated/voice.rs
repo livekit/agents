@@ -3,7 +3,7 @@
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
 //! `#[host(record)]` declarations of `lk-agents-abi`.
 //!
-//! The `voice` records.
+//! The `voice` proxy bridges and in-place records.
 
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::voice::avatar::ClearBufferListener {

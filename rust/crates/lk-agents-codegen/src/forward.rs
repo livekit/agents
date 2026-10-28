@@ -6,16 +6,21 @@ use crate::python::{Out, docstring};
 use crate::stub::signature_parts;
 
 pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Out>, String> {
-    let mut out: Vec<Out> = x.str_classes.iter().map(|c| str_class(decls, x, c)).collect::<Result<_, _>>()?;
+    let mut out: Vec<Out> =
+        x.str_classes.iter().map(|c| str_class(decls, x, c)).collect::<Result<_, _>>()?;
     let mut modules: Vec<&str> = Vec::new();
-    for m in x.wrappers.iter().map(|w| w.module.as_str()).chain(x.forwards.iter().map(|f| f.0.as_str())) {
+    for m in
+        x.wrappers.iter().map(|w| w.module.as_str()).chain(x.forwards.iter().map(|f| f.0.as_str()))
+    {
         if !modules.contains(&m) {
             modules.push(m);
         }
     }
     for m in modules {
         if out.iter().any(|o| o.path == format!("{m}.py")) {
-            return Err(format!("{m}: a forwarding module holds a str class or wrappers, not both"));
+            return Err(format!(
+                "{m}: a forwarding module holds a str class or wrappers, not both"
+            ));
         }
         out.push(wrapper_module(decls, x, m)?);
     }
@@ -58,7 +63,11 @@ fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, Stri
         x.forwards.iter().filter(|f| f.0 == module).map(|f| f.1.clone()).collect();
     forwards.sort();
     let mut sources: Vec<&str> = Vec::new();
-    for s in wrappers.iter().map(|w| w.source.as_str()).chain(x.forwards.iter().filter(|f| f.0 == module).map(|f| f.2.as_str())) {
+    for s in wrappers
+        .iter()
+        .map(|w| w.source.as_str())
+        .chain(x.forwards.iter().filter(|f| f.0 == module).map(|f| f.2.as_str()))
+    {
         if !sources.contains(&s) {
             sources.push(s);
         }
@@ -98,11 +107,10 @@ fn wrapper_module(decls: &[Decl], x: &Exposed, module: &str) -> Result<Out, Stri
     b.push_str("]\n");
     for w in &wrappers {
         let o = x.objects.iter().find(|o| o.name == w.core).expect("the wrapper's own object");
-        let new = o
-            .methods
-            .iter()
-            .find(|m| m.kind == MethodKind::New)
-            .ok_or_else(|| format!("{}: {}: the object has no #[host(new)]", w.source, w.name))?;
+        let new =
+            o.methods.iter().find(|m| m.kind == MethodKind::New).ok_or_else(|| {
+                format!("{}: {}: the object has no #[host(new)]", w.source, w.name)
+            })?;
         let (params, _) = signature_parts(decls, x, &new.sig)?;
         let base = w.base.split_once(':').map_or(w.base.as_str(), |(_, n)| n);
         b.push_str(&format!("\n\nclass {}({base}):\n", w.name));
@@ -163,7 +171,12 @@ fn export<'a>(x: &'a Exposed, c: &StrClass, name: &str) -> Result<&'a ExportFn, 
 }
 
 /// The one string parameter an applied fn takes: `(its stub text, its name)`.
-fn one_str(decls: &[Decl], x: &Exposed, c: &StrClass, f: &ExportFn) -> Result<(String, String), String> {
+fn one_str(
+    decls: &[Decl],
+    x: &Exposed,
+    c: &StrClass,
+    f: &ExportFn,
+) -> Result<(String, String), String> {
     let (params, _) = signature_parts(decls, x, &f.sig)?;
     let [(p, false)] = params.as_slice() else {
         return Err(format!("{}: {}: `{}` must take the string alone", c.source, c.name, f.name));

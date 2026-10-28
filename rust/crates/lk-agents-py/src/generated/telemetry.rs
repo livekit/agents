@@ -127,10 +127,10 @@ impl _core_TelemetryPolicy {
 
     /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
     #[pyo3(signature = (registered, signal_enabled, job_open, held_count, recording_disabled))]
-    fn export_action(&self, registered: bool, signal_enabled: bool, job_open: bool, held_count: usize, recording_disabled: bool) -> PyResult<::lk_agents_abi::telemetry::policy::TelemetryExportAction> {
+    fn export_action<'py>(&self, py: Python<'py>, registered: bool, signal_enabled: bool, job_open: bool, held_count: usize, recording_disabled: bool) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::export_action(&self.0, registered, signal_enabled, job_open, held_count, recording_disabled);
-        Ok(out)
+        Ok(crate::generated::records::telemetry::telemetry_export_action_to_py(py, out)?)
     }
 
     #[pyo3(signature = (key))]
@@ -173,16 +173,18 @@ impl _core_TelemetryPolicy {
     /// Conservative retained bytes for an SDK scalar or collection. Child charges are already
     /// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
     #[pyo3(signature = (kind, length, depth, children))]
-    fn value_bytes(&self, kind: ::lk_agents_abi::telemetry::policy::TelemetryValueKind, length: usize, depth: usize, children: ::std::vec::Vec<usize>) -> PyResult<usize> {
+    fn value_bytes(&self, kind: Bound<'_, PyAny>, length: usize, depth: usize, children: ::std::vec::Vec<usize>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
+        let kind = crate::generated::records::telemetry::telemetry_value_kind_from_py(&kind)?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::value_bytes(&self.0, kind, length, depth, children);
         Ok(out)
     }
 
     /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
     #[pyo3(signature = (kind, fields, event_count, link_count))]
-    fn record_bytes(&self, kind: ::lk_agents_abi::telemetry::policy::TelemetryRecordKind, fields: ::std::vec::Vec<usize>, event_count: usize, link_count: usize) -> PyResult<usize> {
+    fn record_bytes(&self, kind: Bound<'_, PyAny>, fields: ::std::vec::Vec<usize>, event_count: usize, link_count: usize) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
+        let kind = crate::generated::records::telemetry::telemetry_record_kind_from_py(&kind)?;
         let out = <_core_TelemetryPolicyImpl as ::lk_agents_abi::telemetry::policy::TelemetryPolicy>::record_bytes(&self.0, kind, fields, event_count, link_count);
         Ok(out)
     }
@@ -487,10 +489,10 @@ impl _core_TelemetryWorker {
     }
 
     /// Drain bounded lifecycle observations; timed-out work keeps its captured key and owner.
-    fn drain_observations(&self) -> PyResult<::std::vec::Vec<::lk_agents_abi::telemetry::work::TelemetryWorkObservation>> {
+    fn drain_observations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
         let out = <_core_TelemetryWorkerImpl as ::lk_agents_abi::telemetry::work::TelemetryWorker>::drain_observations(&self.0);
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::telemetry::telemetry_work_observation_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
     }
 
     /// Nonrecursive counters, read without exporting/logging them through this same pipeline.

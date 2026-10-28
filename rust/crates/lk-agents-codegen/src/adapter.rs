@@ -35,6 +35,8 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     for family in &sorted {
         root.push_str(&format!("pub mod {family};\n"));
     }
+    // The declared records' conversions, which every family's adapters call.
+    root.push_str("pub mod records;\n");
     root.push_str("\n/// The implementation of each declared class. The registration shell implements it.\npub trait Implementations: 'static {\n");
     for c in &decls.classes {
         // An instance of another class is that class's implementation.
@@ -87,7 +89,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             text.push_str(&class(decls, c)?);
             for (name, item) in sources(c) {
                 text.push('\n');
-                text.push_str(&source_class(&name, &item));
+                text.push_str(&source_class(&name, &item)?);
             }
         }
         for p in decls.proxies.iter().filter(|p| p.family == *family) {
@@ -261,8 +263,9 @@ fn persistence(r: &RecordDecl) -> String {
     let (persist, restore) = r.persistence();
     let (rust, name) = (&r.rust, &r.name);
     format!(
-        "// Declared in {source}.\n\n/// `{name}.to_json()`.\n#[pyfunction]\npub fn {persist}(record: {rust}) -> PyResult<String> {{\n    ::serde_json::to_string(&record)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))\n}}\n\n/// `{name}.from_json(data)`.\n#[pyfunction]\npub fn {restore}(data: &str) -> PyResult<{rust}> {{\n    ::serde_json::from_str(data)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))\n}}\n",
-        source = r.source
+        "// Declared in {source}.\n\n/// `{name}.to_json()`.\n#[pyfunction]\npub fn {persist}(record: Bound<'_, PyAny>) -> PyResult<String> {{\n    let record = {conv}_from_py(&record)?;\n    ::serde_json::to_string(&record)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))\n}}\n\n/// `{name}.from_json(data)`.\n#[pyfunction]\npub fn {restore}<'py>(py: Python<'py>, data: &str) -> PyResult<Bound<'py, PyAny>> {{\n    let record: {rust} = ::serde_json::from_str(data)\n        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{name}: {{e}}\")))?;\n    {conv}_to_py(py, record)\n}}\n",
+        source = r.source,
+        conv = crate::records::conversion(&r.module, &r.name)
     )
 }
 
@@ -279,11 +282,16 @@ pub fn sources(c: &Class) -> Vec<(String, Ty)> {
 }
 
 /// A pull source as the host consumes it: the runtime's `NativeSource` does the work.
-fn source_class(name: &str, item: &Ty) -> String {
-    format!(
-        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        self.0.recv(py)\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        self.0.aclose(py)\n    }}\n}}\n",
+fn source_class(name: &str, item: &Ty) -> Result<String, String> {
+    let to_py = if native(item) {
+        "::pyo3::IntoPyObjectExt::into_py_any(item, py)".to_owned()
+    } else {
+        format!("Ok({}.unbind())", crate::records::emit(item, "item")?)
+    };
+    Ok(format!(
+        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        self.0.recv(py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        ::lk_agents_abi::python::check_pid()?;\n        self.0.aclose(py)\n    }}\n}}\n",
         item = item.rust()
-    )
+    ))
 }
 
 /// pyo3's signature: positional parameters, then `*` before the first keyword-only one.
@@ -321,7 +329,9 @@ fn rust_literal(d: &Literal, ty: &Ty) -> String {
 /// A kind pyo3 extracts and emits by itself: the conversion is the type's own.
 fn native(ty: &Ty) -> bool {
     match ty {
-        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => true,
+        // A declared record crosses by its generated conversion functions, not a pyo3 trait.
+        Ty::Record(r) => r.in_place || !matches!(r.host, HostForm::Record { .. }),
+        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),
@@ -371,6 +381,14 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Json => format!("::lk_agents_abi::python::value_from_py(&{v}, {path})"),
         Ty::JsonObject => format!(
             "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
+        ),
+        Ty::Record(Record { host: HostForm::Record { module, name }, in_place: false, .. }) => {
+            format!("{}_from_py(&{v})", crate::records::conversion(module, name))
+        }
+        Ty::Map(k, t) => format!(
+            "{v}.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok(({}?, {}?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())",
+            from_object("key", k, path, at)?,
+            from_object("item", t, path, at)?
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
             format!("super::{family}::{name}Proxy::owned(&{v})")
@@ -466,6 +484,9 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
                 "{class}(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new({{}})))"
             ),
         ),
-        other => return Err(format!("{at}: `{}` has no output conversion", other.rust())),
+        other => (
+            "Bound<'py, PyAny>".into(),
+            crate::records::emit(other, "{}").map_err(|e| format!("{at}: {e}"))?,
+        ),
     })
 }

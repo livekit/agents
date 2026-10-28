@@ -25,7 +25,7 @@ pub struct Declarations {
 
 /// `#[host(record(module = "..", extract, emit))]` on a struct or enum: a schema-defined record
 /// crossing as a generated model (`_generated/<module>.py`), never a dict. Its pyo3 conversions
-/// are generated into the ABI crate (`src/python/generated/`).
+/// are generated free functions of the registration shell (`lk-agents-py/src/generated/records.rs`).
 #[derive(Debug, Clone)]
 pub struct RecordDecl {
     /// `::lk_agents_abi::agent::ValidatedOutput`.
@@ -40,6 +40,9 @@ pub struct RecordDecl {
     pub doc: Vec<String>,
     pub extract: bool,
     pub emit: bool,
+    /// Its conversions are pyo3 trait impls in ABI, which the in-place exports call
+    /// (`crate::records::IN_PLACE`).
+    pub in_place: bool,
     /// `persisted`: application-saved state. The model's `to_json()`/`from_json()` go through
     /// the record's own serde codec in Rust (`_core._core_persist_<name>`/`_core_restore_<name>`),
     /// so every variant, empty ones included, round-trips by its tag.
@@ -425,6 +428,9 @@ pub struct Record {
     /// `::lk_agents_abi::llm::chat_context::ChatItem`.
     pub rust: String,
     pub host: HostForm,
+    /// A declared record the in-place exports still convert: it keeps pyo3 trait impls in ABI
+    /// (`crate::records::IN_PLACE`).
+    pub in_place: bool,
     /// Declared directions: the host may pass it in (`extract`) / receive it (`emit`).
     pub extract: bool,
     pub emit: bool,

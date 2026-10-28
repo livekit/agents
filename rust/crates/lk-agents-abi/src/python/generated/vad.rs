@@ -3,7 +3,7 @@
 //! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
 //! `#[host(record)]` declarations of `lk-agents-abi`.
 //!
-//! The `vad` records.
+//! The `vad` proxy bridges and in-place records.
 
 // Declared in rust/crates/lk-agents-abi/src/vad/vad.rs.
 impl crate::python::HostProxy for dyn ::lk_agents_abi::Vad {

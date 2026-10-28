@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py};
 use lk_agents_runtime::storage::{QueuedStreams, StreamRead};
-use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
@@ -62,7 +61,7 @@ impl PyStreams {
         let ttl = ttl_seconds.map(std::time::Duration::from_secs);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let info = streams.create(ttl).await.map_err(to_py_err)?;
-            Python::attach(|py| info.into_py_any(py))
+            Python::attach(|py| Ok(crate::generated::records::storage_class::stream_info_to_py(py, info)?.unbind()))
         })
     }
 

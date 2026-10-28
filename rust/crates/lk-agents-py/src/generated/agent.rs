@@ -22,32 +22,36 @@ pub struct RunEvents(RunEventsImpl);
 impl RunEvents {
     #[new]
     #[pyo3(signature = (events))]
-    fn new(events: ::std::vec::Vec<::lk_agents_abi::agent::assertions::ObservedEvent>) -> PyResult<RunEvents> {
+    fn new(events: Bound<'_, PyAny>) -> PyResult<RunEvents> {
         ::lk_agents_abi::python::check_pid()?;
+        let events = events.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::observed_event_from_py(&item) }).collect::<PyResult<Vec<_>>>())?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::new(events);
         Ok(RunEvents(out))
     }
 
     /// The event at `index` (from the end when negative), meeting `expected` when given.
     #[pyo3(signature = (index, expected))]
-    fn at(&self, index: i64, expected: ::std::option::Option<::lk_agents_abi::agent::assertions::EventExpectation>) -> PyResult<usize> {
+    fn at(&self, index: i64, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
+        let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::at(&self.0, index, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// Advances to the next event of `expected`'s kind, or the next event when `None`.
     #[pyo3(signature = (expected))]
-    fn next_event(&mut self, expected: ::std::option::Option<::lk_agents_abi::agent::assertions::EventExpectation>) -> PyResult<usize> {
+    fn next_event(&mut self, expected: Option<Bound<'_, PyAny>>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
+        let expected = expected.map(|v| crate::generated::records::agent_run::event_expectation_from_py(&v)).transpose()?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::next_event(&mut self.0, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
     /// Advances past the next event only if it meets `expected`.
     #[pyo3(signature = (expected))]
-    fn skip_next_event_if(&mut self, expected: ::lk_agents_abi::agent::assertions::EventExpectation) -> PyResult<::std::option::Option<usize>> {
+    fn skip_next_event_if(&mut self, expected: Bound<'_, PyAny>) -> PyResult<::std::option::Option<usize>> {
         ::lk_agents_abi::python::check_pid()?;
+        let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::skip_next_event_if(&mut self.0, expected);
         Ok(out)
     }
@@ -67,8 +71,9 @@ impl RunEvents {
 
     /// The first event of `start..stop` meeting `expected`.
     #[pyo3(signature = (start, stop, expected))]
-    fn contains(&self, start: usize, stop: usize, expected: ::lk_agents_abi::agent::assertions::EventExpectation) -> PyResult<usize> {
+    fn contains(&self, start: usize, stop: usize, expected: Bound<'_, PyAny>) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
+        let expected = crate::generated::records::agent_run::event_expectation_from_py(&expected)?;
         let out = <RunEventsImpl as ::lk_agents_abi::agent::assertions::RunEvents>::contains(&self.0, start, stop, expected).map_err(|e: ::lk_agents_abi::agent::assertions::AssertionFailure| <::lk_agents_abi::agent::assertions::AssertionFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
@@ -96,8 +101,9 @@ impl AgentRunner {
     /// The runner of `definition` on `llm`, its callbacks run by `host`.
     #[new]
     #[pyo3(signature = (definition, llm, host))]
-    fn new(definition: ::lk_agents_abi::agent::AgentDefinition, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
+    fn new(definition: Bound<'_, PyAny>, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
         ::lk_agents_abi::python::check_pid()?;
+        let definition = crate::generated::records::agent_run::agent_definition_from_py(&definition)?;
         let llm = super::llm::LlmProxy::from_host(&llm)?;
         let host = super::agent::AgentHostProxy::from_host(&host)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
@@ -106,8 +112,9 @@ impl AgentRunner {
 
     /// Starts one invocation; nothing runs until the first pull.
     #[pyo3(signature = (request))]
-    fn run(&self, request: ::lk_agents_abi::agent::run::RunRequest) -> PyResult<AgentRunUpdates> {
+    fn run(&self, request: Bound<'_, PyAny>) -> PyResult<AgentRunUpdates> {
         ::lk_agents_abi::python::check_pid()?;
+        let request = crate::generated::records::agent_run::run_request_from_py(&request)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
@@ -131,7 +138,7 @@ pub struct AgentRunUpdates(::lk_agents_runtime::source::NativeSource<::lk_agents
 impl AgentRunUpdates {
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         ::lk_agents_abi::python::check_pid()?;
-        self.0.recv(py)
+        self.0.recv(py, |py, item| Ok(crate::generated::records::agent_run::run_update_to_py(py, item)?.unbind()))
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -183,7 +190,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("checkpoint")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -207,7 +214,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
                 Ok((host.bind(py).getattr("render_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -232,7 +239,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any()];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any()];
                 Ok((host.bind(py).getattr("prepare_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -246,7 +253,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::agent::PreparedArguments>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::agent_run::prepared_arguments_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(Ok(out))
         })
     }
@@ -260,7 +267,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
                 Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -271,7 +278,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::agent::ReadBackAnswer>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::agent_run::read_back_answer_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -285,7 +292,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
                 Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -310,7 +317,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         };
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(candidate_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?, crate::generated::records::agent_run::output_candidate_to_py(py, candidate_arg)?];
                 Ok((host.bind(py).getattr("validate_output")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {
@@ -321,7 +328,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::agent::ValidatedOutput>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::agent_run::validated_output_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -334,7 +341,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
             return;
         };
         self.notifier.notify(context, "AgentHost.cancel", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
             Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
