@@ -160,9 +160,10 @@ class ResponsesWebsocket:
                 if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                deadline = _next_deadline(loop, receive_timeout)
                 event = json.loads(raw_msg.data)
                 yield event
+                # restart once the consumer asks for more, so its own time doesn't count
+                deadline = _next_deadline(loop, receive_timeout)
                 if event["type"] in [
                     "response.completed",
                     "response.failed",
@@ -336,7 +337,9 @@ class ResponsesLLMStream(llm.LLMStream):
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except (APIConnectionError, APIStatusError, APITimeoutError) as e:
+                if not retryable:
+                    e.retryable = False  # text already reached the caller; a retry repeats it
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
@@ -375,7 +378,9 @@ class ResponsesLLMStream(llm.LLMStream):
                     body=e.body,
                     retryable=retryable,
                 )
-            except (APIConnectionError, APIStatusError, APITimeoutError):
+            except (APIConnectionError, APIStatusError, APITimeoutError) as e:
+                if not retryable:
+                    e.retryable = False  # text already reached the caller; a retry repeats it
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
