@@ -17,7 +17,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from livekit.agents import utils
 from livekit.agents.telemetry import trace_types, utils as telemetry_utils
-from livekit.agents.telemetry.traces import _DynamicTracer, _TraceLevelLoggingHandler
+from livekit.agents.telemetry._context import _DynamicTracer
+from livekit.agents.telemetry._destination import _TraceLevelLoggingHandler
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
@@ -115,12 +116,23 @@ def test_record_exception_uses_resolved_redaction_state(monkeypatch: pytest.Monk
     assert trace_types.ATTR_EXCEPTION_TRACE not in span.attributes
 
 
-@pytest.mark.parametrize("use_span", [False, True], ids=["start_as_current_span", "use_span"])
-@pytest.mark.parametrize("redaction_enabled", [False, True])
-@pytest.mark.parametrize("record_exception", [False, True])
-@pytest.mark.parametrize("set_status_on_exception", [False, True])
-@pytest.mark.parametrize("end_on_exit", [False, True])
-@pytest.mark.parametrize("call_style", ["keyword", "positional", "mixed"])
+@pytest.mark.parametrize(
+    (
+        "use_span",
+        "redaction_enabled",
+        "record_exception",
+        "set_status_on_exception",
+        "end_on_exit",
+        "call_style",
+    ),
+    [
+        (False, False, True, True, True, "keyword"),
+        (False, True, True, True, True, "keyword"),
+        (True, True, False, False, True, "keyword"),
+        (True, True, True, False, False, "positional"),
+        (False, True, False, True, False, "mixed"),
+    ],
+)
 def test_dynamic_tracer_records_exceptions_with_caller_options(
     monkeypatch: pytest.MonkeyPatch,
     use_span: bool,

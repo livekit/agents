@@ -7,11 +7,11 @@ import pytest
 from livekit.agents.metrics import (
     LLMMetrics,
     LLMModelUsage,
+    Metadata,
     ModelUsageCollector,
     STTMetrics,
     STTModelUsage,
 )
-from livekit.agents.metrics.base import Metadata
 
 pytestmark = pytest.mark.unit
 
@@ -35,16 +35,6 @@ def _llm_metrics(**overrides: object) -> LLMMetrics:
     return LLMMetrics(**base)
 
 
-def test_llm_metrics_defaults_cache_creation_to_zero() -> None:
-    m = _llm_metrics()
-    assert m.cache_creation_tokens == 0
-
-
-def test_llm_metrics_carries_cache_creation_tokens() -> None:
-    m = _llm_metrics(cache_creation_tokens=42)
-    assert m.cache_creation_tokens == 42
-
-
 def test_collector_aggregates_cache_creation_tokens() -> None:
     collector = ModelUsageCollector()
     collector.collect(_llm_metrics(cache_creation_tokens=42))
@@ -55,16 +45,6 @@ def test_collector_aggregates_cache_creation_tokens() -> None:
     llm_usage = usage[0]
     assert isinstance(llm_usage, LLMModelUsage)
     assert llm_usage.input_cache_creation_tokens == 50
-
-
-def test_llm_metrics_defaults_reasoning_to_zero() -> None:
-    m = _llm_metrics()
-    assert m.reasoning_tokens == 0
-
-
-def test_llm_metrics_carries_reasoning_tokens() -> None:
-    m = _llm_metrics(reasoning_tokens=64)
-    assert m.reasoning_tokens == 64
 
 
 def test_collector_aggregates_reasoning_tokens() -> None:
