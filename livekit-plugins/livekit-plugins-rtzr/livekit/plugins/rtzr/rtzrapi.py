@@ -9,6 +9,10 @@ from typing import TypedDict
 
 import aiohttp
 
+from livekit.agents import APIConnectOptions
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.utils import http_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,8 +108,8 @@ def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
 class RTZROpenAPIClient:
     """RTZR OpenAPI Client for authentication and WebSocket streaming.
 
-    This is an independent SDK client that can be used without livekit dependencies.
-    It supports both manual session management and async context manager usage.
+    Provider requests use the shared transport phase limits. The client supports
+    both manual session management and async context manager usage.
 
     Example:
         # Manual session management
@@ -151,24 +155,30 @@ class RTZROpenAPIClient:
         """Async context manager exit."""
         await self.close()
 
-    async def get_token(self) -> str:
+    async def get_token(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> str:
         """Get a valid access token, refreshing if necessary."""
         token = self._token
         if token is None or token["expire_at"] < time.time() - 3600:
-            await self._refresh_token()
+            await self._refresh_token(conn_options)
             token = self._token
         if token is None:
             raise RTZRAPIError("Failed to obtain RTZR access token")
         return token["access_token"]
 
-    async def _refresh_token(self) -> None:
+    async def _refresh_token(self, conn_options: APIConnectOptions) -> None:
         """Refresh the access token."""
         sess = self._ensure_http_session()
         url = f"{self._api_base}/v1/authenticate"
 
         try:
-            async with sess.post(
-                url, data={"client_id": self.client_id, "client_secret": self.client_secret}
+            async with http_context.request(
+                sess,
+                "POST",
+                url,
+                conn_options=conn_options,
+                data={"client_id": self.client_id, "client_secret": self.client_secret},
             ) as resp:
                 resp.raise_for_status()
                 data = await resp.json()
@@ -203,7 +213,11 @@ class RTZROpenAPIClient:
             self._http_session = None
 
     async def connect_websocket(
-        self, config: dict[str, str], headers: dict[str, str] | None = None
+        self,
+        config: dict[str, str],
+        headers: dict[str, str] | None = None,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the streaming WebSocket endpoint."""
         # Build URL like reference client
@@ -211,7 +225,7 @@ class RTZROpenAPIClient:
         url = f"{self._ws_base}/v1/transcribe:streaming?{query_string}"
 
         # Prepare headers
-        token = await self.get_token()
+        token = await self.get_token(conn_options=conn_options)
         ws_headers = {"Authorization": f"bearer {token}"}
         if headers:
             ws_headers.update(headers)
@@ -219,7 +233,9 @@ class RTZROpenAPIClient:
         session = self._ensure_http_session()
 
         try:
-            ws = await session.ws_connect(url, headers=ws_headers)
+            ws = await http_context.ws_connect(
+                session, url, headers=ws_headers, conn_options=conn_options
+            )
             logger.debug("Connected to RTZR WebSocket at %s", url)
             return ws
         except aiohttp.ClientResponseError as e:

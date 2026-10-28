@@ -45,7 +45,9 @@ async def test_silent_tts_upgrade_reports_read_timeout(provider: str, silent_upg
         if provider == "elevenlabs":
             from livekit.plugins.elevenlabs import TTS
 
-            tts = TTS(api_key="test", base_url=silent_upgrade, http_session=session)
+            tts = TTS(
+                api_key="test", base_url=silent_upgrade, encoding="pcm_24000", http_session=session
+            )
         elif provider == "soniox":
             from livekit.plugins.soniox import TTS
 
@@ -57,7 +59,9 @@ async def test_silent_tts_upgrade_reports_read_timeout(provider: str, silent_upg
         elif provider == "minimax":
             from livekit.plugins.minimax import TTS
 
-            tts = TTS(api_key="test", base_url=silent_upgrade, http_session=session)
+            tts = TTS(
+                api_key="test", base_url=silent_upgrade, audio_format="pcm", http_session=session
+            )
         else:
             from livekit.plugins.baseten import TTS
 
@@ -86,3 +90,25 @@ async def test_silent_tts_upgrade_reports_read_timeout(provider: str, silent_upg
                 assert error.value.phase == "read"
         finally:
             await tts.aclose()
+
+
+async def test_rtzr_silent_upgrade_reports_read_timeout(silent_upgrade: str) -> None:
+    import time
+
+    from livekit.plugins.rtzr.rtzrapi import RTZROpenAPIClient
+
+    options = APIConnectOptions(
+        max_retry=0,
+        pool_timeout=None,
+        connect_timeout=None,
+        write_timeout=None,
+        read_timeout=0.02,
+    )
+    async with aiohttp.ClientSession() as session:
+        client = RTZROpenAPIClient("test", "test", http_session=session)
+        client._token = {"access_token": "cached", "expire_at": time.time() + 10000}
+        client._ws_base = silent_upgrade
+        async with asyncio.timeout(0.5):
+            with pytest.raises(APITimeoutError) as error:
+                await client.connect_websocket({}, conn_options=options)
+        assert error.value.phase == "read"
