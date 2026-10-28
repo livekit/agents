@@ -598,6 +598,7 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
         if code not in {f"clippy::{lint}" for lint in LINTS}:
             continue
         candidates = []
+        unrestricted = False
         for span in message["spans"]:
             if not span["is_primary"]:
                 continue
@@ -609,6 +610,9 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                     relative = path.resolve().relative_to(root).as_posix()
                 except ValueError:
                     relative = ""
+                if relative.startswith(UNRESTRICTED):
+                    unrestricted = True
+                    break
                 if relative.startswith("rust/crates/") and policed(relative):
                     candidates.append(
                         (
@@ -621,6 +625,8 @@ def compiler_locations(messages: list[dict], root: Path) -> list[tuple[str, int,
                     )
                     break
                 span = (span.get("expansion") or {}).get("span")
+        if not candidates and unrestricted:
+            continue
         if not candidates:
             spans = ", ".join(span["file_name"] for span in message["spans"] if span["is_primary"])
             raise ValueError(

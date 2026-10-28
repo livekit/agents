@@ -166,6 +166,8 @@ class ClippyContracts(unittest.TestCase):
             ]
             with self.assertRaisesRegex(ValueError, "unmapped core policy"):
                 clippy.compiler_locations([message], alias)
+            message["spans"][0]["file_name"] = "crates/lk-agents-media/src/workers.rs"
+            self.assertEqual(clippy.compiler_locations([message], alias), [])
 
     def test_empty_partial_and_failed_compiler_transcripts_fail(self):
         for records in (
