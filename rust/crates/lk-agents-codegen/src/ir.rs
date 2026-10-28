@@ -154,7 +154,7 @@ pub struct HostField {
     pub type_import: Option<String>,
 }
 
-/// One generated member: a property or a method, whose body is one call into `_bindings`.
+/// A generated property or method, forwarded to its declared hook.
 #[derive(Debug, Clone)]
 pub struct Member {
     pub name: String,
@@ -163,7 +163,7 @@ pub struct Member {
     pub args: String,
     pub ret: String,
     pub doc: String,
-    /// The `_bindings` name; defaults to `<snake_type>_<name>` so two models can share a member.
+    /// The hook name; defaults to `<snake_type>_<name>` so two models can share a member.
     pub hook: String,
 }
 

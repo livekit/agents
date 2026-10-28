@@ -44,6 +44,8 @@ pub struct RecordDecl {
     /// the record's own serde codec in Rust (`_core._core_persist_<name>`/`_core_restore_<name>`),
     /// so every variant, empty ones included, round-trips by its tag.
     pub persisted: bool,
+    /// Computed views declared with the generated models' property vocabulary.
+    pub members: Vec<crate::ir::Member>,
     pub body: RecordBody,
 }
 

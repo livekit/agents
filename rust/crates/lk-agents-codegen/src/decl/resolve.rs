@@ -703,6 +703,22 @@ impl Resolver<'_> {
             }
             _ => unreachable!("records are structs and enums"),
         };
+        let members = crate::parse::members(item_attrs(item), "python", &ident);
+        for (i, member) in members.iter().enumerate() {
+            let RecordBody::Struct(fields) = &body else {
+                return Err(format!("{at}: computed properties belong to record structs"));
+            };
+            if !member.is_property || !member.args.is_empty() {
+                return Err(format!(
+                    "{at}: a record declares computed properties without arguments"
+                ));
+            }
+            if fields.iter().any(|field| field.host_name() == member.name)
+                || members[..i].iter().any(|other| other.name == member.name)
+            {
+                return Err(format!("{at}: duplicate record member `{}`", member.name));
+            }
+        }
         Ok(RecordDecl {
             rust: k.extern_path(self.module, index).map_err(|e| format!("{at}: {e}"))?,
             name,
@@ -715,6 +731,7 @@ impl Resolver<'_> {
             extract,
             emit,
             persisted,
+            members,
             body,
         })
     }

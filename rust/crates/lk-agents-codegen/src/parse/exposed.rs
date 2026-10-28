@@ -132,7 +132,7 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         "error" => out.exceptions.extend(exception(&m, &e.attrs)),
                         // The wire strings are Rust side only: the enum crosses by its own
                         // impls, if at all.
-                        "wire_strs" | "handwritten" => {}
+                        "wire_strs" | "handwritten" | "record" => {}
                         other => {
                             return Err(format!(
                                 "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
@@ -148,7 +148,7 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         "client" | "kwargs" => out.kwargs.push(kw_record(label, st, &al)?),
                         "error" => out.exceptions.extend(exception(&m, &st.attrs)),
                         // A handwritten type crosses by its own impls.
-                        "handwritten" => {}
+                        "handwritten" | "record" => {}
                         "stream" => out.streams.push(stream(label, &st.ident, &m)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => {

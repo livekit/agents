@@ -394,6 +394,18 @@ fn model(
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>());
+            for member in &r.members {
+                s.push_str("\n    @property\n");
+                s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));
+                s.push_str(&docstring(
+                    &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),
+                    "        ",
+                ));
+                s.push_str(&format!(
+                    "        from .. import _core\n\n        return _core.{}(self)\n",
+                    member.hook
+                ));
+            }
             if r.persisted {
                 let (persist, restore) = r.persistence();
                 s.push_str(&format!(

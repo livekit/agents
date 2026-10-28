@@ -173,6 +173,8 @@ from ._generated._core_classes import (
     VideoSampler as VideoSampler,
     VoiceSession as VoiceSession,
     WarmTransfer as WarmTransfer,
+    _core_a2a_message_data as _core_a2a_message_data,
+    _core_a2a_message_text as _core_a2a_message_text,
     _core_session_chat_record as _core_session_chat_record,
     agent_join_token as agent_join_token,
     amd_auto_select_models as amd_auto_select_models,

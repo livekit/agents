@@ -161,6 +161,8 @@
     "_core_TelemetryPolicy",
     "_core_TelemetryWorker",
     "_core_a2a_agent_card",
+    "_core_a2a_message_data",
+    "_core_a2a_message_text",
     "_core_auth_grant_allows",
     "_core_evaluation_score",
     "_core_judge_tool_schemas",

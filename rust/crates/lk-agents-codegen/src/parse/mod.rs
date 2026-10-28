@@ -849,7 +849,7 @@ fn host_fields(attrs: &[syn::Attribute], outer: &str) -> Vec<HostField> {
 
 /// Every `#[<outer>(property(..))]` / `#[<outer>(method(..))]`, in order; a second `name` starts
 /// the next member.
-fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Vec<Member> {
+pub(crate) fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Vec<Member> {
     let flat = metas(attrs);
     let mut out: Vec<Member> = Vec::new();
     let mut current: Option<(bool, Vec<(String, String)>)> = None;

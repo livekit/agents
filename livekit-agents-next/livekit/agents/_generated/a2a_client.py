@@ -59,6 +59,20 @@ class Message:
     received_at: float | None = None
     raw: object | None = None
 
+    @property
+    def text(self) -> str:
+        """The text parts, joined by newlines."""
+        from .. import _core
+
+        return _core._core_a2a_message_text(self)
+
+    @property
+    def data(self) -> dict[str, object] | None:
+        """The first object data part, if any."""
+        from .. import _core
+
+        return _core._core_a2a_message_data(self)
+
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Artifact:
