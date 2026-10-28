@@ -19,6 +19,7 @@ import base64
 import contextlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -263,14 +264,22 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            opts=replace(self._opts),
+            http_session=self._ensure_session,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        return SynthesizeStream(
+            tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
+        )
 
     def prewarm(self) -> None:
         self._pool.prewarm()
@@ -282,10 +291,18 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """HTTP-based synthesis — used when synthesize() is called directly."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        http_session: Callable[[], aiohttp.ClientSession],
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._http_session = http_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -299,7 +316,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "X-LiveKit-Version": __version__,
             }
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._http_session(),
                 "POST",
                 f"{self._opts.base_url}/tts",
                 headers=headers,
@@ -343,10 +360,17 @@ class SynthesizeStream(tts.SynthesizeStream):
     ``use_continuations`` is False.
     """
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -369,7 +393,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ctx_state = {"opened": False, "finalized": False}
 
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
                 # Whether recv_task ended on a protocol-confirmed signal (legacy's
@@ -392,14 +416,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                         if not ctx_state["finalized"]:
                             # Interrupted (e.g. barge-in) before the context was closed.
                             await self._try_cancel_context(ws, context_id)
-                            self._tts._pool.remove(ws)
+                            self._pool.remove(ws)
                             removed = True
                         elif not drained_confidently:
                             # Completion was inferred, not confirmed by the server (no
                             # terminal marker exists in this protocol - see _recv_task).
                             # Don't let a possibly-still-active context leak trailing
                             # frames into the next request that reuses this connection.
-                            self._tts._pool.remove(ws)
+                            self._pool.remove(ws)
                             removed = True
                         if removed:
                             # A removed connection always needs replacing. Continuations
@@ -408,7 +432,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             # handshake on the next turn's critical path. Kick the
                             # reconnect off now, in the background, so it's already warm
                             # by the time the next segment needs a connection.
-                            self._tts._pool.prewarm()
+                            self._pool.prewarm()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

@@ -43,6 +43,7 @@ import json
 import math
 import os
 import time
+from dataclasses import dataclass
 from typing import Literal
 
 import aiohttp
@@ -138,6 +139,20 @@ def _timed_word(w: dict[str, JsonValue], offset: float) -> TimedString:
     )
 
 
+@dataclass
+class _STTOptions:
+    api_key: str
+    base_url: str
+    recognition_model: NabrahRecognitionModel | str
+    language: str
+    end_of_utterance_silence_ms: int
+    disable_number_normalization: bool
+    priority_words: list[str]
+    priority_words_strength: float
+    max_transcript_inactivity_seconds: float | None
+    end_of_turn_confirm_delay_seconds: float | None
+
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -168,24 +183,20 @@ class STT(stt.STT):
                 "Nabrah API key is required, either as argument or by setting "
                 "the NABRAH_API_KEY environment variable",
             )
-        self._api_key = nabrah_api_key
-        self._base_url = (
-            base_url
+        self._opts = _STTOptions(
+            api_key=nabrah_api_key,
+            base_url=base_url
             if is_given(base_url)
-            else os.environ.get(
-                "NABRAH_STT_URL",
-                DEFAULT_BASE_URL,
-            )
+            else os.environ.get("NABRAH_STT_URL", DEFAULT_BASE_URL),
+            recognition_model=recognition_model,
+            language=language,
+            end_of_utterance_silence_ms=end_of_utterance_silence_ms,
+            disable_number_normalization=disable_number_normalization,
+            priority_words=priority_words or [],
+            priority_words_strength=priority_words_strength,
+            max_transcript_inactivity_seconds=max_transcript_inactivity_seconds,
+            end_of_turn_confirm_delay_seconds=end_of_turn_confirm_delay_seconds,
         )
-
-        self._recognition_model = recognition_model
-        self._language = language
-        self._end_of_utterance_silence_ms = end_of_utterance_silence_ms
-        self._disable_number_normalization = disable_number_normalization
-        self._priority_words = priority_words or []
-        self._priority_words_strength = priority_words_strength
-        self._max_transcript_inactivity_seconds = max_transcript_inactivity_seconds
-        self._end_of_turn_confirm_delay_seconds = end_of_turn_confirm_delay_seconds
         self._session = http_session
         self._label = "nabrah.STT (nabrah-stt-v1)"
 
@@ -217,9 +228,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        lang = language if is_given(language) else self._language
+        lang = language if is_given(language) else self._opts.language
         return SpeechStream(
             stt_instance=self,
+            opts=self._opts,
             conn_options=conn_options,
             language=lang,
             http_session=self._ensure_session(),
@@ -242,12 +254,13 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         stt_instance: STT,
+        opts: _STTOptions,
         conn_options: APIConnectOptions,
         language: str,
         http_session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
-        self._stt: STT = stt_instance
+        self._opts = opts
         self._language = LanguageCode(language)
         self._session = http_session
 
@@ -278,18 +291,18 @@ class SpeechStream(stt.SpeechStream):
 
     def _config_frame(self) -> dict[str, JsonValue]:
         return {
-            "api_key": self._stt._api_key,
-            "recognition_model": self._stt._recognition_model,
-            "end_of_utterance_silence_ms": self._stt._end_of_utterance_silence_ms,
-            "disable_number_normalization": self._stt._disable_number_normalization,
-            "priority_words": list[JsonValue](self._stt._priority_words),
-            "priority_words_strength": self._stt._priority_words_strength,
+            "api_key": self._opts.api_key,
+            "recognition_model": self._opts.recognition_model,
+            "end_of_utterance_silence_ms": self._opts.end_of_utterance_silence_ms,
+            "disable_number_normalization": self._opts.disable_number_normalization,
+            "priority_words": list[JsonValue](self._opts.priority_words),
+            "priority_words_strength": self._opts.priority_words_strength,
         }
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
             return await utils.http_context.ws_connect(
-                self._session, self._stt._base_url, conn_options=self._conn_options
+                self._session, self._opts.base_url, conn_options=self._conn_options
             )
         except (
             aiohttp.ClientConnectorError,
@@ -365,8 +378,8 @@ class SpeechStream(stt.SpeechStream):
             await ws.close()
 
     async def _eot_watchdog(self) -> None:
-        inactivity_timeout = self._stt._max_transcript_inactivity_seconds
-        confirm_delay = self._stt._end_of_turn_confirm_delay_seconds
+        inactivity_timeout = self._opts.max_transcript_inactivity_seconds
+        confirm_delay = self._opts.end_of_turn_confirm_delay_seconds
         while True:
             await asyncio.sleep(_WATCHDOG_POLL_SECONDS)
             now = time.monotonic()
@@ -645,7 +658,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
         if is_eot:
-            if self._stt._end_of_turn_confirm_delay_seconds is None:
+            if self._opts.end_of_turn_confirm_delay_seconds is None:
                 self._flush_eos()
             elif self._pending_eot_at is None:
                 self._pending_eot_at = time.monotonic()

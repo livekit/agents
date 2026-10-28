@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -171,12 +172,21 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            opts=replace(self._opts),
+            http_session=self._ensure_session,
+            api_key=self._api_key,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
+        )
         self._streams.add(stream)
         return stream
 
@@ -191,10 +201,20 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text into speech in one go using Resemble AI's REST API."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        http_session: Callable[[], aiohttp.ClientSession],
+        api_key: str,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._http_session = http_session
+        self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -208,11 +228,11 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["model"] = self._opts.model
 
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._http_session(),
                 "POST",
                 RESEMBLE_REST_API_URL,
                 headers={
-                    "Authorization": f"Bearer {self._tts._api_key}",
+                    "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
@@ -264,10 +284,17 @@ class SynthesizeStream(tts.SynthesizeStream):
     synthesis. Note that this requires a Business plan subscription with Resemble AI.
     """
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
@@ -388,7 +415,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"lk.pii.data": data.model_dump(mode="json")},
                     )
 
-        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

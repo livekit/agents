@@ -21,13 +21,9 @@ def stream() -> SpeechStream:
         coroutine.close()
         return MagicMock()
 
+    provider = STT(api_key="test-key", http_session=MagicMock(spec=aiohttp.ClientSession))
     with patch("livekit.agents._generated.stt.asyncio.create_task", side_effect=_discard_task):
-        return SpeechStream(
-            stt_instance=STT(api_key="test-key"),
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-            language="ar-SA",
-            http_session=MagicMock(spec=aiohttp.ClientSession),
-        )
+        return provider.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
 
 def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
@@ -56,7 +52,7 @@ def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechSt
 
 
 def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> None:
-    stream._stt._end_of_turn_confirm_delay_seconds = None
+    stream._opts.end_of_turn_confirm_delay_seconds = None
 
     stream._process_message(
         {
@@ -90,7 +86,7 @@ def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> 
 
 
 def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: SpeechStream) -> None:
-    stream._stt._end_of_turn_confirm_delay_seconds = None
+    stream._opts.end_of_turn_confirm_delay_seconds = None
     stream._process_message(
         {
             "type": "transcript",

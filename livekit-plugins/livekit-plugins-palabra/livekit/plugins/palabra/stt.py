@@ -192,7 +192,7 @@ class STT(stt.STT):
             filler_filter=self._opts.filler_filter,
             sample_rate=self._opts.sample_rate,
         )
-        stream = SpeechStream(stt=self, opts=opts, conn_options=conn_options)
+        stream = SpeechStream(stt=self, client=self._client, opts=opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -218,9 +218,11 @@ class SpeechStream(stt.RecognizeStream):
     Created by ``STT.stream()``; not instantiated directly.
     """
 
-    def __init__(self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, stt: STT, client: Palabra, opts: _STTOptions, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._stt: STT = stt
+        self._client = client
         self._opts = opts
 
     async def _run(self) -> None:
@@ -229,7 +231,7 @@ class SpeechStream(stt.RecognizeStream):
         utterances: dict[str, _Utterance] = {}
 
         def _make_session() -> SttSession:
-            return self._stt._client.stt(
+            return self._client.stt(
                 self._opts.language,
                 sample_rate=self._opts.sample_rate,
                 translate_languages=self._opts.translate_languages or None,

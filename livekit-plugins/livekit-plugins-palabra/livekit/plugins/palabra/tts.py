@@ -25,7 +25,8 @@ import asyncio
 import contextlib
 import os
 import weakref
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 from palabra_ai import (
     AuthError,
@@ -89,6 +90,16 @@ class _TTSOptions:
     deaccent_strength: float
     model: TTSModels | str
     sample_rate: int
+
+
+@dataclass
+class _TtsSessionState:
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_send: float = 0.0
+    active_streams: int = 0
+    routes: dict[str, asyncio.Queue[TtsChunk | ServerError | None]] = field(
+        default_factory=dict[str, asyncio.Queue[TtsChunk | ServerError | None]]
+    )
 
 
 class TTS(tts.TTS):
@@ -155,15 +166,12 @@ class TTS(tts.TTS):
         #   - _send_lock is held per operation, never for a stream's lifetime.
         self._tts_session: TtsSession | None = None
         self._opts_dirty = False
-        self._send_lock = asyncio.Lock()
-        self._last_send = 0.0
-        self._active_streams_cnt = 0
+        self._session_state = _TtsSessionState()
         # Demultiplexer: one background reader per session.
         # It routes each received event by generation_id into the sending stream's mailbox.
         #   - _routes: generation_id -> owning stream's mailbox;
         #   - unknown generation_id = the generation was already cancelled: dropped;
         #   - ServerError has no generation_id: delivered to every mailbox.
-        self._routes: dict[str, asyncio.Queue[TtsChunk | ServerError | None]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._closed = False
@@ -194,10 +202,10 @@ class TTS(tts.TTS):
         )
 
     async def _ensure_session(self, timeout: float | None) -> TtsSession:
-        # Caller must hold `self._send_lock`.
+        # Caller must hold `self._session_state.send_lock`.
         if self._closed:
             raise APIConnectionError("palabra tts is closed", retryable=False)
-        if self._opts_dirty and self._active_streams_cnt == 0:
+        if self._opts_dirty and self._session_state.active_streams == 0:
             await self._reset_session()
             self._opts_dirty = False
         if self._tts_session is not None and (
@@ -224,13 +232,13 @@ class TTS(tts.TTS):
         try:
             async for event in session:
                 if isinstance(event, TtsChunk):
-                    route = self._routes.get(event.generation_id)
+                    route = self._session_state.routes.get(event.generation_id)
                     if route is None:
                         stale_chunks += 1  # frame of an already-cancelled generation
                         continue
                     route.put_nowait(event)
                 elif isinstance(event, ServerError):
-                    for route in set(self._routes.values()):
+                    for route in set(self._session_state.routes.values()):
                         route.put_nowait(event)
         except asyncio.CancelledError:
             raise
@@ -239,7 +247,7 @@ class TTS(tts.TTS):
         finally:
             if stale_chunks:
                 logger.debug("dropped %d audio chunks of cancelled generations", stale_chunks)
-            for route in set(self._routes.values()):
+            for route in set(self._session_state.routes.values()):
                 route.put_nowait(None)  # the session is gone: wake every stream
 
     async def _reset_session(self) -> None:
@@ -253,12 +261,12 @@ class TTS(tts.TTS):
             with contextlib.suppress(Exception):
                 await session.close()
 
-    async def _drop_session_if_idle(self, *, current_stream_active: bool) -> None:
+    async def _drop_session_if_idle(self, current_stream_active: bool) -> None:
         # A failed request must not close the socket under other active streams.
-        async with self._send_lock:
+        async with self._session_state.send_lock:
             dead = self._tts_session is not None and not _session_alive(self._tts_session)
             # Error teardown runs before the failing stream releases its active count.
-            other_streams = self._active_streams_cnt - int(current_stream_active)
+            other_streams = self._session_state.active_streams - int(current_stream_active)
             if dead or other_streams <= 0:
                 await self._reset_session()
 
@@ -274,7 +282,7 @@ class TTS(tts.TTS):
 
     async def _safe_prewarm(self) -> None:
         with contextlib.suppress(Exception):
-            async with self._send_lock:
+            async with self._session_state.send_lock:
                 if self._closed:
                     return
                 await self._ensure_session(DEFAULT_API_CONNECT_OPTIONS.connect_timeout)
@@ -316,7 +324,15 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Open a streaming synthesis session that accepts incremental text."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            sample_rate=self._opts.sample_rate,
+            tokenizer=self._sentence_tokenizer,
+            state=self._session_state,
+            ensure_session=self._ensure_session,
+            drop_session_if_idle=self._drop_session_if_idle,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -331,7 +347,7 @@ class TTS(tts.TTS):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        async with self._send_lock:
+        async with self._session_state.send_lock:
             await self._reset_session()
 
 
@@ -341,21 +357,35 @@ class SynthesizeStream(tts.SynthesizeStream):
     Created by ``TTS.stream()`` / ``TTS.synthesize()``; not instantiated directly.
     """
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        sample_rate: int,
+        tokenizer: tokenize.SentenceTokenizer,
+        state: _TtsSessionState,
+        ensure_session: Callable[[float | None], Awaitable[TtsSession]],
+        drop_session_if_idle: Callable[[bool], Awaitable[None]],
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._sample_rate = sample_rate
+        self._tokenizer = tokenizer
+        self._session_state = state
+        self._ensure_session = ensure_session
+        self._drop_session_if_idle = drop_session_if_idle
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
-            sample_rate=self._tts._opts.sample_rate,
+            sample_rate=self._sample_rate,
             num_channels=1,
             mime_type="audio/pcm",
             stream=True,
         )
 
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        sent_tokenizer_stream = self._tokenizer.stream()
         send_complete = asyncio.Event()
         # One generation_id per text message.
         # The TTS reader delivers audio_chunk frames into this mailbox by that id.
@@ -387,20 +417,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # Register before sending: audio_chunk can arrive before send_text returns.
                     my_gens.add(gen_id)
                     pending_gens.add(gen_id)
-                    self._tts._routes[gen_id] = mailbox
+                    self._session_state.routes[gen_id] = mailbox
                     self.mark_started()
                     try:
-                        async with self._tts._send_lock:
-                            delay = self._tts._last_send + _MIN_SEND_INTERVAL - loop.time()
+                        async with self._session_state.send_lock:
+                            delay = self._session_state.last_send + _MIN_SEND_INTERVAL - loop.time()
                             if delay > 0:
                                 await asyncio.sleep(delay)
                             await session.send_text(
                                 piece, eos=idx == len(pieces) - 1, generation_id=gen_id
                             )
-                            self._tts._last_send = loop.time()
+                            self._session_state.last_send = loop.time()
                     except BaseException:
                         pending_gens.discard(gen_id)
-                        self._tts._routes.pop(gen_id, None)
+                        self._session_state.routes.pop(gen_id, None)
                         raise
             send_complete.set()
 
@@ -450,15 +480,15 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _teardown() -> None:
             for gen_id in my_gens:
-                self._tts._routes.pop(gen_id, None)
-            await self._tts._drop_session_if_idle(current_stream_active=session_acquired)
+                self._session_state.routes.pop(gen_id, None)
+            await self._drop_session_if_idle(session_acquired)
 
         session: TtsSession | None = None
         session_acquired = False
         try:
-            async with self._tts._send_lock:
-                session = await self._tts._ensure_session(self._conn_options.connect_timeout)
-                self._tts._active_streams_cnt += 1
+            async with self._session_state.send_lock:
+                session = await self._ensure_session(self._conn_options.connect_timeout)
+                self._session_state.active_streams += 1
                 session_acquired = True
             tasks = [
                 asyncio.create_task(_input_task()),
@@ -507,13 +537,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             for gen_id in my_gens:
-                self._tts._routes.pop(gen_id, None)
+                self._session_state.routes.pop(gen_id, None)
             if session_acquired:
-                async with self._tts._send_lock:
-                    self._tts._active_streams_cnt -= 1
+                async with self._session_state.send_lock:
+                    self._session_state.active_streams -= 1
 
     async def _send_cancel(self, session: TtsSession, gen_ids: set[str]) -> None:
-        async with self._tts._send_lock:
+        async with self._session_state.send_lock:
             for gen_id in gen_ids:
                 # The SDK's cancel() takes no generation argument yet.
                 # Send the frame directly until palabra-ai exposes cancel(generation_id).

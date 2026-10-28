@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 
@@ -209,12 +210,27 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            opts=replace(self._opts),
+            http_session=self._ensure_session,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        opts = replace(self._opts)
+        stream = SynthesizeStream(
+            tts=self,
+            opts=opts,
+            tokenizer=self._sentence_tokenizer,
+            pool=self._pool_for(opts),
+            start_keepalive=self._start_keepalive,
+            stop_keepalive=self._stop_keepalive,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -323,10 +339,18 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """One-shot synthesis over HTTP ``POST /v1/tts/stream``."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        http_session: Callable[[], aiohttp.ClientSession],
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._http_session = http_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -346,7 +370,7 @@ class ChunkedStream(tts.ChunkedStream):
         }
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._http_session(),
                 "POST",
                 http_stream_url(self._opts.base_url),
                 json=payload,
@@ -390,10 +414,25 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming synthesis with sentence tokenization over a persistent WebSocket."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        tokenizer: tokenize.SentenceTokenizer,
+        pool: utils.ConnectionPool[AsyncStreamingTTSSession],
+        start_keepalive: Callable[
+            [AsyncStreamingTTSSession, utils.ConnectionPool[AsyncStreamingTTSSession]], None
+        ],
+        stop_keepalive: Callable[[AsyncStreamingTTSSession], Awaitable[None]],
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._tokenizer = tokenizer
+        self._pool = pool
+        self._start_keepalive = start_keepalive
+        self._stop_keepalive = stop_keepalive
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
@@ -412,10 +451,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for data in self.input:
                 if isinstance(data, str):
                     if sentence_stream is None:
-                        sentence_stream = self._tts._sentence_tokenizer.stream()
+                        sentence_stream = self._tokenizer.stream()
                         segments_ch.send_nowait(sentence_stream)
                     sentence_stream.push_text(data)
-                elif isinstance(data, self.Flush):
+                else:
                     if sentence_stream is not None:
                         sentence_stream.end_input()
                         sentence_stream = None
@@ -448,12 +487,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
-        pool = self._tts._pool_for(self._opts)
+        pool = self._pool
         deferred_error: APIStatusError | None = None
         cancelled = False
 
         async with pool.connection(conn_options=self._conn_options) as session:
-            await self._tts._stop_keepalive(session)
+            await self._stop_keepalive(session)
             reusable = False
             try:
                 started = False
@@ -501,7 +540,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise
             finally:
                 if reusable:
-                    self._tts._start_keepalive(session, pool)
+                    self._start_keepalive(session, pool)
 
         if cancelled:
             raise asyncio.CancelledError

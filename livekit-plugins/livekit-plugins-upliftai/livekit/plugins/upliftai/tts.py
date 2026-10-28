@@ -194,15 +194,33 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         """Synthesize text to speech using chunked stream."""
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            opts=self._opts,
+            synthesize_request=self._synthesize_request,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming synthesis session."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            opts=self._opts,
+            synthesize_request=self._synthesize_request,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
+
+    async def _synthesize_request(
+        self, text: str, request_id: str
+    ) -> asyncio.Queue[bytes | APIError | None]:
+        if self._client is None:
+            self._client = WebSocketClient(self._opts)
+        return await self._client.synthesize(text, request_id)
 
     async def aclose(self) -> None:
         """Clean up resources"""
@@ -406,9 +424,18 @@ class WebSocketClient:
 class ChunkedStream(tts.ChunkedStream):
     """Chunked synthesis implementation"""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        synthesize_request: Callable[[str, str], Awaitable[asyncio.Queue[bytes | APIError | None]]],
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._opts = opts
+        self._synthesize_request = synthesize_request
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute synthesis"""
@@ -418,19 +445,14 @@ class ChunkedStream(tts.ChunkedStream):
             # Initialize emitter
             output_emitter.initialize(
                 request_id=request_id,
-                sample_rate=self._tts._opts.sample_rate,
-                num_channels=self._tts._opts.num_channels,
+                sample_rate=self._opts.sample_rate,
+                num_channels=self._opts.num_channels,
                 mime_type=get_content_type_from_output_format(
-                    self._tts._opts.voice_settings.output_format
+                    self._opts.voice_settings.output_format
                 ),
             )
 
-            # Create client if needed
-            if not self._tts._client:
-                self._tts._client = WebSocketClient(self._tts._opts)
-
-            # Get audio queue
-            audio_queue = await self._tts._client.synthesize(self._input_text, request_id)
+            audio_queue = await self._synthesize_request(self._input_text, request_id)
 
             # Stream audio
             while True:
@@ -460,9 +482,17 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming synthesis implementation"""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        synthesize_request: Callable[[str, str], Awaitable[asyncio.Queue[bytes | APIError | None]]],
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._opts = opts
+        self._synthesize_request = synthesize_request
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Execute streaming synthesis"""
@@ -471,12 +501,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         output_emitter.initialize(
             request_id=request_id,
-            sample_rate=self._tts._opts.sample_rate,
-            num_channels=self._tts._opts.num_channels,
+            sample_rate=self._opts.sample_rate,
+            num_channels=self._opts.num_channels,
             stream=True,
-            mime_type=get_content_type_from_output_format(
-                self._tts._opts.voice_settings.output_format
-            ),
+            mime_type=get_content_type_from_output_format(self._opts.voice_settings.output_format),
         )
 
         async def _tokenize_input() -> None:
@@ -485,7 +513,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
-                        word_stream = self._tts._opts.word_tokenizer.stream()
+                        word_stream = self._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
 
                     word_stream.push_text(input)
@@ -530,10 +558,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
 
         try:
-            # Create client if needed
-            if not self._tts._client:
-                self._tts._client = WebSocketClient(self._tts._opts)
-
             # Collect text
             text_parts: list[str] = []
             async for data in word_stream:
@@ -543,15 +567,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return
 
             # Format text
-            if isinstance(self._tts._opts.word_tokenizer, tokenize.WordTokenizer):
-                full_text = self._tts._opts.word_tokenizer.format_words(text_parts)
+            if isinstance(self._opts.word_tokenizer, tokenize.WordTokenizer):
+                full_text = self._opts.word_tokenizer.format_words(text_parts)
             else:
                 full_text = " ".join(text_parts)
 
             self.mark_started()
 
             # Synthesize
-            audio_queue = await self._tts._client.synthesize(full_text, segment_id)
+            audio_queue = await self._synthesize_request(full_text, segment_id)
 
             # Stream audio
             while True:
