@@ -40,7 +40,9 @@ pub trait ConsoleSink: Send + Sync {
 /// The native console socket as the session's transport and audio legs.
 #[crate::host(native(refused = "expected a native ConsoleIo"))]
 pub trait ConsolePort: Send + Sync {
-    fn as_transport(self: Arc<Self>) -> Arc<dyn SessionTransport>;
+    /// The transport, writing to the socket on the session's `spawner`.
+    fn as_transport(self: Arc<Self>, spawner: Arc<dyn crate::Spawner>)
+    -> Arc<dyn SessionTransport>;
     fn as_console(self: Arc<Self>) -> Arc<dyn ConsoleSink>;
     fn as_audio_input(self: Arc<Self>) -> Arc<dyn AudioInput>;
     fn as_audio_output(self: Arc<Self>) -> Arc<dyn AudioOutput>;
@@ -50,7 +52,7 @@ pub trait ConsolePort: Send + Sync {
 #[crate::host(class(name = "ConsoleIo", native = ConsolePort))]
 pub trait ConsoleIo: ConsolePort + Sized + 'static {
     #[host(new)]
-    fn new(addr: String) -> Result<Self, crate::errors::ProviderError>;
+    fn new(addr: String) -> Self;
 }
 
 /// Starts a native voice session with its runtime-owned queue executor.

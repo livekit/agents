@@ -208,7 +208,7 @@ impl SessionApi {
         let room = room.rtc();
         let remote = remote_session.map(|port| {
             let transport = match &console {
-                Some(console) => console.clone().as_transport(),
+                Some(console) => console.clone().as_transport(spawner.clone()),
                 None => Arc::new(crate::remote_session::room::RoomTransport::new(
                     Arc::clone(&room),
                     spawner.clone(),

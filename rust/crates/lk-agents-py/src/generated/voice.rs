@@ -90,7 +90,7 @@ impl ConsoleIo {
     #[pyo3(signature = (addr))]
     fn new(addr: ::std::string::String) -> PyResult<ConsoleIo> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <ConsoleIoImpl as ::lk_agents_abi::voice::console::ConsoleIo>::new(addr).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <ConsoleIoImpl as ::lk_agents_abi::voice::console::ConsoleIo>::new(addr);
         Ok(ConsoleIo(::std::sync::Arc::new(out)))
     }
 }

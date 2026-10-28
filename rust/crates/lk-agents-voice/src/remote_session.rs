@@ -1,6 +1,7 @@
 pub use lk_agents_abi::llm::chat_context::protocol::{
     encode_chat_item, encode_epoch_secs, encode_metrics, encode_role, encode_timestamp,
 };
+pub mod console;
 pub mod driver;
 pub mod room;
 

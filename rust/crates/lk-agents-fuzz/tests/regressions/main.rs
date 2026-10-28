@@ -3,6 +3,7 @@
 //! each of them made a core edit cost a minute of release builds.
 mod agent_state_written_on_connect;
 mod closing_on_own_error;
+mod console_cut_position;
 mod console_delivery;
 mod cut_reply_keeps_heard_words;
 mod determinism;

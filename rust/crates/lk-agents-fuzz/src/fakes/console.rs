@@ -1,11 +1,15 @@
-//! The console boundary: typed messages and audio legs, with CLI playout on virtual time.
+//! The console boundary: typed messages and audio legs, with CLI playout on virtual time. What the
+//! legs account for is the session's own [`ConsolePlayback`], on the simulated clock.
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::console::{ConsolePort, ConsoleSink, SessionTransport};
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackFinished, PlaybackTracker,
+    AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
 };
-use lk_agents_abi::{AudioFrame, BoxFuture};
+use lk_agents_abi::{AudioFrame, BoxFuture, Clock, Spawner};
+use lk_agents_voice::remote_session::console::{
+    CONSOLE_SAMPLE_RATE, ConsolePlayback, microphone_frame,
+};
 use lk_agents_voice::remote_session::{self, proto};
 use proto::agent_session_message::{Message, console_io};
 use std::sync::{Arc, Mutex};
@@ -18,8 +22,8 @@ pub struct FakeConsole {
     mic: Arc<super::output::FakeAudioInput>,
     microphone: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>>,
     tracker: Arc<PlaybackTracker>,
-    segment: Mutex<(Option<f64>, Duration)>,
-    spawner: Arc<dyn lk_agents_abi::Spawner>,
+    playback: Mutex<ConsolePlayback>,
+    clock: Arc<dyn Clock>,
     writer: Mutex<
         Option<(
             tokio::sync::mpsc::UnboundedReceiver<proto::AgentSessionMessage>,
@@ -28,12 +32,16 @@ pub struct FakeConsole {
     >,
 }
 
+/// The console as the session's transport, writing on the session's spawner.
+struct FakeTransport {
+    console: Arc<FakeConsole>,
+    spawner: Arc<dyn Spawner>,
+}
+
 impl FakeConsole {
-    pub fn as_audio_input(self: &Arc<Self>) -> Arc<dyn AudioInput> {
-        self.clone()
-    }
-    pub fn as_audio_output(self: &Arc<Self>) -> Arc<dyn AudioOutput> {
-        self.clone()
+    /// The simulated wall clock, as the session's remote host reads it.
+    fn now(&self) -> f64 {
+        lk_agents_abi::unix_secs(self.clock.wall())
     }
     fn send(&self, message: Message) {
         if let Some(outgoing) = self.outgoing.lock().unwrap().as_ref() {
@@ -41,22 +49,16 @@ impl FakeConsole {
         }
     }
     fn finish(&self, interrupted: bool) {
-        let (started, pushed) = std::mem::take(&mut *self.segment.lock().unwrap());
-        if let Some(started) = started {
-            let played = Duration::try_from_secs_f64(lk_agents_abi::unix_now() - started)
-                .unwrap_or_default();
-            self.tracker.playback_finished(PlaybackFinished {
-                playback_position: if interrupted { played.min(pushed) } else { pushed },
-                interrupted,
-                synchronized_transcript: None,
-            });
+        let finished = self.playback.lock().unwrap().finish(interrupted, self.now());
+        if let Some(finished) = finished {
+            self.tracker.playback_finished(finished);
         }
     }
 }
 
 impl ConsolePort for FakeConsole {
-    fn as_transport(self: Arc<Self>) -> Arc<dyn SessionTransport> {
-        self
+    fn as_transport(self: Arc<Self>, spawner: Arc<dyn Spawner>) -> Arc<dyn SessionTransport> {
+        Arc::new(FakeTransport { console: self, spawner })
     }
     fn as_console(self: Arc<Self>) -> Arc<dyn ConsoleSink> {
         self
@@ -69,10 +71,10 @@ impl ConsolePort for FakeConsole {
     }
 }
 
-impl SessionTransport for FakeConsole {
+impl SessionTransport for FakeTransport {
     fn start(&self) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
-            let Some((mut messages, to_cli)) = self.writer.lock().unwrap().take() else {
+            let Some((mut messages, to_cli)) = self.console.writer.lock().unwrap().take() else {
                 return Ok(());
             };
             self.spawner.spawn(Box::pin(async move {
@@ -93,23 +95,23 @@ impl SessionTransport for FakeConsole {
         Box::pin(async { Ok(()) })
     }
     fn send_message_nowait(&self, message: &proto::AgentSessionMessage) {
-        if let Some(outgoing) = self.outgoing.lock().unwrap().as_ref() {
+        if let Some(outgoing) = self.console.outgoing.lock().unwrap().as_ref() {
             let _ = outgoing.send(message.clone());
         }
     }
     fn recv(&self) -> BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>> {
         Box::pin(async move {
-            let message = self.incoming.lock().await.recv().await;
+            let message = self.console.incoming.lock().await.recv().await;
             if message.is_none() {
-                self.microphone.lock().unwrap().take();
+                self.console.microphone.lock().unwrap().take();
             }
             Ok(message)
         })
     }
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            self.outgoing.lock().unwrap().take();
-            self.microphone.lock().unwrap().take();
+            self.console.outgoing.lock().unwrap().take();
+            self.console.microphone.lock().unwrap().take();
         })
     }
 }
@@ -117,12 +119,7 @@ impl SessionTransport for FakeConsole {
 impl ConsoleSink for FakeConsole {
     fn push_input_frame(&self, frame: &console_io::AudioFrame) {
         if let Some(mic) = self.microphone.lock().unwrap().as_ref() {
-            let _ = mic.send(AudioFrame::new(
-                frame.data.clone(),
-                frame.sample_rate,
-                frame.num_channels as u16,
-                frame.samples_per_channel,
-            ));
+            let _ = mic.send(microphone_frame(frame));
         }
     }
     fn playout_finished(&self) {
@@ -150,27 +147,16 @@ impl AudioOutput for FakeConsole {
         AudioOutputCapabilities { pause: false }
     }
     fn sample_rate(&self) -> Option<u32> {
-        Some(48_000)
+        Some(CONSOLE_SAMPLE_RATE)
     }
     fn capture<'a>(&'a self, frame: &'a AudioFrame) -> BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
-            let now = lk_agents_abi::unix_now();
-            let first = {
-                let mut segment = self.segment.lock().unwrap();
-                segment.1 += Duration::from_secs_f64(frame.duration());
-                let first = segment.0.is_none();
-                segment.0.get_or_insert(now);
-                first
-            };
-            if first {
+            let now = self.now();
+            let (message, opened) = self.playback.lock().unwrap().capture(frame, now);
+            if opened {
                 self.tracker.report_started(now);
             }
-            self.send(Message::AudioOutput(console_io::AudioFrame {
-                data: frame.data.to_vec(),
-                sample_rate: frame.sample_rate,
-                num_channels: u32::from(frame.num_channels),
-                samples_per_channel: frame.samples_per_channel,
-            }));
+            self.send(message);
             Ok(())
         })
     }
@@ -197,10 +183,7 @@ pub struct FakeCli {
 impl FakeCli {
     /// The typed console boundary and the CLI's scheduled playout acknowledgements.
     /// Each direction keeps its writer task: a send is queued before its peer receives it.
-    pub fn connect(
-        spawner: Arc<dyn lk_agents_abi::Spawner>,
-        world: Arc<dyn lk_agents_abi::Spawner>,
-    ) -> (Arc<FakeConsole>, FakeCli) {
+    pub fn connect(world: Arc<dyn Spawner>, clock: Arc<dyn Clock>) -> (Arc<FakeConsole>, FakeCli) {
         let (to_agent, mut sent) = tokio::sync::mpsc::unbounded_channel();
         let (to_console, incoming) = tokio::sync::mpsc::unbounded_channel();
         world.spawn(Box::pin(async move {
@@ -214,14 +197,14 @@ impl FakeCli {
         let (to_cli, mut received) = tokio::sync::mpsc::unbounded_channel();
         let (mic, microphone) = super::output::FakeAudioInput::new();
         let io = Arc::new(FakeConsole {
-            spawner,
             writer: Mutex::new(Some((messages, to_cli))),
             incoming: tokio::sync::Mutex::new(incoming),
             outgoing: Mutex::new(Some(outgoing)),
             mic,
             microphone: Mutex::new(Some(microphone)),
             tracker: Arc::new(PlaybackTracker::new()),
-            segment: Mutex::default(),
+            playback: Mutex::default(),
+            clock,
         });
         let cli = FakeCli { to_agent, playing_until: Arc::default() };
         let speaker = cli.clone();

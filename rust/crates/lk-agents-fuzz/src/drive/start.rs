@@ -4,6 +4,7 @@
 //! and installs the probe before `start()`. Below it are the constructors the start and the calls
 //! share: an agent, a history, a patch, built from the case's terms.
 use super::*;
+use lk_agents_abi::voice::console::ConsolePort;
 
 impl Run {
     /// Build a session through the host's API, over the fake room and the fakes, and start it.
@@ -52,7 +53,7 @@ impl Run {
         // person's track, minted when they join.
         let legs = setup.room_legs;
         // The console's socket is a leg of the host's like the fakes, so the room's stay off.
-        let console = setup.console.then(|| fakes::FakeCli::connect(tasks.clone(), world.clone()));
+        let console = setup.console.then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
         let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
@@ -188,11 +189,11 @@ impl Run {
             nodes.tts,
             nodes.stt,
             match &console {
-                Some((io, _)) => Some(io.as_audio_input()),
+                Some((io, _)) => Some(io.clone().as_audio_input()),
                 None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
             },
             match &console {
-                Some((io, _)) => Some(io.as_audio_output()),
+                Some((io, _)) => Some(io.clone().as_audio_output()),
                 None if setup.avatar => avatar_sink
                     .as_ref()
                     .map(|sink| sink.clone() as Arc<dyn lk_agents_abi::voice::io::AudioOutput>),
@@ -237,9 +238,7 @@ impl Run {
                 Arc::new(fakes::FakeConsolePort)
                     as Arc<dyn lk_agents_voice::remote_session::SessionPort>
             }),
-            console
-                .as_ref()
-                .map(|(io, _)| io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>),
+            console.as_ref().map(|(io, _)| io.clone() as Arc<dyn ConsolePort>),
             None,
             tasks.clone(),
         ));
