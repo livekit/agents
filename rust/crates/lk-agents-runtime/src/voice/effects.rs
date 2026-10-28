@@ -380,9 +380,7 @@ impl Runtime {
                     }
                 }
             }
-            E::Forwarder(command) => {
-                let _ = self.reports.send(command);
-            }
+            E::Forwarder(command) => self.command(command),
             E::Audio(AudioOp::SetAudioInput(input)) => {
                 let source = input.map(|input| self.shared.resources.register_audio_input(input.0));
                 let _ = self

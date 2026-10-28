@@ -12,8 +12,8 @@ use lk_agents_abi::voice::rtc::silence_frame;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Ts};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 
-/// What the decision core tells the forwarder, through the queue like any other event, so a gate
-/// change can land before or after a decision.
+/// Control inputs to the microphone fan-out. External commands enter through the owner's queue;
+/// the decision core's effects are applied in their batch before another frame is forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForwarderCommand {
     /// Put `sink` on `channel`. The sink it replaces has its input ended.

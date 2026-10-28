@@ -683,9 +683,7 @@ impl Executor {
                     }
                 }
             },
-            Effect::Forwarder(command) => {
-                let _ = self.reports.send(command);
-            }
+            Effect::Forwarder(command) => self.command(command),
             Effect::Audio(AudioOp::SetAudioInput(input)) => {
                 let source = input.map(|input| resources.register_audio_input(input.0));
                 let _ = self.reports.send(ForwarderCommand::SetSource(source));
