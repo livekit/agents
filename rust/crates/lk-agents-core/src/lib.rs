@@ -7,11 +7,13 @@
 //! - [`request`]: request planning over an explicit snapshot.
 //! - [`tool_outcome`]: the outcome table, what a tool's classified outcome records and asks for.
 //! - [`approval`]: the approval gate's identity, marks and read-back.
+//! - [`text_session`]: request-scoped backend frames and child continuation.
 
 pub mod agent;
 pub mod agent_run;
 pub mod approval;
 pub mod request;
+pub mod text_session;
 pub mod tool_outcome;
 
 pub use agent::AgentError;

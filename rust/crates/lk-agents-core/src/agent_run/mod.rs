@@ -11,7 +11,10 @@
 
 mod model_step;
 pub mod result;
+mod text_session;
 mod tool_calls;
+
+pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
 mod tests;

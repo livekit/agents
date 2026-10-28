@@ -1,0 +1,616 @@
+//! Request-scoped backend conversation coordination (text-session.md). `state` holds frames;
+//! `invocation` composes one AgentRun at a time. Runtime executes its effects and supplies
+//! validation and delivery receipts. Only a settled turn exposes a new state snapshot.
+//!
+//! - `state`: owned routing records for explicit application persistence.
+//! - `routing`: definitions, context-scope references and restored-state validation.
+//! - `history`: one-time fresh/fork selection and delivered-dialogue transfer.
+//! - `continuation`: child admission, completion and fresh parent invocations.
+
+mod continuation;
+mod history;
+mod routing;
+mod state;
+#[cfg(test)]
+mod tests;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
+
+use lk_agents_abi::agent::ArgumentIdentity;
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
+};
+use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
+use serde_json::Value;
+
+use crate::agent_run::{self, AgentRun, CallId, OutputVerdict, RunInput};
+use crate::approval;
+
+pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextSessionConfig};
+pub use state::{ChildCallStatus, ParentCall, PendingChildCall, SessionFrame, TextSessionState};
+
+/// Runtime/application inputs. Scope references describe contexts the application has built;
+/// this record contains neither services nor an instruction to load/save them.
+pub struct TextSessionInput {
+    pub session_id: String,
+    pub execution_id: String,
+    pub root_scope: String,
+    pub available_scopes: BTreeSet<String>,
+    pub state: Option<TextSessionState>,
+    pub wall: WallAnchor,
+    pub cleanup_timeout: Duration,
+    pub delegated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextSessionTurn {
+    pub result: RunResult,
+    pub state: TextSessionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextSessionError {
+    Routing(RoutingError),
+    Run(RunError),
+}
+
+impl std::fmt::Display for TextSessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Routing(error) => error.fmt(f),
+            Self::Run(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TextSessionError {}
+
+/// Every event belonging to an invocation carries its identity. Late receipts cannot mutate
+/// a new invocation of the same frame, nor a new request reconstructed from the returned state.
+pub enum Event {
+    Start(ChatMessage),
+    Run {
+        invocation_id: String,
+        event: agent_run::Event,
+    },
+    /// The host's accepted value serialized *after* validation/replacement. The runtime also
+    /// retains the original typed host value for the public result.
+    OutputValidated {
+        invocation_id: String,
+        validation: ValidationId,
+        verdict: OutputVerdict,
+        output: Option<Value>,
+    },
+    DialogueDelivered {
+        invocation_id: String,
+        message: ChatMessage,
+    },
+    /// All delivery receipts and invocation cleanup have been reported. A non-presenting
+    /// consumer acknowledges immediately; opening a stream does not imply delivery.
+    InvocationReleased {
+        invocation_id: String,
+    },
+    /// Return from a direct execution of the active frame, preserving its original parent call.
+    /// As with AgentRun, the result must already have passed the agent's output validators.
+    Reconcile {
+        frame_id: String,
+        result: RunResult,
+        output: Option<Value>,
+    },
+    Cancel,
+    Wake,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// The runtime binds this invocation to the supplied context scope and execution identity.
+    InvocationStarted {
+        frame_id: String,
+        agent_name: String,
+        invocation_id: String,
+        context_scope: String,
+        execution_id: String,
+    },
+    /// AgentRun has settled. Runtime finishes any selected delivery and reports its receipts
+    /// before acknowledging release. Until then a child cannot merge or resume its parent.
+    InvocationSettled {
+        frame_id: String,
+        invocation_id: String,
+        result: RunResult,
+    },
+    /// No host work remains in this parent invocation; its continuation is now routing data.
+    InvocationParked {
+        frame_id: String,
+        invocation_id: String,
+        usage: RunUsage,
+    },
+    Run {
+        invocation_id: String,
+        effect: agent_run::Effect,
+    },
+    Emit {
+        sequence: u64,
+        frame_id: String,
+        agent_name: String,
+        invocation_id: String,
+        event: StreamEvent,
+    },
+    /// The call receives an error output and the parent may respond or choose another tool.
+    RoutingRefused {
+        frame_id: String,
+        call_id: String,
+        error: RoutingError,
+    },
+    Finished(Result<TextSessionTurn, TextSessionError>),
+}
+
+struct PreparedChild {
+    function_call: FunctionCall,
+    arguments: Option<Value>,
+    identity: Option<String>,
+    executing: bool,
+}
+
+struct Invocation {
+    id: String,
+    frame_id: String,
+    run: AgentRun,
+    children: BTreeMap<CallId, PreparedChild>,
+    outputs: BTreeMap<ValidationId, Value>,
+    settled: Option<(RunResult, Option<Value>, Vec<PendingChildCall>)>,
+}
+
+pub struct TextSession {
+    config: TextSessionConfig,
+    state: TextSessionState,
+    scopes: BTreeSet<String>,
+    wall: WallAnchor,
+    cleanup_timeout: Duration,
+    delegated: bool,
+    invocation: Option<Invocation>,
+    started: bool,
+    done: bool,
+    sequence: u64,
+}
+
+impl TextSession {
+    pub fn new(config: TextSessionConfig, input: TextSessionInput) -> Result<Self, RoutingError> {
+        config.validate()?;
+        let state = match input.state {
+            Some(state) => {
+                if state.session_id != input.session_id || state.execution_id != input.execution_id
+                {
+                    return Err(RoutingError::InvalidState(
+                        "session or execution identity changed".into(),
+                    ));
+                }
+                state
+            }
+            None => {
+                let root = format!("{}/frame_0", input.session_id);
+                let frame = SessionFrame {
+                    id: root.clone(),
+                    agent_name: config.root_agent.clone(),
+                    history: Vec::new(),
+                    parent: None,
+                    context_scope: input.root_scope,
+                    completed: false,
+                    pending_calls: Vec::new(),
+                    answer_tool: None,
+                    visible_dialogue: Vec::new(),
+                    starting_history_ids: BTreeSet::new(),
+                    transferred_message_ids: BTreeSet::new(),
+                    merge_chat_history: false,
+                };
+                TextSessionState {
+                    session_id: input.session_id,
+                    execution_id: input.execution_id,
+                    root_frame_id: root.clone(),
+                    active_frame_id: root.clone(),
+                    ancestors: Vec::new(),
+                    frames: BTreeMap::from([(root, frame)]),
+                    next_id: 0,
+                }
+            }
+        };
+        config.validate_state(&state, &input.available_scopes)?;
+        Ok(Self {
+            config,
+            state,
+            scopes: input.available_scopes,
+            wall: input.wall,
+            cleanup_timeout: input.cleanup_timeout,
+            delegated: input.delegated,
+            invocation: None,
+            started: false,
+            done: false,
+            sequence: 0,
+        })
+    }
+
+    pub fn wake_at(&self) -> Option<Ts> {
+        self.invocation.as_ref().and_then(|i| i.run.wake_at())
+    }
+
+    pub fn handle(&mut self, event: Event, now: Ts) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        // A late host receipt still transfers ownership of its prepared-arguments resource.
+        // Invocation identity suffices for runtime cleanup, even after this request settled.
+        if let Event::Run { invocation_id, event: agent_run::Event::ToolPrepared { prepared, .. } } =
+            &event
+            && !self.is_current(invocation_id)
+        {
+            effects.push(Effect::Run {
+                invocation_id: invocation_id.clone(),
+                effect: agent_run::Effect::ToolArgumentsRelease { prepared: *prepared },
+            });
+            return effects;
+        }
+        if self.done {
+            return effects;
+        }
+        match event {
+            Event::Start(message) if !self.started => {
+                self.started = true;
+                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+                history::delivered(frame, message.clone());
+                // An answered read-back is now ordinary history. AgentRun alone decides whether
+                // a repeated validated call consumes it; a model argument cannot grant approval.
+                frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
+                self.invoke(Some(message), now, &mut effects);
+            }
+            Event::Run { invocation_id, event } if self.is_current(&invocation_id) => {
+                self.run_event(event, now, &mut effects);
+            }
+            Event::OutputValidated { invocation_id, validation, verdict, output }
+                if self.is_current(&invocation_id) =>
+            {
+                if matches!(verdict, OutputVerdict::Accepted { .. })
+                    && let Some(output) = output
+                {
+                    self.invocation.as_mut().unwrap().outputs.insert(validation, output);
+                }
+                self.run_event(
+                    agent_run::Event::OutputValidated { validation, verdict },
+                    now,
+                    &mut effects,
+                );
+            }
+            Event::DialogueDelivered { invocation_id, message }
+                if self.is_current(&invocation_id) =>
+            {
+                let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
+                history::delivered(frame, message);
+            }
+            Event::InvocationReleased { invocation_id } if self.is_current(&invocation_id) => {
+                if let Some((result, output, approvals)) =
+                    self.invocation.as_mut().unwrap().settled.take()
+                {
+                    self.invocation = None;
+                    self.settled(result, output, approvals, now, &mut effects);
+                }
+            }
+            Event::Reconcile { frame_id, result, output }
+                if !self.started && frame_id == self.state.active_frame_id =>
+            {
+                self.started = true;
+                self.settled(result, output, Vec::new(), now, &mut effects);
+            }
+            Event::Cancel => {
+                if self.invocation.as_ref().is_some_and(|i| i.settled.is_some()) {
+                    self.invocation = None;
+                    self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
+                } else if self.invocation.is_some() {
+                    self.run_event(agent_run::Event::Cancel, now, &mut effects);
+                } else {
+                    self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
+                }
+            }
+            Event::Wake => self.run_event(agent_run::Event::Wake, now, &mut effects),
+            _ => {}
+        }
+        effects
+    }
+
+    fn is_current(&self, invocation_id: &str) -> bool {
+        self.invocation.as_ref().is_some_and(|i| i.id == invocation_id)
+    }
+
+    fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<Effect>) {
+        let invocation_id = self.state.mint("invocation");
+        let frame = &self.state.frames[&self.state.active_frame_id];
+        let agent = &self.config.agents[&frame.agent_name];
+        let resume = message.is_none();
+        let message = message.unwrap_or_else(|| {
+            ChatMessage::text(String::new(), lk_agents_abi::Role::User, "", std::time::UNIX_EPOCH)
+        });
+        let input = RunInput {
+            invocation_id: invocation_id.clone(),
+            message,
+            history: frame.history.clone(),
+            answer_tool: frame.answer_tool.clone(),
+            delegated: self.delegated,
+            mode: crate::tool_outcome::Mode::Text,
+            llm: agent.llm.clone(),
+            wall: self.wall,
+            cleanup_timeout: self.cleanup_timeout,
+        };
+        let mut run = match AgentRun::new(agent.definition.clone(), input) {
+            Ok(run) => run,
+            Err(error) => {
+                self.finish(
+                    Err(TextSessionError::Routing(RoutingError::InvalidState(format!(
+                        "{error:?}"
+                    )))),
+                    effects,
+                );
+                return;
+            }
+        };
+        effects.push(Effect::InvocationStarted {
+            frame_id: frame.id.clone(),
+            agent_name: frame.agent_name.clone(),
+            invocation_id: invocation_id.clone(),
+            context_scope: frame.context_scope.clone(),
+            execution_id: self.state.execution_id.clone(),
+        });
+        let run_effects = if resume {
+            run.continue_from_history(now)
+        } else {
+            run.handle(agent_run::Event::Start, now)
+        };
+        self.invocation = Some(Invocation {
+            id: invocation_id,
+            frame_id: frame.id.clone(),
+            run,
+            children: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            settled: None,
+        });
+        self.run_effects(run_effects, now, effects);
+    }
+
+    fn run_event(&mut self, mut event: agent_run::Event, now: Ts, effects: &mut Vec<Effect>) {
+        let Some(invocation) = self.invocation.as_mut() else { return };
+        if let agent_run::Event::ToolPrepared { call, prepared, identity } = &event
+            && let Some(child) = invocation.children.get_mut(call)
+            && child.identity.is_none()
+        {
+            match identity {
+                ArgumentIdentity::Json(value) if value.is_object() => {
+                    child.identity = Some(approval::canonical(identity));
+                    child.arguments = Some(value.clone());
+                }
+                _ => {
+                    effects.push(Effect::Run {
+                        invocation_id: invocation.id.clone(),
+                        effect: agent_run::Effect::ToolArgumentsRelease { prepared: *prepared },
+                    });
+                    event = agent_run::Event::ToolPrepareFailed {
+                        call: *call,
+                        error:
+                            "local agent arguments must have a serializable validated JSON object"
+                                .into(),
+                    };
+                }
+            }
+        }
+        let run_effects = invocation.run.handle(event, now);
+        self.run_effects(run_effects, now, effects);
+    }
+
+    fn run_effects(
+        &mut self,
+        run_effects: Vec<agent_run::Effect>,
+        now: Ts,
+        effects: &mut Vec<Effect>,
+    ) {
+        for effect in run_effects {
+            let Some(invocation) = self.invocation.as_mut() else { break };
+            let frame_id = invocation.frame_id.clone();
+            let invocation_id = invocation.id.clone();
+            let frame = &self.state.frames[&frame_id];
+            match effect {
+                agent_run::Effect::Emit(event) => {
+                    self.sequence += 1;
+                    effects.push(Effect::Emit {
+                        sequence: self.sequence,
+                        frame_id,
+                        invocation_id,
+                        agent_name: frame.agent_name.clone(),
+                        event,
+                    });
+                }
+                agent_run::Effect::ToolPrepare { call, ref function_call, .. } => {
+                    if self.config.agents[&frame.agent_name]
+                        .agent_tools
+                        .contains_key(&function_call.name)
+                    {
+                        invocation.children.insert(
+                            call,
+                            PreparedChild {
+                                function_call: function_call.clone(),
+                                arguments: None,
+                                identity: None,
+                                executing: false,
+                            },
+                        );
+                    }
+                    effects.push(Effect::Run { invocation_id, effect });
+                }
+                agent_run::Effect::ToolExecute { call, prepared, function_call }
+                    if invocation.children.contains_key(&call) =>
+                {
+                    let child = invocation.children.get_mut(&call).unwrap();
+                    child.function_call = function_call;
+                    child.executing = true;
+                    effects.push(Effect::Run {
+                        invocation_id,
+                        effect: agent_run::Effect::ToolArgumentsRelease { prepared },
+                    });
+                }
+                agent_run::Effect::ToolCancel { call }
+                    if invocation.children.get(&call).is_some_and(|c| c.executing) =>
+                {
+                    invocation.children.get_mut(&call).unwrap().executing = false;
+                    let settled = invocation.run.handle(
+                        agent_run::Event::ToolSettled {
+                            call,
+                            outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
+                        },
+                        now,
+                    );
+                    self.run_effects(settled, now, effects);
+                }
+                agent_run::Effect::Finished(result) => match result {
+                    Err(error) => {
+                        self.invocation = None;
+                        self.finish(Err(TextSessionError::Run(error)), effects);
+                    }
+                    Ok(result) => {
+                        let invocation = self.invocation.as_ref().unwrap();
+                        let output = match &result.outcome {
+                            RunOutcome::Completed { output: Output::Validated(id) } => {
+                                invocation.outputs.get(id).cloned()
+                            }
+                            RunOutcome::Completed { output: Output::Text(text) } => {
+                                Some(Value::String(text.clone()))
+                            }
+                            _ => None,
+                        };
+                        let approvals = self.approvals(invocation, &result);
+                        effects.push(Effect::InvocationSettled {
+                            frame_id,
+                            invocation_id,
+                            result: result.clone(),
+                        });
+                        self.invocation.as_mut().unwrap().settled =
+                            Some((result, output, approvals));
+                    }
+                },
+                other => effects.push(Effect::Run { invocation_id, effect: other }),
+            }
+        }
+        self.park(now, effects);
+    }
+
+    fn pending(
+        &self,
+        frame_id: &str,
+        invocation_id: &str,
+        child: &PreparedChild,
+        status: ChildCallStatus,
+    ) -> PendingChildCall {
+        let frame = &self.state.frames[frame_id];
+        let tool = &self.config.agents[&frame.agent_name].agent_tools[&child.function_call.name];
+        PendingChildCall {
+            parent: ParentCall {
+                frame_id: frame_id.into(),
+                call_id: child.function_call.call_id.clone(),
+            },
+            invocation_id: invocation_id.into(),
+            execution_id: self.state.execution_id.clone(),
+            tool_name: child.function_call.name.clone(),
+            agent_name: tool.agent_name.clone(),
+            validated_arguments: child.arguments.clone().unwrap(),
+            identity: child.identity.clone().unwrap(),
+            status,
+        }
+    }
+
+    fn approvals(&self, invocation: &Invocation, result: &RunResult) -> Vec<PendingChildCall> {
+        invocation
+            .children
+            .values()
+            .filter(|child| child.arguments.is_some())
+            .filter_map(|child| {
+                result.all_messages.iter().find_map(|item| match item {
+                    ChatItem::FunctionCall(call)
+                        if call.call_id == child.function_call.call_id
+                            && approval::mark(call)
+                                == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
+                    {
+                        Some(self.pending(
+                            &invocation.frame_id,
+                            &invocation.id,
+                            child,
+                            ChildCallStatus::Approval,
+                        ))
+                    }
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    fn park(&mut self, now: Ts, effects: &mut Vec<Effect>) {
+        let Some(invocation) = &self.invocation else { return };
+        let calls: Vec<_> =
+            invocation.children.iter().filter(|(_, c)| c.executing).map(|(id, _)| *id).collect();
+        let (history, usage) = match invocation.run.delegation_checkpoint(&calls, now) {
+            agent_run::DelegationCheckpoint::Waiting => return,
+            agent_run::DelegationCheckpoint::ConflictingOutcome => {
+                for id in &calls {
+                    self.invocation.as_mut().unwrap().children.get_mut(id).unwrap().executing =
+                        false;
+                }
+                for call in calls {
+                    self.run_event(
+                        agent_run::Event::ToolSettled {
+                            call,
+                            outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Rejected(
+                                "child was not started because a sibling ended this invocation"
+                                    .into(),
+                            ),
+                        },
+                        now,
+                        effects,
+                    );
+                }
+                return;
+            }
+            agent_run::DelegationCheckpoint::Ready { history, usage } => (history, usage),
+        };
+        let mut pending: Vec<_> = calls
+            .iter()
+            .map(|id| {
+                self.pending(
+                    &invocation.frame_id,
+                    &invocation.id,
+                    &invocation.children[id],
+                    ChildCallStatus::Ready,
+                )
+            })
+            .collect();
+        // Validation/launch arrival order must not change the model's sibling order.
+        pending.sort_by_key(|p| {
+            history
+                .iter()
+                .position(|i| {
+                    matches!(i,
+            ChatItem::FunctionCall(c) if c.call_id == p.parent.call_id)
+                })
+                .unwrap()
+        });
+        let frame = self.state.frames.get_mut(&invocation.frame_id).unwrap();
+        frame.history = history;
+        frame.pending_calls = pending;
+        effects.push(Effect::InvocationParked {
+            frame_id: invocation.frame_id.clone(),
+            invocation_id: invocation.id.clone(),
+            usage,
+        });
+        self.invocation = None;
+        self.next_child(now, effects);
+    }
+
+    fn finish(
+        &mut self,
+        result: Result<TextSessionTurn, TextSessionError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        self.done = true;
+        effects.push(Effect::Finished(result));
+    }
+}

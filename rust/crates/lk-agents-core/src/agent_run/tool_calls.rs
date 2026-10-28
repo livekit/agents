@@ -248,6 +248,54 @@ impl ToolCalls {
         self.calls.iter().all(|c| matches!(c.phase, Phase::Settled(_)))
     }
 
+    pub(super) fn has_terminal_outcome(&self) -> bool {
+        self.calls.iter().any(|call| {
+            matches!(&call.phase,
+            Phase::Settled(settled) if matches!(settled.outcome,
+                ToolOutcome::InputRequired { .. } | ToolOutcome::StopResponse)
+                || tool_outcome::verbatim(&settled.outcome).is_some())
+        })
+    }
+
+    pub(super) fn delegation_checkpoint(
+        &self,
+        delegated: &[CallId],
+        mode: tool_outcome::Mode,
+        created_at: std::time::SystemTime,
+    ) -> Option<Vec<ChatItem>> {
+        // A sibling with a terminal outcome still belongs to AgentRun's terminal arbitration.
+        // The session must not discard it in order to start a child.
+        if delegated
+            .iter()
+            .any(|id| !self.calls.iter().any(|c| c.id == *id))
+        {
+            return None;
+        }
+        let mut items = Vec::new();
+        for call in &self.calls {
+            items.push(ChatItem::FunctionCall(call.item.clone()));
+            match &call.phase {
+                Phase::Running { .. } if delegated.contains(&call.id) => {}
+                Phase::Settled(settled) => {
+                    let outcome = &settled.outcome;
+                    let shape = tool_outcome::shape(outcome, mode);
+                    let mut output = lk_agents_abi::FunctionCallOutput::new(
+                        format!("{}_out", call.item.id),
+                        &call.item.call_id,
+                        shape.text,
+                        shape.is_error,
+                        created_at,
+                    );
+                    output.name = call.item.name.clone();
+                    output.reply_required = shape.reply_required;
+                    items.push(ChatItem::FunctionCallOutput(output));
+                }
+                _ => return None,
+            }
+        }
+        Some(items)
+    }
+
     /// The settled calls in model order.
     pub(super) fn finish(self) -> Vec<Recorded> {
         self.calls
