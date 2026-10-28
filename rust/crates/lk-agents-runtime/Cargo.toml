@@ -11,6 +11,8 @@ license.workspace = true
 [dependencies]
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference" }
+# Signs the gateway token (and later every framework credential): no private claims or signer.
+livekit-token.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 log.workspace = true
 thiserror.workspace = true

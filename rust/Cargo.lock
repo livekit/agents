@@ -1539,6 +1539,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
+ "livekit-token",
  "lk-agents-abi",
  "lk-agents-inference",
  "log",

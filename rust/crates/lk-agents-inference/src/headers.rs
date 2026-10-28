@@ -179,7 +179,20 @@ pub fn inference_headers(
 }
 
 /// Identification (finished by the host from the job context, else [`inference_headers`] with no
-/// job), the pinned provider, and the bearer minted from the key pair.
+/// job) and the pinned provider.
+pub fn identification_headers(
+    identification: Option<&Headers>,
+    inference_class: Option<&str>,
+    provider: Option<&str>,
+) -> Headers {
+    let base = match identification {
+        Some(headers) => headers.clone(),
+        None => inference_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class, None, ""),
+    };
+    crate::llm::request::request_headers(base, provider)
+}
+
+/// [`identification_headers`] and the bearer minted from the key pair.
 pub fn gateway_headers(
     identification: Option<&Headers>,
     inference_class: Option<&str>,
@@ -188,11 +201,7 @@ pub fn gateway_headers(
     api_secret: &str,
 ) -> Result<Headers, lk_agents_abi::errors::ApiError> {
     use crate::token::{DEFAULT_TTL_SECS, create_access_token, now_unix};
-    let base = match identification {
-        Some(headers) => headers.clone(),
-        None => inference_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class, None, ""),
-    };
-    let mut headers = crate::llm::request::request_headers(base, provider);
+    let mut headers = identification_headers(identification, inference_class, provider);
     let token = create_access_token(api_key, api_secret, DEFAULT_TTL_SECS, now_unix())
         .map_err(|e| lk_agents_abi::errors::ApiError::new(e.to_string()))?;
     headers.set("Authorization", format!("Bearer {token}"));

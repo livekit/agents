@@ -11,7 +11,7 @@ pub(crate) mod python;
 pub mod request;
 
 use crate::abi::{ChatRequest, Llm, LlmStream, ToolSpec};
-use crate::headers::{Headers, extract_quota_usage, gateway_headers};
+use crate::headers::{Headers, extract_quota_usage, gateway_headers, identification_headers};
 use crate::transport::{HttpRequest, HttpStream, HttpTransport, TransportError, within};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -169,7 +169,21 @@ impl NativeLlm {
     ) -> Result<Prepared, ApiError> {
         let opts = &self.opts;
         Ok(Prepared {
-            request: build_request(opts, self.identification.as_ref(), self.images.as_ref(), chat_ctx, tools, args)?,
+            request: build_request(
+                opts,
+                self.identification.as_ref(),
+                self.images.as_ref(),
+                chat_ctx,
+                tools,
+                args,
+                &crate::token::create_access_token(
+                    &opts.api_key,
+                    &opts.api_secret,
+                    crate::token::DEFAULT_TTL_SECS,
+                    crate::token::now_unix(),
+                )
+                .map_err(|e| ApiError::new(e.to_string()))?,
+            )?,
             timeout: Duration::from_secs_f64(self.conn_options.timeout.max(0.0)),
             clock: self.clock.clone(),
             http: self.http.clone(),
@@ -183,7 +197,7 @@ impl NativeLlm {
 
 /// The `chat.completions.create` exchange for one request: the body from the conversation, the
 /// tools and the composed kwargs; the headers from `extra_headers`, the job's identification, the
-/// provider pin and the bearer.
+/// provider pin and `bearer`, the gateway token the runtime signed.
 pub fn build_request(
     opts: &LlmOptions,
     identification: Option<&Headers>,
@@ -191,6 +205,7 @@ pub fn build_request(
     chat_ctx: &ChatContext,
     tools: &[ToolSpec],
     args: ChatArgs,
+    bearer: &str,
 ) -> Result<HttpRequest, ApiError> {
     let mut extra = request::compose_extra(&args, &opts.extra_kwargs);
     // Before `tool_choice` is popped (as in `LLMStream.__init__`): the model must see the
@@ -212,17 +227,11 @@ pub fn build_request(
             .collect(),
         _ => Headers::new(),
     };
-    for (name, value) in gateway_headers(
-        identification,
-        args.inference_class.as_deref().or(opts.inference_class.as_deref()),
-        opts.provider.as_deref(),
-        &opts.api_key,
-        &opts.api_secret,
-    )?
-    .into_vec()
-    {
+    let class = args.inference_class.as_deref().or(opts.inference_class.as_deref());
+    for (name, value) in identification_headers(identification, class, opts.provider.as_deref()).into_vec() {
         headers.set(name, value);
     }
+    headers.set("Authorization", format!("Bearer {bearer}"));
     headers.set("Content-Type", "application/json");
 
     Ok(HttpRequest {

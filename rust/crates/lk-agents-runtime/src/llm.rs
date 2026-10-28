@@ -13,7 +13,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::provider_format::PreResolved;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatContext, ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamSource, ToolSpec, Ts};
-use lk_agents_inference::headers::{Headers, gateway_headers};
+use lk_agents_inference::headers::{Headers, identification_headers};
 use lk_agents_inference::llm::lifecycle::{LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy};
 use lk_agents_inference::llm::request::ChatArgs;
 use lk_agents_inference::llm::{LlmOptions, build_request, models};
@@ -97,7 +97,8 @@ impl GatewayLlm {
         // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
         let identification = identification.or(self.identity.as_ref());
-        let request = build_request(&opts, identification, &images, chat_ctx, tools, args)?;
+        let bearer = crate::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
+        let request = build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
@@ -141,9 +142,9 @@ impl Llm for GatewayLlm {
     /// Opens a connection in the background so the first request finds it pooled.
     fn prewarm(&self) {
         let opts = self.options();
-        let Ok(headers) = gateway_headers(self.identity.as_ref(), None, None, &opts.api_key, &opts.api_secret) else {
-            return;
-        };
+        let Ok(bearer) = crate::token::inference_bearer(&opts.api_key, &opts.api_secret) else { return };
+        let mut headers = identification_headers(self.identity.as_ref(), None, None);
+        headers.set("Authorization", format!("Bearer {bearer}"));
         let (http, url) = (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));
         let task = OwnedTask::spawn(&self.runtime, async move { http.warm(url, headers.into_vec()).await }, |_| async {});
         *self.prewarm.lock().unwrap_or_else(|p| p.into_inner()) = Some(task);
