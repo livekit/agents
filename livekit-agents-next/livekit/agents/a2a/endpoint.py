@@ -45,7 +45,7 @@ AuthCallable = Callable[[HTTPConnection], "bool | Awaitable[bool]"]
 
 
 class A2ASessionOptions(TypedDict, total=False):
-    """``a2a_session``'s optional parameters (docs/text-endpoints.md)."""
+    """``a2a_session``'s optional parameters (docs/server.md)."""
 
     public: bool
     """``True`` by default: reachable without a LiveKit token."""
@@ -72,7 +72,7 @@ def a2a_session(
     ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``endpoint`` is the
     last path segment of its URL and ``description`` what another agent reads to decide whether
     to call; ``lane`` names the lane it writes when that is not the worker's own
-    (docs/lanes.md)."""
+    (docs/internals/storage.md#lanes)."""
     return lambda handler: A2AEndpoint(
         handler, endpoint=endpoint, description=description, lane=lane, **options
     )

@@ -129,7 +129,7 @@ class Thread:
             core.close()
 
     async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
-        """One page of the session's journal (docs/journal.md), every lane, in order; pass the
+        """One page of the session's journal (docs/internals/storage.md#journal), every lane, in order; pass the
         last ``id`` to read the next."""
         core = await self._open()
         try:

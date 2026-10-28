@@ -915,14 +915,12 @@ class SessionHost:
         elif req.HasField("finalize_simulation"):
             # The simulator's verdict is passed in so on_simulation_end can read it
             # (ctx.simulator_verdict); the agent records its OWN verdict via
-            # ctx.success()/fail(). Both are reported; this is not an override.
+            # ctx.fail(). Both are reported; this is not an override.
             user_verdict: (
                 agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
             ) = None  # noqa: E501
             sim_error: str | None = None
             try:
-                from livekit.protocol import agent_simulation as sim_pb
-
                 from ..job import get_job_context
                 from ..simulation import SimulationVerdict
 
@@ -934,7 +932,6 @@ class SessionHost:
                             success=req.finalize_simulation.provisional_success,
                             reason=req.finalize_simulation.provisional_reason,
                         ),
-                        run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
                     )
                     fnc = jc._simulation_end_fnc if jc is not None else None
                     if fnc is not None:

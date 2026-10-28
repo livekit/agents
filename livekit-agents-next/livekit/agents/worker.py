@@ -62,7 +62,7 @@ _EntrypointT = TypeVar("_EntrypointT", bound=Entrypoint)
 
 
 class RtcSessionOptions(TypedDict, total=False):
-    """``rtc_session``'s parameters (docs/voice.md)."""
+    """``rtc_session``'s parameters (docs/voice-session.md)."""
 
     endpoint: str
     """The door's name under the agent, ``{agent_name}/{endpoint}``; the agent's name when empty."""
@@ -102,7 +102,7 @@ class AgentHandler:
         @back_office.a2a_session(endpoint="backend", description="The back office.", public=False)
         async def text(ctx: A2ASessionContext) -> str: ...
 
-    ``lane`` names the lane the doors write (docs/lanes.md); the worker's own when left out.
+    ``lane`` names the lane the doors write (docs/internals/storage.md#lanes); the worker's own when left out.
     The voice door writes the worker's lane, so a handler with a lane of its own has text
     doors only. ``AgentServer`` is the handler of the worker's own lane that serves its doors.
     """

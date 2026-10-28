@@ -4,7 +4,7 @@
 //! One module per subject, named like the reference package (`livekit/agents/`).
 
 // `Host` stays in this crate; `Vocabulary`, `host` and `class` are the only items re-exported from
-// `lk-agents-host-derive` (`scripts/check_layout.py`).
+// `lk-agents-host-derive`.
 pub use lk_agents_host_derive::Vocabulary;
 pub use lk_agents_host_derive::class;
 pub use lk_agents_host_derive::host;

@@ -100,7 +100,7 @@ class PendingCall(BaseModel):
 
 
 class HostEvent(BaseModel):
-    """A journal event the handler recorded (docs/journal.md): `tool_execution_updated` for a
+    """A journal event the handler recorded (docs/internals/storage.md#journal): `tool_execution_updated` for a
     call's start, its progress and its end.
     """
 

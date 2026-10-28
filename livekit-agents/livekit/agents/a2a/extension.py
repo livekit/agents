@@ -4,7 +4,7 @@ A2A extensions are named by a URI, declared on the agent card, activated by a cl
 ``A2A-Extensions`` header, echoed by the server, and keep their fields in the ``metadata`` maps
 under keys prefixed by the URI. This module holds the URI, every key written short
 (``livekit/<name>``), the per-request negotiation, the protobuf helpers and the agent card an
-endpoint publishes. The specification is ``docs/a2a-live-ext.md``. A stock client that sends
+endpoint publishes. The specification is ``docs/protocol/a2a.md``. A stock client that sends
 no header gets plain A2A, and a stock server that offers no extension is read as plain A2A.
 """
 

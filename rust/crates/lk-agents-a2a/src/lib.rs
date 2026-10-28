@@ -509,7 +509,7 @@ impl Turn {
                     ..RunOptions::new(task_id, task_id)
                 })
                 .await?;
-            // the row is written under the lease: a refused message leaves none (docs/text-endpoints.md)
+            // the row is written under the lease: a refused message leaves none (docs/server.md)
             let body = async {
                 if run.closed {
                     return Ok(None);
@@ -1013,7 +1013,7 @@ pub struct PendingCall {
     pub answer_tool: Option<String>,
 }
 
-/// A journal event the handler recorded (docs/journal.md): `tool_execution_updated` for a
+/// A journal event the handler recorded (docs/internals/storage.md#journal): `tool_execution_updated` for a
 /// call's start, its progress and its end.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
 #[python(pydantic, module = "storage_turn", config = "frozen=True")]

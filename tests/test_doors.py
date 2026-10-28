@@ -1,5 +1,5 @@
 """An ``AgentHandler`` a module defines with no server, served by ``server.add()``; one with
-``lane=`` writes its own lane of the thread (docs/lanes.md)."""
+``lane=`` writes its own lane of the thread (docs/internals/storage.md#lanes)."""
 
 from __future__ import annotations
 

@@ -106,7 +106,6 @@ class SessionPort:
     async def _core_finalize_simulation(
         self, provisional: tuple[bool, str]
     ) -> tuple[tuple[bool, str] | None, str | None]:
-        from livekit.protocol import agent_simulation as sim_pb
 
         from ..simulation import SimulationVerdict
 
@@ -118,7 +117,6 @@ class SessionPort:
             success, reason = provisional
             sim_ctx._begin_finalize(
                 simulator_verdict=SimulationVerdict(success=success, reason=reason),
-                run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
             )
             if (fnc := job_ctx._simulation_end_fnc) is not None:
                 if asyncio.iscoroutine(out := fnc(sim_ctx)):

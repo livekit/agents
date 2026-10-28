@@ -70,7 +70,7 @@ class A2ASessionContext:
         self.metadata: dict[str, JsonValue] = {}
         """What goes on the task's terminal row and final status event, under short keys."""
         self.events: list[HostEvent] = []
-        """What the turn appends to the journal (docs/journal.md): each ``update`` here, the
+        """What the turn appends to the journal (docs/internals/storage.md#journal): each ``update`` here, the
         tool calls from the runs' results."""
         self.interrupted = False
         self._checkpoint = checkpoint
@@ -276,7 +276,7 @@ class TurnStream:
 
 
 def _tool_events(results: list[RunResult[object]]) -> list[HostEvent]:
-    """Each call's start and end as the runs' results hold them (docs/journal.md)."""
+    """Each call's start and end as the runs' results hold them (docs/internals/storage.md#journal)."""
     events: list[HostEvent] = []
     for result in results:
         for item in result.new_messages():

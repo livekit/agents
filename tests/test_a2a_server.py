@@ -844,7 +844,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
 async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     agentdb_workers: Workers,
 ) -> None:
-    """docs/a2a.md: the turn's save could not be written; the task fails with the reason, and
+    """docs/protocol/a2a.md: the turn's save could not be written; the task fails with the reason, and
     the client resends."""
     a, _ = agentdb_workers
 

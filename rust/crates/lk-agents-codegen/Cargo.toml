@@ -11,10 +11,6 @@ description = "Reads the `#[derive(Host)]` declarations and writes every host's 
 name = "lk-agents-codegen"
 path = "src/main.rs"
 
-[[bin]]
-name = "check-layout"
-path = "src/check_layout.rs"
-
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing", "visit", "visit-mut"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }

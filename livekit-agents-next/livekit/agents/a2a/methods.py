@@ -149,7 +149,7 @@ class A2AService:
     @property
     def lane(self) -> str:
         """The lane this door writes: the worker's name, or its own when it was included from
-        another server (docs/lanes.md)."""
+        another server (docs/internals/storage.md#lanes)."""
         return (self._lane() if self._lane is not None else "") or self.agent_name
 
     @property
@@ -430,7 +430,7 @@ class A2AService:
         self, thread_id: str, message: StoredMessage, error: StorageError
     ) -> tuple[TaskRow, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
-        answer, unpersisted, and the client resends (docs/a2a.md)."""
+        answer, unpersisted, and the client resends (docs/protocol/a2a.md)."""
         logger.warning(
             "an agent-store error ended a turn",
             extra={"endpoint": self._endpoint.name, "threadId": thread_id, "error": str(error)},

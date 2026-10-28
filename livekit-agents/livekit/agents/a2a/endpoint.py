@@ -55,7 +55,7 @@ def a2a_session(
 ) -> Callable[[Handler], A2AEndpoint]:
     """The text door as a decorator with no server: the door is an object a module defines and
     ``AgentServer.add()`` serves (``server.a2a_session(...)`` does both). ``lane`` names the lane
-    it writes when that is not the worker's own (docs/lanes.md)."""
+    it writes when that is not the worker's own (docs/internals/storage.md#lanes)."""
 
     def decorator(handler: Handler) -> A2AEndpoint:
         return A2AEndpoint(
