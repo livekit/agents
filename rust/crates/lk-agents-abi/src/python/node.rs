@@ -12,9 +12,9 @@ use pyo3::prelude::*;
 use tokio::sync::mpsc;
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+#[rustfmt::skip]
 use super::{
-    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured,
-    provider_error_to_py,
+    AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, provider_error_to_py,
 };
 use crate::errors::ProviderError;
 

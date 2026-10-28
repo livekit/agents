@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `metrics/usage.py`'s rollup.
 
 pub mod records;
@@ -57,6 +49,7 @@ impl<V: Default> OrderedByModel<V> {
 
 /// `usage.py:134`.
 #[derive(Debug, Clone, Default)]
+#[crate::class(mutable)]
 pub struct ModelUsageCollector {
     llm: OrderedByModel<LlmModelUsage>,
     tts: OrderedByModel<TtsModelUsage>,
@@ -65,9 +58,8 @@ pub struct ModelUsageCollector {
     eot: OrderedByModel<EotModelUsage>,
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `metrics.ModelUsageCollector` -- the live per-model rollup.
-#[crate::host(object(pid = false, cell = "mutex"))]
+#[crate::host(object(pid = false))]
 impl ModelUsageCollector {
     #[host(new)]
     pub fn new() -> Self {

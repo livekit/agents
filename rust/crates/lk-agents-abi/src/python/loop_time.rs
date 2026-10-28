@@ -707,12 +707,8 @@ impl Future for LoopWait {
             }
             return Poll::Pending;
         }
-        let timer = Arc::new(Mutex::new(Timer {
-            fired: false,
-            dropped: false,
-            waker: Some(cx.waker().clone()),
-            handle: None,
-        }));
+        #[rustfmt::skip]
+        let timer = Arc::new(Mutex::new(Timer { fired: false, dropped: false, waker: Some(cx.waker().clone()), handle: None }));
         self.timer = Some(Arc::clone(&timer));
         let (rt, at) = (Arc::clone(&self.rt), self.at);
         if rt.on_loop_thread() {
