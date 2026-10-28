@@ -51,7 +51,6 @@ class ResponsesOptions(TypedDict, total=False):
     parallel_tool_calls: bool | None
     prompt_cache_options: PromptCacheOptions
     reasoning: Reasoning | dict[str, Any] | None
-    service_tier: Literal["auto", "default", "flex", "scale", "priority", "ultrafast"] | None
     temperature: float | None
     text: ResponseTextConfigParam
     top_p: float | None
