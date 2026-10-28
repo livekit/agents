@@ -25,7 +25,8 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
     use lk_agents_inference::abi::Tts;
     use lk_agents_inference::tts::TtsOptions;
     use lk_agents_net::websocket::TungsteniteTransport;
-    use lk_agents_runtime::speech_text::host::NativeTts;
+    type NativeTts =
+        lk_agents_runtime::inference::tts::NativeTts<lk_agents_runtime::process::Process>;
 
     let Some((api_key, api_secret, base_url)) = credentials() else {
         eprintln!("skipped: no inference credentials in the environment");

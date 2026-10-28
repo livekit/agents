@@ -1438,6 +1438,7 @@ name = "lk-agents-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fancy-regex",
  "lk-agents-abi",
  "log",
  "regex",
@@ -1658,6 +1659,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "fancy-regex",
+ "indexmap",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",

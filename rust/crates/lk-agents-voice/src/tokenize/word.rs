@@ -303,36 +303,33 @@ pub struct BasicWordTokenizer {
     pub opts: WordTokenizerOptions,
 }
 
-/// Really naive implementation of a word tokenizer: words split on whitespace, punctuation
-/// stripped unless asked to keep it.
-impl BasicWordTokenizer {
-    pub fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Self {
+impl lk_agents_abi::tokenize::bindings::WordTokenizer for BasicWordTokenizer {
+    fn new(ignore_punctuation: bool, split_character: bool, retain_format: bool) -> Self {
         BasicWordTokenizer {
             opts: WordTokenizerOptions { ignore_punctuation, split_character, retain_format },
         }
     }
 
     /// The words of `text`; `language` is accepted and unused.
-    pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
-        let _ = language;
-        split_words(text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
+    fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
+        split_words(&text, self.opts).into_iter().map(|w| w.text.into_owned()).collect()
     }
 
     /// `(word, start, end)` per word: what a stream batches.
-    pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
-        split_words(text, self.opts)
+    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
+        split_words(&text, self.opts)
             .into_iter()
             .map(|w| (w.text.into_owned(), w.start, w.end))
             .collect()
     }
 
     /// The shortest token a stream emits: each word once the next proves it whole.
-    pub fn min_token_len(&self) -> usize {
+    fn min_token_len(&self) -> usize {
         1
     }
 
     /// The text a stream buffers before it splits.
-    pub fn min_ctx_len(&self) -> usize {
+    fn min_ctx_len(&self) -> usize {
         1
     }
 }

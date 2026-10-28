@@ -36,17 +36,6 @@ def tokenize_paragraphs(text: str) -> list[str]: ...
 
 def xml_has_unclosed_tags(text: str) -> bool: ...
 
-def strip_thinking(
-    content: str | None,
-    start_tag: str,
-    end_tag: str,
-    buffer: str,
-    end_marker: str | None,
-    is_final: bool,
-) -> tuple[str | None, str, str | None]: ...
-
-def flatten_delta_text(parts: Sequence[str]) -> str | None: ...
-
 def xml_tokenize(
     tokenize_fnc: Callable[[str], Iterable[TokenizerToken]],
     text: str,

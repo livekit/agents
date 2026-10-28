@@ -1,4 +1,4 @@
-use super::host::NativeTts;
+use super::NativeTts;
 use base64::Engine as _;
 use lk_agents_abi::TokioSpawner;
 use lk_agents_abi::{ApiConnectOptions, Clock, Tts};

@@ -1,4 +1,4 @@
-//! One native synthesis operation, shared by the generated gateway and fallback stream views.
+//! One native synthesis operation as the host sees it: the gateway and fallback stream views.
 
 use std::sync::Arc;
 
@@ -6,7 +6,7 @@ use lk_agents_abi::errors::{HostError, ProviderError, PullError};
 use lk_agents_abi::tts::streams::{FallbackTtsStream, InferenceTtsStream};
 use lk_agents_abi::{Closed, StreamSink, SynthesizedAudio, Ts, TtsSink, TtsSource};
 
-use crate::source::{NativeSource, Pulled};
+use lk_agents_net::source::{NativeSource, Pulled};
 
 pub struct TtsStream {
     sink: Option<Arc<dyn StreamSink<String>>>,

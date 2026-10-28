@@ -11,11 +11,18 @@
 /// runtime): the declared classes a core implements outright, and the sentence splitter its
 /// default TTS node composes.
 pub mod cores {
+    pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_inference::creds::Credentials as InferenceCredentials;
     pub use lk_agents_inference::fallback::TokenLog as TtsTokenLog;
     pub use lk_agents_inference::llm::parse::{ChoiceParser, CompletionWire};
     pub use lk_agents_inference::provider::ProviderAttempts;
     pub use lk_agents_voice::tokenize::blingfire::SentenceBuffer;
+    pub use lk_agents_voice::tokenize::{
+        BasicSentenceTokenizer, BasicWordTokenizer, SpeechTokenizer,
+    };
+    pub use lk_agents_voice::tts::markup::{
+        ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper, text_processor_factory,
+    };
 }
 
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it
@@ -61,4 +68,5 @@ pub use lk_agents_media::filters;
 /// The voice session queue owner and its I/O effect execution.
 pub mod voice;
 
-pub mod speech_text;
+/// Tokenization through the application's tokenizer callbacks.
+pub mod tokenize;

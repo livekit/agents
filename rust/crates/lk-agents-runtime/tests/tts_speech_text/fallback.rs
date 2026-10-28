@@ -1,5 +1,5 @@
 //! TTS fallback integration using the production speech factory.
-use super::host::FallbackTts;
+use super::FallbackTts;
 use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{

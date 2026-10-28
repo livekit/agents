@@ -3,6 +3,7 @@
 
 mod chat;
 mod expr;
+mod host;
 mod instructions;
 mod mood;
 mod mood_data;
@@ -18,6 +19,7 @@ pub use chat::{
     remove_expressive_instructions, strip_assistant_markup, strip_message_markup,
 };
 pub use expr::ExpressiveTag;
+pub use host::{ProviderMarkup, SpeechMarkup};
 pub use mood::{DEFAULT_MOOD, MOOD_PRIORITY, Mood, match_mood};
 pub use provider::{NonverbalField, Provider, supported_nonverbals};
 pub use steering::{

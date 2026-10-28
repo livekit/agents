@@ -7,17 +7,18 @@ use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::text::TtsTextProcessorFactory;
-use lk_agents_abi::{ApiConnectOptions, Clock, Tts, TtsSink, TtsSource};
+use lk_agents_abi::{ApiConnectOptions, Clock, Tts};
 
+use super::stream::TtsStream;
 use super::{NativeTts, TtsOptions};
 
-pub trait TtsHost: TtsTextProcessorFactory + crate::env::Env {
-    type Stream: Send + 'static;
-    fn stream(sink: Option<TtsSink>, source: TtsSource) -> Self::Stream;
-}
+/// What a host-constructed synthesis runs on: the process's services and its speech text.
+pub trait TtsHost: TtsTextProcessorFactory + crate::env::Env {}
+
+impl<E: TtsTextProcessorFactory + crate::env::Env> TtsHost for E {}
 
 impl<P: TtsHost> InferenceTts for NativeTts<P> {
-    type Stream = P::Stream;
+    type Stream = TtsStream;
 
     fn new(
         model: String,
@@ -92,6 +93,6 @@ impl<P: TtsHost> InferenceTts for NativeTts<P> {
     ) -> Result<Self::Stream, ProviderError> {
         self.stream_for_host(headers, conn_options)
             .await
-            .map(|(sink, source)| P::stream(Some(sink), source))
+            .map(|(sink, source)| TtsStream::new(Some(sink), source))
     }
 }

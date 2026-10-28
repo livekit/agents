@@ -5,7 +5,9 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::Clock;
+use lk_agents_abi::tts::text::TtsTextProcessorFactory as _;
 use lk_agents_media::workers::{MediaWorkerError, MediaWorkerLimits, MediaWorkers};
+use lk_agents_voice::tts::processing::SpeechText;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProcessError {
@@ -123,6 +125,28 @@ impl lk_agents_inference::env::Env for Process {
     #[cfg(not(feature = "media-images"))]
     fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
         <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
+    }
+}
+
+/// The voice core's speech text in the native synthesis clients and the judges' transcripts.
+impl lk_agents_abi::tts::text::TtsTextProcessorFactory for Process {
+    fn sentence_splitter(
+        provider: Option<&str>,
+        expressive: bool,
+    ) -> Box<dyn lk_agents_abi::SentenceSplitter> {
+        SpeechText::sentence_splitter(provider, expressive)
+    }
+    fn markup(provider: &str) -> Option<Box<dyn lk_agents_abi::SentenceTextProcessor>> {
+        SpeechText::markup(provider)
+    }
+    fn transcript(expressive: bool) -> Box<dyn lk_agents_abi::tts::text::TranscriptProcessor> {
+        SpeechText::transcript(expressive)
+    }
+}
+
+impl lk_agents_inference::evals::JudgeEnv for Process {
+    fn strip_assistant_markup(text: &str) -> String {
+        lk_agents_voice::tts::markup::strip_expr_markup(text)
     }
 }
 

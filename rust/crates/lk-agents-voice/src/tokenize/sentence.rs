@@ -198,41 +198,33 @@ pub struct BasicSentenceTokenizer {
     pub retain_format: bool,
 }
 
-/// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
-/// tested.
-impl BasicSentenceTokenizer {
-    pub fn new(
-        language: &str,
+impl lk_agents_abi::tokenize::bindings::SentenceTokenizer for BasicSentenceTokenizer {
+    fn new(
+        language: String,
         min_sentence_len: usize,
         stream_context_len: usize,
         retain_format: bool,
     ) -> Self {
-        BasicSentenceTokenizer {
-            language: language.to_owned(),
-            min_sentence_len,
-            stream_context_len,
-            retain_format,
-        }
+        BasicSentenceTokenizer { language, min_sentence_len, stream_context_len, retain_format }
     }
 
     /// The sentences of `text`; `language` is accepted and unused.
-    pub fn tokenize(&self, text: &str, language: Option<&str>) -> Vec<String> {
-        let _ = language;
+    fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
         self.split(text).into_iter().map(|(sentence, _, _)| sentence).collect()
     }
 
     /// `(sentence, start, end)` per sentence: what a stream batches.
-    pub fn split(&self, text: &str) -> Vec<(String, usize, usize)> {
-        basic_split_sentences(text, self.min_sentence_len, self.retain_format)
+    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
+        basic_split_sentences(&text, self.min_sentence_len, self.retain_format)
     }
 
     /// The shortest token a stream emits.
-    pub fn min_token_len(&self) -> usize {
+    fn min_token_len(&self) -> usize {
         self.min_sentence_len
     }
 
     /// The text a stream buffers before it splits.
-    pub fn min_ctx_len(&self) -> usize {
+    fn min_ctx_len(&self) -> usize {
         self.stream_context_len
     }
 }

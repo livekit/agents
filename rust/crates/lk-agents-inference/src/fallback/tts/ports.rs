@@ -8,11 +8,12 @@ use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{ApiConnectOptions, Tts, TtsCapabilities};
 
 use crate::tts::TtsHost;
+use crate::tts::stream::TtsStream;
 
 use super::{FallbackTts, TokenLog};
 
 impl<P: TtsHost> port::FallbackTts for FallbackTts<P> {
-    type Stream = P::Stream;
+    type Stream = TtsStream;
 
     fn new(
         ttss: Vec<Arc<dyn Tts>>,
@@ -50,13 +51,17 @@ impl<P: TtsHost> port::FallbackTts for FallbackTts<P> {
         text: String,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self::Stream, ProviderError> {
-        self.synthesize_for_host(text, conn_options).await.map(|source| P::stream(None, source))
+        self.synthesize_for_host(text, conn_options)
+            .await
+            .map(|source| TtsStream::new(None, source))
     }
     async fn stream(
         &self,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self::Stream, ProviderError> {
-        self.stream_for_host(conn_options).await.map(|(sink, source)| P::stream(Some(sink), source))
+        self.stream_for_host(conn_options)
+            .await
+            .map(|(sink, source)| TtsStream::new(Some(sink), source))
     }
 }
 

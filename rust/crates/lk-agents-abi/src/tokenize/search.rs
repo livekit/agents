@@ -1,4 +1,4 @@
-//! Tool discovery export contracts. The ranking and matching algorithms live with text processing.
+//! Tool discovery export contracts, implemented by `lk_agents_core::tool_search`.
 
 /// A native search pattern failed while matching.
 #[crate::host(error(kind = "ValueError"))]

@@ -678,6 +678,21 @@ pub fn inject_confirm_duplicate<'py>(py: Python<'py>, parameters: Bound<'_, PyAn
     Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
 }
 
+#[pyfunction]
+#[pyo3(signature = (content, start_tag, end_tag, buffer, end_marker, is_final))]
+pub fn strip_thinking(content: ::std::option::Option<::std::string::String>, start_tag: ::std::string::String, end_tag: ::std::string::String, buffer: ::std::string::String, end_marker: ::std::option::Option<::std::string::String>, is_final: bool) -> PyResult<(::std::option::Option<::std::string::String>, ::std::string::String, ::std::option::Option<::std::string::String>)> {
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::strip_thinking(content, start_tag, end_tag, buffer, end_marker, is_final);
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (parts))]
+pub fn flatten_delta_text(parts: ::std::vec::Vec<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::flatten_delta_text(parts);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime_native.rs.
 type NativeRealtimeModelImpl = <crate::Selected as super::Implementations>::NativeRealtimeModel;
 

@@ -1,16 +1,19 @@
-//! The pre-split host adapter with voice-owned provider text processing.
+//! `tts.StreamAdapter`'s pre-split host entry: the host ran its own tokenizer and pacer, so each
+//! push is one sentence, converted to the provider's markup and synthesized within the budget.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SentenceSplitter, StreamAdapter, StreamAdapterFunctions};
 use lk_agents_abi::{ApiConnectOptions, Tts};
 
+use super::TtsHost;
 use super::stream::TtsStream;
 
-pub struct AdapterStreams;
+pub struct AdapterStreams<E>(PhantomData<fn() -> E>);
 
-impl StreamAdapterFunctions for AdapterStreams {
+impl<E: TtsHost> StreamAdapterFunctions for AdapterStreams<E> {
     type Stream = TtsStream;
 
     async fn tts_adapter_stream(
@@ -24,8 +27,8 @@ impl StreamAdapterFunctions for AdapterStreams {
         let (sink, source) = StreamAdapter::new(
             provider,
             Arc::new(|_| Box::new(PreSplit)),
-            lk_agents_voice::tts::markup::text_processor_factory(),
-            crate::process::host_clock(),
+            Arc::new(|provider| E::markup(provider)),
+            E::clock(),
         )
         .with_budget(conn_options)
         .stream()
@@ -34,7 +37,7 @@ impl StreamAdapterFunctions for AdapterStreams {
     }
 }
 
-/// Each push is one sentence: the host ran its own tokenizer and pacer.
+/// Each push is already one sentence.
 struct PreSplit;
 
 impl SentenceSplitter for PreSplit {
@@ -46,6 +49,3 @@ impl SentenceSplitter for PreSplit {
         Vec::new()
     }
 }
-
-#[cfg(test)]
-mod tests;

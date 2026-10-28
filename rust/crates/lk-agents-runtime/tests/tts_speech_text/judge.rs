@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use lk_agents_inference::evals::{JudgeEnv, prompts};
 
-use crate::process::Process;
+use lk_agents_runtime::process::Process;
 
 #[test]
 fn judge_prompts_strip_only_assistant_markup_in_conversation_and_reference() {

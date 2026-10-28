@@ -57,21 +57,26 @@ impl generated::Implementations for Selected {
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
     type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;
-    type FallbackTts = lk_agents_runtime::speech_text::host::FallbackTts;
-    type InferenceTts = lk_agents_runtime::speech_text::host::NativeTts;
-    type FallbackTtsStream = lk_agents_runtime::speech_text::stream::TtsStream;
-    type InferenceTtsStream = lk_agents_runtime::speech_text::stream::TtsStream;
-    type StreamAdapterFunctions = lk_agents_runtime::speech_text::stream_adapter::AdapterStreams;
-    type TokenizeFunctions = lk_agents_runtime::speech_text::tokenize::SpeechTokenizer;
-    type WordTokenizer = lk_agents_runtime::speech_text::tokenize::BasicWordTokenizer;
-    type SentenceTokenizer = lk_agents_runtime::speech_text::tokenize::BasicSentenceTokenizer;
-    type BufferedTokens = lk_agents_runtime::speech_text::tokenize::BufferedTokenStream;
-    type MarkupFunctions = lk_agents_runtime::speech_text::markup::SpeechMarkup;
-    type MarkupClass = lk_agents_runtime::speech_text::markup::Markup;
-    type TranscriptStripper = lk_agents_runtime::speech_text::markup::TranscriptMarkupStripper;
-    type SearchDocument = lk_agents_runtime::speech_text::search::SearchDocument;
-    type SearchIndex = lk_agents_runtime::speech_text::search::Bm25;
-    type ToolSearch = lk_agents_runtime::speech_text::search::ToolDiscovery;
+    type FallbackTts =
+        lk_agents_runtime::inference::fallback::FallbackTts<lk_agents_runtime::process::Process>;
+    type InferenceTts =
+        lk_agents_runtime::inference::tts::NativeTts<lk_agents_runtime::process::Process>;
+    type FallbackTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
+    type InferenceTtsStream = lk_agents_runtime::inference::tts::stream::TtsStream;
+    type StreamAdapterFunctions = lk_agents_runtime::inference::tts::adapter::AdapterStreams<
+        lk_agents_runtime::process::Process,
+    >;
+    type TokenizeFunctions = lk_agents_runtime::cores::SpeechTokenizer;
+    type HostTokenization = lk_agents_runtime::tokenize::HostTokenizer;
+    type WordTokenizer = lk_agents_runtime::cores::BasicWordTokenizer;
+    type SentenceTokenizer = lk_agents_runtime::cores::BasicSentenceTokenizer;
+    type BufferedTokens = lk_agents_runtime::tokenize::BufferedTokenStream;
+    type MarkupFunctions = lk_agents_runtime::cores::SpeechMarkup;
+    type MarkupClass = lk_agents_runtime::cores::ProviderMarkup;
+    type TranscriptStripper = lk_agents_runtime::cores::TranscriptMarkupStripper;
+    type SearchDocument = lk_agents_runtime::cores::SearchDocument;
+    type SearchIndex = lk_agents_runtime::cores::Bm25;
+    type ToolSearch = lk_agents_runtime::cores::ToolDiscovery;
 
     type ExpFilter = lk_agents_runtime::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::filters::MovingAverage;
@@ -86,7 +91,8 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::process::Process,
     >;
     type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
-    type AgentClient = lk_agents_runtime::net::a2a_client::AgentClient<lk_agents_runtime::process::Process>;
+    type AgentClient =
+        lk_agents_runtime::net::a2a_client::AgentClient<lk_agents_runtime::process::Process>;
     type Reply = lk_agents_runtime::net::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;

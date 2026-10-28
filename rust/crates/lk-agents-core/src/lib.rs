@@ -23,6 +23,7 @@ pub mod request;
 pub mod text_session;
 pub mod tool_calls;
 pub mod tool_outcome;
+pub mod tool_search;
 
 pub use agent::AgentError;
 pub use agent_run::{AgentRun, Effect, Event, RunInput};

@@ -60,26 +60,14 @@ pub fn xml_has_unclosed_tags(text: ::std::string::String) -> PyResult<bool> {
     Ok(out)
 }
 
-#[pyfunction]
-#[pyo3(signature = (content, start_tag, end_tag, buffer, end_marker, is_final))]
-pub fn strip_thinking(content: ::std::option::Option<::std::string::String>, start_tag: ::std::string::String, end_tag: ::std::string::String, buffer: ::std::string::String, end_marker: ::std::option::Option<::std::string::String>, is_final: bool) -> PyResult<(::std::option::Option<::std::string::String>, ::std::string::String, ::std::option::Option<::std::string::String>)> {
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::strip_thinking(content, start_tag, end_tag, buffer, end_marker, is_final);
-    Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (parts))]
-pub fn flatten_delta_text(parts: ::std::vec::Vec<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
-    ::lk_agents_abi::python::check_pid()?;
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::flatten_delta_text(parts);
-    Ok(out)
-}
+// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+type HostTokenizationImpl = <crate::Selected as super::Implementations>::HostTokenization;
 
 #[pyfunction]
 #[pyo3(signature = (tokenize_fnc, text))]
 pub fn xml_tokenize(tokenize_fnc: Bound<'_, PyAny>, text: ::std::string::String) -> PyResult<::std::vec::Vec<(::std::string::String, usize, usize)>> {
     let tokenize_fnc = crate::generated::tokenize::TokenizerCallbackProxy::from_host(&tokenize_fnc)?;
-    let out = <TokenizeFunctionsImpl as ::lk_agents_abi::tokenize::bindings::TokenizeFunctions>::xml_tokenize(tokenize_fnc, text).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 

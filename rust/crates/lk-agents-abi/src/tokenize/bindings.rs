@@ -1,4 +1,4 @@
-//! Export contracts for speech tokenization, implemented by the runtime over the voice core.
+//! Export contracts for speech tokenization, implemented by the voice core.
 
 use crate::errors::HostError;
 use std::sync::Arc;
@@ -51,20 +51,11 @@ pub trait TokenizeFunctions {
 
     #[host(function)]
     fn xml_has_unclosed_tags(text: String) -> bool;
+}
 
-    #[host(function)]
-    fn strip_thinking(
-        content: Option<String>,
-        start_tag: String,
-        end_tag: String,
-        buffer: String,
-        end_marker: Option<String>,
-        is_final: bool,
-    ) -> (Option<String>, String, Option<String>);
-
-    #[host(function, pid = true)]
-    fn flatten_delta_text(parts: Vec<String>) -> Option<String>;
-
+/// Tokenization through an application tokenizer: the host calls the voice core's steps request.
+#[crate::host(functions(pid = false))]
+pub trait HostTokenization {
     #[host(function)]
     fn xml_tokenize(
         tokenize_fnc: Arc<dyn TokenizerCallback>,

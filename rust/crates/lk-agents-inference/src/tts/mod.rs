@@ -5,8 +5,10 @@
 //! Text is normalised, split into sentences and converted to the provider's markup here, as
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
+pub mod adapter;
 pub mod machine;
 mod ports;
+pub mod stream;
 mod pump;
 pub use ports::TtsHost;
 pub mod wire;

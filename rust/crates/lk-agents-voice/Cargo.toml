@@ -26,6 +26,8 @@ async-trait.workspace = true
 base64.workspace = true
 log.workspace = true
 serde_json.workspace = true
+# `replace_words`' ordered replacement table, as the host passes it.
+indexmap.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 # `remote_session` (`voice/remote_session.py`): the `livekit.agent` package's

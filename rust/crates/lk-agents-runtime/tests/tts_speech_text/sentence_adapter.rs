@@ -1,8 +1,10 @@
 //! Sentence adapter conformance with the production speech text transformations.
 
-use super::*;
 use async_trait::async_trait;
+use lk_agents_abi::Tts;
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::tts::stream_adapter::SentenceSplitter;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, StreamAdapter};
 use lk_agents_abi::tts::tts::{SynthesizedAudio, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::utils::audio::AudioFrame;
