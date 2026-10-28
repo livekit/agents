@@ -935,7 +935,7 @@ class _Connection:
                         self._cleanup_context(context_id)
                     continue
 
-                if ctx is None:
+                if context_id is None or ctx is None:
                     if context_id is None:
                         logger.warning(
                             "unexpected message received from elevenlabs tts",
@@ -1223,7 +1223,7 @@ class _DialogueConnection(_Connection):
                         self._cleanup_context(context_id)
                     continue
 
-                if ctx is None:
+                if context_id is None or ctx is None:
                     if context_id is None:
                         logger.warning(
                             "unexpected message received from elevenlabs text-to-dialogue",

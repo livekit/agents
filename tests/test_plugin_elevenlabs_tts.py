@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import contextlib
 import json
 import logging
 from types import SimpleNamespace
@@ -20,6 +19,7 @@ class _FakeWebSocket:
     def __init__(self, messages: list[object]) -> None:
         self._messages = messages
         self.closed = False
+        self.close_code = 1000
 
     async def receive(self) -> object:
         if self._messages:
@@ -466,8 +466,12 @@ async def test_recv_loop_resets_timeout_timer_on_audio(
     restarted: list[str] = []
     connection._start_timeout_timer = restarted.append  # type: ignore[attr-defined]
 
-    with contextlib.suppress(Exception):
-        await connection_cls._recv_loop(connection)
+    final_key = "isFinal" if connection_cls is elevenlabs_tts._Connection else "is_final"
+    connection._ws._messages.append(
+        _websocket_text_message({"context_id": context_id, final_key: True})
+    )
+    await connection_cls._recv_loop(connection)
+    assert connection.waiter.result() is None
 
     # cleared so _start_timeout_timer can arm a new timer on the next send
     assert timer.cancelled()
