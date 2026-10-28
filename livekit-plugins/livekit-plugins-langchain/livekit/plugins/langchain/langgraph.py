@@ -14,15 +14,15 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import aclosing
-from typing import Any, Generic, Never, cast
+from typing import Generic, Never, Protocol, TypeVar, cast, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.pregel.protocol import PregelProtocol
+from langgraph.pregel import Pregel
 from langgraph.types import StreamMode
-from langgraph.typing import ContextT
+from langgraph.typing import ContextT, InputT, OutputT, StateT
 
 from livekit.agents import llm, utils
 from livekit.agents.llm import ToolChoice
@@ -35,12 +35,31 @@ from livekit.agents.types import (
 )
 
 _SUPPORTED_MODES: set[StreamMode] = {"messages", "custom"}
+_ContextT_contra = TypeVar("_ContextT_contra", contravariant=True)
+
+
+class _StreamingGraph(Protocol[_ContextT_contra]):
+    def astream(
+        self,
+        input: dict[str, object],
+        config: RunnableConfig | None = None,
+        *,
+        context: _ContextT_contra | None = None,
+        stream_mode: StreamMode | list[StreamMode] | None = None,
+        subgraphs: bool = False,
+    ) -> AsyncIterator[object]: ...
+
+
+@runtime_checkable
+class _Content(Protocol):
+    @property
+    def content(self) -> object: ...
 
 
 class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
     def __init__(
         self,
-        graph: PregelProtocol[Any, ContextT, Any, Any],
+        graph: Pregel[StateT, ContextT, InputT, OutputT],
         *,
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
@@ -54,11 +73,12 @@ class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
             raise ValueError(
                 f"Unsupported stream mode(s): {unsupported}. Only {_SUPPORTED_MODES} are supported."
             )
-        self._graph = graph
+        # LangGraph accepts partial state updates; its input type describes the full state.
+        self._graph = cast(_StreamingGraph[ContextT], graph)
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
-        self._stream_mode = stream_mode
+        self._stream_mode: StreamMode | list[StreamMode] = stream_mode
 
     @property
     def model(self) -> str:
@@ -77,7 +97,7 @@ class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
         # these are unused, since tool execution takes place in langgraph
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LangGraphStream[ContextT]:
         return LangGraphStream(
             self,
@@ -100,7 +120,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         chat_ctx: ChatContext,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
-        graph: PregelProtocol[Any, ContextT, Any, Any],
+        graph: Pregel[StateT, ContextT, InputT, OutputT] | _StreamingGraph[ContextT],
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
@@ -112,11 +132,12 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
             tools=tools,
             conn_options=conn_options,
         )
-        self._graph = graph
+        # LangGraph accepts partial state updates; its input type describes the full state.
+        self._graph = cast(_StreamingGraph[ContextT], graph)
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
-        self._stream_mode = stream_mode
+        self._stream_mode: StreamMode | list[StreamMode] = stream_mode
 
     async def _run(self) -> None:
         state = self._chat_ctx_to_state()
@@ -143,8 +164,13 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         async with aclosing(cast(AsyncGenerator[object, None], aiter)) as events:
             async for item in events:
                 # Multi-mode: item is (mode, data) tuple wrapper
-                if is_multi_mode and isinstance(item, tuple) and len(item) == 2:
-                    mode, data = item
+                if is_multi_mode:
+                    if not isinstance(item, tuple):
+                        continue
+                    values = cast(tuple[object, ...], item)
+                    if len(values) != 2:
+                        continue
+                    mode, data = values
                     if isinstance(mode, str):
                         if mode == "custom":
                             # data = payload (str, dict, object)
@@ -162,6 +188,8 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                                 self.send(chat_chunk)
                             continue
 
+                    continue
+
                 # Single-mode: item is data directly (no tuple wrapper)
                 if self._stream_mode == "custom":
                     # item = payload (str, dict, object)
@@ -177,7 +205,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                     if chat_chunk:
                         self.send(chat_chunk)
 
-    def _chat_ctx_to_state(self) -> dict[str, Any]:
+    def _chat_ctx_to_state(self) -> dict[str, object]:
         """Convert chat context to langgraph input"""
 
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
@@ -194,48 +222,28 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         return {"messages": messages}
 
 
-def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
-    """
-    Normalize outputs from graph.astream(..., stream_mode='messages', [subgraphs]).
-
-    Expected shapes:
-      - (token, meta)
-      - (namespace, (token, meta))                  # with subgraphs=True
-      - (mode, (token, meta))                       # future-friendly
-      - (namespace, mode, (token, meta))            # future-friendly
-    Also tolerate direct token-like values for robustness.
-    """
-    # Already a token-like thing?
+def _extract_message_chunk(item: object) -> BaseMessageChunk | str | None:
+    """Extract a message from LangGraph's optional namespace and mode wrappers."""
     if isinstance(item, (BaseMessageChunk, str)):
         return item
-
     if not isinstance(item, tuple):
         return None
 
-    # token is usually BaseMessageChunk, but could be a str
-    # (token, meta)
-    if len(item) == 2 and not isinstance(item[1], tuple):
-        token, _meta = item
-        return token  # type: ignore
-
-    # (namespace, (token, meta))  OR  (mode, (token, meta))
-    if len(item) == 2 and isinstance(item[1], tuple):
-        inner = item[1]
-        if len(inner) == 2:
-            token, _meta = inner
-            return token  # type: ignore
-
-    # (namespace, mode, (token, meta))
-    if len(item) == 3 and isinstance(item[2], tuple):
-        inner = item[2]
-        if len(inner) == 2:
-            token, _meta = inner
-            return token  # type: ignore
-
-    return None
+    values = cast(tuple[object, ...], item)
+    if len(values) not in (2, 3):
+        return None
+    if len(values) == 3 and not isinstance(values[-1], tuple):
+        return None
+    token: object = values[0]
+    if isinstance(values[-1], tuple):
+        inner = cast(tuple[object, ...], values[-1])
+        if len(inner) != 2:
+            return None
+        token = inner[0]
+    return token if isinstance(token, (BaseMessageChunk, str)) else None
 
 
-def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
+def _to_chat_chunk(msg: object) -> llm.ChatChunk | None:
     message_id = utils.shortuuid("LC_")
     content: str | None = None
 
@@ -243,13 +251,13 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         content = msg
     elif isinstance(msg, BaseMessageChunk):
         content = msg.text
-        if getattr(msg, "id", None):
-            message_id = msg.id  # type: ignore
+        if msg.id:
+            message_id = msg.id
     elif isinstance(msg, dict):
-        raw = msg.get("content")
+        raw = cast(Mapping[object, object], msg).get("content")
         if isinstance(raw, str):
             content = raw
-    elif hasattr(msg, "content"):
+    elif isinstance(msg, _Content):
         raw = msg.content
         if isinstance(raw, str):
             content = raw
