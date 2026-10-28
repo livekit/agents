@@ -21,7 +21,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: agents
     env:
       RUST_SDKS_REF: ${{ vars.AGENTS_RUST_SDKS_REF }}
       LIVEKIT_URL: ${{ matrix.backend == 'agentdb' && secrets.LIVEKIT_URL || '' }}
@@ -29,31 +28,21 @@ jobs:
       LIVEKIT_API_SECRET: ${{ matrix.backend == 'agentdb' && secrets.LIVEKIT_API_SECRET || '' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
         with:
-          path: agents
+          python-sdk: 'false'
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
 
       - name: Check backend prerequisites
+        run: bash rust/backend-contracts.sh "${{ matrix.backend }}" --check
+
+      - name: Install native build prerequisites
         run: |
-          bash rust/backend-contracts.sh "${{ matrix.backend }}" --check
-          if [[ -z "$RUST_SDKS_REF" ]]; then
-            echo "::error::Set AGENTS_RUST_SDKS_REF to the compatible published Rust SDK source ref."
-            exit 2
-          fi
-
-      # Cargo's path dependencies resolve beside the agents checkout. The configured SDK ref
-      # must include its matching protocol submodule and thread schema.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          repository: livekit/rust-sdks
-          ref: ${{ env.RUST_SDKS_REF }}
-          path: rust-sdks
-
-      - name: Initialize the SDK protocol source
-        working-directory: rust-sdks
-        run: git submodule update --init --depth 1 livekit-protocol/protocol
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
 
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
@@ -64,8 +53,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            agents/rust/target
-          key: storage-backends-${{ runner.os }}-${{ env.RUST_SDKS_REF }}-${{ hashFiles('agents/rust/Cargo.lock') }}
+            rust/target
+          key: storage-backends-${{ runner.os }}-${{ env.RUST_SDKS_REF }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: storage-backends-${{ runner.os }}-${{ env.RUST_SDKS_REF }}-
 
       - name: Run backend contracts

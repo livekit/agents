@@ -95,7 +95,7 @@ livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
 
 [tool.uv.workspace]
-members = ["livekit-plugins/*", "livekit-agents-next", "examples_old/avatar", "examples_old/drive_thru", "examples_old/expressive_agent", "examples_old/frontdesk", "examples_old/healthcare", "examples_old/homepage", "examples_old/hotel_receptionist", "examples_old/inference", "examples_old/survey", "examples_old/voice_agents"]
+members = ["livekit-plugins/*", "livekit-agents-next"]
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",
@@ -158,7 +158,7 @@ line-length = 100
 target-version = "py310"
 # `_generated` is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): generator
 # output is not hand-formatted, and a lint finding there is fixed in the generator, not the file.
-exclude = [".github", "livekit-agents/livekit/agents/_generated", "livekit-agents-next/livekit/agents/_generated"]
+exclude = [".github", "livekit-agents-next/livekit/agents/_generated"]
 
 [tool.ruff.lint]
 select = [
@@ -193,7 +193,6 @@ filterwarnings = [
 addopts = [
     "--import-mode=importlib",
     "--ignore=examples",
-    "--ignore=examples_old",
     "-p",
     "tests.concurrency",
 ]

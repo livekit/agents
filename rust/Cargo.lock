@@ -1414,6 +1414,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lk-agents-bench-steps"
+version = "0.1.0"
+dependencies = [
+ "lk-agents-abi",
+ "lk-agents-voice",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lk-agents-bindgen"
 version = "0.1.0"
 dependencies = [

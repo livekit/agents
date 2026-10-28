@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 0.x]
+    branches: [main, 0.x, v2.0]
     paths-ignore:
       - '**/*.md'
   pull_request:
@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-sdk: 'false'
+
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -53,6 +59,18 @@ jobs:
         
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -83,8 +101,17 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-sdk: 'false'
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
 
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -109,8 +136,17 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
 
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -140,8 +176,6 @@ jobs:
       - name: Prepare architecture checks
         run: |
           rustup component add clippy
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
           if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
             git fetch --unshallow
           fi
@@ -155,7 +189,7 @@ jobs:
           uv venv -p 3.12 .venv-next
           uv pip install -p .venv-next/bin/python --no-config maturin pytest ruff
           cd livekit-agents-next
-          VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv --release
+          VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv
 
       # The plugin base classes are Python the generator writes from `lk-agents-codegen/src/bases.rs`:
       # linted like hand-written code (the repository's ruff excludes `_generated/` otherwise).

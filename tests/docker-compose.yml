@@ -20,8 +20,11 @@ services:
     command: tail -f /dev/null
     volumes:
       - ../tests:/app/tests
-      - ../livekit-agents:/app/livekit-agents
+      - ../livekit-agents-next:/app/livekit-agents-next
       - ../livekit-plugins:/app/livekit-plugins
+      - ../rust:/app/rust
+      - ../../python-sdks:/python-sdks
+      - ../../rust-sdks:/rust-sdks
       # workspace members: without them uv sees a stale lock and re-resolves
       - ../examples:/app/examples
       - ../pyproject.toml:/app/pyproject.toml

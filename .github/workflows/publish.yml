@@ -15,14 +15,14 @@ on:
           - "minor-rc    (1.5.1 → 1.6.0.rc1)"
           - "major-rc    (1.5.1 → 2.0.0.rc1)"
           - "next-rc     (.rc1 → .rc2)"
-          - "beta        (2.0.0.dev0 → 2.0.0b1, .b1 → .b2; livekit-agents only)"
+          - "beta        (2.0.0.dev0 → 2.0.0b1, .b1 → .b2; livekit-agents-next only)"
           - "promote     (1.6.0.rc2 → 1.6.0)"
           - "republish   (retry failed publish, no version bump)"
       branch:
-        description: "Branch to publish from (default: main)"
+        description: "Branch to publish from (default: v2.0)"
         type: string
         required: false
-        default: "main"
+        default: "v2.0"
 
   pull_request:
     types: [closed]
@@ -62,13 +62,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install click packaging pyyaml colorama
 
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Check out compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-sdk: 'false'
 
       - name: Bump versions
         env:
@@ -90,17 +96,17 @@ jobs:
               ;;
             beta)
               python .github/update_versions.py --pre b --agents-only
-              uv lock  # the lock records livekit-agents' static version
               ;;
             promote)
               python .github/update_versions.py --bump-type release
               ;;
           esac
+          uv lock
 
       - name: Read new version
         id: version
         run: |
-          version=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
+          version=$(grep -m1 '__version__' livekit-agents-next/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "New version: $version"
 
@@ -159,13 +165,13 @@ jobs:
         run: |
           packages=()
 
-          packages+=("livekit-agents")
-          release=$(grep -m1 '__version__' livekit-agents/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
+          packages+=("livekit-agents-next")
+          release=$(grep -m1 '__version__' livekit-agents-next/livekit/agents/version.py | sed 's/.*"\(.*\)".*/\1/')
 
           for dir in livekit-plugins/livekit-plugins-*; do
             if [ ! -d "$dir" ]; then continue; fi
 
-            # a beta (2.0.0b1) is livekit-agents alone; the plugins keep their releases
+            # a beta (2.0.0b1) is livekit-agents-next alone; the plugins keep their releases
             if echo "$release" | grep -qE '[0-9]b[0-9]+$'; then
               break
             fi
@@ -222,6 +228,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       package: ${{ matrix.package }}
+      ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
       artifact_name: dist-${{ matrix.package }}
 
   publish:
@@ -257,51 +264,3 @@ jobs:
     if: always() && needs.publish.result == 'success' && (github.event.pull_request.base.ref || inputs.branch) == 'main'
     uses: ./.github/workflows/publish-docs.yml
     secrets: inherit
-
-  deploy-examples:
-    name: Deploy examples
-    needs: [publish]
-    # main only: a release from another branch (the 2.0 beta) must not replace main's docs or examples
-    if: always() && needs.publish.result == 'success' && (github.event.pull_request.base.ref || inputs.branch) == 'main'
-    uses: ./.github/workflows/deploy-examples.yml
-    with:
-      ref: ${{ inputs.branch || github.event.pull_request.merge_commit_sha }}
-    secrets: inherit
-
-  dispatch-downstream-bumps:
-    name: Bump livekit-agents in downstream repos
-    needs: [publish]
-    # Only fire for stable releases merged via a release/vX.Y.Z PR.
-    # RC head refs look like release/v1.5.13rc1 and won't match the regex below.
-    # Republish retries should use internal-actions' workflow_dispatch fallback.
-    if: |
-      always()
-      && needs.publish.result == 'success'
-      && github.event_name == 'pull_request'
-      && github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    steps:
-      - name: Resolve stable version from head ref
-        id: version
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          version="${HEAD_REF#release/v}"
-          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::notice::Head ref '$HEAD_REF' is not a stable release — skipping downstream bump."
-            exit 0
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch to internal-actions
-        if: steps.version.outputs.version != ''
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_DISPATCH_TOKEN }}
-          TARGET_REPO: ${{ vars.TARGET_REPO }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          gh api -X POST "repos/${TARGET_REPO}/dispatches" \
-            -f event_type="livekit-agents-published" \
-            -f client_payload[version]="$VERSION" \
-            -f client_payload[source_repo]="${{ github.repository }}" \
-            -f client_payload[source_sha]="${{ github.event.pull_request.merge_commit_sha }}"

@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+
 from scripts.bench import reports, sessions
 from scripts.bench.metrics import (
     CallbackSlices,

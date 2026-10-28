@@ -1,0 +1,69 @@
+name: Checkout compatible SDK sources
+description: Place the protocol and API SDK sources beside the agents checkout.
+inputs:
+  python-sdk:
+    description: Checkout the Python SDK sources.
+    default: 'true'
+  rust-sdk:
+    description: Checkout the Rust SDK sources.
+    default: 'true'
+  python-ref:
+    description: Compatible livekit/python-sdks source revision.
+  rust-ref:
+    description: Compatible livekit/rust-sdks source revision, including its protocol submodule.
+runs:
+  using: composite
+  steps:
+    - name: Check source revisions
+      shell: bash
+      env:
+        PYTHON_SDK: ${{ inputs.python-sdk }}
+        RUST_SDK: ${{ inputs.rust-sdk }}
+        PYTHON_REF: ${{ inputs.python-ref }}
+        RUST_REF: ${{ inputs.rust-ref }}
+      run: |
+        if [[ "$PYTHON_SDK" == true && -z "$PYTHON_REF" ]]; then
+          echo '::error::Set AGENTS_PYTHON_SDKS_REF to a compatible published Python SDK source revision with the thread schema.'
+          exit 2
+        fi
+        if [[ "$RUST_SDK" == true && -z "$RUST_REF" ]]; then
+          echo '::error::Set AGENTS_RUST_SDKS_REF to a compatible published Rust SDK source revision with the thread schema.'
+          exit 2
+        fi
+    # actions/checkout requires paths inside GITHUB_WORKSPACE. Move the SDKs beside
+    # agents afterwards so the local uv and Cargo source paths resolve unchanged.
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      if: inputs.python-sdk == 'true'
+      with:
+        repository: livekit/python-sdks
+        ref: ${{ inputs.python-ref }}
+        path: .ci-sdks/python-sdks
+        persist-credentials: false
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      if: inputs.rust-sdk == 'true'
+      with:
+        repository: livekit/rust-sdks
+        ref: ${{ inputs.rust-ref }}
+        path: .ci-sdks/rust-sdks
+        submodules: true
+        persist-credentials: false
+    - name: Place SDK sources beside agents
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        PYTHON_SDK: ${{ inputs.python-sdk }}
+        RUST_SDK: ${{ inputs.rust-sdk }}
+      run: |
+        workspace="$(pwd)"
+        for sdk in python rust; do
+          enabled="$PYTHON_SDK"
+          [[ "$sdk" == rust ]] && enabled="$RUST_SDK"
+          if [[ "$enabled" == true ]]; then
+            destination="$(dirname "$workspace")/$sdk-sdks"
+            if [[ -e "$destination" ]]; then
+              echo "::error::SDK destination already exists: $destination"
+              exit 2
+            fi
+            mv "$workspace/.ci-sdks/$sdk-sdks" "$destination"
+          fi
+        done

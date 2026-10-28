@@ -25,6 +25,18 @@ jobs:
         with:
           fetch-depth: 0 # the known findings ratchet against the base branch
 
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+
       # Shrink-only: a pull request may remove open findings, never add one.
       - name: Known findings only shrink
         if: github.event_name == 'pull_request'
@@ -39,14 +51,8 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal && rustup default stable
-
       - name: Prepare architecture checks
-        run: |
-          rustup component add clippy
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+        run: rustup component add clippy
 
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin

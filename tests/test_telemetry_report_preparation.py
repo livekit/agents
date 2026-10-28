@@ -7,9 +7,9 @@ import json
 import weakref
 
 import pytest
-from scripts.bench.reports import capture_reports, make_report, prepare
 
 from livekit.agents import llm
+from scripts.bench.reports import capture_reports, make_report, prepare
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 

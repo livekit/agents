@@ -1,11 +1,13 @@
 import pathlib
 import re
+
 import click
-from packaging.version import Version
 import colorama
-from typing import Dict
+from packaging.version import Version
 
 colorama.init()
+
+AGENTS_PROJECT = pathlib.Path("livekit-agents-next")
 
 
 def _iter_plugin_dirs(plugins_root: pathlib.Path) -> list[pathlib.Path]:
@@ -31,6 +33,7 @@ def _read_pypi_name(pdir: pathlib.Path) -> str:
 def _esc(*codes: int) -> str:
     return "\033[" + ";".join(str(c) for c in codes) + "m"
 
+
 def read_version(f: pathlib.Path) -> str:
     """Read __version__ = \"X.Y.Z\" from a Python file."""
     text = f.read_text()
@@ -39,25 +42,27 @@ def read_version(f: pathlib.Path) -> str:
         raise ValueError(f"could not find __version__ in {f}")
     return m.group(1)
 
+
 def write_new_version(f: pathlib.Path, new_version: str) -> None:
     """Substitute a new __version__ = \"X.Y.Z\" in place of the existing one."""
     text = f.read_text()
     new_text = re.sub(
-        r'__version__\s*=\s*[\'"][^\'"]*[\'"]',
-        f'__version__ = "{new_version}"',
-        text,
-        count=1
+        r'__version__\s*=\s*[\'"][^\'"]*[\'"]', f'__version__ = "{new_version}"', text, count=1
     )
     f.write_text(new_text)
 
+
 def write_agents_version(f: pathlib.Path, new_version: str) -> None:
-    """livekit-agents' version.py, and its pyproject.toml, whose static version maturin builds."""
+    """livekit-agents-next' version.py, and its pyproject.toml, whose static version maturin builds."""
     write_new_version(f, new_version)
-    pyproject = pathlib.Path("livekit-agents/pyproject.toml")
+    pyproject = AGENTS_PROJECT / "pyproject.toml"
     text = pyproject.read_text()
-    new_text, n = re.subn(r'(?m)^version\s*=\s*"[^"]*"', f'version = "{new_version}"', text, count=1)
+    new_text, n = re.subn(
+        r'(?m)^version\s*=\s*"[^"]*"', f'version = "{new_version}"', text, count=1
+    )
     if n:
         pyproject.write_text(new_text)
+
 
 def bump_version(cur: str, bump_type: str) -> str:
     v = Version(cur)
@@ -70,6 +75,7 @@ def bump_version(cur: str, bump_type: str) -> str:
     if bump_type == "major":
         return f"{v.major + 1}.0.0"
     raise ValueError(f"unknown bump type: {bump_type}")
+
 
 def bump_prerelease(cur: str, bump_type: str) -> str:
     v = Version(cur)
@@ -90,13 +96,14 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
     else:
         raise ValueError(f"unknown prerelease bump type: {bump_type}")
 
+
 def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
     plugins_root = pathlib.Path("livekit-plugins")
     for pdir in _iter_plugin_dirs(plugins_root):
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
             old_text = pyproject.read_text()
-            pattern = r'("livekit-agents(?:\[.*?\])?\s*[=><!~]+\s*)([\w\.\-]+)(?=")'
+            pattern = r'("livekit-agents-next(?:\[.*?\])?\s*[=><!~]+\s*)([\w\.\-]+)(?=")'
 
             def replacer(m: re.Match) -> str:
                 return f"{m.group(1)}{new_agents_version}"
@@ -104,17 +111,20 @@ def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
             new_text = re.sub(pattern, replacer, old_text)
             if new_text != old_text:
                 pyproject.write_text(new_text)
-                print(f"Updated pyproject.toml in {pdir.name} to use livekit-agents {new_agents_version}")
+                print(
+                    f"Updated pyproject.toml in {pdir.name} to use livekit-agents-next {new_agents_version}"
+                )
 
-def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str]) -> None:
-    agents_pyproject = pathlib.Path("livekit-agents/pyproject.toml")
+
+def update_agents_pyproject_optional_dependencies(plugin_versions: dict[str, str]) -> None:
+    agents_pyproject = AGENTS_PROJECT / "pyproject.toml"
     if not agents_pyproject.exists():
-        print("Warning: livekit-agents/pyproject.toml not found")
+        print("Warning: livekit-agents-next/pyproject.toml not found")
         return
-        
+
     old_text = agents_pyproject.read_text()
     new_text = old_text
-    
+
     for pypi_name, new_version in plugin_versions.items():
         if pypi_name.startswith("livekit-plugins-"):
             # Match any dep key that references this PyPI package name
@@ -127,29 +137,36 @@ def update_agents_pyproject_optional_dependencies(plugin_versions: Dict[str, str
             if updated_text != new_text:
                 new_text = updated_text
                 print(f"Updated optional dependency {pypi_name} to version {new_version}")
-    
+
     if new_text != old_text:
         agents_pyproject.write_text(new_text)
-        print("Updated livekit-agents/pyproject.toml optional-dependencies")
+        print("Updated livekit-agents-next/pyproject.toml optional-dependencies")
+
 
 def update_versions(bump_type: str) -> None:
-    agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
+    agents_ver = AGENTS_PROJECT / "livekit" / "agents" / "version.py"
     plugins_root = pathlib.Path("livekit-plugins")
-    
+
     new_agents_version = None
     plugin_versions = {}
 
     if agents_ver.exists():
         cur = read_version(agents_ver)
         new = bump_version(cur, bump_type)
-        print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+        print(f"livekit-agents-next: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
         write_agents_version(agents_ver, new)
         new_agents_version = new
     else:
-        print("Warning: No version.py found for livekit-agents.")
+        print("Warning: No version.py found for livekit-agents-next.")
 
     for pdir in _iter_plugin_dirs(plugins_root):
-        vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        vf = (
+            pdir
+            / "livekit"
+            / "plugins"
+            / pdir.name.split("livekit-plugins-")[1].replace("-", "_")
+            / "version.py"
+        )
         pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
@@ -166,8 +183,9 @@ def update_versions(bump_type: str) -> None:
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
+
 def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
-    agents_ver = pathlib.Path("livekit-agents/livekit/agents/version.py")
+    agents_ver = AGENTS_PROJECT / "livekit" / "agents" / "version.py"
     plugins_root = pathlib.Path("livekit-plugins")
 
     new_agents_version = None
@@ -176,17 +194,23 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
     if agents_ver.exists():
         cur = read_version(agents_ver)
         new = bump_prerelease(cur, prerelease_type)
-        print(f"livekit-agents: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
+        print(f"livekit-agents-next: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new}{_esc(0)}")
         write_agents_version(agents_ver, new)
         new_agents_version = new
     else:
-        print("Warning: No version.py for livekit-agents.")
+        print("Warning: No version.py for livekit-agents-next.")
 
     if agents_only:
         return
 
     for pdir in _iter_plugin_dirs(plugins_root):
-        vf = pdir / "livekit" / "plugins" / pdir.name.split("livekit-plugins-")[1].replace("-", "_") / "version.py"
+        vf = (
+            pdir
+            / "livekit"
+            / "plugins"
+            / pdir.name.split("livekit-plugins-")[1].replace("-", "_")
+            / "version.py"
+        )
         pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
@@ -203,23 +227,24 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
     if plugin_versions:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
+
 @click.command("bump")
 @click.option(
-    "--pre", 
-    type=click.Choice(["rc", "b", "dev", "none"]), 
-    default="none", 
-    help="Pre-release type. Use 'none' for normal bump, or 'rc'/'b'/'dev' for pre-release."
+    "--pre",
+    type=click.Choice(["rc", "b", "dev", "none"]),
+    default="none",
+    help="Pre-release type. Use 'none' for normal bump, or 'rc'/'b'/'dev' for pre-release.",
 )
 @click.option(
     "--agents-only",
     is_flag=True,
-    help="Pre-release livekit-agents alone; the plugins and their livekit-agents floor stay as they are.",
+    help="Pre-release livekit-agents-next alone; the plugins and their livekit-agents floor stay as they are.",
 )
 @click.option(
     "--bump-type",
     type=click.Choice(["patch", "minor", "major", "release"]),
     default="patch",
-    help="Type of version bump to apply to every package. Use 'release' to strip pre-release suffixes. Defaults to patch."
+    help="Type of version bump to apply to every package. Use 'release' to strip pre-release suffixes. Defaults to patch.",
 )
 def bump(pre: str, bump_type: str, agents_only: bool) -> None:
     """
@@ -228,12 +253,13 @@ def bump(pre: str, bump_type: str, agents_only: bool) -> None:
     For a normal release (with --pre=none), every package is bumped with the specified
     --bump-type. For pre-release bumps (--pre=rc or --pre=dev), it updates the current
     versions to a new RC or DEV version. In both cases, plugin pyproject.toml references
-    for 'livekit-agents' will be updated if that version changes.
+    for 'livekit-agents-next' will be updated if that version changes.
     """
     if pre == "none":
         update_versions(bump_type)
     else:
         update_prerelease(pre, agents_only)
+
 
 if __name__ == "__main__":
     bump()

@@ -1,0 +1,76 @@
+name: Example contracts
+
+on:
+  pull_request:
+  push:
+    branches: [v2.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  examples-typecheck:
+    name: Examples strict mypy and pyright
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install the project and type checkers
+        run: uv sync --locked --all-extras --dev --group typing
+      - name: Prepare SDK types
+        run: uv run --no-sync python scripts/prepare_sdk_types.py
+      - name: Strict mypy
+        run: |
+          for example in examples/*/; do
+            uv run --no-sync mypy --strict --platform linux "$example"
+          done
+      - name: Strict pyright
+        run: uv run --no-sync pyright --pythonpath .venv/bin/python examples
+
+  example_simulation_smoke:
+    name: Frontdesk, hotel and airline simulation smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Checkout compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
+      - name: Install native build prerequisites
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+      # Scripted model responses keep handlers, tools, approval, context save/load and
+      # business outcomes under test without a hosted inference or LiveKit project.
+      - name: Run simulated example conversations
+        run: uv run --no-sync pytest tests/test_example_simulation.py tests/test_airline_support_example.py --unit -v

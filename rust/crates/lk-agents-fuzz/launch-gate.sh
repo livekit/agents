@@ -38,6 +38,7 @@ done
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
 executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice lk-agents-worker lk-agents-runtime)
 compiled=(
+    "lk-agents-bench-steps: measurement CLI; run explicitly on qualified hardware"
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
     "lk-agents-host-derive: proc macros; exercised by every crate that derives"
     "lk-agents-media: tests not in the gate yet (K-12 closure)"

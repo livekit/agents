@@ -251,7 +251,6 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
 
     from opentelemetry.sdk._logs import ReadableLogRecord
     from opentelemetry.sdk._logs.export import LogRecordExportResult
-    from scripts.bench.reports import _CountingExporter, capture_reports
 
     from livekit.agents import _core
     from livekit.agents.job import JobContext
@@ -265,6 +264,7 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     )
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
+    from scripts.bench.reports import _CountingExporter, capture_reports
 
     set_capture_content(creation_consent)
     session = VoiceSession(turn_handling={"turn_detection": None})
@@ -365,10 +365,9 @@ async def test_report_upload_keeps_creation_consent(creation_consent: bool, sour
     from types import SimpleNamespace
     from typing import cast
 
-    from scripts.bench.reports import capture_reports, prepare
-
     from livekit.agents.job import JobContext, SessionReport
     from livekit.protocol import agent as job_protocol
+    from scripts.bench.reports import capture_reports, prepare
 
     set_capture_content(creation_consent)
     session = VoiceSession(turn_handling={"turn_detection": None})
@@ -417,10 +416,9 @@ def test_safe_usage_events_reach_reports_without_conversation_capture() -> None:
 
 
 async def test_explicit_report_options_do_not_implicitly_enable_recording() -> None:
-    from scripts.bench.reports import capture_reports, prepare
-
     from livekit.agents import llm
     from livekit.agents.job import SessionReport
+    from scripts.bench.reports import capture_reports, prepare
 
     set_capture_content(True)
     report = SessionReport(
@@ -452,12 +450,11 @@ async def test_event_overflow_preserves_the_complete_transcript(
     import json
     from types import SimpleNamespace
 
-    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
-
     from livekit.agents import _core, llm
     from livekit.agents.job import JobContext
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
+    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
 
     previous = capture_content_enabled()
     set_capture_content(True)
@@ -539,9 +536,8 @@ async def test_event_overflow_preserves_the_complete_transcript(
 async def test_report_usage_reaches_the_sdk_without_a_display_shape_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
-
     from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
+    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
 
     report = make_report([])
     report.model_usage = [

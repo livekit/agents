@@ -7,6 +7,9 @@ permissions:
 on:
   workflow_call:
     inputs:
+      ref:
+        required: false
+        type: string
       package:
         required: true
         type: string
@@ -18,7 +21,7 @@ on:
       package:
         description: "Name of the package to build"
         required: true
-        default: "livekit-agents"
+        default: "livekit-agents-next"
       artifact_name:
         description: "Artifact name for the distribution package"
         required: true
@@ -27,11 +30,18 @@ on:
 jobs:
   build_plugins:
     runs-on: ubuntu-latest
-    if: inputs.package != 'livekit-blockguard' && inputs.package != 'livekit-agents'
+    if: inputs.package != 'livekit-blockguard' && inputs.package != 'livekit-agents-next'
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ inputs.ref || github.sha }}
           lfs: true
+
+      - name: Check out compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-sdk: 'false'
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -53,10 +63,10 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: dist/
 
-  # livekit-agents carries the Rust core: one abi3 wheel per platform (cp311-abi3, every
+  # livekit-agents-next carries the Rust core: one abi3 wheel per platform (cp311-abi3, every
   # Python from 3.11), checked by importing the core on 3.11 and 3.14 where the runner can run it
   build_agents:
-    if: inputs.package == 'livekit-agents'
+    if: inputs.package == 'livekit-agents-next'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,29 +74,61 @@ jobs:
         include:
           - { name: linux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: "2_28", test: true }
           - { name: linux-aarch64, os: namespace-profile-default-arm64, target: aarch64, manylinux: "2_28", test: true }
-          - { name: musllinux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2, test: false }
-          - { name: musllinux-aarch64, os: namespace-profile-default-arm64, target: aarch64, manylinux: musllinux_1_2, test: false }
+          - { name: musllinux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2, container: quay.io/pypa/musllinux_1_2_x86_64:latest, test: false }
+          - { name: musllinux-aarch64, os: namespace-profile-default-arm64, target: aarch64, manylinux: musllinux_1_2, container: quay.io/pypa/musllinux_1_2_aarch64:latest, test: false }
           - { name: macos-arm64, os: macos-latest, target: aarch64, manylinux: "", test: true }
-          - { name: macos-x86_64, os: macos-latest, target: x86_64, manylinux: "", test: false }
+          - { name: macos-x86_64, os: macos-15-intel, target: x86_64, manylinux: "", test: true }
           - { name: windows-x64, os: windows-latest, target: x64, manylinux: "", test: true }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          ref: ${{ inputs.ref || github.sha }}
           lfs: true
+
+      - name: Check out compatible SDK sources
+        uses: ./.github/actions/checkout-sdks
+        with:
+          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
+          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"
 
+      - name: Install macOS codec build prerequisites
+        if: runner.os == 'macOS'
+        run: brew install opus nasm pkg-config cmake
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
-          working-directory: livekit-agents
+          working-directory: livekit-agents-next
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist
+          container: ${{ matrix.container || '' }}
+          args: --release --locked --out dist
+          # This runs inside the manylinux/musllinux container before Cargo builds
+          # the pinned FFmpeg source with its required libopus encoder.
+          before-script-linux: |
+            if command -v apk >/dev/null; then
+              apk add --no-cache build-base cmake nasm pkgconf opus-dev opus-static
+            elif command -v yum >/dev/null; then
+              yum install -y cmake nasm pkgconfig opus-devel
+            fi
+          # maturin-action mounts the workspace at its host path. Cargo also needs
+          # the sibling SDK at that same relative location inside Linux containers.
+          docker-options: >-
+            -v "${{ github.workspace }}/../rust-sdks:${{ github.workspace }}/../rust-sdks"
           sccache: true
+
+      - name: Bundle macOS codec libraries
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install delocate
+          delocate-wheel --require-archs "$(uname -m)" -v -w repaired livekit-agents-next/dist/*.whl
+          rm livekit-agents-next/dist/*.whl
+          mv repaired/*.whl livekit-agents-next/dist/
 
       - name: Install uv
         if: matrix.test
@@ -96,10 +138,10 @@ jobs:
         if: matrix.test
         shell: bash
         run: |
-          wheel=$(ls livekit-agents/dist/*.whl)
+          wheel=$(ls livekit-agents-next/dist/*.whl)
           for v in 3.11 3.14; do
             uv venv -p "$v" "venv-$v"
-            VIRTUAL_ENV="$PWD/venv-$v" uv pip install "$wheel"
+            VIRTUAL_ENV="$PWD/venv-$v" uv pip install ../python-sdks/livekit-protocol ../python-sdks/livekit-api "$wheel"
             py="venv-$v/bin/python"; [ -f "venv-$v/Scripts/python.exe" ] && py="venv-$v/Scripts/python.exe"
             "$py" -c "import sys, livekit.agents, livekit.agents._core as c; print(sys.version, c.__file__)"
           done
@@ -108,7 +150,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.artifact_name }}-${{ matrix.name }}
-          path: livekit-agents/dist/
+          path: livekit-agents-next/dist/
 
   build_blockguard:
     if: inputs.package == 'livekit-blockguard'
@@ -130,6 +172,8 @@ jobs:
         working-directory: livekit-plugins/livekit-blockguard
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -154,7 +198,7 @@ jobs:
           path: livekit-plugins/livekit-blockguard/dist/
 
   merge_artifacts:
-    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.package == 'livekit-blockguard' || inputs.package == 'livekit-agents') }}
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.package == 'livekit-blockguard' || inputs.package == 'livekit-agents-next') }}
     runs-on: ubuntu-latest
     needs: [build_agents, build_blockguard]
     steps:
