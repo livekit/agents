@@ -1,0 +1,21 @@
+tests/test_plugin_thunderphone_realtime.py
+  s_ce7ad5408f8219::t_79d9e7c657487d 14,490
+livekit-plugins/livekit-plugins-thunderphone/livekit/plugins/thunderphone/realtime/realtime_model.py
+  s_ce7ad5408f8219::t_79d9e7c657487d 49,425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "55ec52d124d94d3bee823136f1dace62d7aff66a",
+  "prompts": {},
+  "sessions": {
+    "s_ce7ad5408f8219": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ad59c09-a3cf-4dc5-aa6d-3ac2f1eaf041",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
