@@ -24,7 +24,7 @@ from .._core import Run, Thread
 from .._generated.storage_run import ItemRow
 from ..llm import ChatContext
 from ..log import logger
-from .agentdb import AgentDBStorage
+from .backends import Storage
 from .context_store import ContextStore
 from .protocol import StorageError, VersionConflict, history_of, item_to_payload
 
@@ -43,7 +43,7 @@ class LiveLane:
 
     def __init__(
         self,
-        storage: AgentDBStorage,
+        storage: Storage,
         thread_id: str,
         *,
         agent_name: str,

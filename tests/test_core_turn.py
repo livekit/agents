@@ -1,7 +1,7 @@
 """The Rust turn through ``livekit.agents._core``: a ``Session`` over a database
-``AgentDBStorage`` opened, a ``Turn`` whose host is a Python object, one message answered, and a
+``Storage`` opened, a ``Turn`` whose host is a Python object, one message answered, and a
 second message under ``interrupt`` that yields the first turn. Against the local agent-db of
-``agentdb_fixture.py``; skipped when the data plane is not up."""
+``storage_fixture.py``; skipped when the data plane is not up."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from livekit.agents._generated.storage_run import ItemRow
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext, TurnOptions
 from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents.llm import ChatMessage
-from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage import Storage
 from livekit.agents.storage.context import TurnStream
 from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 
@@ -27,7 +27,7 @@ LANE = "front-desk"
 
 
 def a2a(text: str, message_id: str) -> dict[str, Any]:
-    return {"messageId": message_id, "role": "user", "parts": [{"kind": "text", "text": text}]}
+    return {"messageId": message_id, "role": "ROLE_USER", "parts": [{"text": text}]}
 
 
 def assistant_item(text: str) -> dict[str, Any]:
@@ -71,14 +71,14 @@ class Host:
         )
 
 
-async def database_of(storage: AgentDBStorage) -> str:
-    return (await storage.threads.create_thread()).database_id
+async def thread_of(storage: Storage) -> str:
+    return (await storage.threads.create_thread()).thread_id
 
 
-async def test_one_message_through_the_rust_turn(agentdb_storage: AgentDBStorage) -> None:
-    database_id = await database_of(agentdb_storage)
-    session = await agentdb_storage.open_database(database_id)
-    assert session.id == database_id
+async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> None:
+    thread_id = await thread_of(thread_storage)
+    session = await thread_storage.open(thread_id)
+    assert session.id == thread_id
     assert session.holder.startswith("worker-a/")
 
     host = Host()
@@ -89,13 +89,13 @@ async def test_one_message_through_the_rust_turn(agentdb_storage: AgentDBStorage
     assert result.task.status == "completed"
     assert result.task.message_id == "m1"
     assert result.output == "reply to: hello"
-    assert result.thread_id == database_id
+    assert result.thread_id == thread_id
     assert result.answered_by == result.task.task_id
     assert result.run_id == result.task.task_id
 
     # the context the handler saw
     (ctx,) = host.contexts
-    assert ctx.thread_id == database_id and ctx.lane == LANE
+    assert ctx.thread_id == thread_id and ctx.lane == LANE
     assert ctx.task_id == result.task.task_id
     assert ctx.history == [] and ctx.state is None and ctx.caller_history is None
     assert payload_to_item(ctx.message).model_dump(include={"role", "content"}) == {
@@ -122,11 +122,11 @@ async def test_one_message_through_the_rust_turn(agentdb_storage: AgentDBStorage
 
 
 async def test_a_second_message_under_interrupt_yields_the_first(
-    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+    thread_storages: tuple[Storage, Storage],
 ) -> None:
-    storage_a, storage_b = agentdb_workers
-    database_id = await database_of(storage_a)
-    session_a = await storage_a.open_database(database_id)
+    storage_a, storage_b = thread_storages
+    thread_id = await thread_of(storage_a)
+    session_a = await storage_a.open(thread_id)
     gate = asyncio.Event()
     host_a = Host(gate)
     turn_a = _core.Turn(session_a, LANE, host_a, TurnOptions(policy="interrupt", debounce=0))
@@ -134,7 +134,7 @@ async def test_a_second_message_under_interrupt_yields_the_first(
     first = asyncio.ensure_future(turn_a.run(a2a("first", "m1")))
     await asyncio.wait_for(host_a.entered.wait(), 10)
 
-    session_b = await storage_b.open_database(database_id)
+    session_b = await storage_b.open(thread_id)
     host_b = Host()
     turn_b = _core.Turn(session_b, LANE, host_b, TurnOptions(policy="interrupt", debounce=0))
     second = asyncio.ensure_future(turn_b.run(a2a("second", "m2")))

@@ -1,5 +1,5 @@
 """The storage package (plan 5): the Rust turn with the door's host, the lease across workers,
-resolution, the voice lane; against the local agent-db of ``agentdb_fixture.py``, every test
+resolution, the voice lane; against the local agent-db of ``storage_fixture.py``, every test
 skipped when the data plane is not up. The run itself (a raising run, a committed run id, a
 stale commit) is tested in the crate: ``rust/crates/lk-agents-storage/tests``."""
 
@@ -26,12 +26,12 @@ from livekit.agents.a2a.extension import (
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import AgentDBStorage, RunRejected
+from livekit.agents.storage import RunRejected, Storage
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
 from livekit.agents.storage.resolve import Thread, resolve_thread
 
-from .agentdb_fixture import let_the_lease_lapse, new_session
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .storage_fixture import lease_ttl, let_the_lease_lapse, new_session
 
 pytestmark = [pytest.mark.unit]
 
@@ -53,8 +53,8 @@ def a2a(
 ) -> dict[str, Any]:
     msg: dict[str, Any] = {
         "messageId": message_id,
-        "role": "user",
-        "parts": [{"kind": "text", "text": text}],
+        "role": "ROLE_USER",
+        "parts": [{"text": text}],
     }
     if channel:
         msg["metadata"] = {CHANNEL: channel}
@@ -67,11 +67,11 @@ async def echo(ctx: A2ASessionContext) -> str:
     return "reply to: " + ctx.message.text_content
 
 
-Workers = tuple[AgentDBStorage, AgentDBStorage]
+Workers = tuple[Storage, Storage]
 
 
 async def run_turn(
-    storage: AgentDBStorage,
+    storage: Storage,
     thread_id: str,
     lane: str,
     message: dict[str, Any],
@@ -99,21 +99,19 @@ async def run_turn(
         core.close()
 
 
-async def history_items(storage: AgentDBStorage, thread_id: str, lane: str) -> list[ChatItem]:
+async def history_items(storage: Storage, thread_id: str, lane: str) -> list[ChatItem]:
     return (await Thread(storage, thread_id, agent_name=lane).chat_history()).items
 
 
-async def tasks_of(storage: AgentDBStorage, thread_id: str, lane: str) -> list[TaskRow]:
+async def tasks_of(storage: Storage, thread_id: str, lane: str) -> list[TaskRow]:
     return await Thread(storage, thread_id, agent_name=lane).tasks()
 
 
-async def task_of(
-    storage: AgentDBStorage, thread_id: str, lane: str, task_id: str
-) -> TaskRow | None:
+async def task_of(storage: Storage, thread_id: str, lane: str, task_id: str) -> TaskRow | None:
     return next((t for t in await tasks_of(storage, thread_id, lane) if t.task_id == task_id), None)
 
 
-async def lane_row(storage: AgentDBStorage, thread_id: str, lane: str) -> LaneRow | None:
+async def lane_row(storage: Storage, thread_id: str, lane: str) -> LaneRow | None:
     core = await storage.open(thread_id)
     try:
         return await core.lane_info(lane)
@@ -121,7 +119,7 @@ async def lane_row(storage: AgentDBStorage, thread_id: str, lane: str) -> LaneRo
         core.close()
 
 
-async def run_outcomes(storage: AgentDBStorage, thread_id: str) -> list[str]:
+async def run_outcomes(storage: Storage, thread_id: str) -> list[str]:
     """What ``run_ended`` recorded, oldest first."""
     core = await storage.open(thread_id)
     try:
@@ -134,9 +132,9 @@ async def run_outcomes(storage: AgentDBStorage, thread_id: str) -> list[str]:
 # -- the thin slice --
 
 
-async def test_two_workers_share_one_session(agentdb_workers: Workers) -> None:
+async def test_two_workers_share_one_session(thread_storages: Workers) -> None:
     """Nothing stays in memory between runs: the second worker loads what the first committed."""
-    a, b = agentdb_workers
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     seen: list[list[str]] = []
 
@@ -160,9 +158,9 @@ async def test_two_workers_share_one_session(agentdb_workers: Workers) -> None:
 
 
 async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    storage = agentdb_storage
+    storage = thread_storage
     sid = await new_session(storage, LANE)
 
     async def boom(ctx: A2ASessionContext) -> str:
@@ -178,8 +176,8 @@ async def test_a_raising_handler_fails_the_task_and_keeps_the_message(
 # -- the journal --
 
 
-async def test_the_journal_records_a_tool_call_and_its_progress(agentdb_workers: Workers) -> None:
-    a, _ = agentdb_workers
+async def test_the_journal_records_a_tool_call_and_its_progress(thread_storages: Workers) -> None:
+    a, _ = thread_storages
     sid = await new_session(a, LANE)
     front = Agent(
         instructions="front desk",
@@ -222,12 +220,10 @@ async def test_the_journal_records_a_tool_call_and_its_progress(agentdb_workers:
 # -- interrupt --
 
 
-async def test_the_interrupting_turn_outlives_the_lease_ttl(agentdb_workers: Workers) -> None:
+async def test_the_interrupting_turn_outlives_the_lease_ttl(thread_storages: Workers) -> None:
     """The waiter that took the lane keeps it for as long as its turn runs: a reply slower than
     the lease TTL is still committed (the renewal timer runs on the waiter's lease too)."""
-    from .agentdb_fixture import LEASE_TTL
-
-    a, b = agentdb_workers
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     released = asyncio.Event()
@@ -238,7 +234,7 @@ async def test_the_interrupting_turn_outlives_the_lease_ttl(agentdb_workers: Wor
         return "never sent"
 
     async def slow(ctx: A2ASessionContext) -> str:
-        await asyncio.sleep(LEASE_TTL + 1)
+        await asyncio.sleep(lease_ttl(a) + 1)
         return "late reply"
 
     first = asyncio.create_task(run_turn(a, sid, LANE, a2a("first", "m1"), "interrupt", stuck))
@@ -262,8 +258,8 @@ async def test_the_interrupting_turn_outlives_the_lease_ttl(agentdb_workers: Wor
     assert [i.text_content for i in items] == ["first", "never sent", "second", "late reply"]
 
 
-async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_interrupt_yields_and_the_newer_task_answers_both(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     tool_entered = asyncio.Event()
     waiter_set = asyncio.Event()
@@ -331,8 +327,8 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
 # -- inbox --
 
 
-async def test_inbox_batches_a_burst_into_one_reply(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_inbox_batches_a_burst_into_one_reply(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     batches: list[list[str]] = []
 
@@ -366,9 +362,9 @@ async def test_inbox_batches_a_burst_into_one_reply(agentdb_workers: Workers) ->
 
 
 async def test_message_id_resend_returns_the_existing_task(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    storage = agentdb_storage
+    storage = thread_storage
     sid = await new_session(storage, LANE)
     first = await run_turn(
         storage, sid, LANE, a2a("hi", "m1", channel="sms"), None, echo, debounce=timedelta(0)
@@ -387,8 +383,8 @@ async def test_message_id_resend_returns_the_existing_task(
 # -- the lease --
 
 
-async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_a_lapsed_lease_fails_the_orphan_worker_lost(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     never = asyncio.Event()
@@ -419,7 +415,7 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
     await entered.wait()
     dead.cancel()
     await asyncio.gather(dead, return_exceptions=True)
-    await let_the_lease_lapse()
+    await let_the_lease_lapse(a)
 
     # worker B takes the lane for the next message: the orphan fails worker-lost, not run again
     r2 = await run_turn(
@@ -435,13 +431,13 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
 
 
 async def test_a_resend_after_the_holder_died_fails_worker_lost(
-    agentdb_worker: Callable[[str], AgentDBStorage],
+    thread_storage_worker: Callable[[str], Storage],
 ) -> None:
     """Under ``interrupt``: the holder dies mid-turn (its turn is cancelled, so the run is
     dropped without a commit and its lease lapses); a resend of the same messageId on another
     worker fails the orphaned ``working`` row ``worker-lost``, nothing runs again, and the
     message sent under a new messageId runs as a new task."""
-    a, b = (agentdb_worker(h) for h in ("wa", "wb"))
+    a, b = (thread_storage_worker(h) for h in ("wa", "wb"))
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     never = asyncio.Event()
@@ -457,7 +453,7 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
     await entered.wait()
     dead.cancel()
     await asyncio.gather(dead, return_exceptions=True)
-    await let_the_lease_lapse()  # the lease lapses with no renewal
+    await let_the_lease_lapse(a)  # the lease lapses with no renewal
 
     lost = await run_turn(b, sid, LANE, a2a("hello", "m1"), "interrupt", echo)
     assert lost.task.task_id == "AST_x" and lost.task.status == "failed"
@@ -476,9 +472,9 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
 
 
 async def test_input_required_pending_call_is_the_next_messages_output(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    storage = agentdb_storage
+    storage = thread_storage
     sid = await new_session(storage, LANE)
     fnol = Agent(
         instructions="claims",
@@ -529,12 +525,12 @@ async def test_input_required_pending_call_is_the_next_messages_output(
 
 
 async def test_needs_approval_asks_then_runs_on_the_approved_call(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     """Plan 7.4: ``needs_approval=True`` returns the ``InputRequired`` for you. The first call
     asks yes or no and does not run; the answer is its output; the model's repeat of the same
     call after the answer runs the body. The schema has no approval flag for the model."""
-    storage = agentdb_storage
+    storage = thread_storage
     sid = await new_session(storage, LANE)
     desk = Agent(
         instructions="front desk",
@@ -593,8 +589,8 @@ async def test_needs_approval_asks_then_runs_on_the_approved_call(
 # -- concurrent and reject --
 
 
-async def test_concurrent_runs_append_without_a_lease(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_concurrent_runs_append_without_a_lease(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     gate = asyncio.Event()
 
@@ -615,8 +611,8 @@ async def test_concurrent_runs_append_without_a_lease(agentdb_workers: Workers) 
     assert sorted(i.text_content or "" for i in items) == ["fast", "one", "slow", "two"]
 
 
-async def test_reject_refuses_while_a_turn_runs(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_reject_refuses_while_a_turn_runs(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     gate = asyncio.Event()
@@ -638,13 +634,13 @@ async def test_reject_refuses_while_a_turn_runs(agentdb_workers: Workers) -> Non
 
 @pytest.mark.parametrize("policy", ["interrupt", "queue", "concurrent", "reject"])
 async def test_a_submitted_row_exists_while_the_turn_runs(
-    policy: str, agentdb_workers: Workers
+    policy: str, thread_storages: Workers
 ) -> None:
     """Plan 3.3.4: the ``submitted`` row is written before the lease is tried, so ``tasks/get``
     finds the task before the commit; the lease holder picks it up (``working``, one attempt,
     plan 3.3.2), and the commit moves that same row to its terminal state. ``concurrent`` holds
     no lease and leaves the row ``submitted``."""
-    a, b = agentdb_workers
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     gate = asyncio.Event()
@@ -677,10 +673,10 @@ async def test_a_submitted_row_exists_while_the_turn_runs(
     assert len(await tasks_of(b, sid, LANE)) == 1, "the commit moved the early row, not added one"
 
 
-async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> None:
+async def test_a_lease_timeout_fails_the_early_row(thread_storages: Workers) -> None:
     """A turn that never took the lease: its early row ends ``failed`` rather than staying
     ``submitted`` for a message the caller was told failed."""
-    a, b = agentdb_workers
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     gate = asyncio.Event()
@@ -704,8 +700,8 @@ async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> 
     assert sorted(t.status for t in await tasks_of(b, sid, LANE)) == ["completed", "failed"]
 
 
-async def test_a_rejected_message_leaves_no_submitted_row(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_a_rejected_message_leaves_no_submitted_row(thread_storages: Workers) -> None:
+    a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
     gate = asyncio.Event()
@@ -730,9 +726,9 @@ async def test_a_rejected_message_leaves_no_submitted_row(agentdb_workers: Worke
 
 
 async def test_session_resolution_follows_the_threads_service(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    threads = agentdb_storage.threads
+    threads = thread_storage.threads
     fresh = await resolve_thread(threads)
     assert fresh.created and fresh.id.startswith("AT_")
     by_id = await resolve_thread(threads, context_id=fresh.id)
@@ -742,20 +738,20 @@ async def test_session_resolution_follows_the_threads_service(
 # -- a text during a call (plan 3.3.7) --
 
 
-async def test_the_rtc_door_resolves_the_call_thread(agentdb_storage: AgentDBStorage) -> None:
+async def test_the_rtc_door_resolves_the_call_thread(thread_storage: Storage) -> None:
     import json
     import pickle
     from types import SimpleNamespace
 
-    from livekit.agents.worker import _CallThreadEntrypoint
+    from livekit.agents.storage.resolve import CallThreadEntrypoint as _CallThreadEntrypoint
 
     seen: list[Thread | None] = []
 
     async def entrypoint(ctx: Any) -> None:
         seen.append(ctx._thread)
 
-    door = _CallThreadEntrypoint(entrypoint, agentdb_storage)
-    sid = await new_session(agentdb_storage, "desk")
+    door = _CallThreadEntrypoint(entrypoint, thread_storage)
+    sid = await new_session(thread_storage, "desk")
     for metadata in (json.dumps({"thread_id": sid}), ""):
         job = SimpleNamespace(metadata=metadata, agent_name="desk")
         await door(SimpleNamespace(worker_id="w", job=job, _thread=None))  # type: ignore[arg-type]
@@ -765,13 +761,13 @@ async def test_the_rtc_door_resolves_the_call_thread(agentdb_storage: AgentDBSto
     assert fresh is not None and fresh.id != sid
     assert (await fresh.info()).thread_id == fresh.id
     # a job process rebuilds the storage from its configuration
-    assert pickle.loads(pickle.dumps(agentdb_storage))._args == agentdb_storage._args
+    assert pickle.loads(pickle.dumps(thread_storage))._args == thread_storage._args
 
 
-async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: Workers) -> None:
+async def test_live_session_reloads_when_a_text_moved_the_lane(thread_storages: Workers) -> None:
     from livekit.agents import VoiceSession
 
-    call_worker, text_worker = agentdb_workers
+    call_worker, text_worker = thread_storages
     sid = await new_session(call_worker, "desk")
     agent = Agent(instructions="desk", name="desk")
     llm = FakeLLM(
@@ -838,12 +834,12 @@ async def test_live_session_reloads_when_a_text_moved_the_lane(agentdb_workers: 
 # -- the database behind a session --
 
 
-async def test_create_thread_creates_the_database(agentdb_storage: AgentDBStorage) -> None:
+async def test_create_thread_creates_the_database(thread_storage: Storage) -> None:
     """``CreateThread`` creates the thread's database; every worker reads it after a write."""
-    storage = agentdb_storage
+    storage = thread_storage
     created = await storage.threads.create_thread()
     thread_id = created.thread_id
-    assert created.database_id.startswith("DB_")
+    assert created.thread_id.startswith("AT_") and created.database_id
 
     assert await history_items(storage, thread_id, "front") == []
     first = await run_turn(storage, thread_id, "front", a2a("hi", "m1"), "queue", echo)
@@ -852,7 +848,7 @@ async def test_create_thread_creates_the_database(agentdb_storage: AgentDBStorag
     assert info.database_id == created.database_id
     second = await run_turn(storage, thread_id, "front", a2a("again", "m2"), "queue", echo)
     assert second.output == "reply to: again"
-    core = await storage.open_database(info.database_id)
+    core = await storage.open(info.thread_id)
     items = await core.history("front")
     assert [i.payload["content"][0] for i in items] == [
         "hi",

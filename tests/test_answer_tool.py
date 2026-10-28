@@ -10,7 +10,7 @@ from a2a.types import a2a_pb2 as pb
 from livekit.agents import Agent, InputRequired, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
-from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage import Storage
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
@@ -61,8 +61,8 @@ async def desk(ctx: A2ASessionContext) -> str:
     )
 
 
-async def test_the_answer_goes_to_the_tool_that_asked(agentdb_storage: AgentDBStorage) -> None:
-    server, _ = make_server(agentdb_storage, desk)
+async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -> None:
+    server, _ = make_server(thread_storage, desk)
     async with http_client(server) as http:
         client = await stock_client(http)
         first = payloads(await send(client, user_message("book me in", "m1")))
@@ -80,7 +80,7 @@ async def test_the_answer_goes_to_the_tool_that_asked(agentdb_storage: AgentDBSt
     artifacts = [p for p in second if hasattr(p, "artifact")]
     assert artifacts and artifacts[-1].artifact.parts[0].text == "All set."
 
-    db = await agentdb_storage.open(ctx_id)
+    db = await thread_storage.open(ctx_id)
     try:
         history = [row.payload for row in await db.history("front-desk")]
     finally:

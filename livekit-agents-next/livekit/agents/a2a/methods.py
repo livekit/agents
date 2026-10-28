@@ -38,7 +38,7 @@ from .._generated.storage import StreamInfo, TaskData
 from .._generated.storage_run import TaskRow
 from .._generated.storage_turn import TurnResult
 from ..log import logger
-from ..storage.agentdb import AgentDBStorage
+from ..storage.backends import Storage
 from ..storage.context import TokenHook, TurnHost, UpdateHook
 from ..storage.protocol import (
     TERMINAL_TASK_STATES,
@@ -123,7 +123,7 @@ class A2AService:
         self,
         endpoint: A2AEndpoint,
         *,
-        storage: AgentDBStorage,
+        storage: Storage,
         agent_name: Callable[[], str],
         credentials: Credentials | None,
         lane: Callable[[], str] | None = None,
@@ -322,10 +322,13 @@ class A2AService:
         """An answer stream created ahead of the request, so a turn does not wait for one;
         the next is made as this one is taken."""
         while len(self._streams) < READY_STREAMS:
-            self._streams.append(asyncio.ensure_future(self._storage.streams.create()))
+            self._streams.append(asyncio.ensure_future(self._create_stream()))
         taken = self._streams.popleft()
-        self._streams.append(asyncio.ensure_future(self._storage.streams.create()))
+        self._streams.append(asyncio.ensure_future(self._create_stream()))
         return taken
+
+    async def _create_stream(self) -> StreamInfo:
+        return await (await self._storage.streams()).create()
 
     async def _start(
         self, thread_id: str, message: StoredMessage, exts: Extensions
@@ -347,7 +350,7 @@ class A2AService:
             opening.add_done_callback(close)
             raise
         stream_id = created.stream_id
-        pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, stream_id)
+        pump: ResponsePump[TurnOutcome] = ResponsePump(await self._storage.streams(), stream_id)
         wire = WireHost(
             lambda on_update, on_token: self._host(
                 thread_id, on_update=on_update, on_token=on_token
@@ -532,7 +535,7 @@ class A2AService:
         after = str(offset) if offset is not None else call.resume_offset
         live = record.status not in TERMINAL_TASK_STATES
         try:
-            reader = self._storage.streams.read(task_id, after=after, live=live)
+            reader = (await self._storage.streams()).read(task_id, after=after, live=live)
             while (frame := await reader.next()) is not None:
                 yield json_format.ParseDict(
                     json.loads(frame), pb.StreamResponse(), ignore_unknown_fields=True

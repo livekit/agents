@@ -797,12 +797,20 @@ impl Decode for ListTasksDecode {
     }
 }
 
-/// One page of the thread's items: in insertion order with their lane, and
-/// the cursor of the next page when there is one.
+/// One page of the thread's items in insertion order, and the cursor of the next page when
+/// there is one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemPage {
-    pub items: Vec<(String, ItemRow)>,
+    pub items: Vec<PagedItem>,
     pub next: Option<String>,
+}
+
+/// An item of a page: its position in the thread's history and its lane.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PagedItem {
+    pub seq: i64,
+    pub lane: String,
+    pub item: ItemRow,
 }
 
 /// The largest item page.
@@ -854,7 +862,8 @@ impl Decode for ItemPageDecode {
             if items.len() as i64 == self.limit {
                 return Ok(ItemPage { items, next: Some(item_cursor(self.lane.as_deref(), last)) });
             }
-            items.push((lane.to_owned(), ItemRow::from_row(&row[2..].to_vec())?));
+            let item = ItemRow::from_row(&row[2..].to_vec())?;
+            items.push(PagedItem { seq: pos, lane: lane.to_owned(), item });
             last = pos;
         }
         Ok(ItemPage { items, next: None })

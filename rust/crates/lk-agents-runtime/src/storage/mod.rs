@@ -6,11 +6,13 @@
 //! * [`engine`]: the shared [`Thread`], [`Lane`] and [`Run`] handles over a connection.
 //! * [`lease`]: a held lease, its renewal task and its loss.
 //! * [`streams`]: the response streams a task's subscribers read, on either backend.
+//! * [`host`]: the host's `Storage` class over either backend.
 //!
 //! The decisions (statements, fences, transitions, renewal timing) are `lk_agents_storage`'s.
 
 pub mod agentdb;
 pub mod engine;
+pub mod host;
 pub mod lease;
 pub mod sqlite;
 pub mod streams;
@@ -26,7 +28,7 @@ use lk_agents_storage::sql::{BatchResult, Row, Statement};
 
 pub use engine::{CommitOptions, Lane, LaneDb, Run, RunOptions, Tasks, Thread, ThreadDb};
 pub use lease::Lease;
-pub use streams::{LocalStreams, ResponseStreams, StreamRead};
+pub use streams::{LocalStreams, QueuedStreams, ResponseStreams, StreamRead};
 
 /// One thread database's execution: typed reads and atomic ordered batches. Statements and
 /// results are backend-neutral; an `Err` from `batch` never claims a rollback it did not see.

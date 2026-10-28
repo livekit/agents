@@ -10,13 +10,12 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue
 
 from .. import _core
-from .._core import Threads
 from .._generated.storage import EventRow
+from .._generated.storage_class import ThreadInfo
 from .._generated.storage_run import TaskPage, TaskRow
-from .._generated.storage_threads import ThreadInfo
 from ..llm import ChatContext
 from ..log import logger
-from .agentdb import AgentDBStorage
+from .backends import Storage
 from .protocol import StorageError, history_of
 
 if TYPE_CHECKING:
@@ -34,7 +33,7 @@ class ResolvedThread:
 
 
 async def resolve_thread(
-    threads: Threads, *, context_id: str | None = None, scope: str = ""
+    threads: _core.Storage, *, context_id: str | None = None, scope: str = ""
 ) -> ResolvedThread:
     """Exactly one thread for a request (plan 4.4): the one ``context_id`` names, else a new one
     in ``scope``. A thread is the project's, not one agent's: any agent picks it up."""
@@ -48,7 +47,7 @@ class Thread:
     """``ctx.thread``: the durable thread, with the verbs that reach outside the turn. Reads
     open the thread's database for the call."""
 
-    def __init__(self, storage: AgentDBStorage, thread_id: str, *, agent_name: str) -> None:
+    def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
         self._id = thread_id
         self._agent_name = agent_name
@@ -62,7 +61,7 @@ class Thread:
         return self._agent_name
 
     @property
-    def storage(self) -> AgentDBStorage:
+    def storage(self) -> Storage:
         return self._storage
 
     async def info(self) -> ThreadInfo:
@@ -165,7 +164,7 @@ class CallThreadEntrypoint:
     A storage failure is logged and the call runs with no thread."""
 
     entrypoint: Callable[[JobContext], Awaitable[None]]
-    storage: AgentDBStorage
+    storage: Storage
 
     async def __call__(self, ctx: JobContext) -> None:
         try:

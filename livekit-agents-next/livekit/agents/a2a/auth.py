@@ -19,7 +19,7 @@ from typing import Literal
 
 import jwt
 
-from .._generated.storage_threads import ThreadInfo
+from .._generated.storage_class import ThreadInfo
 
 GRANT_CLAIM = "agentThread"
 GRANT_HEADER = "X-LiveKit-Thread-Grant"

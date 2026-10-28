@@ -31,7 +31,7 @@ from typing_extensions import Unpack
 
 from .._core import ServerConfig, endpoint_url_base
 from .._generated.storage_turn import Policy, TurnOptions
-from ..storage.agentdb import AgentDBStorage
+from ..storage.backends import Storage
 from ..storage.context import Handler
 from .auth import ANONYMOUS, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
@@ -55,7 +55,7 @@ class A2ASessionOptions(TypedDict, total=False):
     """The turn policy for a message that arrives while one runs, or a map by channel."""
     debounce: timedelta | Mapping[str, timedelta] | None
     """How long to wait for more of a burst, or a map by channel."""
-    storage: AgentDBStorage | None
+    storage: Storage | None
     """This endpoint's storage when it is not the server's."""
     version: str | None
     """The card's version; ``LIVEKIT_AGENT_VERSION`` by default."""
@@ -92,7 +92,7 @@ class A2AEndpoint:
         auth: AuthCallable | None = None,
         inbox: Policy | Mapping[str, Policy] | None = None,
         debounce: timedelta | Mapping[str, timedelta] | None = None,
-        storage: AgentDBStorage | None = None,
+        storage: Storage | None = None,
         version: str | None = None,
         lane: str | None = None,
     ) -> None:
@@ -117,7 +117,7 @@ class A2AEndpoint:
 
     # -- binding to a server --
 
-    def bind(self, *, storage: AgentDBStorage | None, config: ServerConfig) -> A2AService:
+    def bind(self, *, storage: Storage | None, config: ServerConfig) -> A2AService:
         """Attach the endpoint to a server's storage and options: its agent name (the lane,
         unless the door writes its own), credentials and URL."""
         chosen = self._storage or storage

@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from livekit import api
-from livekit.agents._generated.storage_threads import ThreadInfo, ThreadItem
+from livekit.agents._generated.storage_class import ThreadInfo, ThreadItem
 from livekit.agents.a2a import AgentThreadGrant, Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 from livekit.agents.storage.protocol import payload_to_item

@@ -505,7 +505,7 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
         run.commit(CommitOptions::default()).await.unwrap();
     }
     let ids = |p: &lk_agents_storage::db::ItemPage| -> Vec<String> {
-        p.items.iter().map(|(lane, i)| format!("{lane}/{}", i.id)).collect()
+        p.items.iter().map(|i| format!("{}/{}", i.lane, i.item.id)).collect()
     };
     let first = s.list_items(None, None, 2).await.unwrap();
     assert_eq!(ids(&first), vec!["lane-a/i0", "lane-b/i1"]);

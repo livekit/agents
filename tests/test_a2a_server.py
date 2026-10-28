@@ -1,5 +1,5 @@
 """``a2a_session`` over the wire, in process: a stock a2a-sdk client over HTTP+SSE with and
-without the extension header, two workers sharing one local agent-db (``agentdb_fixture.py``)
+without the extension header, two workers sharing one local agent-db (``storage_fixture.py``)
 for the thin slice, the interrupt, the inbox, a resend and a resubscribe, and the session grant
 at the endpoint."""
 
@@ -18,7 +18,7 @@ from a2a.types import a2a_pb2 as pb
 from a2a.utils.constants import TransportProtocol
 
 from livekit.agents import Agent, AgentServer, RunContext
-from livekit.agents._generated.storage_threads import ThreadInfo
+from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
     AGENT_CARD_PATH,
     EXTENSION_URI,
@@ -40,7 +40,7 @@ from livekit.agents.a2a.extension import (
     as_dict,
 )
 from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.storage import AgentDBStorage, StorageUnavailable
+from livekit.agents.storage import Storage, StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -82,11 +82,11 @@ async def echo(ctx: A2ASessionContext) -> str:
     return "reply to: " + ctx.message.text_content
 
 
-Workers = tuple[AgentDBStorage, AgentDBStorage]
+Workers = tuple[Storage, Storage]
 
 
 def make_server(
-    storage: AgentDBStorage,
+    storage: Storage,
     handler: Callable[[A2ASessionContext], Awaitable[Any]] = echo,
     **kw: Any,
 ) -> tuple[AgentServer, A2AEndpoint]:
@@ -182,11 +182,11 @@ def state_of(result: dict[str, Any]) -> str | None:
     return update["status"]["state"] if update else None
 
 
-async def history_items(storage: AgentDBStorage, thread_id: str, lane: str) -> list[ChatItem]:
+async def history_items(storage: Storage, thread_id: str, lane: str) -> list[ChatItem]:
     return (await Thread(storage, thread_id, agent_name=lane).chat_history()).items
 
 
-async def waiter_of(storage: AgentDBStorage, thread_id: str, lane: str) -> str:
+async def waiter_of(storage: Storage, thread_id: str, lane: str) -> str:
     db = await storage.open(thread_id)
     try:
         row = await db.lane_info(lane)
@@ -201,9 +201,9 @@ async def waiter_of(storage: AgentDBStorage, thread_id: str, lane: str) -> str:
 
 
 async def test_the_card_lists_the_http_interface_and_offers_the_extension(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    server, endpoint = make_server(agentdb_storage)
+    server, endpoint = make_server(thread_storage)
     async with http_client(server) as http:
         response = await http.get(f"/{ENDPOINT}{AGENT_CARD_PATH}")
     assert response.status_code == 200
@@ -225,9 +225,9 @@ async def test_the_card_lists_the_http_interface_and_offers_the_extension(
 
 
 async def test_a_stock_client_without_the_header_gets_a_plain_text_agent(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    server, _ = make_server(agentdb_storage)
+    server, _ = make_server(thread_storage)
     async with http_client(server) as http:
         client = await stock_client(http)
         events = await send(client, user_message("what is the fare", "m1"))
@@ -250,12 +250,12 @@ async def test_a_stock_client_without_the_header_gets_a_plain_text_agent(
         assert all(p.WhichOneof("content") == "text" for p in s.status.message.parts)
 
 
-async def test_the_header_is_echoed(agentdb_storage: AgentDBStorage) -> None:
+async def test_the_header_is_echoed(thread_storage: Storage) -> None:
     async def handler(ctx: A2ASessionContext) -> str:
         await ctx.update("one moment")
         return "Goodbye."
 
-    server, _ = make_server(agentdb_storage, handler)
+    server, _ = make_server(thread_storage, handler)
     async with http_client(server) as http:
         response = await rpc(
             http,
@@ -289,8 +289,8 @@ async def _updates(results: list[dict[str, Any]]) -> list[TaskUpdate]:
     return [u async for u in updates_from_events(events())]
 
 
-async def test_errors_map_as_the_plan_lists_them(agentdb_storage: AgentDBStorage) -> None:
-    server, _ = make_server(agentdb_storage)
+async def test_errors_map_as_the_plan_lists_them(thread_storage: Storage) -> None:
+    server, _ = make_server(thread_storage)
     async with http_client(server) as http:
         # a message with no messageId
         r = await rpc(
@@ -331,8 +331,8 @@ async def test_errors_map_as_the_plan_lists_them(agentdb_storage: AgentDBStorage
 # ---------------------------------------------------------------------------------------------
 
 
-async def test_thin_slice_across_two_workers(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
+    a, b = thread_storages
     seen: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -386,9 +386,9 @@ def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agen
 
 
 async def test_interrupt_two_streams_within_a_second_on_two_workers(
-    agentdb_workers: Workers,
+    thread_storages: Workers,
 ) -> None:
-    a, b = agentdb_workers
+    a, b = thread_storages
     tool_entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(tool_entered, release)
 
@@ -436,8 +436,8 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
     ]
 
 
-async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers) -> None:
-    a, b = agentdb_workers
+async def test_inbox_sms_burst_is_one_reply_and_a_merge(thread_storages: Workers) -> None:
+    a, b = thread_storages
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -474,10 +474,10 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers
 
 
 async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     """Two requests of one worker on one lane hold two leases, not one re-taken lease."""
-    storage = agentdb_storage
+    storage = thread_storage
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -514,9 +514,9 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
 
 
 async def test_a_resent_message_id_returns_the_existing_task(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    server, _ = make_server(agentdb_storage)
+    server, _ = make_server(thread_storage)
     async with http_client(server) as http:
         first = (await rpc(http, "message/send", {"message": wire("hi", "m1")})).json()["result"][
             "task"
@@ -539,9 +539,9 @@ async def test_a_resent_message_id_returns_the_existing_task(
 
 
 async def test_resubscribe_replays_after_the_first_stream_is_dropped(
-    agentdb_workers: Workers,
+    thread_storages: Workers,
 ) -> None:
-    a, b = agentdb_workers
+    a, b = thread_storages
     release = asyncio.Event()
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -593,13 +593,13 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
 
 
 async def test_the_stream_completes_when_the_first_client_vanishes_without_closing(
-    agentdb_workers: Workers,
+    thread_storages: Workers,
 ) -> None:
     """A browser reload drops the response mid-turn: the ASGI send fails and the generator
     is left suspended, never closed. The durable stream must still receive the rest of the
     turn, or a tasks/resubscribe from another worker ends at the last frame the first client
     saw."""
-    a, b = agentdb_workers
+    a, b = thread_storages
     release = asyncio.Event()
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -634,7 +634,7 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
 
 
 async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     front = _blocking_agent(entered, release)
@@ -642,8 +642,8 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
     async def handler(ctx: A2ASessionContext) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
-    server, _ = make_server(agentdb_storage, handler)
-    ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
+    server, _ = make_server(thread_storage, handler)
+    ctx_id = (await thread_storage.threads.create_thread()).thread_id
     async with http_client(server) as http:
         running = asyncio.create_task(
             rpc(http, "message/stream", {"message": wire("first", "m1", context_id=ctx_id)})
@@ -683,9 +683,9 @@ def grant_token(scope: str, **flags: bool) -> str:
 
 
 async def test_the_grant_creates_in_its_scope_and_refuses_another_scopes_session(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    server, _ = make_server(agentdb_storage)
+    server, _ = make_server(thread_storage)
     storage = server.storage
     assert storage is not None
     async with http_client(server) as http:
@@ -768,7 +768,7 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
 
 
 async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     seen: list[str] = []
 
@@ -776,7 +776,7 @@ async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
         seen.append(connection.headers.get("x-api-key", ""))
         return connection.headers.get("x-api-key") == "letmein"
 
-    server, _ = make_server(agentdb_storage, public=False, auth=auth)
+    server, _ = make_server(thread_storage, public=False, auth=auth)
     async with http_client(server) as http:
         # nobody, the developer's check failing, then a project token with the right key
         r = await rpc(
@@ -806,7 +806,7 @@ async def test_a_private_endpoint_takes_a_project_token_and_the_developers_auth(
 
 
 async def test_a_delegation_part_and_kind_reach_the_handler(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     from livekit.agents.llm import ChatContext, ChatMessage
 
@@ -818,7 +818,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
         seen["parts"] = ctx.messages[0].parts
         return "ok"
 
-    server, _ = make_server(agentdb_storage, handler)
+    server, _ = make_server(thread_storage, handler)
     from livekit.agents.a2a.codec import chat_ctx_part, message_to_pb
 
     history = ChatContext([ChatMessage(role="user", content=["earlier"])])
@@ -841,11 +841,11 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
 
 
 async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
-    agentdb_workers: Workers,
+    thread_storages: Workers,
 ) -> None:
     """docs/protocol/a2a.md: the turn's save could not be written; the task fails with the reason, and
     the client resends."""
-    a, _ = agentdb_workers
+    a, _ = thread_storages
 
     async def handler(ctx: A2ASessionContext) -> str:
         raise StorageUnavailable("the database went away")

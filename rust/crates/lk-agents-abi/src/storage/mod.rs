@@ -1,4 +1,7 @@
-//! Thread storage as the host sees it: the error every storage operation fails with.
+//! Thread storage as the host sees it: the `Storage` class `AgentDBStorage` and `SQLiteStorage`
+//! configure, the thread records it answers with, and the error every operation fails with.
+
+use serde_json::{Map, Value};
 
 /// A storage failure. `Unavailable` is the one retryable error; a task that ends on it fails
 /// with reason `storage-unavailable`. The host raises the classes of `livekit.agents.storage`.
@@ -97,4 +100,160 @@ pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
         });
     }
     err
+}
+
+/// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
+/// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
+#[crate::host(class(name = "Storage"))]
+#[async_trait::async_trait]
+pub trait Storage: Send + Sync + Sized + 'static {
+    /// An open thread: the shared engine's handle, bound to a holder.
+    #[host(handle(class = "Thread"))]
+    type Thread: Send + Sync + 'static;
+    /// The response streams a task's subscribers read.
+    #[host(handle(class = "Streams"))]
+    type Streams: Send + Sync + 'static;
+
+    /// `directory`: threads in that local directory, resolved to an absolute path once.
+    /// Otherwise agentstore through the public API derived from `url` (the project's
+    /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
+    #[host(new)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        #[host(kw, default = None)] directory: Option<String>,
+        #[host(default = None)] url: Option<String>,
+        #[host(default = None)] api_key: Option<String>,
+        #[host(default = None)] api_secret: Option<String>,
+        #[host(default = None)] lease_ttl: Option<f64>,
+        #[host(default = None)] renew_interval: Option<f64>,
+    ) -> Result<Self, StorageError>;
+
+    /// The absolute local directory, or the public API agentstore is reached through.
+    #[host(getter)]
+    fn location(&self) -> String;
+
+    /// A new `AT_` thread, returned once its metadata and database exist. `attributes` maps
+    /// strings to strings.
+    #[host(await)]
+    async fn create_thread(
+        &self,
+        #[host(kw, default = "")] scope: String,
+        #[host(default = None)] attributes: Option<Map<String, Value>>,
+        #[host(default = 0)] idle_ttl_seconds: i64,
+    ) -> Result<ThreadInfo, StorageError>;
+
+    /// Unknown, deleted or expired threads raise `ThreadNotFound`.
+    #[host(await)]
+    async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError>;
+
+    /// The threads of one scope, newest first; `before` is the previous page's cursor.
+    #[host(await)]
+    async fn list_threads(
+        &self,
+        scope: String,
+        #[host(kw, default = "")] before: String,
+        #[host(default = 0)] limit: i64,
+    ) -> Result<ThreadPage, StorageError>;
+
+    /// Merges `attributes` (an empty value deletes the key) and sets the idle TTL when given:
+    /// the activity boundary that moves expiry.
+    #[host(await)]
+    async fn update_thread(
+        &self,
+        thread_id: String,
+        #[host(kw, default = None)] attributes: Option<Map<String, Value>>,
+        #[host(default = None)] idle_ttl_seconds: Option<i64>,
+    ) -> Result<ThreadInfo, StorageError>;
+
+    /// Makes the thread unavailable and reclaims its content; repeat-safe.
+    #[host(await)]
+    async fn delete_thread(&self, thread_id: String) -> Result<(), StorageError>;
+
+    /// The thread's chat items, oldest first, of one agent's lane when `agent` is given.
+    #[host(await)]
+    async fn get_thread_items(
+        &self,
+        thread_id: String,
+        #[host(kw, default = "")] agent: String,
+        #[host(default = "")] after: String,
+        #[host(default = 0)] limit: i64,
+    ) -> Result<ThreadItemPage, StorageError>;
+
+    /// The thread's A2A tasks, of one `status` when given.
+    #[host(await)]
+    async fn get_thread_tasks(
+        &self,
+        thread_id: String,
+        #[host(kw, default = None)] status: Option<String>,
+    ) -> Result<Vec<ThreadTask>, StorageError>;
+
+    /// The existing thread's handle, its writes under `holder`. Takes no lease.
+    #[host(await)]
+    async fn open(&self, thread_id: String, holder: String) -> Result<Self::Thread, StorageError>;
+
+    /// The storage's response streams, shared by its threads.
+    #[host(await)]
+    async fn streams(&self) -> Result<Self::Streams, StorageError>;
+
+    /// Releases backend resources once open handles settled; repeat-safe.
+    #[host(await)]
+    async fn aclose(&self);
+}
+
+/// A thread: times are unix seconds, `0` for never, TTLs whole seconds.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadInfo {
+    pub thread_id: String,
+    /// The subject the thread is about, the one threads are listed and granted by.
+    pub scope: String,
+    pub attributes: Map<String, Value>,
+    pub created_at: i64,
+    pub last_active: i64,
+    pub expires_at: i64,
+    pub idle_ttl_seconds: i64,
+    /// The thread's database: `DB_..` on agent-db, the thread id locally.
+    pub database_id: String,
+}
+
+/// One page of `list_threads`, newest first.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadPage {
+    pub threads: Vec<ThreadInfo>,
+    /// The next page's cursor; empty at the end.
+    pub before: String,
+}
+
+/// One chat item of a thread; `item` is the `ChatContext.ChatItem` as protobuf JSON.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadItem {
+    pub agent: String,
+    /// Position in the thread's history.
+    pub seq: i64,
+    pub message_id: String,
+    pub item: Value,
+}
+
+/// One page of `get_thread_items`, oldest first.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadItemPage {
+    pub items: Vec<ThreadItem>,
+    /// The next page's cursor; empty at the end.
+    pub after: String,
+}
+
+/// One A2A task of a thread.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadTask {
+    pub task_id: String,
+    pub thread_id: String,
+    /// The application's task label; empty when none.
+    pub name: String,
+    /// The A2A state: `submitted`, `working`, `input-required`, `completed`, ...
+    pub status: String,
+    pub updated_at: i64,
 }

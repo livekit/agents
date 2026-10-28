@@ -29,7 +29,7 @@ from livekit.agents.a2a.extension import KIND
 from livekit.agents.delegation import A2ADelegate, DelegationFailed
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
 from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS
-from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -46,7 +46,7 @@ from .test_a2a_server import (
 )
 
 
-async def lanes_of(storage: AgentDBStorage, thread_id: str) -> set[str]:
+async def lanes_of(storage: Storage, thread_id: str) -> set[str]:
     core = await storage.open(thread_id)
     try:
         return {lane.lane for lane in await core.lanes()}
@@ -71,8 +71,8 @@ async def expert(ctx: A2ASessionContext) -> str:
     return f"the fare is 240 USD{seen}"
 
 
-async def test_a2a_delegate_against_a_livekit_expert(agentdb_storage: AgentDBStorage) -> None:
-    server, _ = make_server(agentdb_storage, expert)
+async def test_a2a_delegate_against_a_livekit_expert(thread_storage: Storage) -> None:
+    server, _ = make_server(thread_storage, expert)
     storage = server.storage
     assert storage is not None
     caller_session = (await storage.threads.create_thread()).thread_id
@@ -109,9 +109,9 @@ async def test_a2a_delegate_against_a_livekit_expert(agentdb_storage: AgentDBSto
 
 
 async def test_a2a_delegate_outside_the_session_sends_the_conversation(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    server, _ = make_server(agentdb_storage, expert)
+    server, _ = make_server(thread_storage, expert)
     history = ChatContext(
         [ChatMessage(role="user", content=["hi"]), ChatMessage(role="assistant", content=["hello"])]
     )
@@ -273,9 +273,9 @@ async def test_a2a_delegate_speaks_plain_a2a_to_a_stock_server() -> None:
 
 
 async def test_a_delegate_is_a_toolset_named_from_the_card(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
-    expert_server = AgentServer(storage=agentdb_storage, agent_name="eligibility")
+    expert_server = AgentServer(storage=thread_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(expert)
     async with http_client(expert_server) as http:
         back_office = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
@@ -325,11 +325,11 @@ def _front_desk(expert: A2ADelegate) -> Agent:
 
 
 async def test_a_tools_update_inside_agent_run_reaches_the_door_and_the_delegate_the_session(
-    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+    thread_storages: tuple[Storage, Storage],
 ) -> None:
     # one project: the clinic and the expert share the threads service and the databases, and the
     # expert is its own agent, so its lane is its own
-    clinic_storage, expert_storage = agentdb_workers
+    clinic_storage, expert_storage = thread_storages
     expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
     expert_server.a2a_session(endpoint=ENDPOINT, description="x")(expert)
     async with http_client(expert_server) as http:
@@ -395,11 +395,11 @@ def _expert_that_asks(*, verbatim: bool = False) -> Agent:
 
 @pytest.mark.parametrize("verbatim", [False, True])
 async def test_the_experts_question_is_answered_through_the_delegates_tool(
-    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage], verbatim: bool
+    thread_storages: tuple[Storage, Storage], verbatim: bool
 ) -> None:
     """The expert's question reaches the person in the front desk's words, or as the expert
     wrote it when verbatim; the answer goes back to the expert either way."""
-    clinic_storage, expert_storage = agentdb_workers
+    clinic_storage, expert_storage = thread_storages
     expert = _expert_that_asks(verbatim=verbatim)
     question = "Which payer, and the member id?"
 
@@ -506,13 +506,13 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
 
 
 async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
-    agentdb_workers: tuple[AgentDBStorage, AgentDBStorage],
+    thread_storages: tuple[Storage, Storage],
 ) -> None:
     """A verbatim result leads the expert's answer, flagged ``livekit/verbatim``: the front desk
     delivers it as written and phrases only the rest."""
     from livekit.agents.llm.tool_context import DELIVERED
 
-    clinic_storage, expert_storage = agentdb_workers
+    clinic_storage, expert_storage = thread_storages
     disclaimer = "This is not medical advice."
     expert = Agent(
         instructions="eligibility",

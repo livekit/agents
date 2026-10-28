@@ -16,12 +16,12 @@ from livekit.agents import (
     persisted,
 )
 from livekit.agents.llm import ChatContext, FunctionToolCall, Tool
-from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage import Storage
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
-from .agentdb_fixture import new_session
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .storage_fixture import new_session
 
 pytestmark = [pytest.mark.unit]
 
@@ -337,7 +337,7 @@ async def test_agent_run_stops_at_input_required() -> None:
 
 
 async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
-    agentdb_storage: AgentDBStorage,
+    thread_storage: Storage,
 ) -> None:
     seen: list[tuple[Deps, Patient, str]] = []
     agent = Agent[AppContext](instructions="x")
@@ -364,7 +364,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     )
     state = Patient()
     deps = Deps(greeting="hey")
-    storage = agentdb_storage
+    storage = thread_storage
     sid = await new_session(storage, agent.id)
     thread = Thread(storage, sid, agent_name=agent.id)
     app = AppContext(settings=deps, patient=state)
