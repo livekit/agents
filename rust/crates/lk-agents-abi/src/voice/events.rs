@@ -188,41 +188,6 @@ pub struct AgentFalseInterruption {
     pub created_at: f64,
 }
 
-/// Emitted after a batch of function tools finishes executing.
-///
-/// ``function_calls`` and ``function_call_outputs`` are parallel lists: the
-/// output at a given index belongs to the call at the same index and carries
-/// the same ``call_id``. Every call has one output, even one whose tool raised
-/// ``StopResponse``; such an output asks for no reply with ``reply_required``.
-#[derive(Host)]
-#[python(
-    pydantic,
-    name = "FunctionToolsExecutedEvent",
-    tag = "type",
-    tag_value = "function_tools_executed",
-    validator = "verify_lists_length",
-    method(
-        name = "zipped",
-        ret = "list[tuple[FunctionCall, FunctionCallOutput]]",
-        doc = "Return calls paired with outputs by list position."
-    ),
-    method(name = "cancel_tool_reply", ret = "None"),
-    method(name = "cancel_agent_handoff", ret = "None"),
-    property(name = "has_tool_reply", ret = "bool"),
-    property(name = "has_agent_handoff", ret = "bool")
-)]
-pub struct FunctionToolsExecuted {
-    #[python(ty = "list[FunctionCall]", import = "..llm:FunctionCall")]
-    pub function_calls: (),
-    #[python(ty = "list[FunctionCallOutput]", import = "..llm:FunctionCallOutput")]
-    pub function_call_outputs: (),
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
-    #[host(rename = "_handoff_required")]
-    #[python(private, default = "False")]
-    pub handoff_required: bool,
-}
-
 #[derive(Host, Serialize, Deserialize)]
 #[python(
     pydantic,
@@ -233,30 +198,6 @@ pub struct FunctionToolsExecuted {
 pub struct SessionUsageUpdated {
     #[python(ty = "AgentSessionUsage", import = "..metrics:AgentSessionUsage")]
     pub usage: crate::metrics::usage::AgentSessionUsage,
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
-}
-
-#[crate::host(record(
-    module = "events",
-    name = "_TypeDiscriminator",
-    constant(type = "unknown")
-))]
-pub struct TypeDiscriminator {}
-
-#[derive(Host)]
-#[python(
-    pydantic,
-    name = "ConversationItemAddedEvent",
-    tag = "type",
-    tag_value = "conversation_item_added"
-)]
-pub struct ConversationItemAdded {
-    #[python(
-        ty = "ChatMessage | AgentHandoff | _TypeDiscriminator",
-        import = "..llm:ChatMessage,AgentHandoff"
-    )]
-    pub item: (),
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -451,39 +392,7 @@ pub struct UserTurnExceededEvent {
     pub duration: std::time::Duration,
 }
 
-#[derive(Host)]
-#[python(
-    tag = "type",
-    tag_value = "error",
-    pydantic,
-    name = "ErrorEvent",
-    config = "arbitrary_types_allowed=True"
-)]
-pub struct Error {
-    #[python(
-        ty = "LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any",
-        import = "..llm:LLMError,RealtimeModelError",
-        import = "..stt:STTError",
-        import = "..tts:TTSError",
-        import = "..inference.interruption:InterruptionDetectionError",
-        serializer = "serialize_error"
-    )]
-    pub error: (),
-    #[python(
-        ty = "LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any",
-        import = "..llm:LLM,RealtimeModel",
-        import = "..stt:STT",
-        import = "..tts:TTS",
-        import = "..inference.interruption:AdaptiveInterruptionDetector",
-        serializer = "serialize_source"
-    )]
-    pub source: (),
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
-}
-
-// `//`, not `///`: the reference has no docstring, and one would change `model_json_schema()`,
-// which the gate digests.
+// `//`, not `///`: the reference has no docstring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Host)]
@@ -500,51 +409,6 @@ pub enum CloseReason {
     UserInitiated,
     #[host(rename = "task_completed")]
     TaskCompleted,
-}
-
-#[derive(Host)]
-#[python(pydantic, name = "CloseEvent", tag = "type", tag_value = "close")]
-pub struct Close {
-    #[python(
-        ty = "LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None",
-        import = "..llm:LLMError,RealtimeModelError",
-        import = "..stt:STTError",
-        import = "..tts:TTSError",
-        import = "..inference.interruption:InterruptionDetectionError",
-        default = "None"
-    )]
-    pub error: (),
-    pub reason: CloseReason,
-    #[python(default_factory = "time.time")]
-    pub created_at: f64,
-}
-
-// --- the union --------------------------------------------------------------------------------
-
-/// `AgentEvent` -- everything an `AgentSession` surfaces, discriminated on `type`.
-#[derive(Host)]
-#[python(union, discriminator = "type", name = "AgentEvent")]
-pub enum AgentEvent {
-    UserInputTranscribed(UserInputTranscribed),
-    UserTranscriptionTimeout(UserTranscriptionTimeout),
-    UserStateChanged(UserStateChanged),
-    AgentStateChanged(AgentStateChanged),
-    AgentFalseInterruption(AgentFalseInterruption),
-    SessionUsageUpdated(SessionUsageUpdated),
-    ConversationItemAdded(ConversationItemAdded),
-    FunctionToolsExecuted(FunctionToolsExecuted),
-    SpeechCreated(SpeechCreated),
-    ToolExecutionUpdated(ToolExecutionUpdated),
-    Error(Error),
-    Close(Close),
-    /// Named, not declared: the real class (`inference/interruption.py`) carries numpy fields.
-    OverlappingSpeech(
-        #[python(
-            ty = "OverlappingSpeechEvent",
-            import = "..inference.interruption:OverlappingSpeechEvent"
-        )]
-        (),
-    ),
 }
 
 // --- the session-event wire payloads --------------------------------------------------------------
@@ -638,7 +502,8 @@ pub struct ItemAddedWire {
 }
 
 /// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. A twin
-/// of [`FunctionToolsExecuted`]: this dict keys `handoff_required`, the model `_handoff_required`.
+/// of `FunctionToolsExecutedEvent` (`voice/events.py`): this dict keys `handoff_required`, the
+/// model `_handoff_required`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolsExecutedEvent {
     pub function_calls: Vec<crate::FunctionCall>,

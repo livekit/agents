@@ -342,9 +342,11 @@ pub(super) fn record_target(
         Some(owner) => format!("{owner}.{name}"),
         None => name,
     };
-    // Neither direction: a model only, which a host annotation names and nothing converts.
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
+    if !extract && !emit {
+        return Err(format!("{at}: a record crosses some way: extract, emit or both"));
+    }
     Ok((module, name, extract, emit))
 }
 

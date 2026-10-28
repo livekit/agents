@@ -9,45 +9,17 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from enum import Enum, unique
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
-from typing_extensions import Self
+from pydantic import BaseModel, ConfigDict, Field
 
-from .. import _bindings
-from ..inference.interruption import (
-    AdaptiveInterruptionDetector,
-    InterruptionDetectionError,
-    OverlappingSpeechEvent,
-)
-from ..llm import (
-    LLM,
-    AgentHandoff,
-    ChatMessage,
-    FunctionCall,
-    FunctionCallOutput,
-    LLMError,
-    RealtimeModel,
-    RealtimeModelError,
-)
+from ..llm import FunctionCall
 from ..metrics import AgentSessionUsage
-from ..stt import STT, STTError
-from ..tts import TTS, TTSError
 from .language import LanguageCode
 
 if TYPE_CHECKING:
     from ..voice.speech_handle import SpeechHandle
-
-
-# The declared records.
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class _TypeDiscriminator:
-    type: Literal["unknown"] = "unknown"
-
 
 # --- the two state vocabularies ---------------------------------------------------------------
 
@@ -137,53 +109,9 @@ class AgentFalseInterruptionEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class FunctionToolsExecutedEvent(BaseModel):
-    """Emitted after a batch of function tools finishes executing.
-
-    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
-    output at a given index belongs to the call at the same index and carries
-    the same ``call_id``. Every call has one output, even one whose tool raised
-    ``StopResponse``; such an output asks for no reply with ``reply_required``.
-    """
-
-    type: Literal["function_tools_executed"] = "function_tools_executed"
-    function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput]
-    created_at: float = Field(default_factory=time.time)
-    _handoff_required: bool = PrivateAttr(default=False)
-
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
-        """Return calls paired with outputs by list position."""
-        return _bindings.function_tools_executed_zipped(self)
-
-    def cancel_tool_reply(self) -> None:
-        return _bindings.function_tools_executed_cancel_tool_reply(self)
-
-    def cancel_agent_handoff(self) -> None:
-        return _bindings.function_tools_executed_cancel_agent_handoff(self)
-
-    @property
-    def has_tool_reply(self) -> bool:
-        return _bindings.function_tools_executed_has_tool_reply(self)
-
-    @property
-    def has_agent_handoff(self) -> bool:
-        return _bindings.function_tools_executed_has_agent_handoff(self)
-
-    @model_validator(mode="after")
-    def verify_lists_length(self) -> Self:
-        return _bindings.verify_lists_length(self)
-
-
 class SessionUsageUpdatedEvent(BaseModel):
     type: Literal["session_usage_updated"] = "session_usage_updated"
     usage: AgentSessionUsage
-    created_at: float = Field(default_factory=time.time)
-
-
-class ConversationItemAddedEvent(BaseModel):
-    type: Literal["conversation_item_added"] = "conversation_item_added"
-    item: ChatMessage | AgentHandoff | _TypeDiscriminator
     created_at: float = Field(default_factory=time.time)
 
 
@@ -274,22 +202,6 @@ class UserTurnExceededEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class ErrorEvent(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
-    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
-    created_at: float = Field(default_factory=time.time)
-
-    @field_serializer("error")
-    def _serialize_error(self, value: Any) -> Any:
-        return _bindings.serialize_error(value)
-
-    @field_serializer("source")
-    def _serialize_source(self, value: Any) -> Any:
-        return _bindings.serialize_source(value)
-
-
 @unique
 class CloseReason(str, Enum):
     ERROR = "error"
@@ -297,33 +209,6 @@ class CloseReason(str, Enum):
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
     USER_INITIATED = "user_initiated"
     TASK_COMPLETED = "task_completed"
-
-
-class CloseEvent(BaseModel):
-    type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None = None
-    reason: CloseReason
-    created_at: float = Field(default_factory=time.time)
-
-
-# --- the union --------------------------------------------------------------------------------
-
-AgentEvent = Annotated[
-    UserInputTranscribedEvent
-    | UserTranscriptionTimeoutEvent
-    | UserStateChangedEvent
-    | AgentStateChangedEvent
-    | AgentFalseInterruptionEvent
-    | SessionUsageUpdatedEvent
-    | ConversationItemAddedEvent
-    | FunctionToolsExecutedEvent
-    | SpeechCreatedEvent
-    | ToolExecutionUpdatedEvent
-    | ErrorEvent
-    | CloseEvent
-    | OverlappingSpeechEvent,
-    Field(discriminator="type"),
-]
 
 
 # --- the frozen public paths -----------------------------------------------------------------
@@ -340,9 +225,7 @@ UserTranscriptionTimeoutEvent.__module__ = "livekit.agents.voice.events"
 EotPredictionEvent.__module__ = "livekit.agents.voice.events"
 _AgentBackchannelOpportunityEvent.__module__ = "livekit.agents.voice.events"
 AgentFalseInterruptionEvent.__module__ = "livekit.agents.voice.events"
-FunctionToolsExecutedEvent.__module__ = "livekit.agents.voice.events"
 SessionUsageUpdatedEvent.__module__ = "livekit.agents.voice.events"
-ConversationItemAddedEvent.__module__ = "livekit.agents.voice.events"
 SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 ToolCallStarted.__module__ = "livekit.agents.voice.events"
 ToolCallUpdated.__module__ = "livekit.agents.voice.events"
@@ -350,6 +233,4 @@ ToolCallEnded.__module__ = "livekit.agents.voice.events"
 ToolReplyUpdated.__module__ = "livekit.agents.voice.events"
 ToolExecutionUpdatedEvent.__module__ = "livekit.agents.voice.events"
 UserTurnExceededEvent.__module__ = "livekit.agents.voice.events"
-ErrorEvent.__module__ = "livekit.agents.voice.events"
 CloseReason.__module__ = "livekit.agents.voice.events"
-CloseEvent.__module__ = "livekit.agents.voice.events"

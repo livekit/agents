@@ -957,10 +957,6 @@ pub mod evals {
     }
 }
 
-pub mod events {
-    use pyo3::prelude::*;
-}
-
 pub mod llm_fallback {
     use pyo3::prelude::*;
 

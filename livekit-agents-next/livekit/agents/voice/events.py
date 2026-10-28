@@ -2,23 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Generic, Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
-from typing_extensions import TypeVar
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer, model_validator
+from typing_extensions import Self, TypeVar
 
 from .._generated.events import (
-    AgentEvent,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
-    CloseEvent,
     CloseReason,
-    ConversationItemAddedEvent,
     EotPredictionEvent,
-    ErrorEvent,
-    FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     ToolCallEnded,
@@ -33,7 +31,23 @@ from .._generated.events import (
     UserTurnExceededEvent,
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
-from ..llm import FunctionCall
+from ..inference.interruption import (
+    AdaptiveInterruptionDetector,
+    InterruptionDetectionError,
+    OverlappingSpeechEvent,
+)
+from ..llm import (
+    LLM,
+    AgentHandoff,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    LLMError,
+    RealtimeModel,
+    RealtimeModelError,
+)
+from ..stt import STT, STTError
+from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -68,6 +82,106 @@ __all__ = [
     "UserStateChangedEvent",
     "UserTranscriptionTimeoutEvent",
     "UserTurnExceededEvent",
+]
+
+# The public events whose fields hold host objects: written here, not generated, since no core
+# record crosses as them.
+
+
+class FunctionToolsExecutedEvent(BaseModel):
+    """Emitted after a batch of function tools finishes executing.
+
+    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+    output at a given index belongs to the call at the same index and carries
+    the same ``call_id``. Every call has one output, even one whose tool raised
+    ``StopResponse``; such an output asks for no reply with ``reply_required``.
+    """
+
+    type: Literal["function_tools_executed"] = "function_tools_executed"
+    function_calls: list[FunctionCall]
+    function_call_outputs: list[FunctionCallOutput]
+    created_at: float = Field(default_factory=time.time)
+    _handoff_required: bool = PrivateAttr(default=False)
+
+    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+        """Return calls paired with outputs by list position."""
+        return list(zip(self.function_calls, self.function_call_outputs, strict=False))
+
+    def cancel_tool_reply(self) -> None:
+        for out in self.function_call_outputs:
+            out.reply_required = False
+
+    def cancel_agent_handoff(self) -> None:
+        self._handoff_required = False
+
+    @property
+    def has_tool_reply(self) -> bool:
+        return any(out.reply_required for out in self.function_call_outputs)
+
+    @property
+    def has_agent_handoff(self) -> bool:
+        return self._handoff_required
+
+    @model_validator(mode="after")
+    def verify_lists_length(self) -> Self:
+        if len(self.function_calls) != len(self.function_call_outputs):
+            raise ValueError("The number of function_calls and function_call_outputs must match.")
+        return self
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _TypeDiscriminator:
+    type: Literal["unknown"] = "unknown"
+
+
+class ConversationItemAddedEvent(BaseModel):
+    type: Literal["conversation_item_added"] = "conversation_item_added"
+    item: ChatMessage | AgentHandoff | _TypeDiscriminator
+    created_at: float = Field(default_factory=time.time)
+
+
+class ErrorEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["error"] = "error"
+    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
+    created_at: float = Field(default_factory=time.time)
+
+    @field_serializer("error")
+    def _serialize_error(self, value: Any) -> Any:
+        return value.model_dump() if isinstance(value, BaseModel) else repr(value)
+
+    @field_serializer("source")
+    def _serialize_source(self, value: Any) -> Any:
+        if isinstance(value, LLM | STT | TTS | RealtimeModel):
+            return {"model": value.model, "provider": value.provider}
+        return value.model_dump() if isinstance(value, BaseModel) else repr(value)
+
+
+class CloseEvent(BaseModel):
+    type: Literal["close"] = "close"
+    error: (
+        LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None
+    ) = None
+    reason: CloseReason
+    created_at: float = Field(default_factory=time.time)
+
+
+AgentEvent = Annotated[
+    UserInputTranscribedEvent
+    | UserTranscriptionTimeoutEvent
+    | UserStateChangedEvent
+    | AgentStateChangedEvent
+    | AgentFalseInterruptionEvent
+    | SessionUsageUpdatedEvent
+    | ConversationItemAddedEvent
+    | FunctionToolsExecutedEvent
+    | SpeechCreatedEvent
+    | ToolExecutionUpdatedEvent
+    | ErrorEvent
+    | CloseEvent
+    | OverlappingSpeechEvent,
+    Field(discriminator="type"),
 ]
 
 Context_T = TypeVar("Context_T", default=Any)

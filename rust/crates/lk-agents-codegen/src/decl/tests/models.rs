@@ -71,22 +71,6 @@ fn a_record_constant_is_a_model_field_at_its_fixed_value() {
     assert!(!shell.contains("\"type\""), "{shell}");
 }
 
-// Catches: a model only a host annotation names (`_TypeDiscriminator`) refused, or given a
-// conversion (and its class cell) nothing calls.
-#[test]
-fn a_record_with_no_direction_is_a_model_without_conversions() {
-    let decls = read(
-        r#"#[crate::host(record(module = "events", name = "_Tag", constant(type = "unknown")))]
-        pub struct Tag {}"#,
-    )
-    .expect("resolves");
-    let models = crate::records::python(&decls).expect("models");
-    let events = &models.iter().find(|o| o.path == "events.py").expect("events.py").text;
-    assert!(events.contains("class _Tag:"), "{events}");
-    let shell = crate::records::conversions(&decls).expect("emits").text;
-    assert!(!shell.contains("_TAG") && !shell.contains("_tag_"), "{shell}");
-}
-
 // Catches: a legacy union naming a record migrated to a declaration failing generation, the
 // union referencing its model before the module defines it, or the record not marked for the
 // legacy conversions (by-reference emit, union tag) its members owe.
