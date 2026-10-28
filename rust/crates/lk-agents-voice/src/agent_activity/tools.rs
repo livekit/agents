@@ -528,7 +528,7 @@ impl Driver {
     }
 
     /// The person's message answers the call an `InputRequired` left open: written as that call's
-    /// output, as an approval's answer when the call asked for one (`_answer_pending_input`).
+    /// output; the request planner presents an approval answer as a call not yet run.
     pub(crate) fn answer_pending_input(&mut self, text: &str, out: &mut Out) {
         let tools = &mut self.activity.tools;
         tools.approval_answers = tools.pending_input.iter().map(|a| a.call_id.clone()).collect();
@@ -538,7 +538,7 @@ impl Driver {
         else {
             return;
         };
-        output.output = crate::tool_executor::answered_text(&self.session.chat_ctx, &ask, text);
+        output.output = text.to_owned();
         self.replace_item(ChatItem::FunctionCallOutput(output), out);
     }
 

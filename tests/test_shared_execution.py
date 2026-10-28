@@ -7,6 +7,7 @@ belong to the voice suite, and the text entrypoints neither run nor promise them
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -19,10 +20,13 @@ from pydantic import Field
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     Agent,
+    InputRequired,
     ModelRetry,
     RunContext,
     TextSession,
     TextSessionState,
+    TextSessionTurn,
+    ToolResult,
     UnexpectedModelBehavior,
     VoiceSession,
 )
@@ -32,6 +36,7 @@ from livekit.agents.llm import (
     ChatContext,
     ChatItem,
     ChoiceDelta,
+    FunctionCallOutput,
     FunctionToolCall,
     LLMStream,
 )
@@ -96,6 +101,9 @@ class _Stream(LLMStream):
 class Settled:
     output: object
     expect: RunAssert
+    status: str
+    question: str | None
+    history: list[ChatItem]
 
 
 def _events(items: list[ChatItem]) -> list[RunEvent]:
@@ -110,34 +118,66 @@ def _events(items: list[ChatItem]) -> list[RunEvent]:
     return events
 
 
-def _settled(output: object, items: list[ChatItem]) -> Settled:
-    return Settled(output=output, expect=RunAssert(_events(items)))
+def _settled(
+    output: object,
+    items: list[ChatItem],
+    status: str,
+    question: str | None,
+    history: list[ChatItem],
+) -> Settled:
+    return Settled(
+        output=output,
+        expect=RunAssert(_events(items)),
+        status=status,
+        question=question,
+        history=history,
+    )
 
 
-async def _direct(agent: Agent[Any, Any], *messages: str) -> Settled:
+async def _direct(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
     history: list[ChatItem] = []
     for message in messages:
-        result = await agent.run(message, message_history=history)
+        result = await agent.run(message, message_history=history, context=context)
         history = result.all_messages()
-    assert result.status == "completed"
-    return _settled(result.output, result.new_messages())
+    return _settled(
+        result.output if result.status == "completed" else None,
+        result.new_messages(),
+        result.status,
+        result.question if result.status == "input_required" else None,
+        result.all_messages(),
+    )
 
 
-async def _text_session(agent: Agent[Any, Any], *messages: str) -> Settled:
+async def _text_session(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
     state: TextSessionState | None = None
     for message in messages:
-        turn = await TextSession(agent=agent).run(message, state=state)
+        turn = await TextSession(agent=agent).run(message, state=state, context=context)
         state = turn.state
-    assert turn.result.status == "completed"
-    return _settled(turn.result.output, turn.result.new_messages())
+    result = turn.result
+    return _settled(
+        result.output if result.status == "completed" else None,
+        result.new_messages(),
+        result.status,
+        result.question if result.status == "input_required" else None,
+        result.all_messages(),
+    )
 
 
-async def _voice(agent: Agent[Any, Any], *messages: str) -> Settled:
-    async with VoiceSession() as session:
+async def _voice(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Settled:
+    from .fake_io import FakeTextOutput
+
+    async with VoiceSession(context=context) as session:
+        session.output.transcription = FakeTextOutput()
         await session.start(agent)
         for message in messages:
             result: VoiceRunResult[Any] = await session.run(user_input=message)
-    return _settled(result.output, result.new_messages())
+        return _settled(
+            result.output,
+            result.new_messages(),
+            result.status,
+            result.question,
+            result.all_messages(),
+        )
 
 
 Entrypoint = Callable[..., Awaitable[Settled]]
@@ -162,9 +202,20 @@ async def test_a_plain_reply_is_the_output(run: Entrypoint) -> None:
     settled.expect.no_more_events()
 
 
-async def test_tool_arguments_are_coerced_and_defaulted_before_the_body(run: Entrypoint) -> None:
+@pytest.mark.parametrize(
+    "arguments, note",
+    [
+        ({"nights": "2"}, None),
+        ({"nights": "2", "note": None}, None),
+        ({"nights": "2", "note": "window"}, "window"),
+    ],
+    ids=["omitted", "null", "provided"],
+)
+async def test_tool_arguments_are_coerced_and_defaulted_before_the_body(
+    run: Entrypoint, arguments: dict[str, object], note: str | None
+) -> None:
     seen: list[tuple[int, str, str | None]] = []
-    model = Script(call("book", {"nights": "2"}, "c1"), Reply("Booked two nights."))
+    model = Script(call("book", arguments, "c1"), Reply("Booked two nights."))
     agent = Agent(name="desk", instructions="Help", llm=model)
 
     @agent.tool
@@ -185,9 +236,9 @@ async def test_tool_arguments_are_coerced_and_defaulted_before_the_body(run: Ent
         return f"booked {nights} {room}"
 
     settled = await run(agent, "Book two nights")
-    assert seen == [(2, "double", None)]
+    assert seen == [(2, "double", note)]
     assert settled.output == "Booked two nights."
-    settled.expect.next_event().is_function_call(name="book", arguments={"nights": "2"})
+    settled.expect.next_event().is_function_call(name="book", arguments=arguments)
     settled.expect.next_event().is_function_call_output(output="booked 2 double", is_error=False)
     settled.expect.next_event().is_message(role="assistant")
     settled.expect.no_more_events()
@@ -329,4 +380,415 @@ async def test_the_next_turn_sees_the_previous_exchange(run: Entrypoint) -> None
         ("user", "What is my name?"),
     ]
     settled.expect.next_event().is_message(role="assistant")
+    settled.expect.no_more_events()
+
+
+@pytest.mark.parametrize(
+    "kind", ["tool_error", "internal", "invalid", "failed", "rejected", "completed"]
+)
+async def test_tool_outcomes_are_recorded_before_the_model_continues(
+    run: Entrypoint, kind: str
+) -> None:
+    from livekit.agents import Completed, Failed, Rejected, ToolError
+
+    model = Script(call("lookup", {}, "c1"), Reply("Handled."))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    async def lookup(ctx: RunContext) -> Any:
+        """Look up the booking."""
+        if kind == "tool_error":
+            raise ToolError("No booking")
+        if kind == "internal":
+            raise RuntimeError("private credentials")
+        if kind == "invalid":
+            return object()
+        if kind == "failed":
+            return Failed("No booking")
+        if kind == "rejected":
+            return Rejected("No booking")
+        return Completed("Booking 42")
+
+    settled = await run(agent, "Lookup")
+    assert settled.output == "Handled."
+    settled.expect.next_event().is_function_call(name="lookup")
+    output = (
+        settled.expect.next_event()
+        .is_function_call_output(is_error=kind != "completed")
+        .event()
+        .item
+    )
+    expected = {
+        "tool_error": "No booking",
+        "internal": "An internal error occurred",
+        "invalid": "the tool returned an invalid output",
+        "failed": "No booking",
+        "rejected": "No booking",
+        "completed": "Booking 42",
+    }
+    assert output.output == expected[kind]
+    assert any(
+        i.type == "function_call_output" and i.output == output.output
+        for i in model.requests[1].items
+    )
+    settled.expect.next_event().is_message(role="assistant")
+    settled.expect.no_more_events()
+
+
+@pytest.mark.parametrize("verbatim", [False, True])
+async def test_a_tool_can_end_the_turn_without_another_model_request(
+    run: Entrypoint, verbatim: bool
+) -> None:
+    model = Script(call("receipt", {}, "c1"))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    async def receipt(ctx: RunContext) -> ToolResult:
+        """Return the receipt."""
+        return ToolResult("Receipt 42", reply_required=False, verbatim=verbatim)
+
+    settled = await run(agent, "Receipt")
+    assert len(model.requests) == 1
+    settled.expect.next_event().is_function_call(name="receipt")
+    output = settled.expect.next_event().is_function_call_output(is_error=False).event().item
+    assert "Receipt 42" in output.output
+    if verbatim and run is not _voice:
+        assert "Receipt 42" in str(settled.output)
+
+
+async def test_stop_response_ends_the_turn_without_a_reply(run: Entrypoint) -> None:
+    from livekit.agents import StopResponse
+
+    model = Script(call("stop", {}, "c1"))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    def stop(ctx: RunContext) -> str:
+        """End this response."""
+        raise StopResponse()
+
+    settled = await run(agent, "Stop")
+    assert settled.output is None
+    assert len(model.requests) == 1
+    settled.expect.next_event().is_function_call(name="stop")
+    settled.expect.next_event().is_function_call_output(is_error=False)
+    settled.expect.no_more_events()
+
+
+async def test_nested_invocations_restore_the_parent_context(run: Entrypoint) -> None:
+    child = Agent(
+        instructions="Child", llm=Script(call("inspect", {}, "child"), Reply("Child done."))
+    )
+    parent = Agent(
+        instructions="Parent", llm=Script(call("delegate", {}, "parent"), Reply("Parent done."))
+    )
+    seen: list[tuple[str, str]] = []
+
+    @child.tool
+    async def inspect(ctx: RunContext) -> str:
+        """Inspect the child invocation."""
+        seen.append(("child", ctx.function_call.call_id))
+        return "inspected"
+
+    @parent.tool
+    async def delegate(ctx: RunContext) -> str:
+        """Invoke the child."""
+        seen.append(("before", ctx.function_call.call_id))
+        result = await child.run("Inspect")
+        assert result.status == "completed" and result.output == "Child done."
+        seen.append(("after", ctx.function_call.call_id))
+        return "delegated"
+
+    settled = await run(parent, "Delegate")
+    assert settled.output == "Parent done."
+    assert seen == [("before", "parent"), ("child", "child"), ("after", "parent")]
+
+
+async def test_concurrent_invocations_keep_their_application_contexts_separate(
+    run: Entrypoint,
+) -> None:
+    class Model(Script):
+        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> LLMStream:
+            self.requests.append(chat_ctx.copy())
+            last = chat_ctx.items[-1]
+            if isinstance(last, FunctionCallOutput):
+                reply = Reply(last.output)
+            else:
+                reply = call("inspect", {}, last.id)
+            return _Stream(self, chat_ctx=chat_ctx, reply=reply)
+
+    agent = Agent(instructions="Help", llm=Model())
+    entered = 0
+    both = asyncio.Event()
+    seen: list[tuple[str, str]] = []
+
+    @agent.tool
+    async def inspect(ctx: RunContext[dict[str, str]]) -> str:
+        """Inspect this invocation's context."""
+        nonlocal entered
+        before = ctx.context["name"]
+        entered += 1
+        if entered == 2:
+            both.set()
+        await both.wait()
+        seen.append((before, ctx.context["name"]))
+        ctx.context["visited"] = before
+        return before
+
+    ada, grace = {"name": "Ada"}, {"name": "Grace"}
+    first, second = await asyncio.gather(
+        run(agent, "Hi Ada", context=ada), run(agent, "Hi Grace", context=grace)
+    )
+    assert first.output == "Ada" and second.output == "Grace"
+    assert sorted(seen) == [("Ada", "Ada"), ("Grace", "Grace")]
+    assert ada == {"name": "Ada", "visited": "Ada"}
+    assert grace == {"name": "Grace", "visited": "Grace"}
+
+
+async def test_approval_changes_require_another_answer_and_each_answer_is_consumed_once(
+    run: Entrypoint,
+) -> None:
+    model = Script(
+        call("cancel", {"date": "Monday"}, "first"),
+        call("cancel", {"date": "Tuesday"}, "changed"),
+        call("cancel", {"date": "Tuesday", "notify": True}, "repeat"),
+        Reply("Canceled Tuesday."),
+        call("cancel", {"date": "Tuesday"}, "again"),
+    )
+    agent = Agent(instructions="Help", llm=model)
+    ran: list[str] = []
+
+    @agent.tool(needs_approval=True)
+    async def cancel(ctx: RunContext, date: str, notify: bool = True) -> str:
+        """Cancel the appointment."""
+        ran.append(date)
+        return "canceled"
+
+    settled = await run(agent, "Cancel Monday", "Yes", "Yes", "Cancel Tuesday again")
+    assert ran == ["Tuesday"]
+    assert settled.status == "input_required" and "Tuesday" in (settled.question or "")
+    answers = {i.call_id: i.output for i in settled.history if isinstance(i, FunctionCallOutput)}
+    assert answers["first"] == answers["changed"] == "Yes"
+    calls = [i for i in model.requests[3].items if i.type == "function_call"]
+    assert [(i.call_id, i.extra["lk.approval"]) for i in calls] == [
+        ("first", "asked"),
+        ("changed", "asked"),
+        ("repeat", "granted"),
+    ]
+
+
+@pytest.mark.parametrize("verbatim", [False, True])
+async def test_input_required_waits_for_the_person_and_the_next_turn_continues(
+    run: Entrypoint, verbatim: bool
+) -> None:
+    model = Script(
+        call("ask", {}, "question"),
+        *([] if verbatim else [Reply("Which date would you like?")]),
+        Reply("Tuesday it is."),
+    )
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    async def ask(ctx: RunContext) -> InputRequired:
+        """Ask for the date."""
+        return InputRequired("Which date?", verbatim=verbatim)
+
+    settled = await run(agent, "Book", "Tuesday")
+    assert settled.status == "completed" and settled.output == "Tuesday it is."
+    request = model.requests[-1]
+    answered = next(i for i in request.items if i.type == "function_call_output")
+    assert answered.output == "Tuesday"
+    stored = next(i for i in settled.history if isinstance(i, FunctionCallOutput))
+    assert stored.output == "Tuesday"
+    assert len(model.requests) == (2 if verbatim else 3)
+
+
+async def test_cancellation_before_launch_does_not_run_a_tool(run: Entrypoint) -> None:
+    model = Script(call("effect", {}, "c1"))
+    agent = Agent(instructions="Help", llm=model)
+    ran: list[str] = []
+
+    @agent.tool
+    async def effect(ctx: RunContext) -> str:
+        """Perform an effect."""
+        ran.append("ran")
+        return "done"
+
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+
+    @agent.instructions
+    async def prepare(ctx: RunContext) -> str:
+        entered.set()
+        try:
+            await asyncio.Future[None]()
+        finally:
+            cleaned.set()
+        return "unreachable"
+
+    if run is _voice:
+        async with VoiceSession() as session:
+            await session.start(agent)
+            result: VoiceRunResult[Any] = session.run(user_input="Act")
+            try:
+                await entered.wait()
+            finally:
+                await session.interrupt(force=True)
+            await result
+    else:
+        invocation = asyncio.ensure_future(run(agent, "Act"))
+        try:
+            await entered.wait()
+        finally:
+            invocation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await invocation
+    assert cleaned.is_set()
+    assert ran == [] and model.requests == []
+
+
+@pytest.mark.parametrize("late_result", [False, True])
+async def test_cancellation_after_launch_settles_the_body_without_starting_a_followup(
+    run: Entrypoint, late_result: bool
+) -> None:
+    entered, cleaned = asyncio.Event(), asyncio.Event()
+    model = Script(call("wait", {}, "c1"))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    async def wait(ctx: RunContext) -> str:
+        """Wait for the service."""
+        entered.set()
+        try:
+            await asyncio.Future[None]()
+        except asyncio.CancelledError:
+            if late_result:
+                return "late result"
+            raise
+        finally:
+            cleaned.set()
+        return "unreachable"
+
+    invocation = asyncio.ensure_future(run(agent, "Wait"))
+    try:
+        await entered.wait()
+    finally:
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+    assert cleaned.is_set()
+    assert len(model.requests) == 1
+
+
+async def test_text_reaches_the_consumer_before_the_model_ends(run: Entrypoint) -> None:
+    from livekit import rtc
+    from livekit.agents import tts
+
+    from .fake_io import FakeAudioOutput
+
+    eof = asyncio.Event()
+
+    class GatedStream(_Stream):
+        async def _run(self) -> None:
+            await super()._run()
+            await eof.wait()
+
+    class Model(Script):
+        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> LLMStream:
+            self.requests.append(chat_ctx.copy())
+            return GatedStream(
+                self,
+                chat_ctx=chat_ctx,
+                reply=Reply("Your booking is ready. Let me check the next step."),
+            )
+
+    model = Model()
+    agent = Agent(instructions="Help", llm=model)
+    if run is _voice:
+        seen = asyncio.Event()
+
+        class Audio(FakeAudioOutput):
+            async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+                await super().capture_frame(frame)
+                seen.set()
+
+        class SpeechStream(tts.SynthesizeStream):
+            async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+                output_emitter.initialize(
+                    request_id="streaming",
+                    sample_rate=24000,
+                    num_channels=1,
+                    mime_type="audio/pcm",
+                    stream=True,
+                )
+                output_emitter.start_segment(segment_id="sentence")
+                async for part in self.input:
+                    if isinstance(part, str):
+                        output_emitter.push(bytes(4800))
+                output_emitter.end_segment()
+
+        class Speech(tts.TTS):
+            def __init__(self) -> None:
+                super().__init__(
+                    capabilities=tts.TTSCapabilities(streaming=True),
+                    sample_rate=24000,
+                    num_channels=1,
+                )
+
+            def stream(
+                self, *, conn_options: Any = DEFAULT_API_CONNECT_OPTIONS
+            ) -> tts.SynthesizeStream:
+                return SpeechStream(tts=self, conn_options=conn_options)
+
+            def synthesize(self, text: str, **kwargs: Any) -> tts.ChunkedStream:
+                raise AssertionError("the voice reply should stream")
+
+        async with VoiceSession(tts=Speech()) as session:
+            session.output.audio = Audio()
+            await session.start(agent)
+            voice_result: VoiceRunResult[Any] = session.run(user_input="Booking")
+            try:
+                await seen.wait()
+                assert not eof.is_set()
+            finally:
+                eof.set()
+            assert (
+                await voice_result
+            ).output == "Your booking is ready. Let me check the next step."
+    else:
+        stream = (
+            agent.run_stream("Booking")
+            if run is _direct
+            else TextSession(agent=agent).run_stream("Booking")
+        )
+        async with stream:
+            chunks = stream.stream_text(delta=True)
+            try:
+                assert await anext(chunks) == "Your booking is ready. Let me check the next step."
+                assert not eof.is_set()
+            finally:
+                eof.set()
+            assert [chunk async for chunk in chunks] == []
+            result = await stream.result()
+            if isinstance(result, TextSessionTurn):
+                result = result.result
+            assert result.status == "completed"
+            assert result.output == "Your booking is ready. Let me check the next step."
+    assert len(model.requests) == 1
+
+
+async def test_none_uses_the_coordinators_documented_reply_rule(run: Entrypoint) -> None:
+    model = Script(call("note", {}, "c1"), *([] if run is _voice else [Reply("Noted.")]))
+    agent = Agent(instructions="Help", llm=model)
+
+    @agent.tool
+    async def note(ctx: RunContext) -> None:
+        """Note this request."""
+
+    settled = await run(agent, "Note it")
+    assert settled.output == (None if run is _voice else "Noted.")
+    assert len(model.requests) == (1 if run is _voice else 2)
+    settled.expect.next_event().is_function_call(name="note")
+    settled.expect.next_event().is_function_call_output(is_error=False)
+    if run is not _voice:
+        settled.expect.next_event().is_message(role="assistant")
     settled.expect.no_more_events()

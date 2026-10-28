@@ -326,33 +326,6 @@ pub struct StepTools {
 /// the read-back, `granted` when it ran on the person's answer.
 pub use lk_agents_core::approval::APPROVAL_KEY;
 
-/// The output of an answered `InputRequired`: the person's words, or, for an approval's
-/// read-back, that the call has not run and how to run it (`APPROVAL_ANSWERED`).
-pub(crate) fn answered_text(
-    record: &crate::agent::SessionChatCtx,
-    ask: &Ask,
-    text: &str,
-) -> String {
-    let asked = record.items().any(|item| match item {
-        ChatItem::FunctionCall(call) => {
-            call.call_id == ask.call_id
-                && call.extra.get(APPROVAL_KEY).and_then(|v| v.as_str()) == Some("asked")
-        }
-        _ => false,
-    });
-    if !asked {
-        return text.to_owned();
-    }
-    let name = record
-        .items()
-        .find_map(|item| match item {
-            ChatItem::FunctionCall(call) if call.call_id == ask.call_id => Some(call.name.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
-    lk_agents_core::approval::answered_text(&name, text)
-}
-
 /// `{call_ids}` as Python's `str.format` spells a list: `['a', 'b']`.
 fn python_list(ids: &[String]) -> String {
     let quoted: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();

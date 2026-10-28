@@ -24,7 +24,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::llm::tool_executor::{ASK_IN_OWN_WORDS, Approval, ToolOutcome, WAITING_PREFIX};
+use lk_agents_abi::llm::tool_executor::{ASK_IN_OWN_WORDS, Approval, ToolOutcome};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, FunctionCallOutput, LlmChunk,
@@ -502,15 +502,7 @@ impl AgentRun {
         };
         self.history = std::mem::take(&mut self.input.history);
         let answer = self.input.message.raw_text_content().unwrap_or_default();
-        // The person's message answers the question a call is waiting on.
-        for item in &mut self.history {
-            if let ChatItem::FunctionCallOutput(o) = item
-                && o.output.starts_with(WAITING_PREFIX)
-            {
-                o.output = answer.clone();
-                self.approval_answers.insert(o.call_id.clone());
-            }
-        }
+        self.approval_answers = crate::request::answer_pending_input(&mut self.history, &answer);
         // A transport (the A2A door) may already have written the answer: the read-backs of the
         // execution this message continues were still waiting, so this invocation answers them.
         if let Some((at, _)) = execution::pending_turn(&self.history) {

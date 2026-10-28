@@ -61,6 +61,24 @@ pub fn plan_request(snapshot: RequestSnapshot<'_>) -> PlannedRequest {
     PlannedRequest { chat_ctx: ChatContext::new(items), tools }
 }
 
+/// Write the person's answer into the tool outputs left waiting by the previous invocation.
+/// Returns the read-backs this message answered, for once-only approval consumption.
+pub fn answer_pending_input(
+    history: &mut [ChatItem],
+    answer: &str,
+) -> std::collections::BTreeSet<String> {
+    let mut answered = std::collections::BTreeSet::new();
+    for item in history {
+        if let ChatItem::FunctionCallOutput(output) = item
+            && output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
+        {
+            output.output = answer.to_owned();
+            answered.insert(output.call_id.clone());
+        }
+    }
+    answered
+}
+
 /// The history as the model reads it: no stored instructions; a call without an output yet is
 /// left out (a request cannot carry it); an answered read-back says the call has not run and how
 /// to run it, while the stored output stays the person's words.

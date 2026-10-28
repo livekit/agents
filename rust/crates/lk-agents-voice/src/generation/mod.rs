@@ -335,22 +335,20 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
     let mut ctx = record.copy(&CopyOptions::default());
     ctx.items.retain(|item| item.id() != INSTRUCTIONS_MESSAGE_ID);
 
-    let tools: Vec<ToolSpec> =
-        tools.iter().filter(|t| !(on_enter && t.flags.ignore_on_enter)).cloned().collect();
-
     let known: std::collections::HashSet<String> =
         ctx.items.iter().map(|it| it.id().to_owned()).collect();
     ctx.insert_all(pending.iter().filter(|it| !known.contains(it.id())).cloned());
     if let Some(msg) = new_message
         && !known.contains(msg.id.as_str())
     {
+        if msg.role == Role::User {
+            lk_agents_core::request::answer_pending_input(
+                &mut ctx.items,
+                &msg.raw_text_content().unwrap_or_default(),
+            );
+        }
         ctx.insert(msg.clone());
     }
-
-    ctx.items.insert(
-        0,
-        ChatMessage::text(INSTRUCTIONS_MESSAGE_ID, Role::System, instructions, now).into(),
-    );
     if let Some(turn) = turn_instructions {
         ctx.push(ChatMessage::text(
             &turn.message_id,
@@ -376,9 +374,17 @@ pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
 
     inject_running_tool_calls(&mut ctx, running_tool_calls);
 
-    Request {
-        chat_ctx: ctx,
+    let planned = lk_agents_core::request::plan_request(lk_agents_core::request::RequestSnapshot {
+        history: &ctx.items,
+        instructions,
         tools,
+        on_enter,
+        turn_instructions: None,
+        created_at: now,
+    });
+    Request {
+        chat_ctx: planned.chat_ctx,
+        tools: planned.tools,
         tts_enabled: audio_output_enabled,
         text_output_enabled,
         instructions_hash: stable_hash(instructions),
