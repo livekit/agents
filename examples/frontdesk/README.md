@@ -27,6 +27,8 @@ email, by text and on the phone.
   conversation, and the system of record for what is booked. Its clock is read into the
   instructions on every turn, after the static part, so the model knows the date.
 - **The lane's state** keeps the patient's email, so a second booking does not ask again.
+- **Work in the background.** Both text doors take the `live` inbox: a tool's first
+  `ctx.update()` ends its turn, the next message runs beside it, and its result comes on its own.
 
 The same pattern with guided flows as tasks awaited in text is [`../hotel-receptionist/`](../hotel-receptionist/README.md).
 
@@ -38,11 +40,21 @@ With the stack and the environment of [`../README.md`](../README.md), from this 
 FRONTDESK_NOW=2026-06-12T09:00 uv run python main.py dev
 ```
 
-The console (`../../console`) lists this example and picks it once it is up.
+The console (`../../console`) lists this example and picks it once it is up; `../../dev.sh`
+starts both. `FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the
+scenarios' dates stay put. `CAL_API_KEY` swaps the fake calendar for cal.com.
 
-`FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the scenarios' absolute
-dates stay where they are; without it the practice runs on the wall clock, with the same
-openings as days from today. `CAL_API_KEY` swaps the fake calendar for cal.com.
+## Try it
+
+By text, in order:
+
+1. "Do you take Delta Dental?" The back office checks for 8 seconds; progress shows at once.
+2. "What are your hours?" The front desk answers at once, while the check runs.
+3. "Any openings Tuesday?" It runs on the back office beside the check.
+4. Wait for the insurance answer, which comes on its own, or say "never mind the insurance"
+   before it does: the back office cancels the check.
+
+A message sent while the front desk is still writing a reply stops that reply.
 
 ## Scenarios
 
@@ -50,9 +62,6 @@ openings as days from today. `CAL_API_KEY` swaps the fake calendar for cal.com.
 lk agent simulate text --scenarios scenarios/booking.yaml --agent-name dentist
 ```
 
-`booking` covers the paths that book: a patient hesitant about the email, one with a date in
-mind, a change of mind before the read-back, the earliest opening, and a listing after a
-booking that must no longer show the slot taken. `availability` covers the pushes for times
-the practice does not have: a morning that is not open, a demand with no acceptable alternative,
-a weekend, minutes around a listed time, a month with nothing. Every scenario that books takes
-a different slot, since the calendar is shared across a run; restart the backend between runs.
+`booking` covers the paths that book; `availability` the pushes for times the practice does
+not have. Every scenario that books takes a different slot, since the calendar is shared
+across a run; restart the backend between runs.
