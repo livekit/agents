@@ -20,6 +20,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.utils.http_context import client_timeout
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -162,6 +163,7 @@ class AvatarSession(BaseAvatarSession):
         if is_given(self._max_duration):
             body["maxDuration"] = self._max_duration
 
+        request_timeout = client_timeout(self._conn_options)
         for attempt in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
@@ -171,7 +173,7 @@ class AvatarSession(BaseAvatarSession):
                         "X-Runway-Version": API_VERSION,
                     },
                     json=body,
-                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     if not response.ok:
                         text = await response.text()
@@ -247,6 +249,7 @@ class AvatarSession(BaseAvatarSession):
             logger.warning("could not cancel Runway realtime session; no session id available")
             return
 
+        request_timeout = client_timeout(self._conn_options)
         try:
             async with self._ensure_http_session().delete(
                 f"{self._api_url}/v1/realtime_sessions/{session_id}",
@@ -254,7 +257,7 @@ class AvatarSession(BaseAvatarSession):
                     "Authorization": f"Bearer {self._api_key}",
                     "X-Runway-Version": API_VERSION,
                 },
-                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                timeout=request_timeout,
             ) as response:
                 if response.ok:
                     logger.debug(

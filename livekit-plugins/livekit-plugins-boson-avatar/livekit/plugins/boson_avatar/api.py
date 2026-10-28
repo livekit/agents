@@ -35,6 +35,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .errors import BosonAvatarException
 from .log import logger
@@ -250,6 +251,7 @@ class BosonAvatarAPI:
         }
         url = f"{self._api_url}{path}"
 
+        request_timeout = client_timeout(self._conn_options)
         for attempt in range(self._conn_options.max_retry + 1):
             retry_after: float | None = None
             try:
@@ -258,7 +260,7 @@ class BosonAvatarAPI:
                     url,
                     json=json,
                     headers=request_headers,
-                    timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     payload = await _read_payload(response)
                     if response.status in success_statuses:

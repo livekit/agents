@@ -13,6 +13,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .log import logger
 
@@ -183,6 +184,7 @@ class TavusAPI:
                 persists after all retries
             APIConnectionError: If the request fails after all retries
         """
+        request_timeout = client_timeout(self._conn_options)
         for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._session.post(
@@ -192,7 +194,7 @@ class TavusAPI:
                         "x-api-key": self._api_key,
                     },
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     if not response.ok:
                         text = await response.text()

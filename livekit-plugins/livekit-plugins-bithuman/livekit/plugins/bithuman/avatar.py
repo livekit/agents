@@ -27,6 +27,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
+from livekit.agents.utils.http_context import client_timeout
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -646,6 +647,7 @@ class AvatarSession(BaseAvatarSession):
         Raises:
             APIConnectionError: If all retry attempts fail
         """
+        request_timeout = client_timeout(self._conn_options)
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
@@ -653,7 +655,7 @@ class AvatarSession(BaseAvatarSession):
                     headers=headers,
                     json=json_data,
                     data=form_data,
-                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     if not response.ok:
                         text = await response.text()

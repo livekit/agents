@@ -11,6 +11,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .log import logger
 from .types import PersonaConfig, SessionOptions
@@ -143,13 +144,14 @@ class AnamAPI:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
+            request_timeout = client_timeout(self._conn_options)
             for attempt in range(self._conn_options.max_retry + 1):
                 try:
                     async with session.post(
                         url,
                         headers=headers,
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                        timeout=request_timeout,
                     ) as response:
                         if not response.ok:
                             text = await response.text()

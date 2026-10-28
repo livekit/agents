@@ -14,6 +14,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .log import logger
 
@@ -112,6 +113,7 @@ class AvatarioAPI:
         if self._session is None:
             raise RuntimeError("Session not initialized. Use 'async with AvatarioAPI(...)'.")
         last_exc: Exception | None = None
+        request_timeout = client_timeout(self._conn_options)
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._session.post(
@@ -121,7 +123,7 @@ class AvatarioAPI:
                         "x-api-key": self._api_key,
                     },
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     if not response.ok:
                         text = await response.text()

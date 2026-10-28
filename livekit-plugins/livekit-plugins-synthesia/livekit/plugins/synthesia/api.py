@@ -20,6 +20,7 @@ import json
 import aiohttp
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, utils
+from livekit.agents.utils.http_context import client_timeout
 
 from .errors import ErrorType, SynthesiaError
 from .log import logger
@@ -102,7 +103,7 @@ class SynthesiaAPI:
             "livekitUrl": request.livekit_url,
             "livekitToken": request.lk_token,
         }
-        timeout = aiohttp.ClientTimeout(total=conn_options.timeout)
+        timeout = client_timeout(conn_options)
 
         last_status: int | None = None
         last_body: object = None

@@ -18,6 +18,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .log import logger
 from .meeting.room import JoinMeetingResult
@@ -224,6 +225,7 @@ class LemonSliceAPI:
         """
         session = self._session or aiohttp.ClientSession()
         try:
+            request_timeout = client_timeout(self._conn_options)
             for i in range(self._conn_options.max_retry + 1):
                 try:
                     headers = {"X-API-Key": self._api_key}
@@ -248,10 +250,7 @@ class LemonSliceAPI:
                     async with session.post(
                         url or self._api_url,
                         headers=headers,
-                        timeout=aiohttp.ClientTimeout(
-                            total=60.0,
-                            sock_connect=self._conn_options.timeout,
-                        ),
+                        timeout=request_timeout,
                         **request_kwargs,
                     ) as response:
                         if not response.ok:

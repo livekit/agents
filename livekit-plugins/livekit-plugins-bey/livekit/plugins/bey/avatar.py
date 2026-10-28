@@ -17,6 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -122,6 +123,7 @@ class AvatarSession(BaseAvatarSession):
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
 
+        request_timeout = client_timeout(self._conn_options)
         for i in range(self._conn_options.max_retry):
             try:
                 async with self._ensure_http_session().post(
@@ -134,7 +136,7 @@ class AvatarSession(BaseAvatarSession):
                         "livekit_url": livekit_url,
                         "livekit_token": livekit_token,
                     },
-                    timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     if not response.ok:
                         text = await response.text()

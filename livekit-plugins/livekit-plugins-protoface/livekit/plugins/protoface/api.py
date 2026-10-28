@@ -16,6 +16,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils.http_context import client_timeout
 
 from .errors import ProtofaceException
 from .log import logger
@@ -131,6 +132,7 @@ class ProtofaceAPI:
         url = f"{self._api_url}{path}"
         error: Exception | None = None
 
+        request_timeout = client_timeout(self._conn_options)
         for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().request(
@@ -138,7 +140,7 @@ class ProtofaceAPI:
                     url,
                     json=json,
                     headers=request_headers,
-                    timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+                    timeout=request_timeout,
                 ) as response:
                     payload = await _read_payload(response)
                     if response.ok:
