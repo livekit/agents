@@ -4,6 +4,8 @@
 //! Results are assembled in model order by the parent; waiting on one call never holds back
 //! another's lifecycle.
 
+use std::collections::BTreeSet;
+
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::tool_arguments;
 use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome};
@@ -43,6 +45,7 @@ fn duplicate_text(tool: &str, running: &[&FunctionCall], confirm: bool) -> Strin
 #[derive(Debug)]
 pub(super) struct ToolCalls {
     calls: Vec<Call>,
+    approval_answers: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -106,9 +109,13 @@ impl ToolCalls {
     pub(super) fn begin(
         calls: Vec<(CallId, FunctionCall)>,
         agent: &AgentDefinition,
+        approval_answers: &BTreeSet<String>,
         fx: &mut Vec<Effect>,
     ) -> (ToolCalls, Vec<FinalCandidate>) {
-        let mut this = ToolCalls { calls: Vec::with_capacity(calls.len()) };
+        let mut this = ToolCalls {
+            calls: Vec::with_capacity(calls.len()),
+            approval_answers: approval_answers.clone(),
+        };
         let mut finals = Vec::new();
         for (id, item) in calls {
             let phase = if item.name == FINAL_RESULT_TOOL
@@ -368,7 +375,7 @@ impl ToolCalls {
             decided
                 .extend(self.calls[..index].iter().map(|c| ChatItem::FunctionCall(c.item.clone())));
             let call = &mut self.calls[index];
-            if approval::granted(&decided, &call.item.name, &canonical) {
+            if approval::granted(&decided, &self.approval_answers, &call.item.name, &canonical) {
                 approval::set_mark(&mut call.item, Approval::Granted, &canonical);
             } else if read_back == ReadBack::Function {
                 fx.push(Effect::ReadBackRender {

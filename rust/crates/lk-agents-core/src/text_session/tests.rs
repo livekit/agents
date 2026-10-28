@@ -322,24 +322,62 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     );
 }
 
+// An answered read-back cannot authorize a later turn, including one spent in a child.
 #[test]
-fn rejection_after_reconstruction_resolves_readback_without_starting_a_child() {
-    let mut first = Driver::new(config(true, ChatHistory::Fresh, false), None, "Book");
-    first.reply("", &[("book", json!({"nights":2}))]);
-    first.prepare(json!({"nights":2}));
-    let asked =
-        first.turn().state.frames.values().next().unwrap().pending_calls[0].parent.call_id.clone();
-    let mut next = first.reconstruct("no");
-    let request = next.request().1;
-    assert!(request.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == asked && o.output.contains("not run yet") && o.output.contains("'no'"))));
-    next.reply("I will not start the booking", &[]);
-    let turn = next.turn();
-    assert_eq!(turn.state.frames.len(), 1);
-    let root = &turn.state.frames[&turn.state.root_frame_id];
-    assert!(root.pending_calls.is_empty());
-    assert!(root.history.iter().any(
-        |i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == asked && o.output == "no")
-    ));
+fn an_answer_without_a_repeated_call_consumes_the_child_approval() {
+    for answer in ["no", "yes"] {
+        for delegate in [false, true] {
+            let mut cfg = config(true, ChatHistory::Fresh, false);
+            let root = cfg.agents.get_mut("desk").unwrap();
+            let mut details = root.definition.tools[0].clone();
+            details.spec.name = "details".into();
+            details.needs_approval = None;
+            root.definition.tools.push(details);
+            root.agent_tools.insert("details".into(), root.agent_tools["book"].clone());
+            let mut first = Driver::new(cfg, None, "Book");
+            first.reply("", &[("book", json!({"nights":2}))]);
+            first.prepare(json!({"nights":2}));
+            let asked = first.turn().state.frames.values().next().unwrap().pending_calls[0]
+                .parent
+                .call_id
+                .clone();
+            let mut next = first.reconstruct(answer);
+            let request = next.request().1;
+            assert!(request.items.iter().any(|i| matches!(i,
+                ChatItem::FunctionCallOutput(o) if o.call_id == asked
+                    && o.output == approval::answered_text("book", answer))));
+            let mut later = if delegate {
+                next.reply("", &[("details", json!({"nights":1}))]);
+                next.prepare(json!({"nights":1}));
+                next.reply("Which date?", &[]);
+                let mut later = next.reconstruct("Friday");
+                later.accepted(json!({"reference":"details"}));
+                later
+            } else {
+                next.reply("Noted.", &[]);
+                next.reconstruct("Book the same room again")
+            };
+            let root_id = later.session.state.root_frame_id.clone();
+            let root = &later.session.state.frames[&root_id];
+            assert!(root.pending_calls.is_empty());
+            assert!(root.history.iter().any(|i| matches!(i,
+                ChatItem::FunctionCallOutput(o) if o.call_id == asked && o.output == answer)));
+            let frames = later.session.state.frames.len();
+            later.reply("", &[("book", json!({"nights":2}))]);
+            later.prepare(json!({"nights":2}));
+            assert_eq!(
+                later.session.state.frames.len(),
+                frames,
+                "a later call needs a fresh approval"
+            );
+            let waiting = later.turn();
+            assert!(matches!(waiting.result.outcome, RunOutcome::InputRequired { .. }));
+            let root = &waiting.state.frames[&root_id];
+            assert_eq!(root.pending_calls.len(), 1);
+            assert_eq!(root.pending_calls[0].status, ChildCallStatus::Approval);
+            assert_ne!(root.pending_calls[0].parent.call_id, asked);
+        }
+    }
 }
 
 #[test]

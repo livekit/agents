@@ -243,6 +243,7 @@ pub struct AgentRun {
     output_retries: u32,
     /// The dynamic instructions last rendered, for a phrasing request.
     dynamic: Option<String>,
+    approval_answers: BTreeSet<String>,
     checkpoints: bool,
     phase: Phase,
 }
@@ -319,6 +320,7 @@ impl AgentRun {
             tool_retries: tool_outcome::ToolRetries::default(),
             output_retries: 0,
             dynamic: None,
+            approval_answers: BTreeSet::new(),
             checkpoints: false,
             phase: Phase::Idle,
         })
@@ -468,6 +470,7 @@ impl AgentRun {
                 && o.output.starts_with(WAITING_PREFIX)
             {
                 o.output = answer.clone();
+                self.approval_answers.insert(o.call_id.clone());
             }
         }
         self.first_new = self.history.len();
@@ -616,7 +619,8 @@ impl AgentRun {
     fn act(&mut self, calls: Vec<FunctionCall>, now: Ts, fx: &mut Vec<Effect>) {
         self.usage.tool_calls += calls.len() as u32;
         let calls = calls.into_iter().map(|c| (CallId(self.mint()), c)).collect();
-        let (calls, candidates) = ToolCalls::begin(calls, &self.agent, fx);
+        let (calls, candidates) =
+            ToolCalls::begin(calls, &self.agent, &self.approval_answers, fx);
         let mut acting = Acting { calls, finals: BTreeMap::new(), accepted: BTreeMap::new() };
         for FinalCandidate { call, value } in candidates {
             match value {

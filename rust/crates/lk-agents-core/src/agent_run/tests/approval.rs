@@ -152,3 +152,30 @@ fn a_read_back_function_may_ask_for_a_missing_detail_first() {
     let ChatItem::FunctionCall(c) = &d.result().all_messages[1] else { panic!() };
     assert_eq!(approval::mark(c), None);
 }
+
+// Framework validation feedback must not spend the person's approval as a new human reply.
+#[test]
+fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
+    let mut definition = text_agent(vec![cancel_tool()]);
+    definition.output = OutputSpec::Text { validated: true };
+    let mut second = Driver::new(definition, "yes", first.result().all_messages.clone());
+    second.reply("Done", &[]);
+    let validation = second
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::OutputValidate { validation, .. } => Some(*validation),
+            _ => None,
+        })
+        .unwrap();
+    second.send(Event::OutputValidated {
+        validation,
+        verdict: OutputVerdict::Retry("Run the requested tool first".into()),
+    });
+    second.reply("", &[("cancel_appointment", json!({"date":"Monday"}))]);
+    let (call, _) = second.prepares()[0].clone();
+    second.prepared(call, validated);
+    assert_eq!(second.executes().len(), 1, "validation feedback does not answer a read-back");
+}

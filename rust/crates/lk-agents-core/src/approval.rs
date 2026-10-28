@@ -1,10 +1,12 @@
 //! Approval (tools.md "Approval"): a `needs_approval` tool's call runs only as the repeat of a
 //! read-back the person answered, with the same validated arguments, and each answer is consumed
-//! once. The state lives in the history: calls carry [`APPROVAL_KEY`] (`asked`, `granted`) and the
-//! [`APPROVAL_IDENTITY_KEY`] of the validated arguments they were decided on.
+//! once. History records [`APPROVAL_KEY`] (`asked`, `granted`) and the [`APPROVAL_IDENTITY_KEY`]
+//! of the validated arguments. Only calls answered by the current invocation can grant a repeat.
+
+use std::collections::BTreeSet;
 
 use lk_agents_abi::agent::ArgumentIdentity;
-use lk_agents_abi::llm::tool_executor::{Approval, WAITING_PREFIX};
+use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::Value;
 
@@ -71,16 +73,16 @@ pub fn canonical_json(value: &Value) -> String {
     out
 }
 
-/// Whether a call of `tool` with `identity` repeats the latest read-back of that tool after the
-/// person answered it, and no earlier repeat consumed that answer. `items` are the calls decided
-/// before this one, in model order, with their outputs.
-pub fn granted(items: &[ChatItem], tool: &str, identity: &str) -> bool {
-    let answered = |call_id: &str| {
-        items.iter().any(|i| {
-            matches!(i, ChatItem::FunctionCallOutput(o)
-                if o.call_id == call_id && !o.output.starts_with(WAITING_PREFIX))
-        })
-    };
+/// Whether a call of `tool` with `identity` repeats the latest read-back of that tool, answered
+/// by this invocation, and no earlier repeat consumed that answer. `items` are the calls decided
+/// before this one, in model order, with their outputs; `answered` identifies the pending calls
+/// this invocation answered when it started.
+pub fn granted(
+    items: &[ChatItem],
+    answered: &BTreeSet<String>,
+    tool: &str,
+    identity: &str,
+) -> bool {
     // The identity of the latest answered, unconsumed read-back.
     let mut open: Option<&str> = None;
     for item in items {
@@ -91,7 +93,7 @@ pub fn granted(items: &[ChatItem], tool: &str, identity: &str) -> bool {
         let decided = call.extra.get(APPROVAL_IDENTITY_KEY).and_then(Value::as_str);
         match mark(call) {
             Some(Approval::Granted) if decided.is_some() && decided == open => open = None,
-            Some(Approval::Asked) => open = decided.filter(|_| answered(&call.call_id)),
+            Some(Approval::Asked) => open = decided.filter(|_| answered.contains(&call.call_id)),
             _ => {}
         }
     }
