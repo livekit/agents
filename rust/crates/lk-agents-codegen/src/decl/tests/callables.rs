@@ -841,3 +841,33 @@ fn property_assignment_captures_context_without_an_extra_python_argument() {
     assert!(stub.contains("@target.setter\n    def target(self, count: int) -> None"), "{stub}");
     assert!(!stub.contains("cx"), "context is hidden from Python: {stub}");
 }
+
+#[test]
+fn native_class_stubs_keep_host_types_distinct_and_import_union_members() {
+    let declarations = read(r#"
+        use std::sync::Arc;
+        #[crate::host(proxy(host = "service.Receiver"))]
+        pub trait Callback {}
+        #[crate::host(proxy(host = "other_service.Receiver"))]
+        pub trait OtherCallback {}
+        #[crate::host(handwritten(extract, emit, host = "media.AudioFrame | rtc.VideoFrame | app.avatar.End | typing.Literal['not.a.type']"))]
+        pub struct Frame;
+        #[crate::host(class(name = "Receiver"))]
+        pub trait Native: Sized {
+            #[host(new)] fn new(callback: Arc<dyn Callback>, other: Arc<dyn OtherCallback>) -> Self;
+            #[host(call)] fn receive(&self) -> Frame;
+        }
+    "#).unwrap();
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let stub = &stubs.iter().find(|stub| stub.out.path == "_core_llm.pyi").unwrap().out.text;
+    assert!(stub.contains("from service import Receiver as HostReceiver\n"), "{stub}");
+    assert!(stub.contains("from other_service import Receiver as HostHostReceiver\n"), "{stub}");
+    assert!(stub.contains("callback: HostReceiver"), "{stub}");
+    assert!(stub.contains("other: HostHostReceiver"), "{stub}");
+    assert!(stub.contains("from media import AudioFrame\n"), "{stub}");
+    assert!(stub.contains("from livekit import rtc\n"), "{stub}");
+    assert!(stub.contains("from app.avatar import End\n"), "{stub}");
+    assert!(stub.contains("from typing import Literal\n"), "{stub}");
+    assert!(stub.contains("AudioFrame | rtc.VideoFrame | End | Literal['not.a.type']"), "{stub}");
+    assert!(!stub.contains("from not.a import"), "literal values are not type names: {stub}");
+}

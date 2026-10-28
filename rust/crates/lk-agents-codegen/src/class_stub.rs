@@ -105,72 +105,96 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
 
 /// `from <module> import <name>` lines, sorted.
 #[derive(Default)]
-pub(crate) struct Imports(Vec<(String, String)>, Vec<RecordDecl>, Vec<Proxy>);
+pub(crate) struct Imports {
+    entries: Vec<(String, String)>,
+    records: Vec<RecordDecl>,
+    proxies: Vec<Proxy>,
+    defined: Vec<String>,
+}
 
 impl Imports {
     pub(crate) fn new(declarations: &Declarations) -> Self {
-        Self(Vec::new(), declarations.records.clone(), declarations.proxies.clone())
+        Self {
+            entries: Vec::new(),
+            records: declarations.records.clone(),
+            proxies: declarations.proxies.clone(),
+            defined: declarations
+                .classes
+                .iter()
+                .filter(|class| class.form != Form::Functions)
+                .flat_map(|class| {
+                    std::iter::once(class.name.clone())
+                        .chain(crate::adapter::sources(class).into_iter().map(|(name, _)| name))
+                })
+                .collect(),
+        }
     }
 
     pub(crate) fn entries(&self) -> &[(String, String)] {
-        &self.0
+        &self.entries
     }
 
     /// `name` may be a nested model (`Owner.Name`): its owner is imported.
     pub(crate) fn add(&mut self, module: &str, name: &str) {
         let name = name.split('.').next().unwrap_or(name);
         let entry = (module.to_owned(), name.to_owned());
-        if !self.0.contains(&entry) {
-            self.0.push(entry);
+        if !self.entries.contains(&entry) {
+            self.entries.push(entry);
         }
     }
 
-    /// A handwritten annotation as the stub writes it, with what it names imported: `rtc.X`
-    /// through `livekit.rtc`, a dotted `module.Class` as its class, and the generated records
-    /// beside its declaration a scalar union refers to.
-    fn annotation(&mut self, text: &str, rust: &str) -> String {
-        let mut out = String::new();
-        let mut token = String::new();
-        for c in text.chars().chain(std::iter::once(' ')) {
-            if c.is_alphanumeric() || c == '_' || c == '.' {
-                token.push(c);
-                continue;
+    /// Import colliding host classes under distinct local names.
+    fn external(&mut self, module: &str, name: &str) -> String {
+        let occupied = |bound: &str| {
+            self.defined.iter().any(|defined| defined == bound)
+                || self.entries.iter().any(|(source, import)| {
+                    let (imported, alias) = import.split_once(" as ").unwrap_or((import, import));
+                    alias == bound && !(source == module && imported == name)
+                })
+        };
+        if occupied(name) {
+            let mut alias = format!("Host{name}");
+            while occupied(&alias) {
+                alias.insert_str(0, "Host");
             }
-            match token.rsplit_once('.') {
-                Some(("rtc", _)) => {
-                    self.add("livekit", "rtc");
-                    out.push_str(&token);
-                }
-                Some((module, class)) if class.starts_with(char::is_uppercase) => {
-                    self.add(module, class);
-                    out.push_str(class);
-                }
-                _ => out.push_str(&token),
-            }
-            token.clear();
-            out.push(c);
+            self.add(module, &format!("{name} as {alias}"));
+            alias
+        } else {
+            self.add(module, name);
+            name.to_owned()
         }
-        out.pop();
-        self.records(text, rust);
-        out
     }
 
-    fn records(&mut self, text: &str, rust: &str) {
-        let Some((module, _)) = rust.rsplit_once("::") else { return };
-        let records: Vec<_> = self
-            .1
-            .iter()
-            .filter(|record| {
-                record.rust.rsplit_once("::").is_some_and(|(scope, _)| scope == module)
-                    && text
-                        .split(|c: char| !c.is_alphanumeric() && c != '_')
-                        .any(|name| name == record.name)
-            })
-            .map(|record| (record.module.clone(), record.name.clone()))
-            .collect();
-        for (module, name) in records {
-            self.add(&format!(".{module}"), &name);
+    /// Resolve names in a handwritten annotation through their declarations or qualified paths.
+    pub(crate) fn annotation(&mut self, text: &str, rust: &str) -> String {
+        let scope = rust.rsplit_once("::").map(|(scope, _)| scope);
+        let mut result = String::new();
+        let mut end = 0;
+        for (range, name) in annotation_names(text) {
+            result.push_str(&text[end..range.start]);
+            let record = self
+                .records
+                .iter()
+                .find(|record| {
+                    record.rust.rsplit_once("::").map(|(scope, _)| scope) == scope
+                        && record.name == name
+                })
+                .map(|record| (record.module.clone(), record.name.clone()));
+            if let Some((module, name)) = record {
+                self.add(&format!(".{module}"), &name);
+                result.push_str(&name);
+            } else if name.starts_with("rtc.") {
+                self.add("livekit", "rtc");
+                result.push_str(name);
+            } else if let Some((module, name)) = name.rsplit_once('.') {
+                result.push_str(&self.external(module, name));
+            } else {
+                result.push_str(name);
+            }
+            end = range.end;
         }
+        result.push_str(&text[end..]);
+        result
     }
 
     /// `import module` (a host callable named by its module, `time.time`).
@@ -187,7 +211,7 @@ impl Imports {
             _ => 1,
         };
         let mut statements: Vec<(u8, bool, &str)> =
-            self.0.iter().map(|(m, n)| (block(m), !n.is_empty(), m.as_str())).collect();
+            self.entries.iter().map(|(m, n)| (block(m), !n.is_empty(), m.as_str())).collect();
         statements.sort();
         statements.dedup();
         let mut s = String::new();
@@ -195,7 +219,7 @@ impl Imports {
         for (b, from, m) in statements {
             let line = if from {
                 let mut names: Vec<&str> = self
-                    .0
+                    .entries
                     .iter()
                     .filter(|(mm, n)| {
                         mm == m && !n.is_empty() && !(m == ".._core" && own.contains(&n.as_str()))
@@ -216,7 +240,12 @@ impl Imports {
                 if names.is_empty() {
                     continue;
                 }
-                format!("from {m} import {}\n", names.join(", "))
+                crate::imports::render(
+                    m,
+                    &names.iter().map(|name| name.to_string()).collect::<Vec<_>>(),
+                )
+                .join("\n")
+                    + "\n"
             } else {
                 format!("import {m}\n")
             };
@@ -228,6 +257,37 @@ impl Imports {
         }
         s
     }
+}
+
+/// Identifier paths, excluding quoted literal values and forward-reference strings.
+fn annotation_names(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let chars: Vec<_> = text.char_indices().collect();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let (start, ch) = chars[i];
+        i += 1;
+        if ch == '\'' || ch == '"' {
+            while i < chars.len() {
+                let next = chars[i].1;
+                i += 1;
+                if next == '\\' {
+                    i = (i + 1).min(chars.len());
+                } else if next == ch {
+                    break;
+                }
+            }
+        } else if ch.is_alphabetic() || ch == '_' {
+            while i < chars.len()
+                && (chars[i].1.is_alphanumeric() || matches!(chars[i].1, '_' | '.'))
+            {
+                i += 1;
+            }
+            let end = chars.get(i).map_or(text.len(), |(index, _)| *index);
+            names.push((start..end, &text[start..end]));
+        }
+    }
+    names
 }
 
 fn class(c: &Class, imports: &mut Imports) -> String {
@@ -429,10 +489,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 imports.add(".._core", name);
                 name.clone()
             }
-            HostForm::External { module, name } => {
-                imports.add(module, name);
-                name.clone()
-            }
+            HostForm::External { module, name } => imports.external(module, name),
             HostForm::Dict => "dict[str, object]".into(),
             HostForm::WireStrs => "str".into(),
             HostForm::Annotation(text) => imports.annotation(text, &r.rust),
@@ -442,7 +499,7 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             if host == "collections.abc.Callable"
                 && let Some((family, name)) = declared
                 && let Some(method) = imports
-                    .2
+                    .proxies
                     .iter()
                     .find(|proxy| &proxy.family == family && &proxy.rust_name == name)
                     .and_then(|proxy| proxy.methods.iter().find(|method| method.name == "__call__"))
@@ -464,12 +521,12 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 return format!("Callable[[{params}], {result}]");
             }
             let (module, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
-            imports.add(module, name);
+            let name = imports.external(module, name);
             if *generic {
                 imports.add("typing", "Any");
                 format!("{name}[Any]")
             } else {
-                name.to_owned()
+                name
             }
         }
         Ty::Source { class, .. } | Ty::Sink { class, .. } | Ty::Duplex { class, .. } => {

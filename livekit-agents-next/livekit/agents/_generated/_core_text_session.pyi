@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from .text_session import TextSessionAgent, TextSessionDelivery, TextSessionRequest, TextSessionState, TextSessionUpdate
+from .text_session import (
+    TextSessionAgent,
+    TextSessionDelivery,
+    TextSessionRequest,
+    TextSessionState,
+    TextSessionUpdate,
+)
 
 class TextSessionRunner:
     def __init__(

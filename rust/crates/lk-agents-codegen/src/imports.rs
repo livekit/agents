@@ -2,8 +2,32 @@
 //! (`combine-as-imports`, order by type) would write them: a module imported by both keeps one
 //! statement with the union of its names; any other statement joins its section in order.
 
-/// `header` (a module's imports) with the top-level imports of `extra` merged in.
+/// Merge generated import headers, retaining the scope of typing-only imports.
 pub fn merge(header: &str, extra: &str) -> Result<String, String> {
+    let Some((extra_runtime, added)) = extra.split_once("if TYPE_CHECKING:\n") else {
+        return merge_scope(header, extra);
+    };
+    let imports = merge_scope(header, extra_runtime)?;
+    let (runtime, existing) = imports.split_once("if TYPE_CHECKING:\n").unwrap_or((&imports, ""));
+    let dedent = |block: &str| {
+        block
+            .lines()
+            .map(|line| line.strip_prefix("    ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let checking = merge_scope(&dedent(existing), &dedent(added))?;
+    let checking = checking
+        .trim()
+        .lines()
+        .map(|line| if line.is_empty() { String::new() } else { format!("    {line}") })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("{}\n\nif TYPE_CHECKING:\n{checking}\n", runtime.trim_end()))
+}
+
+/// Merge imports within one scope, leaving any other header text in place.
+fn merge_scope(header: &str, extra: &str) -> Result<String, String> {
     let mut lines: Vec<String> = header.lines().map(str::to_owned).collect();
     for statement in statements(&extra.lines().map(str::to_owned).collect::<Vec<_>>())? {
         let ours = statements(&lines)?;
@@ -151,7 +175,7 @@ fn order(name: &str) -> (u8, String) {
 }
 
 /// `from module import names`, wrapped as ruff formats it at 100 columns.
-fn render(module: &str, names: &[String]) -> Vec<String> {
+pub(crate) fn render(module: &str, names: &[String]) -> Vec<String> {
     let flat = format!("from {module} import {}", names.join(", "));
     if flat.len() <= 100 {
         return vec![flat];
@@ -173,6 +197,16 @@ mod tests {
         assert_eq!(
             super::merge(legacy, declared).unwrap(),
             "from __future__ import annotations\n\nimport time\nfrom dataclasses import dataclass\nfrom enum import Enum, unique\nfrom typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias\n\nfrom pydantic import BaseModel\n\nfrom .. import _bindings\n\nif TYPE_CHECKING:\n    from ..voice.speech_handle import SpeechHandle\n"
+        );
+    }
+
+    #[test]
+    fn typing_imports_merge_in_their_own_scope() {
+        let header = "from typing import TYPE_CHECKING\n\nfrom ..types import NOT_GIVEN\n\nif TYPE_CHECKING:\n    from ..types import Existing\n";
+        let extra = "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from ..types import NotGivenOr\n";
+        assert_eq!(
+            super::merge(header, extra).unwrap(),
+            "from typing import TYPE_CHECKING\n\nfrom ..types import NOT_GIVEN\n\nif TYPE_CHECKING:\n    from ..types import Existing, NotGivenOr\n"
         );
     }
 }

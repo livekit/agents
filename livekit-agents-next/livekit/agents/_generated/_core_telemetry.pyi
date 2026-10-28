@@ -8,7 +8,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from .._core import ChatItem
-from .telemetry import LogRecordWire, ProjectedReportEvent, RecordingOptions, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind
+from .telemetry import (
+    LogRecordWire,
+    ProjectedReportEvent,
+    RecordingOptions,
+    SessionReportSnapshot,
+    TelemetryExportAction,
+    TelemetryRecordKind,
+    TelemetryValueKind,
+)
 
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""

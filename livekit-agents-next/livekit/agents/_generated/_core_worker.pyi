@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from livekit.agents._core import EndpointServer, ServerConfig
 from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
-from livekit.agents.ipc import JobExecutor, ProcPool
+from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerHost
 
@@ -168,7 +168,7 @@ class IpcClient:
 class ProcPool:
     def __init__(
         self,
-        host: ProcPool,
+        host: HostProcPool,
         *,
         num_idle_processes: int,
         initialize_timeout: float,
