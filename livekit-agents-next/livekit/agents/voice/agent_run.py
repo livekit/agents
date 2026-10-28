@@ -212,6 +212,7 @@ async def start_run(
         updates = runner.run(
             RunRequest(
                 invocation_id=run.id,
+                execution_id=hooks.task_id if hooks is not None else None,
                 message=to_core_item(message),
                 history=to_core_items(history),
                 answer_tool=hooks.answer_tool if hooks is not None else None,

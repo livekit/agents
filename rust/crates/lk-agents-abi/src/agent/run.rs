@@ -163,6 +163,9 @@ pub enum ToolResultStatus {
 pub struct RunRequest {
     /// Prefixes every id the invocation mints.
     pub invocation_id: String,
+    /// The transport task id, when this invocation belongs to an A2A task.
+    #[host(default = None)]
+    pub execution_id: Option<String>,
     /// A user message.
     pub message: ChatItem,
     pub history: Vec<ChatItem>,

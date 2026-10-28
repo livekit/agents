@@ -51,10 +51,16 @@ impl AgentRunner for Runner {
     }
 
     fn run(&self, request: RunRequest) -> Result<Updates, InvalidRun> {
-        let ChatItem::Message(message) = request.message else {
+        let ChatItem::Message(mut message) = request.message else {
             return Err(InvalidRun("a run's message is a chat message".into()));
         };
         let runtime = crate::process::handle().map_err(|e| InvalidRun(e.to_string()))?;
+        let execution_id = lk_agents_core::agent_run::execution::bind(
+            &mut message,
+            &request.history,
+            request.execution_id.as_deref(),
+            &request.invocation_id,
+        );
         let input = RunInput {
             invocation_id: request.invocation_id.clone(),
             message,
@@ -75,7 +81,7 @@ impl AgentRunner for Runner {
                 operation: 0,
                 invocation_id: request.invocation_id,
                 agent_name: self.definition.name.clone(),
-                execution_id: None,
+                execution_id: Some(execution_id),
                 frame_id: None,
                 context_scope: None,
                 application_context: None,

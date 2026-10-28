@@ -160,6 +160,13 @@ class RunContext(Generic[Context_T]):
         return RunUsage.from_session_usage(self._call().usage)
 
     @property
+    def execution_id(self) -> str:
+        """The stored conversational execution; on A2A, its task id."""
+        if self._run is not None and self._run.execution_id is not None:
+            return self._run.execution_id
+        return self.speech_handle.id
+
+    @property
     def task_id(self) -> str | None:
         """The A2A task id of the turn; ``None`` outside an A2A turn, such as on a call."""
         hooks = self._run.hooks if self._run is not None else None

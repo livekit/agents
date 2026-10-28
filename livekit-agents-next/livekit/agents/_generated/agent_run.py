@@ -423,6 +423,8 @@ class RunRequest:
 
     invocation_id: str
     """Prefixes every id the invocation mints."""
+    execution_id: str | None = None
+    """The transport task id, when this invocation belongs to an A2A task."""
     message: ChatItem
     """A user message."""
     history: list[ChatItem]

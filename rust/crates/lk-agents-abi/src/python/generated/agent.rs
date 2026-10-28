@@ -561,6 +561,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::run::RunRequest 
         }
         Ok(Self {
             invocation_id: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "invocation_id", |v| v.extract::<::std::string::String>())?,
+            execution_id: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "execution_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
             message: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "message", |v| v.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into))?,
             history: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "history", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>())?,
             answer_tool: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "answer_tool", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,

@@ -538,6 +538,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
     let runner = super::Runner::new(definition(vec![]), llm(), host).unwrap();
     let mut updates = runner
         .run(RunRequest {
+            execution_id: None,
             invocation_id: "run_1".into(),
             message: lk_agents_abi::ChatItem::Message(ChatMessage::text(
                 "m1",

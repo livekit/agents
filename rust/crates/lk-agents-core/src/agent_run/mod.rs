@@ -10,6 +10,7 @@
 //! - [`tool_calls`]: one step's calls, from arguments to recorded outcomes.
 
 mod checkpoint;
+pub mod execution;
 mod model_step;
 pub mod result;
 mod text_session;
@@ -304,8 +305,9 @@ impl Owed {
 }
 
 impl AgentRun {
-    pub fn new(agent: AgentDefinition, input: RunInput) -> Result<AgentRun, AgentError> {
+    pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
         agent::validate(&agent)?;
+        execution::bind(&mut input.message, &input.history, None, &input.invocation_id);
         Ok(AgentRun {
             agent,
             history: Vec::new(),
@@ -886,12 +888,16 @@ impl AgentRun {
     }
 
     fn result(&self, outcome: RunOutcome, verbatim: Option<String>) -> RunResult {
-        let all = ChatContext::new(self.history.clone())
+        let mut history = self.history.clone();
+        if let Some(ChatItem::Message(message)) = history.get_mut(self.first_new) {
+            execution::settle(message, matches!(outcome, RunOutcome::InputRequired { .. }));
+        }
+        let all = ChatContext::new(history.clone())
             .copy(&CopyOptions { exclude_instructions: true, ..Default::default() });
         RunResult {
             outcome,
             interrupted: false,
-            new_messages: self.history[self.first_new..].to_vec(),
+            new_messages: history[self.first_new..].to_vec(),
             all_messages: all.items,
             usage: self.usage,
             verbatim,
