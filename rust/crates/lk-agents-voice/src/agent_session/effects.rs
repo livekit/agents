@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 pub struct Out {
     frame: FrameId,
-    /// What the machines asked for, not yet performed.
-    todo: Vec<Effect>,
+    /// What the machines asked for, not yet performed or settled.
+    todo: Vec<Planned>,
     /// What a machine writes into. Drained into `todo` by [`Out::absorb`].
     machine: Effects,
     pub(crate) signals: VecDeque<Signal>,
@@ -51,7 +51,7 @@ impl Out {
     pub(crate) fn answer(&mut self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
             self.absorb();
-            self.todo.push(Effect::Answer(call, answer));
+            self.todo.push(Planned::Effect(Effect::Answer(call, answer)));
         }
     }
 
@@ -59,7 +59,7 @@ impl Out {
         self.frame
     }
 
-    /// Where this cycle's effects are written; [`Out::take`] and [`Out::peek`] read them.
+    /// Where this cycle's effects are written; [`Out::take`] reads them.
     pub fn machine(&mut self) -> &mut Effects {
         &mut self.machine
     }
@@ -69,13 +69,9 @@ impl Out {
     /// order; `perform` records nothing.
     pub fn absorb(&mut self) {
         for transition in self.machine.take() {
-            match transition {
-                Transition::Effect(effect) => {
-                    if self.journal {
-                        self.journal_effect(&effect);
-                    }
-                    self.todo.push(effect);
-                }
+            let planned = match transition {
+                Transition::Effect(effect) => Planned::Effect(effect),
+                Transition::Op(op) => Planned::Op(op),
                 Transition::Signal(signal) => {
                     if self.journal {
                         let step = match &signal {
@@ -86,141 +82,46 @@ impl Out {
                             _ => None,
                         };
                         if let Some(step) = step {
-                            self.todo.push(Effect::Journal(Box::new(step)));
+                            self.todo.push(Planned::Effect(Effect::Journal(Box::new(step))));
                         }
                     }
                     self.signals.push_back(signal);
+                    continue;
                 }
+            };
+            if self.journal
+                && let Some(step) = journal_form(&planned)
+            {
+                self.todo.push(Planned::Effect(Effect::Journal(Box::new(step))));
             }
+            self.todo.push(planned);
         }
-    }
-
-    fn journal_effect(&mut self, effect: &Effect) {
-        let step = match effect {
-            // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
-            Effect::Emit(_) => return,
-            Effect::Arm(t, at) => Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }),
-            Effect::Cancel(t) => Step::Core(CoreStep::TimerCancelled((*t).into())),
-            Effect::Provider(call) => Step::Input(InputStep::ProviderCalled(*call)),
-            Effect::Detector(call) => Step::Input(InputStep::DetectorCalled(*call)),
-            Effect::EotPredict { req, .. } => {
-                Step::Input(InputStep::DetectorCalled(DetectorCall::RequestEot { req: *req }))
-            }
-            Effect::Audio(AudioOp::Gate { speech, op, cause, output: _ }) => {
-                let (speech, op, cause) = (*speech, *op, *cause);
-                Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause })
-            }
-            // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
-            Effect::Audio(
-                AudioOp::SetVideoInput(_)
-                | AudioOp::SetAudioInput(_)
-                | AudioOp::SetAudioOutput { .. }
-                | AudioOp::SetTranscriptionOutput { .. }
-                | AudioOp::SetOutputEnabled { .. },
-            ) => return,
-            Effect::Journal(_)
-            | Effect::Answer(..)
-            | Effect::Host(_)
-            | Effect::ChatContext(_)
-            | Effect::StorageCommit { .. }
-            | Effect::StorageAbort(_)
-            | Effect::Outputs(_)
-            | Effect::Tap(_)
-            | Effect::LaunchHold(_)
-            | Effect::SessionView(_)
-            | Effect::Draining
-            | Effect::Closing
-            | Effect::SttConversationItem { .. }
-            | Effect::SpeechStart { .. }
-            | Effect::PushKeyterms { .. }
-            | Effect::RequestKeyterms { .. }
-            | Effect::CancelKeyterms(_)
-            | Effect::AttachRecorder { .. }
-            | Effect::DetachRecorder(_)
-            | Effect::FlushRecorder(_)
-            | Effect::RealtimePlayer { .. }
-            | Effect::CloseRealtimePlayer(_)
-            | Effect::CloseRealtimePlayers
-            | Effect::CancelSpeech(_)
-            | Effect::FlushStream(_)
-            | Effect::InterruptionSignal { .. } => return,
-            // Journalled through the data plane's reports.
-            Effect::Forwarder(_) | Effect::ActivateLeg { .. } | Effect::DiscardLeg(_) => return,
-            Effect::Realtime { command: cmd, .. } => Step::Realtime(RealtimeStep::Sent {
-                kind: cmd.kind(),
-                req_id: cmd.req_id().map(str::to_owned),
-            }),
-            Effect::CancelTool { call_id, .. } => {
-                Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
-            }
-        };
-        self.todo.push(Effect::Journal(Box::new(step.into())));
     }
 
     /// Record a driver decision, after the effects decided before it.
     pub fn trace(&mut self, step: impl Into<Step>) {
         self.absorb();
         if self.journal {
-            self.todo.push(Effect::Journal(Box::new(step.into())));
+            self.todo.push(Planned::Effect(Effect::Journal(Box::new(step.into()))));
         }
     }
 
-    pub fn take(&mut self) -> Vec<Effect> {
+    pub(crate) fn take(&mut self) -> Vec<Planned> {
         self.absorb();
         std::mem::take(&mut self.todo)
     }
 
-    /// Read the to-do list without draining it.
-    pub fn peek(&mut self) -> &[Effect] {
-        self.absorb();
-        &self.todo
-    }
-
-    /// The timers a pending `Arm` or `Cancel` of this cycle touches, in order. Timer effects run
+    /// The timers a pending `Arm` or `Cancel` of this cycle touches, in order. Timer ops settle
     /// after the loop's timer pass, so without this a deadline cancelled by an earlier fire in the
     /// same instant would still be popped (`Driver::on_timers`).
-    pub fn timers_touched(&mut self) -> Vec<crate::agent_session::effects::Timer> {
+    pub fn timers_touched(&mut self) -> Vec<Timer> {
         self.absorb();
         self.todo
             .iter()
-            .filter_map(|e| match e {
-                Effect::Arm(t, _) | Effect::Cancel(t) => Some(*t),
-                Effect::Emit(_)
-                | Effect::Provider(_)
-                | Effect::Detector(_)
-                | Effect::EotPredict { .. }
-                | Effect::Audio(_)
-                | Effect::Journal(_)
-                | Effect::Answer(..)
-                | Effect::Host(_)
-                | Effect::ChatContext(_)
-                | Effect::StorageCommit { .. }
-                | Effect::StorageAbort(_)
-                | Effect::Outputs(_)
-                | Effect::Tap(_)
-                | Effect::LaunchHold(_)
-                | Effect::SessionView(_)
-                | Effect::Draining
-                | Effect::Closing
-                | Effect::SttConversationItem { .. }
-                | Effect::SpeechStart { .. }
-                | Effect::Realtime { .. }
-                | Effect::Forwarder(_)
-                | Effect::PushKeyterms { .. }
-                | Effect::RequestKeyterms { .. }
-                | Effect::AttachRecorder { .. }
-                | Effect::DetachRecorder(_)
-                | Effect::RealtimePlayer { .. }
-                | Effect::CloseRealtimePlayer(_)
-                | Effect::CloseRealtimePlayers
-                | Effect::CancelSpeech(_)
-                | Effect::FlushStream(_)
-                | Effect::InterruptionSignal { .. }
-                | Effect::FlushRecorder(_)
-                | Effect::CancelKeyterms(_)
-                | Effect::ActivateLeg { .. }
-                | Effect::DiscardLeg(_)
-                | Effect::CancelTool { .. } => None,
+            .filter_map(|planned| match planned {
+                Planned::Op(StepOp::Arm(t, _) | StepOp::Cancel(t)) => Some(*t),
+                Planned::Op(StepOp::FlushInput(_) | StepOp::Interruption(_))
+                | Planned::Effect(_) => None,
             })
             .collect()
     }
@@ -228,24 +129,144 @@ impl Out {
     /// Whether this cycle's last `Arm` or `Cancel` of `timer` arms it; `None` when it touches none.
     pub fn arms(&mut self, timer: Timer) -> Option<bool> {
         self.absorb();
-        self.todo.iter().rev().find_map(|e| match e {
-            Effect::Arm(t, _) if *t == timer => Some(true),
-            Effect::Cancel(t) if *t == timer => Some(false),
+        self.todo.iter().rev().find_map(|planned| match planned {
+            Planned::Op(StepOp::Arm(t, _)) if *t == timer => Some(true),
+            Planned::Op(StepOp::Cancel(t)) if *t == timer => Some(false),
             _ => None,
         })
     }
+
+    /// Whether this cycle cancels `timer` anywhere.
+    pub(crate) fn cancels(&mut self, timer: Timer) -> bool {
+        self.absorb();
+        self.todo
+            .iter()
+            .any(|planned| matches!(planned, Planned::Op(StepOp::Cancel(t)) if *t == timer))
+    }
 }
 
-/// One ordered list, not per-kind fields: order within and across kinds is inherited from the
-/// reference, where these ran inline in exactly this order.
+/// The step the journal records for what a machine decided, at the instant it decided it; `None`
+/// for what is journalled elsewhere.
+fn journal_form(planned: &Planned) -> Option<Step> {
+    let effect = match planned {
+        Planned::Op(StepOp::Arm(t, at)) => {
+            return Some(Step::Core(CoreStep::TimerArmed { timer: (*t).into(), at: *at }));
+        }
+        Planned::Op(StepOp::Cancel(t)) => {
+            return Some(Step::Core(CoreStep::TimerCancelled((*t).into())));
+        }
+        Planned::Op(StepOp::FlushInput(StreamKind::Stt)) => {
+            return Some(Step::Input(InputStep::ProviderCalled(ProviderCall::FlushStt)));
+        }
+        Planned::Op(StepOp::FlushInput(StreamKind::Vad)) => {
+            return Some(Step::Input(InputStep::ProviderCalled(ProviderCall::FlushVad)));
+        }
+        Planned::Op(StepOp::Interruption(signal)) => {
+            return Some(Step::Input(InputStep::DetectorCalled(DetectorCall::Signal(*signal))));
+        }
+        Planned::Effect(effect) => effect,
+    };
+    let step = match effect {
+        // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
+        Effect::Emit(_) => return None,
+        Effect::SttStreamOpen { open, stt } => {
+            ProviderCall::OpenLeg { leg: StreamKind::Stt, open: *open, resource: *stt }.into()
+        }
+        Effect::VadStreamOpen { open, vad } => {
+            ProviderCall::OpenLeg { leg: StreamKind::Vad, open: *open, resource: *vad }.into()
+        }
+        Effect::ProviderPrewarm(id) => ProviderCall::Prewarm(*id).into(),
+        Effect::ProviderRelease(id) => ProviderCall::Release(*id).into(),
+        Effect::RealtimeClose(id) => ProviderCall::CloseRealtime(*id).into(),
+        Effect::EotPredict { req, .. } => DetectorCall::RequestEot { req: *req }.into(),
+        Effect::EotCancel { req, timed_out } => {
+            DetectorCall::CancelEot { req: *req, timed_out: *timed_out }.into()
+        }
+        Effect::EotFlush(reason) => DetectorCall::Flush(*reason).into(),
+        Effect::EotClose => DetectorCall::Close.into(),
+        Effect::Audio(AudioOp::Gate { speech, op, cause, output: _ }) => {
+            let (speech, op, cause) = (*speech, *op, *cause);
+            Step::Interrupt(InterruptStep::PlayoutGate { speech, op, cause })
+        }
+        // The source swap's own step (`AudioInputSet`, `VideoInputSet`) is the handler's.
+        Effect::Audio(
+            AudioOp::SetVideoInput(_)
+            | AudioOp::SetAudioInput(_)
+            | AudioOp::SetAudioOutput { .. }
+            | AudioOp::SetTranscriptionOutput { .. }
+            | AudioOp::SetOutputEnabled { .. },
+        ) => return None,
+        Effect::Journal(_)
+        | Effect::Answer(..)
+        | Effect::Host(_)
+        | Effect::ChatContext(_)
+        | Effect::StorageCommit { .. }
+        | Effect::StorageAbort(_)
+        | Effect::Outputs(_)
+        | Effect::Tap(_)
+        | Effect::LaunchHold(_)
+        | Effect::SessionView(_)
+        | Effect::Draining
+        | Effect::Closing
+        | Effect::SttConversationItem { .. }
+        | Effect::SpeechStart { .. }
+        | Effect::PushKeyterms { .. }
+        | Effect::RequestKeyterms { .. }
+        | Effect::CancelKeyterms(_)
+        | Effect::AttachRecorder { .. }
+        | Effect::DetachRecorder(_)
+        | Effect::FlushRecorder(_)
+        | Effect::RealtimePlayer { .. }
+        | Effect::CloseRealtimePlayer(_)
+        | Effect::CloseRealtimePlayers
+        | Effect::CancelSpeech(_)
+        | Effect::FlushStream(_)
+        | Effect::InterruptionSignal { .. } => return None,
+        // Journalled through the data plane's reports.
+        Effect::Forwarder(_) | Effect::ActivateLeg { .. } | Effect::DiscardLeg(_) => return None,
+        Effect::Realtime { command: cmd, .. } => Step::Realtime(RealtimeStep::Sent {
+            kind: cmd.kind(),
+            req_id: cmd.req_id().map(str::to_owned),
+        }),
+        Effect::CancelTool { call_id, .. } => {
+            Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
+        }
+    };
+    Some(step)
+}
+
+impl From<ProviderCall> for Step {
+    fn from(call: ProviderCall) -> Self {
+        Step::Input(InputStep::ProviderCalled(call))
+    }
+}
+
+impl From<DetectorCall> for Step {
+    fn from(call: DetectorCall) -> Self {
+        Step::Input(InputStep::DetectorCalled(call))
+    }
+}
+
+/// What a step asks the runtime to do, in one ordered list, not per-kind fields: order within and
+/// across kinds is inherited from the reference, where these ran inline in exactly this order.
+/// What the step settles itself ([`StepOp`], [`Signal`]) never appears here.
 #[derive(Debug)]
 pub enum Effect {
-    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
-    Arm(Timer, Ts),
-    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
-    Cancel(Timer),
-    /// Buffered because reaching it needs `&mut` on the driver.
-    Provider(ProviderCall),
+    /// Comes back as `Input::StreamOpened{open}`: the loop never awaits `stream()`.
+    SttStreamOpen {
+        open: u64,
+        stt: ResourceId,
+    },
+    VadStreamOpen {
+        open: u64,
+        vad: ResourceId,
+    },
+    /// `prewarm()`: open the provider's connection pool early.
+    ProviderPrewarm(ResourceId),
+    /// The core holds the provider no more.
+    ProviderRelease(ResourceId),
+    /// The realtime session's `aclose()`, off the loop; comes back as `RealtimeWake::Closed`.
+    RealtimeClose(ResourceId),
     Emit(SessionEvent),
     Journal(Box<Step>),
     Answer(RequestId, Answer),
@@ -284,11 +305,20 @@ pub enum Effect {
         signal: InterruptionSignal,
     },
     Audio(AudioOp),
-    Detector(DetectorCall),
+    /// The answer carries `req` back.
     EotPredict {
         req: ReqId,
         timeout: Option<std::time::Duration>,
     },
+    /// `cancel_inference(timed_out=..)`: `true` only from the prediction timeout.
+    EotCancel {
+        req: ReqId,
+        timed_out: bool,
+    },
+    /// `AudioRecognition._clear_user_turn`, `._bounce_eou_task`.
+    EotFlush(FlushReason),
+    /// A prediction still in flight answers a turn nobody will decide.
+    EotClose,
     RealtimePlayer {
         speech: SpeechId,
         event: Box<lk_agents_abi::llm::realtime::Event>,
@@ -327,6 +357,27 @@ pub enum Effect {
     },
 }
 
+/// What the step settles itself before it returns: the runtime never sees these.
+#[derive(Debug)]
+pub(crate) enum StepOp {
+    /// Arming an armed timer *replaces* it ([`TimerSet`](lk_agents_abi::TimerSet)).
+    Arm(Timer, Ts),
+    /// Idempotent: cancelling an unarmed timer is a no-op, so cleanup paths cancel unconditionally.
+    Cancel(Timer),
+    /// Flush the open stream of that leg, when one is open.
+    FlushInput(StreamKind),
+    /// To the interruption detector (`_interruption_ch`), with the overlap open once the
+    /// transition that raised it returned.
+    Interruption(InterruptionSignal),
+}
+
+/// One entry of a step's to-do list, in the order decided.
+#[derive(Debug)]
+pub(crate) enum Planned {
+    Effect(Effect),
+    Op(StepOp),
+}
+
 #[derive(Debug, Default)]
 #[must_use = "effects a transition asked for must reach the driver's out"]
 pub struct Effects {
@@ -336,6 +387,7 @@ pub struct Effects {
 #[derive(Debug)]
 pub(crate) enum Transition {
     Effect(Effect),
+    Op(StepOp),
     Signal(Signal),
 }
 
@@ -358,11 +410,16 @@ impl Effects {
     }
 
     pub fn arm(&mut self, timer: Timer, at: Ts) {
-        self.push(Effect::Arm(timer, at));
+        self.transitions.push(Transition::Op(StepOp::Arm(timer, at)));
     }
 
     pub fn cancel(&mut self, timer: Timer) {
-        self.push(Effect::Cancel(timer));
+        self.transitions.push(Transition::Op(StepOp::Cancel(timer)));
+    }
+
+    /// The open STT or VAD stream flushed (`flush()`), when one is open.
+    pub fn flush_input(&mut self, leg: StreamKind) {
+        self.transitions.push(Transition::Op(StepOp::FlushInput(leg)));
     }
 
     pub fn emit(&mut self, ev: SessionEvent) {
@@ -374,11 +431,11 @@ impl Effects {
     }
 
     pub fn cancel_eot(&mut self, req: ReqId, timed_out: bool) {
-        self.push(Effect::Detector(DetectorCall::CancelEot { req, timed_out }));
+        self.push(Effect::EotCancel { req, timed_out });
     }
 
     pub fn signal(&mut self, signal: InterruptionSignal) {
-        self.push(Effect::Detector(DetectorCall::Signal(signal)));
+        self.transitions.push(Transition::Op(StepOp::Interruption(signal)));
     }
 
     pub fn decide(&mut self, decision: Decision) {
@@ -386,12 +443,12 @@ impl Effects {
     }
 
     pub fn flush_turn_detector(&mut self, reason: FlushReason) {
-        self.push(Effect::Detector(DetectorCall::Flush(reason)));
+        self.push(Effect::EotFlush(reason));
     }
 
     /// The close's edge and its `CloseLegs` phase.
     pub fn close_turn_detector(&mut self) {
-        self.push(Effect::Detector(DetectorCall::Close));
+        self.push(Effect::EotClose);
     }
 }
 
@@ -443,6 +500,7 @@ pub enum Timer {
     ConsecutiveSpeechDelay,
 }
 
+/// The journal's record of a call on a provider (`InputStep::ProviderCalled`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderCall {
     FlushVad,
@@ -476,6 +534,7 @@ impl StreamKind {
     }
 }
 
+/// The journal's record of a call on a detector (`InputStep::DetectorCalled`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectorCall {
     /// `req` is the id the answer carries back.
@@ -598,29 +657,28 @@ impl Driver {
         let mut effects = Vec::new();
         loop {
             effects.append(&mut self.outbox);
-            for effect in out.take() {
-                match effect {
-                    Effect::Arm(timer, at) => {
+            for planned in out.take() {
+                match planned {
+                    Planned::Effect(effect) => effects.push(effect),
+                    Planned::Op(StepOp::Arm(timer, at)) => {
                         self.timers.arm(timer, at);
                     }
-                    Effect::Cancel(timer) => {
+                    Planned::Op(StepOp::Cancel(timer)) => {
                         self.timers.cancel(timer);
                     }
-                    Effect::Provider(call @ (ProviderCall::FlushStt | ProviderCall::FlushVad)) => {
-                        let channel = if matches!(call, ProviderCall::FlushStt) {
-                            crate::audio::AudioChannel::Stt
-                        } else {
-                            crate::audio::AudioChannel::Vad
+                    Planned::Op(StepOp::FlushInput(leg)) => {
+                        let channel = match leg {
+                            StreamKind::Stt => crate::audio::AudioChannel::Stt,
+                            StreamKind::Vad => crate::audio::AudioChannel::Vad,
                         };
                         if let Some(&sink) = self.input.sinks.get(&channel) {
                             effects.push(Effect::FlushStream(sink));
                         }
                     }
-                    Effect::Detector(DetectorCall::Signal(signal)) => {
+                    Planned::Op(StepOp::Interruption(signal)) => {
                         let overlap = self.activity.audio_recognition.open_overlap();
                         effects.push(Effect::InterruptionSignal { overlap, signal });
                     }
-                    effect => effects.push(effect),
                 }
             }
             if let Some(signal) = out.signals.pop_front() {

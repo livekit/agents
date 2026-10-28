@@ -1,7 +1,7 @@
 //! The activity's IO: [`AgentInput`], the STT and VAD legs (reopened by a handoff or
 //! `update_models`), audio and video input, and output enablement.
 
-use crate::agent_session::effects::{AudioOp, Effect, Out, ProviderCall, StreamKind};
+use crate::agent_session::effects::{AudioOp, Effect, Out, StreamKind};
 use crate::agent_session::{Driver, IoKind};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
 use crate::data_plane::ForwarderCommand;
@@ -168,7 +168,10 @@ impl Driver {
     ) -> u64 {
         self.input.next_open += 1;
         let open = self.input.next_open;
-        out.machine().push(Effect::Provider(ProviderCall::OpenLeg { leg, open, resource }));
+        out.machine().push(match leg {
+            StreamKind::Stt => Effect::SttStreamOpen { open, stt: resource },
+            StreamKind::Vad => Effect::VadStreamOpen { open, vad: resource },
+        });
         open
     }
 
@@ -202,7 +205,7 @@ impl Driver {
                 let channel = match leg {
                     StreamKind::Stt => {
                         if let Some(stt) = &self.session.stt {
-                            out.machine().push(Effect::Provider(ProviderCall::Prewarm(stt.id)));
+                            out.machine().push(Effect::ProviderPrewarm(stt.id));
                         }
                         self.input.stt_provider = None;
                         self.keyterms_on_stt_swap(now, self.input.stt_open_same, out);

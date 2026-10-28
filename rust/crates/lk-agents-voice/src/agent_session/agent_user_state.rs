@@ -195,13 +195,13 @@ impl AgentUserState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_session::effects::Effect;
+    use crate::agent_session::effects::StepOp;
 
     fn armed(eff: &Effects) -> bool {
         eff.transitions.iter().any(|e| {
             matches!(
                 e,
-                crate::agent_session::effects::Transition::Effect(Effect::Arm(Timer::UserAway, _))
+                crate::agent_session::effects::Transition::Op(StepOp::Arm(Timer::UserAway, _))
             )
         })
     }
@@ -217,7 +217,7 @@ mod tests {
         let eff = s.on_link(t, false, false);
         assert!(eff.transitions.iter().any(|e| matches!(
             e,
-            crate::agent_session::effects::Transition::Effect(Effect::Cancel(Timer::UserAway))
+            crate::agent_session::effects::Transition::Op(StepOp::Cancel(Timer::UserAway))
         )));
         assert!(!armed(&s.reconcile_away_timer(t, false)), "re-armed with nobody linked");
         assert!(armed(&s.on_link(t, true, false)), "a link restarts the window");

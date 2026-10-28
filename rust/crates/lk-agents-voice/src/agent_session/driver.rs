@@ -454,13 +454,12 @@ impl Driver {
             }
         }
         // Only the refusals are sent: nothing else takes effect once the loop stopped.
-        for effect in out.take() {
-            if matches!(
-                effect,
-                crate::agent_session::effects::Effect::Answer(..)
-                    | crate::agent_session::effects::Effect::DiscardLeg(_)
-                    | crate::agent_session::effects::Effect::Journal(_)
-            ) {
+        for planned in out.take() {
+            use crate::agent_session::effects::{Effect, Planned};
+            if let Planned::Effect(
+                effect @ (Effect::Answer(..) | Effect::DiscardLeg(_) | Effect::Journal(_)),
+            ) = planned
+            {
                 self.outbox.push(effect);
             }
         }

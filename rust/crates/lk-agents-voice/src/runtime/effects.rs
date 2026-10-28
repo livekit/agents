@@ -55,9 +55,7 @@ impl Runtime {
     #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     fn perform_voice_effect(&mut self, effect: Effect) {
-        use crate::agent_session::effects::{
-            AudioOp, DetectorCall as D, Effect as E, GateOp, ProviderCall as P,
-        };
+        use crate::agent_session::effects::{AudioOp, Effect as E, GateOp};
         // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
             E::RealtimePlayer { speech, event } => {
@@ -266,7 +264,7 @@ impl Runtime {
                 }
             }
             // A session without a turn detector asks for no flush.
-            E::Detector(D::Flush(reason)) => {
+            E::EotFlush(reason) => {
                 if let Some(d) = self.eot.as_ref() {
                     d.flush(reason.as_str());
                 }
@@ -286,7 +284,7 @@ impl Runtime {
             }
             // `_generate_reply` is the one `timed_out=True` site. A session without a detector
             // asks for none.
-            E::Detector(D::CancelEot { req: _, timed_out }) => {
+            E::EotCancel { req: _, timed_out } => {
                 if let Some(d) = self.eot.as_ref() {
                     d.cancel(timed_out);
                 }
@@ -307,53 +305,19 @@ impl Runtime {
                     }
                 }
             }
-            // Journal-only: the learn is the machine's. The open runs off the loop (the provider
-            // awaits a connection); the stream comes back as `Input::StreamOpened`.
-            E::Provider(P::OpenLeg { leg, open, resource }) => {
-                enum Pending {
-                    Stt(Arc<dyn lk_agents_abi::Stt>),
-                    Vad(Arc<dyn lk_agents_abi::Vad>),
-                }
-                let resources = &self.shared.resources;
-                let pending = match leg {
-                    StreamKind::Stt => resources.stt(resource).map(Pending::Stt),
-                    StreamKind::Vad => resources.vad(resource).map(Pending::Vad),
-                };
-                let Some(pending) = pending else {
-                    let error = ProviderError::Local(
-                        ApiError::new("provider resource is no longer available")
-                            .with_retryable(false),
-                    );
-                    let _ =
-                        self.reports.send_opened(StreamOpened { open, leg, outcome: Err(error) });
-                    return;
-                };
-                let tx = self.reports.clone();
-                let time = self.shared.time.clone();
-                self.shared.spawner.spawn_unboxed(async move {
-                    let outcome = match pending {
-                        Pending::Stt(stt) => match stt.stream(None, None).await {
-                            Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
-                            Err(e) => Err(e),
-                            Ok(None) => Err(ProviderError::Local(ApiError::new(
-                                "the new agent's STT does not stream",
-                            ))),
-                        },
-                        Pending::Vad(vad) => {
-                            vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
-                        }
-                    };
-                    if let Err(StreamOpened { outcome: Ok(stream), .. }) =
-                        tx.send_opened(StreamOpened { open, leg, outcome })
-                    {
-                        let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                        stream.close(deadline).await;
-                    }
-                });
+            // The open runs off the loop (the provider awaits a connection); the stream comes back
+            // as `Input::StreamOpened`.
+            E::SttStreamOpen { open, stt } => {
+                let stt = self.shared.resources.stt(stt);
+                self.open_stream(open, StreamKind::Stt, stt.map(PendingOpen::Stt));
             }
-            E::Provider(P::Prewarm(id)) => self.shared.resources.prewarm(id),
-            E::Provider(P::Release(id)) => self.shared.resources.release(id),
-            E::Provider(P::CloseRealtime(id)) => {
+            E::VadStreamOpen { open, vad } => {
+                let vad = self.shared.resources.vad(vad);
+                self.open_stream(open, StreamKind::Vad, vad.map(PendingOpen::Vad));
+            }
+            E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
+            E::ProviderRelease(id) => self.shared.resources.release(id),
+            E::RealtimeClose(id) => {
                 let Some(session) = self.shared.resources.realtime(id) else { return };
                 let tx = self.reports.clone();
                 self.shared.spawner.spawn_unboxed(async move {
@@ -361,7 +325,7 @@ impl Runtime {
                     let _ = tx.send(RealtimeWake::Closed);
                 });
             }
-            E::Detector(D::Close) => {
+            E::EotClose => {
                 if let Some(leg) = self.eot.as_ref() {
                     leg.close();
                 }
@@ -452,16 +416,48 @@ impl Runtime {
                 }
             }
             E::CancelTool { call_id, runner } => runner.cancel(&call_id),
-            // The core's own timers, and the requests its step completes with the sink or overlap
-            // they name (`Driver::settle_step`), never leave the step.
-            E::Arm(..)
-            | E::Cancel(..)
-            | E::Provider(P::FlushStt | P::FlushVad)
-            | E::Detector(D::RequestEot { .. } | D::Signal(_)) => {
-                unreachable!("settled inside the core's step")
-            }
         }
     }
+
+    /// Opens `provider`'s stream off the loop and reports it, or that the provider is gone, as
+    /// `Input::StreamOpened`.
+    fn open_stream(&mut self, open: u64, leg: StreamKind, provider: Option<PendingOpen>) {
+        let Some(pending) = provider else {
+            let error = ProviderError::Local(
+                ApiError::new("provider resource is no longer available").with_retryable(false),
+            );
+            let _ = self.reports.send_opened(StreamOpened { open, leg, outcome: Err(error) });
+            return;
+        };
+        let tx = self.reports.clone();
+        let time = self.shared.time.clone();
+        self.shared.spawner.spawn_unboxed(async move {
+            let outcome = match pending {
+                PendingOpen::Stt(stt) => match stt.stream(None, None).await {
+                    Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
+                    Err(e) => Err(e),
+                    Ok(None) => Err(ProviderError::Local(ApiError::new(
+                        "the new agent's STT does not stream",
+                    ))),
+                },
+                PendingOpen::Vad(vad) => {
+                    vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
+                }
+            };
+            if let Err(StreamOpened { outcome: Ok(stream), .. }) =
+                tx.send_opened(StreamOpened { open, leg, outcome })
+            {
+                let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+                stream.close(deadline).await;
+            }
+        });
+    }
+}
+
+/// A provider whose stream is being opened.
+enum PendingOpen {
+    Stt(Arc<dyn lk_agents_abi::Stt>),
+    Vad(Arc<dyn lk_agents_abi::Vad>),
 }
 
 fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {

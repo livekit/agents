@@ -8,7 +8,7 @@ use super::{
     user_transcript,
 };
 use crate::agent_activity::false_interruption::TurnSettled;
-use crate::agent_session::effects::{Decision, Effect, Effects, FlushReason, ProviderCall, Timer};
+use crate::agent_session::effects::{Decision, Effects, FlushReason, StreamKind, Timer};
 use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
     UserTurnExceededEvent,
@@ -294,7 +294,7 @@ impl AudioRecognition {
         eff.append(self.reset_transcription_timeout());
 
         // "reset stt to clear the buffer from previous user turn" (a stream swap here).
-        eff.push(Effect::Provider(ProviderCall::FlushStt));
+        eff.flush_input(StreamKind::Stt);
         eff
     }
 

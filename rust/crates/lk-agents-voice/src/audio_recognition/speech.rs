@@ -7,7 +7,7 @@ use super::{
     MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES, OverlapVerdict, Phase, Prediction,
     ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
-use crate::agent_session::effects::{Decision, Effect, Effects, ProviderCall, Timer};
+use crate::agent_session::effects::{Decision, Effects, StreamKind, Timer};
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };
@@ -240,7 +240,7 @@ impl AudioRecognition {
 
         // Reset the VAD so an incorrect STT end of turn can be corrected by a VAD interruption.
         if self.cfg.vad_enabled && self.vad_speech_started {
-            eff.push(Effect::Provider(ProviderCall::FlushVad));
+            eff.flush_input(StreamKind::Vad);
         }
 
         // The STT declared the end: `_user_turn_committed = True`.

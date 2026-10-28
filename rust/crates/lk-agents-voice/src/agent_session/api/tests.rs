@@ -58,7 +58,7 @@ async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_sess
 #[tokio::test(start_paused = true)]
 async fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     use crate::agent_activity::realtime::RealtimeWake;
-    use crate::agent_session::effects::Effect;
+    use crate::agent_session::effects::{Effect, Planned};
     use lk_agents_abi::llm::realtime as rt;
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
@@ -123,7 +123,7 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
     assert!(
         !out.take().iter().any(|effect| matches!(
             effect,
-            Effect::RealtimePlayer { .. } | Effect::SpeechStart { .. }
+            Planned::Effect(Effect::RealtimePlayer { .. } | Effect::SpeechStart { .. })
         )),
         "a correction was sent through speech playback"
     );
@@ -219,7 +219,7 @@ async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
 
 #[tokio::test(start_paused = true)]
 async fn missing_provider_open_reports_correlated_failure() {
-    use crate::agent_session::effects::{Effect, ProviderCall, StreamKind};
+    use crate::agent_session::effects::{Effect, StreamKind};
     let api = unobserved(fake_room("missing-provider").1, None);
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
@@ -227,11 +227,11 @@ async fn missing_provider_open_reports_correlated_failure() {
     let (mut runtime, _) = ready.builder.start().await.unwrap();
     while runtime.queue.try_recv().is_ok() {}
     for leg in [StreamKind::Stt, StreamKind::Vad] {
-        runtime.perform_voice(vec![Effect::Provider(ProviderCall::OpenLeg {
-            leg,
-            open: 42,
-            resource: lk_agents_abi::resources::ResourceId(u64::MAX),
-        })]);
+        let gone = lk_agents_abi::resources::ResourceId(u64::MAX);
+        runtime.perform_voice(vec![match leg {
+            StreamKind::Stt => Effect::SttStreamOpen { open: 42, stt: gone },
+            StreamKind::Vad => Effect::VadStreamOpen { open: 42, vad: gone },
+        }]);
         assert!(
             matches!(
                 runtime.queue.try_recv(),

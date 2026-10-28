@@ -4,7 +4,7 @@
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Effect, Effects, Out, ProviderCall, Timer};
+use crate::agent_session::effects::{Effect, Effects, Out, Timer};
 use crate::audio::LaunchGate;
 use crate::generation::GenEvent;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
@@ -228,16 +228,16 @@ impl VoiceSession {
         tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
         out: &mut crate::agent_session::effects::Out,
     ) {
-        use crate::agent_session::effects::{Effect, ProviderCall};
+        use crate::agent_session::effects::Effect;
         if let Maybe::Given(llm) = llm {
             if let Some(l) = &llm {
-                out.machine().push(Effect::Provider(ProviderCall::Prewarm(l.id)));
+                out.machine().push(Effect::ProviderPrewarm(l.id));
             }
             self.llm = llm;
         }
         if let Maybe::Given(tts) = tts {
             if let Some(t) = &tts {
-                out.machine().push(Effect::Provider(ProviderCall::Prewarm(t.id)));
+                out.machine().push(Effect::ProviderPrewarm(t.id));
             }
             self.tts = tts;
         }
@@ -555,7 +555,7 @@ impl Driver {
     pub(crate) fn release_providers(&mut self, out: &mut Out) {
         let held = self.providers_held();
         for &id in self.session.providers.difference(&held) {
-            out.machine().push(Effect::Provider(ProviderCall::Release(id)));
+            out.machine().push(Effect::ProviderRelease(id));
         }
         self.session.providers = held;
     }
@@ -564,7 +564,7 @@ impl Driver {
     pub(crate) fn release_all_providers(&mut self) {
         self.session.providers.extend(self.providers_held());
         for id in std::mem::take(&mut self.session.providers) {
-            self.outbox.push(Effect::Provider(ProviderCall::Release(id)));
+            self.outbox.push(Effect::ProviderRelease(id));
         }
     }
 }
@@ -687,7 +687,7 @@ mod idle_tests {
 #[cfg(test)]
 mod label_tests {
     use super::*;
-    use crate::agent_session::effects::Effect;
+    use crate::agent_session::effects::StepOp;
     use crate::events::SessionEvent;
     use lk_agents_abi::Ts;
 
@@ -702,7 +702,7 @@ mod label_tests {
         eff.transitions
             .iter()
             .filter_map(|e| match e {
-                crate::agent_session::effects::Transition::Effect(Effect::Arm(
+                crate::agent_session::effects::Transition::Op(StepOp::Arm(
                     Timer::AecWarmup,
                     at,
                 )) => Some(*at),
@@ -761,9 +761,7 @@ mod label_tests {
         assert!(
             matches!(
                 eff.transitions.as_slice(),
-                [crate::agent_session::effects::Transition::Effect(Effect::Cancel(
-                    Timer::AecWarmup
-                ))]
+                [crate::agent_session::effects::Transition::Op(StepOp::Cancel(Timer::AecWarmup))]
             ),
             "{eff:?}"
         );

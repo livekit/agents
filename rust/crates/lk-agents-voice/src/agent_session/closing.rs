@@ -11,7 +11,7 @@ use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, ProviderCall, Signal, Timer};
+use crate::agent_session::effects::{Effect, Out, Signal, Timer};
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
     IdleRefused, SpeechCommand,
@@ -284,7 +284,7 @@ impl Driver {
         self.cancel_running_tools(now, out);
         out.machine().close_turn_detector();
         if let Some(rt) = rt {
-            out.machine().push(Effect::Provider(ProviderCall::CloseRealtime(rt)));
+            out.machine().push(Effect::RealtimeClose(rt));
         }
     }
 
@@ -529,64 +529,18 @@ impl Driver {
         out.machine().close_turn_detector();
         // Cancel the turn's armed timers through the cycle so each is journalled, skipping those
         // the turn machine just cancelled; the others are cancelled with what owns them.
-        {
-            let already: Vec<Timer> = out
-                .peek()
-                .iter()
-                .filter_map(|e| match e {
-                    Effect::Cancel(t) => Some(*t),
-                    Effect::Arm(..)
-                    | Effect::Provider(_)
-                    | Effect::Emit(_)
-                    | Effect::Journal(_)
-                    | Effect::Answer(..)
-                    | Effect::Host(_)
-                    | Effect::ChatContext(_)
-                    | Effect::StorageCommit { .. }
-                    | Effect::StorageAbort(_)
-                    | Effect::Outputs(_)
-                    | Effect::Tap(_)
-                    | Effect::LaunchHold(_)
-                    | Effect::SessionView(_)
-                    | Effect::Draining
-                    | Effect::Closing
-                    | Effect::SttConversationItem { .. }
-                    | Effect::SpeechStart { .. }
-                    | Effect::Realtime { .. }
-                    | Effect::Audio(_)
-                    | Effect::Detector(_)
-                    | Effect::EotPredict { .. }
-                    | Effect::Forwarder(_)
-                    | Effect::PushKeyterms { .. }
-                    | Effect::RequestKeyterms { .. }
-                    | Effect::AttachRecorder { .. }
-                    | Effect::DetachRecorder(_)
-                    | Effect::RealtimePlayer { .. }
-                    | Effect::CloseRealtimePlayer(_)
-                    | Effect::CloseRealtimePlayers
-                    | Effect::CancelSpeech(_)
-                    | Effect::FlushStream(_)
-                    | Effect::InterruptionSignal { .. }
-                    | Effect::FlushRecorder(_)
-                    | Effect::CancelKeyterms(_)
-                    | Effect::ActivateLeg { .. }
-                    | Effect::DiscardLeg(_)
-                    | Effect::CancelTool { .. } => None,
-                })
-                .collect();
-            for t in [
-                Timer::EotPredictionTimeout,
-                Timer::EndpointingDelay,
-                Timer::TranscriptionTimeout,
-                Timer::BackchannelBoundary,
-                Timer::FalseInterruption,
-                Timer::AecWarmup,
-                Timer::UserAway,
-                Timer::UserTurnDuration,
-            ] {
-                if self.timers.is_armed(t) && !already.contains(&t) {
-                    out.machine().cancel(t);
-                }
+        for t in [
+            Timer::EotPredictionTimeout,
+            Timer::EndpointingDelay,
+            Timer::TranscriptionTimeout,
+            Timer::BackchannelBoundary,
+            Timer::FalseInterruption,
+            Timer::AecWarmup,
+            Timer::UserAway,
+            Timer::UserTurnDuration,
+        ] {
+            if self.timers.is_armed(t) && !out.cancels(t) {
+                out.machine().cancel(t);
             }
         }
         // Watchdogs go with their speeches, the current speech is released, a pending preemptive
