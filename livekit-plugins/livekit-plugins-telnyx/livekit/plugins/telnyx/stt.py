@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import struct
 import weakref
 from collections.abc import Callable
@@ -14,6 +13,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 import aiohttp
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from livekit import rtc
 from livekit.agents import (
@@ -41,6 +42,15 @@ class _STTOptions:
     interim_results: bool
     base_url: str
     sample_rate: int
+
+
+class _Transcript(TypedDict, total=False):
+    transcript: str
+    is_final: bool
+    confidence: float
+
+
+_TRANSCRIPT = TypeAdapter(_Transcript)
 
 
 class STT(stt.STT):
@@ -230,7 +240,7 @@ class SpeechStream(stt.RecognizeStream):
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        data = json.loads(msg.data)
+                        data = _TRANSCRIPT.validate_json(msg.data)
                         logger.debug(
                             "Telnyx STT received: is_final=%s, has_transcript=%s",
                             data.get("is_final"),
@@ -292,7 +302,7 @@ class SpeechStream(stt.RecognizeStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             raise APIConnectionError("Failed to connect to Telnyx STT") from e
 
-    def _process_stream_event(self, data: dict) -> None:
+    def _process_stream_event(self, data: _Transcript) -> None:
         transcript = data.get("transcript", "")
         is_final = data.get("is_final", False)
 
