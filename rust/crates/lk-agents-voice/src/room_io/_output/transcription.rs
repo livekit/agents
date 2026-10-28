@@ -4,7 +4,6 @@
 use crate::room_io::{
     find_micro_track_id, is_local_proxy_participant, local_micro_track_id, publishes_on_behalf_of,
 };
-use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::tts::markup::{ExpressiveTag, expression_attribute};
 use lk_agents_abi::voice::io::Result;
@@ -144,12 +143,7 @@ impl Writer {
 
     /// Visible text: the first of a segment opens it, the rest extend (or replace) it. Blank text
     /// (a tag still held, a markup-only chunk) opens nothing.
-    fn capture(
-        &mut self,
-        visible: Visible,
-        timing: Option<&TimedString>,
-        ids: &SegmentIds,
-    ) {
+    fn capture(&mut self, visible: Visible, timing: Option<&TimedString>, ids: &SegmentIds) {
         if self.writing == Writing::Closed {
             return;
         }
@@ -537,7 +531,6 @@ impl ParticipantTranscriptionOutput {
     }
 }
 
-#[async_trait]
 impl TextOutput for ParticipantTranscriptionOutput {
     fn label(&self) -> &str {
         "RoomIO"
@@ -547,25 +540,30 @@ impl TextOutput for ParticipantTranscriptionOutput {
         self.next_in_chain.clone()
     }
 
-    async fn capture_text(&self, text: &str) -> Result<()> {
-        self.capture_timed(&TimedString::new(text)).await
+    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.capture_timed(&TimedString::new(text)).await })
     }
 
-    async fn capture_timed(&self, text: &TimedString) -> Result<()> {
-        let shown = {
-            let mut writer = self.writer.lock().unwrap();
-            let visible = writer.visible_of(&text.text);
-            let shown = visible.text.clone();
-            writer.capture(visible, Some(text), &self.ids);
-            shown
-        };
-        if let Some(next) = &self.next_in_chain
-            && !shown.is_empty()
-        {
-            // The host's sink sees the same visible text the room does.
-            next.capture_timed(&TimedString { text: shown, ..text.clone() }).await?;
-        }
-        Ok(())
+    fn capture_timed<'a>(
+        &'a self,
+        text: &'a TimedString,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let shown = {
+                let mut writer = self.writer.lock().unwrap();
+                let visible = writer.visible_of(&text.text);
+                let shown = visible.text.clone();
+                writer.capture(visible, Some(text), &self.ids);
+                shown
+            };
+            if let Some(next) = &self.next_in_chain
+                && !shown.is_empty()
+            {
+                // The host's sink sees the same visible text the room does.
+                next.capture_timed(&TimedString { text: shown, ..text.clone() }).await?;
+            }
+            Ok(())
+        })
     }
 
     fn flush(&self) {

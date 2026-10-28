@@ -7,7 +7,6 @@ use tokio::sync::watch;
 /// The sink below the synchroniser: it reports playback as the case says.
 struct Leaf(Arc<PlaybackTracker>);
 
-#[async_trait]
 impl AudioOutput for Leaf {
     fn label(&self) -> &str {
         "leaf"
@@ -21,8 +20,8 @@ impl AudioOutput for Leaf {
         AudioOutputCapabilities { pause: true }
     }
 
-    async fn capture(&self, _frame: &AudioFrame) -> Result<()> {
-        Ok(())
+    fn capture<'a>(&'a self, _frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { Ok(()) })
     }
 
     fn flush_segment(&self) {}

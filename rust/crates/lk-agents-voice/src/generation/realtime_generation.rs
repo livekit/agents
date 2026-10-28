@@ -583,7 +583,6 @@ pub(crate) struct NodeOutput<'a> {
     pub(crate) out: &'a dyn AudioOutput,
 }
 
-#[async_trait::async_trait]
 impl AudioOutput for NodeOutput<'_> {
     fn label(&self) -> &str {
         "RealtimeAudioNode"
@@ -601,9 +600,14 @@ impl AudioOutput for NodeOutput<'_> {
         self.out.sample_rate()
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> lk_agents_abi::voice::io::Result<()> {
-        self.node.push(frame).await;
-        Ok(())
+    fn capture<'a>(
+        &'a self,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
+        Box::pin(async move {
+            self.node.push(frame).await;
+            Ok(())
+        })
     }
 
     /// The tracker is `out`'s, and `AudioOutputExt::flush` on this node already moved it.

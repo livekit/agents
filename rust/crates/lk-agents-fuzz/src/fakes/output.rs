@@ -432,7 +432,6 @@ impl FakeAudioOutput {
     }
 }
 
-#[async_trait::async_trait]
 impl AudioOutput for FakeAudioOutput {
     fn label(&self) -> &str {
         "fake::audio_output"
@@ -454,30 +453,35 @@ impl AudioOutput for FakeAudioOutput {
         self.registry.record_sink(Sink::Resumed { output: self.id });
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> io::Result<()> {
-        // The first frame after a flush opens a segment, as the driver's tracker counts them;
-        // the case reports on it from here on, so it needs its identity now, not at the flush.
-        let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| {
-            match Tag::decode(i16::from_le_bytes(*s)) {
-                Tag::Generated { generation, .. } => Some(generation),
-                _ => None,
+    fn capture<'a>(
+        &'a self,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            // The first frame after a flush opens a segment, as the driver's tracker counts them;
+            // the case reports on it from here on, so it needs its identity now, not at the flush.
+            let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| {
+                match Tag::decode(i16::from_le_bytes(*s)) {
+                    Tag::Generated { generation, .. } => Some(generation),
+                    _ => None,
+                }
+            });
+            if self.playout.captured(Duration::from_secs_f64(frame.duration()), generation) {
+                let control = Control::Segment(self.playout.clone());
+                let segment = self.registry.register(Kind::Segment, Detail::None, control).nth;
+                self.playout.opened(segment);
+                self.registry.attach_segment(segment, self.id);
             }
-        });
-        if self.playout.captured(Duration::from_secs_f64(frame.duration()), generation) {
-            let control = Control::Segment(self.playout.clone());
-            let segment = self.registry.register(Kind::Segment, Detail::None, control).nth;
-            self.playout.opened(segment);
-            self.registry.attach_segment(segment, self.id);
-        }
-        let mut tags: Vec<Tag> = Vec::new();
-        for sample in frame.data.as_chunks::<2>().0 {
-            let tag = Tag::decode(i16::from_le_bytes(*sample));
-            if tags.last() != Some(&tag) {
-                tags.push(tag);
+            let mut tags: Vec<Tag> = Vec::new();
+            for sample in frame.data.as_chunks::<2>().0 {
+                let tag = Tag::decode(i16::from_le_bytes(*sample));
+                if tags.last() != Some(&tag) {
+                    tags.push(tag);
+                }
             }
-        }
-        self.registry.record_sink(Sink::Audio { output: self.id, tags });
-        Ok(())
+            self.registry.record_sink(Sink::Audio { output: self.id, tags });
+            Ok(())
+        })
     }
 
     fn flush_segment(&self) {
@@ -506,15 +510,16 @@ impl FakeTextOutput {
     }
 }
 
-#[async_trait::async_trait]
 impl TextOutput for FakeTextOutput {
     fn label(&self) -> &str {
         "fake::text_output"
     }
 
-    async fn capture_text(&self, text: &str) -> io::Result<()> {
-        self.registry.record_sink(Sink::Text { output: self.id, text: text.to_string() });
-        Ok(())
+    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
+        Box::pin(async move {
+            self.registry.record_sink(Sink::Text { output: self.id, text: text.to_string() });
+            Ok(())
+        })
     }
 
     fn flush(&self) {

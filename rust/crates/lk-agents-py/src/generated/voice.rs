@@ -899,7 +899,6 @@ impl AudioOutputProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::AudioOutput>(|obj| AudioOutputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
     fn label(&self) -> &str {
         &self.label
@@ -917,10 +916,11 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         ::std::clone::Clone::clone(&self.sample_rate)
     }
 
-    async fn capture(&self, frame: &::lk_agents_abi::AudioFrame) -> ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError> {
+    fn capture<'a>(&'a self, frame: &::lk_agents_abi::AudioFrame) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = ::std::clone::Clone::clone(frame);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
@@ -936,6 +936,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 
@@ -1036,16 +1037,16 @@ impl TextOutputProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::TextOutput>(|obj| TextOutputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
     fn label(&self) -> &str {
         &self.label
     }
 
-    async fn capture_timed(&self, text: &::lk_agents_abi::TimedString) -> ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError> {
+    fn capture_timed<'a>(&'a self, text: &::lk_agents_abi::TimedString) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = ::std::clone::Clone::clone(text);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
@@ -1062,12 +1063,14 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn capture_text(&self, text: &str) -> ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError> {
+    fn capture_text<'a>(&'a self, text: &str) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text.to_owned();
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
@@ -1083,6 +1086,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 
@@ -1149,12 +1153,12 @@ impl SessionHooksProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>(|obj| SessionHooksProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy {
-    async fn on_enter(&self, agent: &::lk_agents_abi::HostRef) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn on_enter<'a>(&'a self, agent: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
@@ -1171,12 +1175,14 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn on_exit(&self, agent: &::lk_agents_abi::HostRef) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn on_exit<'a>(&'a self, agent: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
@@ -1193,12 +1199,14 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn close_toolsets(&self, agent: Option<&::lk_agents_abi::HostRef>) {
+    fn close_toolsets<'a>(&'a self, agent: Option<&::lk_agents_abi::HostRef>) -> ::lk_agents_abi::BoxFuture<'a, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = agent.map(::std::borrow::ToOwned::to_owned);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         if let Err(e) = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?];
@@ -1206,12 +1214,14 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             }).await {
             ::lk_agents_abi::python::log::warn!("SessionHooks._core_close_toolsets failed: {e}");
         }
+        })
     }
 
-    async fn setup_tools(&self, tools: &::lk_agents_abi::HostRef) -> ::std::result::Result<::std::vec::Vec<::lk_agents_abi::ToolSpec>, ::lk_agents_abi::errors::HostError> {
+    fn setup_tools<'a>(&'a self, tools: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::std::vec::Vec<::lk_agents_abi::ToolSpec>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let tools_arg = ::std::clone::Clone::clone(tools);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(tools_arg, py)?];
@@ -1228,11 +1238,13 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ToolSpec>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn closing(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn closing(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -1249,15 +1261,17 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn on_user_turn_completed(&self, agent: &::lk_agents_abi::HostRef, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new_transcript: &str, transcript_confidence: f64) -> ::std::result::Result<(::std::option::Option<::std::string::String>, ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, bool), ::lk_agents_abi::errors::HostError> {
+    fn on_user_turn_completed<'a>(&'a self, agent: &::lk_agents_abi::HostRef, chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>, new_transcript: &str, transcript_confidence: f64) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(::std::option::Option<::std::string::String>, ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>, bool), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let chat_ctx_arg = chat_ctx;
         let new_transcript_arg = new_transcript.to_owned();
         let transcript_confidence_arg = transcript_confidence;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(chat_ctx_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(new_transcript_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript_confidence_arg, py)?];
@@ -1274,13 +1288,15 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.extract::<::std::string::String>()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::lk_agents_abi::ChatItem>().map_err(::pyo3::PyErr::from) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn on_user_turn_exceeded(&self, agent: &::lk_agents_abi::HostRef, ev: &::lk_agents_abi::voice::events::UserTurnExceededEvent) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+    fn on_user_turn_exceeded<'a>(&'a self, agent: &::lk_agents_abi::HostRef, ev: &::lk_agents_abi::voice::events::UserTurnExceededEvent) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let agent_arg = ::std::clone::Clone::clone(agent);
         let ev_arg = ::std::clone::Clone::clone(ev);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(agent_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
@@ -1297,13 +1313,15 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn function_tools_executed(&self, function_calls: ::std::vec::Vec<::lk_agents_abi::ChatItem>, function_call_outputs: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> ::std::result::Result<::std::vec::Vec<bool>, ::lk_agents_abi::errors::HostError> {
+    fn function_tools_executed(&self, function_calls: ::std::vec::Vec<::lk_agents_abi::ChatItem>, function_call_outputs: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::vec::Vec<bool>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let function_calls_arg = function_calls;
         let function_call_outputs_arg = function_call_outputs;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(function_calls_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(function_call_outputs_arg, py)?];
@@ -1320,13 +1338,15 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<bool>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn filler_source(&self, source: &::lk_agents_abi::HostRef, step: u32) -> ::std::result::Result<::lk_agents_abi::voice::session_effects::FillerReply, ::lk_agents_abi::errors::HostError> {
+    fn filler_source<'a>(&'a self, source: &::lk_agents_abi::HostRef, step: u32) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<::lk_agents_abi::voice::session_effects::FillerReply, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let source_arg = ::std::clone::Clone::clone(source);
         let step_arg = step;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = crate::host::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(source_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(step_arg, py)?];
@@ -1342,6 +1362,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let o = out.bind(py);
             let out = (o.extract::<::lk_agents_abi::voice::session_effects::FillerReply>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 

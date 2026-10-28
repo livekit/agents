@@ -257,7 +257,6 @@ impl AudioInput for ConsoleIo {
     }
 }
 
-#[async_trait]
 impl AudioOutput for ConsoleIo {
     fn label(&self) -> &str {
         "Console"
@@ -275,25 +274,30 @@ impl AudioOutput for ConsoleIo {
         Some(WIRE_SAMPLE_RATE)
     }
 
-    async fn capture(&self, f: &AudioFrame) -> Result<(), IoError> {
-        let now = lk_agents_abi::unix_now();
-        let first = {
-            let mut playback = self.playback.lock().unwrap();
-            playback.pushed += Duration::from_secs_f64(f.duration());
-            let first = playback.started.is_none();
-            playback.started.get_or_insert(now);
-            first
-        };
-        if first {
-            self.tracker.report_started(now);
-        }
-        self.send(Message::AudioOutput(console_io::AudioFrame {
-            data: f.data.to_vec(),
-            sample_rate: f.sample_rate,
-            num_channels: u32::from(f.num_channels),
-            samples_per_channel: f.samples_per_channel,
-        }));
-        Ok(())
+    fn capture<'a>(
+        &'a self,
+        f: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
+        Box::pin(async move {
+            let now = lk_agents_abi::unix_now();
+            let first = {
+                let mut playback = self.playback.lock().unwrap();
+                playback.pushed += Duration::from_secs_f64(f.duration());
+                let first = playback.started.is_none();
+                playback.started.get_or_insert(now);
+                first
+            };
+            if first {
+                self.tracker.report_started(now);
+            }
+            self.send(Message::AudioOutput(console_io::AudioFrame {
+                data: f.data.to_vec(),
+                sample_rate: f.sample_rate,
+                num_channels: u32::from(f.num_channels),
+                samples_per_channel: f.samples_per_channel,
+            }));
+            Ok(())
+        })
     }
 
     fn flush_segment(&self) {

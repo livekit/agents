@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{
@@ -407,7 +406,6 @@ impl DataStreamAudioOutput {
     }
 }
 
-#[async_trait]
 impl AudioOutput for DataStreamAudioOutput {
     fn label(&self) -> &str {
         "DataStreamIO"
@@ -426,29 +424,31 @@ impl AudioOutput for DataStreamAudioOutput {
     }
 
     /// `capture_frame`: wait for the avatar, open the segment's stream on its first frame.
-    async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        let mut started = self.inner.started.subscribe();
-        let ready = started.wait_for(Option::is_some).await.map(|s| s.clone()).ok().flatten();
-        match ready {
-            Some(Ok(())) => {}
-            Some(Err(e)) => return Err(IoError::Rtc(e)),
-            None => return Err(IoError::Rtc("the avatar output closed".into())),
-        }
-        let segment = {
-            let mut state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
-            if state.closed {
-                return Err(IoError::Rtc("the avatar output closed".into()));
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut started = self.inner.started.subscribe();
+            let ready = started.wait_for(Option::is_some).await.map(|s| s.clone()).ok().flatten();
+            match ready {
+                Some(Ok(())) => {}
+                Some(Err(e)) => return Err(IoError::Rtc(e)),
+                None => return Err(IoError::Rtc("the avatar output closed".into())),
             }
-            Arc::clone(state.active.get_or_insert_with(Default::default))
-        };
-        // The task retains the writer even if the capture caller is interrupted.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let inner = Arc::clone(&self.inner);
-        let frame = frame.clone();
-        self.inner.tasks.try_spawn(&*self.inner.spawner, "avatar_audio_write", async move {
-            let _ = tx.send(inner.write(&segment, &frame).await);
-        });
-        rx.await.unwrap_or_else(|_| Err(IoError::Rtc("the avatar output closed".into())))
+            let segment = {
+                let mut state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
+                if state.closed {
+                    return Err(IoError::Rtc("the avatar output closed".into()));
+                }
+                Arc::clone(state.active.get_or_insert_with(Default::default))
+            };
+            // The task retains the writer even if the capture caller is interrupted.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let inner = Arc::clone(&self.inner);
+            let frame = frame.clone();
+            self.inner.tasks.try_spawn(&*self.inner.spawner, "avatar_audio_write", async move {
+                let _ = tx.send(inner.write(&segment, &frame).await);
+            });
+            rx.await.unwrap_or_else(|_| Err(IoError::Rtc("the avatar output closed".into())))
+        })
     }
 
     /// `flush`: close the segment's stream, its trailer ending the segment on the avatar.

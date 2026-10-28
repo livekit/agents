@@ -4,7 +4,6 @@
 
 use crate::voice::rtc::TrackSid;
 use crate::{AudioFrame, TimedString, Ts, WallAnchor};
-use async_trait::async_trait;
 use std::collections::BTreeMap;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -499,7 +498,6 @@ pub trait VideoInput: Send + Sync {
     host = "livekit.agents.voice.io.AudioOutput",
     view = "livekit.agents._core_view._AudioOutput"
 ))]
-#[async_trait]
 pub trait AudioOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
@@ -524,7 +522,7 @@ pub trait AudioOutput: Send + Sync {
     /// Push one frame downstream. Callers use [`AudioOutputExt::capture_frame`]. Awaited on a host
     /// sink, where backpressure lives.
     #[host(await, name = "_core_capture")]
-    async fn capture(&self, frame: &AudioFrame) -> Result<()>;
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, Result<()>>;
 
     /// End the current segment. **Not the caller's entry point** -- use [`AudioOutputExt::flush`].
     #[host(notify, name = "_core_flush_segment")]
@@ -601,7 +599,6 @@ impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
     host = "livekit.agents.voice.io.TextOutput",
     view = "livekit.agents._core_view._TextOutput"
 ))]
-#[async_trait]
 pub trait TextOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
@@ -613,13 +610,13 @@ pub trait TextOutput: Send + Sync {
     /// Capture a delta with word timings (Python's `TimedString` is a `str`; here it's a separate
     /// method whose default drops the timings).
     #[host(await, name = "_core_capture_timed")]
-    async fn capture_timed(&self, text: &TimedString) -> Result<()> {
-        self.capture_text(&text.text).await
+    fn capture_timed<'a>(&'a self, text: &'a TimedString) -> crate::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.capture_text(&text.text).await })
     }
 
     /// Capture a text delta. Must not drop: a lost token mangles the transcript and the speech.
     #[host(await, name = "_core_capture_text")]
-    async fn capture_text(&self, text: &str) -> Result<()>;
+    fn capture_text<'a>(&'a self, text: &'a str) -> crate::BoxFuture<'a, Result<()>>;
 
     /// The generation is complete; close the segment.
     #[host(notify, name = "_core_flush")]

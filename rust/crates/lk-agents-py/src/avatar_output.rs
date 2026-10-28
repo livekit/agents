@@ -61,7 +61,6 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
     }
 }
 
-#[async_trait::async_trait]
 impl AudioOutput for DataStreamAudioOutput {
     fn label(&self) -> &str {
         self.0.label()
@@ -75,8 +74,8 @@ impl AudioOutput for DataStreamAudioOutput {
     fn sample_rate(&self) -> Option<u32> {
         self.0.sample_rate()
     }
-    async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        self.0.capture(frame).await
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.0.capture(frame).await })
     }
     fn flush_segment(&self) {
         self.0.flush_segment();

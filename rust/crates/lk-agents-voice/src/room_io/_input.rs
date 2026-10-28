@@ -1,7 +1,6 @@
 use crate::room_io::_pre_connect_audio::PreConnectAudioHandler;
 use crate::room_io::decide_track;
 use crate::room_io::{AUDIO_INPUT_SOURCES, AudioInputConfig};
-use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::voice::io::VideoInput;
@@ -682,6 +681,7 @@ impl AudioInput for ParticipantAudioInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use lk_agents_abi::TokioSpawner;
     use lk_agents_rtc::FakeRtc;
 

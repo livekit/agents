@@ -912,58 +912,73 @@ impl ScriptedHooks {
     }
 }
 
-#[async_trait::async_trait]
 impl SessionHooks for ScriptedHooks {
-    async fn on_enter(&self, _: &lk_agents_abi::HostRef) -> Result<(), HostError> {
-        self.result(())
+    fn on_enter<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move { self.result(()) })
     }
-    async fn on_exit(&self, _: &lk_agents_abi::HostRef) -> Result<(), HostError> {
-        self.result(())
+    fn on_exit<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move { self.result(()) })
     }
-    async fn close_toolsets(&self, _: Option<&lk_agents_abi::HostRef>) {
-        *self.toolsets_closed.lock().unwrap() += 1;
+    fn close_toolsets<'a>(
+        &'a self,
+        _: Option<&'a lk_agents_abi::HostRef>,
+    ) -> lk_agents_abi::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            *self.toolsets_closed.lock().unwrap() += 1;
+        })
     }
-    async fn setup_tools(
-        &self,
-        _: &lk_agents_abi::HostRef,
-    ) -> Result<Vec<lk_agents_abi::ToolSpec>, HostError> {
-        self.result(Vec::new())
+    fn setup_tools<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<lk_agents_abi::ToolSpec>, HostError>> {
+        Box::pin(async move { self.result(Vec::new()) })
     }
-    async fn closing(&self) -> Result<(), HostError> {
-        self.result(())
+    fn closing(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move { self.result(()) })
     }
-    async fn on_user_turn_completed(
-        &self,
-        _: &lk_agents_abi::HostRef,
+    fn on_user_turn_completed<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
         _: Vec<lk_agents_abi::ChatItem>,
-        _: &str,
+        _: &'a str,
         _: f64,
-    ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError> {
-        self.result((self.user_text.clone(), Some(Vec::new()), self.stop))
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>,
+    > {
+        Box::pin(async move { self.result((self.user_text.clone(), Some(Vec::new()), self.stop)) })
     }
-    async fn on_user_turn_exceeded(
-        &self,
-        _: &lk_agents_abi::HostRef,
-        _: &lk_agents_abi::voice::events::UserTurnExceededEvent,
-    ) -> Result<(), HostError> {
-        self.result(())
+    fn on_user_turn_exceeded<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
+        _: &'a lk_agents_abi::voice::events::UserTurnExceededEvent,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move { self.result(()) })
     }
-    async fn function_tools_executed(
+    fn function_tools_executed(
         &self,
         _: Vec<lk_agents_abi::ChatItem>,
         outputs: Vec<lk_agents_abi::ChatItem>,
-    ) -> Result<Vec<bool>, HostError> {
-        self.result(vec![false; outputs.len()])
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<bool>, HostError>> {
+        Box::pin(async move { self.result(vec![false; outputs.len()]) })
     }
-    async fn filler_source(
-        &self,
-        _: &lk_agents_abi::HostRef,
+    fn filler_source<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::HostRef,
         step: u32,
-    ) -> Result<FillerReply, HostError> {
-        self.result(match step {
-            0 => FillerReply::Text("one moment".into()),
-            1 => FillerReply::Spoke,
-            _ => FillerReply::Declined,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<FillerReply, HostError>> {
+        Box::pin(async move {
+            self.result(match step {
+                0 => FillerReply::Text("one moment".into()),
+                1 => FillerReply::Spoke,
+                _ => FillerReply::Declined,
+            })
         })
     }
     fn hook_failed(&self, hook: &str, _: Option<lk_agents_abi::errors::CapturedError>) {

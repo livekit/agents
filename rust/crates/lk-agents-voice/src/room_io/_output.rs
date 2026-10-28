@@ -2,7 +2,6 @@
 //! and its host object; the transcription output is [`transcription`].
 
 use crate::room_io::{AudioOutputConfig, publication::Publication};
-use async_trait::async_trait;
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackFinished, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
@@ -817,7 +816,6 @@ fn cleanup_outcome(result: lk_agents_rtc::Result<()>, resource: &str) -> Closed 
     }
 }
 
-#[async_trait]
 impl AudioOutput for ParticipantAudioOutput {
     fn label(&self) -> &str {
         "RoomIO"
@@ -835,33 +833,35 @@ impl AudioOutput for ParticipantAudioOutput {
         Some(self.shared.sample_rate)
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        if frame.sample_rate != self.shared.sample_rate
-            || frame.num_channels != self.shared.num_channels
-            || frame.num_channels == 0
-            || self.shared.max_buffer_bytes == 0
-            || frame.data.len()
-                != frame.samples_per_channel as usize * usize::from(frame.num_channels) * 2
-        {
-            return Err(lk_agents_abi::voice::io::IoError::Rtc(
-                "room audio frame must match the output format".into(),
-            ));
-        }
-        let sample_bytes = usize::from(frame.num_channels) * 2;
-        let chunk_bytes = (frame.sample_rate as usize / 20).max(1) * sample_bytes;
-        if frame.data.len() <= chunk_bytes {
-            return self.capture_chunk(frame).await;
-        }
-        for bytes in frame.data.chunks(chunk_bytes) {
-            let chunk = AudioFrame::new(
-                bytes.to_vec(),
-                frame.sample_rate,
-                frame.num_channels,
-                (bytes.len() / sample_bytes) as u32,
-            );
-            self.capture_chunk(&chunk).await?;
-        }
-        Ok(())
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            if frame.sample_rate != self.shared.sample_rate
+                || frame.num_channels != self.shared.num_channels
+                || frame.num_channels == 0
+                || self.shared.max_buffer_bytes == 0
+                || frame.data.len()
+                    != frame.samples_per_channel as usize * usize::from(frame.num_channels) * 2
+            {
+                return Err(lk_agents_abi::voice::io::IoError::Rtc(
+                    "room audio frame must match the output format".into(),
+                ));
+            }
+            let sample_bytes = usize::from(frame.num_channels) * 2;
+            let chunk_bytes = (frame.sample_rate as usize / 20).max(1) * sample_bytes;
+            if frame.data.len() <= chunk_bytes {
+                return self.capture_chunk(frame).await;
+            }
+            for bytes in frame.data.chunks(chunk_bytes) {
+                let chunk = AudioFrame::new(
+                    bytes.to_vec(),
+                    frame.sample_rate,
+                    frame.num_channels,
+                    (bytes.len() / sample_bytes) as u32,
+                );
+                self.capture_chunk(&chunk).await?;
+            }
+            Ok(())
+        })
     }
 
     fn flush_segment(&self) {

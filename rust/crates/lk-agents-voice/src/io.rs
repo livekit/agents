@@ -1,7 +1,6 @@
 //! The voice core's own IO nodes over the host traits in `lk_agents_abi::voice::io`: the proxy
 //! beneath a wrapper chain, and the text and audio nodes a host hands in.
 
-use async_trait::async_trait;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputCapabilities, AudioOutputExt, IoError, PlaybackTracker, Result,
     TextOutput,
@@ -24,7 +23,6 @@ impl AudioSinkProxy {
     }
 }
 
-#[async_trait]
 impl AudioOutput for AudioSinkProxy {
     fn label(&self) -> &str {
         "AudioSinkProxy"
@@ -47,8 +45,8 @@ impl AudioOutput for AudioSinkProxy {
         Some(self.next.clone())
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        self.next.capture_frame(frame).await
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.next.capture_frame(frame).await })
     }
 
     fn flush_segment(&self) {
@@ -80,7 +78,6 @@ impl NodeTextOutput {
     }
 }
 
-#[async_trait]
 impl TextOutput for NodeTextOutput {
     fn label(&self) -> &str {
         "Agent.transcription_node"
@@ -90,14 +87,21 @@ impl TextOutput for NodeTextOutput {
         Some(Arc::clone(&self.next))
     }
 
-    async fn capture_timed(&self, text: &TimedString) -> Result<()> {
-        self.node.capture_timed(text);
-        Ok(())
+    fn capture_timed<'a>(
+        &'a self,
+        text: &'a TimedString,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.node.capture_timed(text);
+            Ok(())
+        })
     }
 
-    async fn capture_text(&self, text: &str) -> Result<()> {
-        self.node.capture_text(text);
-        Ok(())
+    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.node.capture_text(text);
+            Ok(())
+        })
     }
 
     fn flush(&self) {

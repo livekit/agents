@@ -1,6 +1,5 @@
 use crate::transcription::Heard;
 use crate::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
-use async_trait::async_trait;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
     PlaybackTracker, Result, TextOutput,
@@ -571,7 +570,6 @@ impl SyncedAudioOutput {
     }
 }
 
-#[async_trait]
 impl AudioOutput for SyncedAudioOutput {
     fn label(&self) -> &str {
         "TranscriptSynchronizer"
@@ -593,12 +591,14 @@ impl AudioOutput for SyncedAudioOutput {
         Some(self.next.clone())
     }
 
-    async fn capture(&self, frame: &AudioFrame) -> Result<()> {
-        // Counted before it passes: the sink below may report its playback from inside the
-        // capture, and that playback is this segment's.
-        let secs = lk_agents_rtc::frame_duration(frame).as_secs_f64();
-        self.core.step(SyncInput::Audio { secs });
-        self.next.capture_frame(frame).await
+    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            // Counted before it passes: the sink below may report its playback from inside the
+            // capture, and that playback is this segment's.
+            let secs = lk_agents_rtc::frame_duration(frame).as_secs_f64();
+            self.core.step(SyncInput::Audio { secs });
+            self.next.capture_frame(frame).await
+        })
     }
 
     fn flush_segment(&self) {
@@ -659,7 +659,6 @@ impl SyncedTextOutput {
     }
 }
 
-#[async_trait]
 impl TextOutput for SyncedTextOutput {
     fn label(&self) -> &str {
         "TranscriptSynchronizer"
@@ -669,12 +668,15 @@ impl TextOutput for SyncedTextOutput {
         self.next.clone()
     }
 
-    async fn capture_timed(&self, text: &TimedString) -> Result<()> {
-        self.capture(text, true).await
+    fn capture_timed<'a>(
+        &'a self,
+        text: &'a TimedString,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.capture(text, true).await })
     }
 
-    async fn capture_text(&self, text: &str) -> Result<()> {
-        self.capture(&TimedString::new(text), false).await
+    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.capture(&TimedString::new(text), false).await })
     }
 
     fn flush(&self) {
