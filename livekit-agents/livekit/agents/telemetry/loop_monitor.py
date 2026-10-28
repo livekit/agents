@@ -51,6 +51,7 @@ import asyncio
 import contextlib
 import contextvars
 import gc
+import itertools
 import math
 import os
 import sys
@@ -58,8 +59,9 @@ import threading
 import time
 import traceback
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from types import FrameType
 from typing import Any
 
 from opentelemetry import context as otel_context, trace
@@ -588,10 +590,18 @@ class EventLoopMonitor:
             importing = _module_being_imported(frame)
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
             # thread is what it is taking it from. Its wake-ups also measure host starvation,
-            # so it must never wait on a file.
-            frames = list(
-                traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
-            )
+            # so it must never wait on a file. StackSummary.extract() is not used: even with
+            # lookup_lines=False it adds a linecache entry per file and stats cached files.
+            walked: Iterator[tuple[FrameType, int]] = traceback.walk_stack(frame)
+            limit = getattr(sys, "tracebacklimit", None)
+            if limit is not None:
+                walked = itertools.islice(walked, max(limit, 0))
+            frames = [
+                traceback.FrameSummary(
+                    f.f_code.co_filename, lineno, f.f_code.co_name, lookup_line=False
+                )
+                for f, lineno in walked
+            ]
             frames.reverse()  # outermost first, like extract_stack
         return _StackSample(
             lag=lag,
