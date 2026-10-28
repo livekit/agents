@@ -215,6 +215,49 @@ impl<S: Source, T> Sched<S, T> {
 
 /// The scheduler against small programs whose legal orders are known (RC "Partial-order
 /// sampling": scheduler correctness is tested on small programs; benchmarks do not establish it).
+/// What the fakes will report, and when: an item reaches the scheduler once it is due.
+pub struct Timeline<S, E> {
+    items: Vec<(u64, u64, S, E)>,
+    seq: u64,
+}
+
+impl<S: Source, E> Default for Timeline<S, E> {
+    fn default() -> Self {
+        Timeline { items: Vec::new(), seq: 0 }
+    }
+}
+
+impl<S: Source, E> Timeline<S, E> {
+    /// `event` from `source` is reported at `due` ms.
+    pub fn at(&mut self, due: u64, source: S, event: E) {
+        self.items.push((due, self.seq, source, event));
+        self.seq += 1;
+    }
+
+    /// Everything due by `now` reaches the scheduler, in the order it fell due.
+    pub fn release(&mut self, now: u64, sched: &mut Sched<S, E>) {
+        let mut due: Vec<(u64, u64, S, E)> = Vec::new();
+        let mut i = 0;
+        while i < self.items.len() {
+            if self.items[i].0 <= now {
+                due.push(self.items.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        due.sort_by_key(|(at, seq, ..)| (*at, *seq));
+        for (_, _, source, event) in due {
+            sched.push(source, event);
+        }
+    }
+
+    /// When the next report falls due.
+    pub fn next_due(&self) -> Option<u64> {
+        self.items.iter().map(|(at, ..)| *at).min()
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

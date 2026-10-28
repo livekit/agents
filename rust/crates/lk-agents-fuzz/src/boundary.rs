@@ -57,7 +57,7 @@ pub const VOICE: Boundary = Boundary {
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
-        "worker, IPC and job processes (G-12 stress; worker DST is K-2)",
+        "worker, IPC and job processes (lk-agents-worker's own tests, decision 70)",
         "agent-db storage and the A2A door's transport (I-27 backend contracts; DST K-3, K-4)",
     ],
 };
@@ -116,66 +116,6 @@ pub const A2A: Boundary = Boundary {
         "SubscribeToTask and resubscribe from a cursor (current Task first, then the frames \
          after the offset): runtime door and response streams, no core decision (K-30, I-27)",
         "the door's HTTP/JSON-RPC transport and the host's handler (runtime a2a_turns suite)",
-    ],
-};
-
-/// The inference campaign (`tests/inference_survey.rs`, `inference` module).
-pub const INFERENCE: Boundary = Boundary {
-    cores: &[
-        "LLM request core (lk_agents_inference::llm::lifecycle::LlmRequest over attempts::Attempts), \
-         stepped per delivered transport or consumer event and due wake",
-        "avatar session core (lk_agents_inference::avatar::lifecycle::AvatarSessionLifecycle), \
-         stepped per delivered transport, caller or program event and due wake",
-        "VAD stream machine (lk_agents_inference::vad::machine::VadMachine), stepped per \
-         delivered microphone frame, model result, flush and options update",
-    ],
-    fakes: &[
-        "inference::llm::Gateway: connections, rejections, recorded gpt-4.1-mini chunk timing, \
-         drops, stalls, malformed and unterminated bodies, late or missing attempt releases",
-        "inference::llm::Consumer: demand with backpressure, cancellation",
-        "inference::avatar::Gateway: idempotent creates applied on receipt, lost answers, \
-         rejections, sessions without terminate ids, late or missing attempt releases",
-        "inference::avatar::Program: the creating caller, a racing caller, refusals, closes",
-        "inference::vad: a microphone at 16-48 kHz, mono or stereo, 10 or 20 ms frames, a track \
-         switched midway; a model runtime scoring one window at a time on a speech-like \
-         probability stream, its latency drawn (no VAD recording in the corpus yet), a result \
-         landing after a flush; the host's flushes and option updates",
-    ],
-    transitional: &["none: every machine is a core machine the simulation steps itself"],
-    outside: &[
-        "the runtime's HTTP exchange tasks and the Python avatar/LLM adapters (K-30 conformance, \
-         F-18 real-peer tests)",
-        "the Silero model and the media worker that runs it (F-12 model tests, K-31 \
-         never-block qualification)",
-    ],
-};
-
-/// The worker campaign (`tests/worker_survey.rs`, `worker` module).
-pub const WORKER: Boundary = Boundary {
-    cores: &[
-        "process pool allocation core (lk_agents_worker::ipc::pool::PoolState), stepped per \
-         delivered process, driver or server event and due wake",
-        "worker registration and job assignment core (lk_agents_worker::WorkerState), stepped \
-         per delivered server message, host answer, connection event, load sample, drain and due \
-         timer",
-    ],
-    fakes: &[
-        "worker::Os: job processes that spawn or fail to, initialize, crash or hang, run a job \
-         and exit, close late, and whose exit watches and reaps fail and are retried",
-        "the driver: admissions with duplicate dispatches, cancels, a drain, the close, launches \
-         of reserved jobs, forgets of settled requests, the cleanup report",
-        "worker::registration: a LiveKit server that registers (or never answers), dispatches \
-         and re-dispatches jobs, assigns late, never or twice, assigns and terminates jobs the \
-         worker does not hold, terminates running ones; a host that accepts, rejects or fails a \
-         request, launches that fail or report before returning; loads over the threshold; \
-         connections that drop, reconnect and roll over; a drain with or without a deadline",
-    ],
-    transitional: &["the drivers mirror lk_agents_worker::ipc::pool's task loop and \
-         lk_agents_runtime::worker's connection loop by hand"],
-    outside: &[
-        "the pool's async task, the supervisor's process I/O, IPC and the server connection \
-         (G-12 stress, K-30 conformance)",
-        "the server lifecycle (ServerLifecycle: startup, drain and cleanup ordering)",
     ],
 };
 

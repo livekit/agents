@@ -1468,7 +1468,6 @@ dependencies = [
  "lk-agents-rtc",
  "lk-agents-storage",
  "lk-agents-voice",
- "lk-agents-worker",
  "prost",
  "rusqlite",
  "serde_json",

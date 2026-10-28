@@ -19,7 +19,7 @@
 //! real-peer tests, a regression per bug: K-30). The voice harness still runs the core's policy
 //! tasks and some adapters, under the transitional task bridge, until they become core machines;
 //! `boundary.rs` states what each campaign simulates and leaves outside, and every campaign prints
-//! it. One crate, a module per subject: voice, inference, worker, storage, A2A and TextSession.
+//! it. One crate, a module per subject: voice, storage, A2A and TextSession.
 //!
 //! The rules run once per run, over the finished record, and state properties of the whole
 //! timeline. `cargo test` runs the rules' own examples, the determinism check and the regression
@@ -34,7 +34,6 @@ pub mod check;
 pub mod corpus;
 pub mod drive;
 pub mod fakes;
-pub mod inference;
 pub mod input;
 pub mod record;
 pub mod rules;
@@ -42,4 +41,3 @@ pub mod sched;
 pub mod search;
 pub mod storage;
 pub mod text_session;
-pub mod worker;

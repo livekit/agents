@@ -25,7 +25,7 @@ lk-agents-rtc = { path = "../lk-agents-rtc" }
 bytes = "1"
 # The realtime fake runs the production native session (its wire machine, reconnects and all)
 # over a socket whose far end is the simulated OpenAI Realtime server.
-lk-agents-inference = { path = "../lk-agents-inference", default-features = false, features = ["testkit"] }
+lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
 base64.workspace = true
 tokio = { workspace = true, features = ["test-util", "io-util"] }
 prost.workspace = true
@@ -40,5 +40,3 @@ livekit-protocol.workspace = true
 a2a.workspace = true
 # The A2A simulation: the text door's policy and turn decisions over the storage simulation.
 lk-agents-a2a = { path = "../lk-agents-a2a" }
-# The worker simulation: the process pool's synchronous allocation core.
-lk-agents-worker = { path = "../lk-agents-worker" }

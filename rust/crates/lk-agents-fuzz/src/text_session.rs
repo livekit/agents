@@ -45,7 +45,7 @@ use lk_agents_core::text_session::{
 };
 use serde_json::{Value, json};
 
-use crate::inference::Timeline;
+use crate::sched::Timeline;
 use crate::sched::{Sampling, Sched, Step as Picked, Tick};
 
 /// The scheduler's own random stream off the seed: the bytes `sched`.
