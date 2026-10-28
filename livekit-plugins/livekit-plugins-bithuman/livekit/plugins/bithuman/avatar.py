@@ -648,7 +648,7 @@ class AvatarSession(BaseAvatarSession):
             APIConnectionError: If all retry attempts fail
         """
         async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry):
+            for i in range(self._conn_options.max_retry + 1):
                 try:
                     async with http_context.request(
                         self._ensure_http_session(),
@@ -674,7 +674,7 @@ class AvatarSession(BaseAvatarSession):
                     else:
                         logger.exception("failed to call bithuman avatar api")
 
-                    if i < self._conn_options.max_retry - 1:
+                    if i < self._conn_options.max_retry:
                         await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")

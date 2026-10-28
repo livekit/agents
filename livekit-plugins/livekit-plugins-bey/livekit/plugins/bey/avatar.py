@@ -123,7 +123,7 @@ class AvatarSession(BaseAvatarSession):
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
         async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry):
+            for i in range(self._conn_options.max_retry + 1):
                 try:
                     async with http_context.request(
                         self._ensure_http_session(),
@@ -152,7 +152,7 @@ class AvatarSession(BaseAvatarSession):
                     else:
                         logger.exception("failed to call bey presence api")
 
-                    if i < self._conn_options.max_retry - 1:
+                    if i < self._conn_options.max_retry:
                         await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bey Avatar Session after all retries")

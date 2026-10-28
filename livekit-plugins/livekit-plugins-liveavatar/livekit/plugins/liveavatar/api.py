@@ -108,7 +108,7 @@ class LiveAvatarAPI:
         self, *, endpoint: str, payload: dict[str, Any], headers: dict[str, Any]
     ) -> dict[str, Any]:
         url = self._api_url + endpoint
-        for i in range(self._conn_options.max_retry):
+        for i in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     url=url, headers=headers, json=payload
@@ -122,7 +122,7 @@ class LiveAvatarAPI:
                         )
                     return await response.json()  # type: ignore
             except APIStatusError as e:
-                if not e.retryable or i >= self._conn_options.max_retry - 1:
+                if not e.retryable or i >= self._conn_options.max_retry:
                     raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
@@ -132,7 +132,7 @@ class LiveAvatarAPI:
             except Exception:
                 logger.exception("failed to call LiveAvatar API")
 
-            if i < self._conn_options.max_retry - 1:
+            if i < self._conn_options.max_retry:
                 await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to call LiveAvatar API after all retries.")
