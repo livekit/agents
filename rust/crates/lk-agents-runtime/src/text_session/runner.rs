@@ -37,10 +37,7 @@ impl TextSessionRunner for Runner {
                 name.clone(),
                 SessionAgent {
                     definition: agent.definition.clone(),
-                    llm: Some(LlmRef {
-                        id: ResourceId(0),
-                        provider: agent.llm.id(),
-                    }),
+                    llm: Some(LlmRef { id: ResourceId(0), provider: agent.llm.id() }),
                     output_type_explicit: agent.output_type_explicit,
                     agent_tools: agent.agent_tools.clone(),
                 },
@@ -49,26 +46,16 @@ impl TextSessionRunner for Runner {
                 return Err(InvalidRun(format!("duplicate session agent: {name}")));
             }
         }
-        let config = TextSessionConfig {
-            root_agent,
-            agents: definitions,
-            max_depth,
-        };
+        let config = TextSessionConfig { root_agent, agents: definitions, max_depth };
         config.validate().map_err(|e| InvalidRun(e.to_string()))?;
-        Ok(Self {
-            config,
-            agents: resources,
-            control: Mutex::new(None),
-        })
+        Ok(Self { config, agents: resources, control: Mutex::new(None) })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
         let runtime = crate::process::handle().map_err(|e| InvalidRun(e.to_string()))?;
         let mut current = self.control.lock().unwrap_or_else(|e| e.into_inner());
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
-            return Err(InvalidRun(
-                "this runner already has an active request".into(),
-            ));
+            return Err(InvalidRun("this runner already has an active request".into()));
         }
         let (updates, control) = start(
             &runtime,
@@ -83,9 +70,8 @@ impl TextSessionRunner for Runner {
 
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
         let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
-        let control = current
-            .as_ref()
-            .ok_or_else(|| InvalidRun("session request is not running".into()))?;
+        let control =
+            current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
         control
             .release
             .try_send(Release {
@@ -102,9 +88,8 @@ impl TextSessionRunner for Runner {
         message: String,
     ) -> Result<(), InvalidRun> {
         let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
-        let control = current
-            .as_ref()
-            .ok_or_else(|| InvalidRun("session request is not running".into()))?;
+        let control =
+            current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
         control
             .progress
             .try_send((invocation_id.into(), operation, message))
@@ -160,15 +145,8 @@ fn start(
     };
     runtime.spawn(driver.drive(message, events, progress, releases, cancelled));
     Ok((
-        Updates {
-            cancel: Some(cancel),
-            receiver,
-            clock,
-        },
-        Control {
-            release: release_tx,
-            progress: progress_tx,
-        },
+        Updates { cancel: Some(cancel), receiver, clock },
+        Control { release: release_tx, progress: progress_tx },
     ))
 }
 
@@ -186,25 +164,30 @@ impl Drop for Updates {
     }
 }
 
-#[async_trait::async_trait]
 impl StreamSource<TextSessionUpdate> for Updates {
-    async fn next(&mut self) -> Result<Option<TextSessionUpdate>, ProviderError> {
-        match self.receiver.recv().await {
-            Some(update) => update.map(Some),
-            None => Ok(None),
-        }
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<TextSessionUpdate>, ProviderError>> {
+        Box::pin(async move {
+            match self.receiver.recv().await {
+                Some(update) => update.map(Some),
+                None => Ok(None),
+            }
+        })
     }
     fn cancel_safe(&self) -> bool {
         true
     }
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
-        let clock = self.clock.clone();
-        Closed::bounded(&*clock, deadline, async move {
-            while self.receiver.recv().await.is_some() {}
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            if let Some(cancel) = self.cancel.take() {
+                let _ = cancel.send(());
+            }
+            let clock = self.clock.clone();
+            Closed::bounded(&*clock, deadline, async move {
+                while self.receiver.recv().await.is_some() {}
+            })
+            .await
         })
-        .await
     }
 }

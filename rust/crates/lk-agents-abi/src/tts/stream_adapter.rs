@@ -12,6 +12,7 @@ use crate::errors::{ApiError, ProviderError};
 use crate::metrics::base::AgentMetrics;
 use crate::telemetry::provider::{Context, TtsMetricState};
 use async_trait::async_trait;
+
 use tokio::sync::mpsc;
 
 use crate::tts::markup::Markup;
@@ -59,7 +60,8 @@ impl StreamAdapter {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// No sentence is retried; see [`with_budget`](Self::with_budget).
     pub fn new(tts: Arc<dyn Tts>, splitter: SplitterFactory, clock: Arc<dyn Clock>) -> Self {
-        let budget = crate::ApiConnectOptions { max_retry: 0, ..crate::ApiConnectOptions::default() };
+        let budget =
+            crate::ApiConnectOptions { max_retry: 0, ..crate::ApiConnectOptions::default() };
         StreamAdapter { tts, splitter, clock, expressive: AtomicBool::new(false), budget }
     }
 
@@ -173,8 +175,9 @@ impl Tts for StreamAdapter {
         let (tx, rx) = mpsc::unbounded_channel();
         // Snapshotted now, while the framework holds it fixed for this synthesis.
         let markup = Markup::from_provider_key(&self.tts.markup_provider());
-        let lowering = (self.expressive.load(Ordering::Acquire) && !markup.provider_key().is_empty())
-            .then_some(markup);
+        let lowering = (self.expressive.load(Ordering::Acquire)
+            && !markup.provider_key().is_empty())
+        .then_some(markup);
         let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
         let source = AdapterSource {
             tts: self.tts.clone(),
@@ -496,57 +499,58 @@ impl AdapterSource {
     }
 }
 
-#[async_trait]
 impl StreamSource<SynthesizedAudio> for AdapterSource {
-    async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        loop {
-            match self.raw_next().await {
-                Ok(Some(mut frame)) => {
-                    self.drain_input();
-                    self.duration += frame.frame.duration();
-                    // A sentence boundary is not a segment boundary (`tts/tts.py:1183`): the inner
-                    // provider's ids and `is_final` are not ours.
-                    frame.is_final = false;
-                    frame.request_id.clone_from(&self.request_id);
-                    frame.segment_id.clone_from(&self.segment_id);
-                    if !self.pending_transcript.is_empty() {
-                        frame.timed_transcript = std::mem::take(&mut self.pending_transcript);
-                    }
-                    // Hold only once no further audio can arrive; a queued whitespace-only sentence
-                    // is not audio. Once true it stays true.
-                    let more_audio_coming = !self.input_done
-                        || self
-                            .pending
-                            .iter()
-                            .any(|s| !s.trim_matches(crate::tokenize::is_py_space).is_empty());
-                    if !more_audio_coming {
-                        if let Some(previous) = self.held.replace(frame) {
-                            return Ok(Some(previous));
+    fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            loop {
+                match self.raw_next().await {
+                    Ok(Some(mut frame)) => {
+                        self.drain_input();
+                        self.duration += frame.frame.duration();
+                        // A sentence boundary is not a segment boundary (`tts/tts.py:1183`): the inner
+                        // provider's ids and `is_final` are not ours.
+                        frame.is_final = false;
+                        frame.request_id.clone_from(&self.request_id);
+                        frame.segment_id.clone_from(&self.segment_id);
+                        if !self.pending_transcript.is_empty() {
+                            frame.timed_transcript = std::mem::take(&mut self.pending_transcript);
                         }
-                        continue;
-                    }
-                    return Ok(Some(frame));
-                }
-                Ok(None) => {
-                    return match self.held.take() {
-                        Some(mut last) => {
-                            last.is_final = true;
-                            // Alignment for trailing sentences that produced no audio rides on the
-                            // real last frame (no silence marker, which is `AudioEmitter`'s job).
-                            last.timed_transcript.append(&mut self.pending_transcript);
-                            Ok(Some(last))
+                        // Hold only once no further audio can arrive; a queued whitespace-only sentence
+                        // is not audio. Once true it stays true.
+                        let more_audio_coming = !self.input_done
+                            || self
+                                .pending
+                                .iter()
+                                .any(|s| !s.trim_matches(crate::tokenize::is_py_space).is_empty());
+                        if !more_audio_coming {
+                            if let Some(previous) = self.held.replace(frame) {
+                                return Ok(Some(previous));
+                            }
+                            continue;
                         }
-                        None => Ok(None),
-                    };
-                }
-                Err(e) => {
-                    // Drop the hold and report now: `FallbackChain` needs the error to decide
-                    // `retry_on_chunk_sent`.
-                    self.held = None;
-                    return Err(e);
+                        return Ok(Some(frame));
+                    }
+                    Ok(None) => {
+                        return match self.held.take() {
+                            Some(mut last) => {
+                                last.is_final = true;
+                                // Alignment for trailing sentences that produced no audio rides on the
+                                // real last frame (no silence marker, which is `AudioEmitter`'s job).
+                                last.timed_transcript.append(&mut self.pending_transcript);
+                                Ok(Some(last))
+                            }
+                            None => Ok(None),
+                        };
+                    }
+                    Err(e) => {
+                        // Drop the hold and report now: `FallbackChain` needs the error to decide
+                        // `retry_on_chunk_sent`.
+                        self.held = None;
+                        return Err(e);
+                    }
                 }
             }
-        }
+        })
     }
 
     fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
@@ -565,13 +569,15 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
     }
 
     /// The worst inner close: `TimedOut` if any did not ack, else `Failed` if any teardown failed.
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        let current = match self.current.take() {
-            Some(cur) => cur.close(deadline).await,
-            None => Closed::Clean,
-        };
-        self.rx.close();
-        self.inner_closed.and(current)
+    fn close(mut self: Box<Self>, deadline: Ts) -> crate::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            let current = match self.current.take() {
+                Some(cur) => cur.close(deadline).await,
+                None => Closed::Clean,
+            };
+            self.rx.close();
+            self.inner_closed.and(current)
+        })
     }
 }
 
@@ -667,23 +673,28 @@ mod tests {
         closed: Arc<AtomicUsize>,
     }
 
-    #[async_trait]
     impl StreamSource<SynthesizedAudio> for VecSource {
-        async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-            if self.fail_after == Some(self.emitted) {
-                return Err(ApiError::status("rate limited", 429, None, None).into());
-            }
-            match self.frames.pop_front() {
-                Some(a) => {
-                    self.emitted += 1;
-                    Ok(Some(a))
+        fn next(
+            &mut self,
+        ) -> crate::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+            Box::pin(async move {
+                if self.fail_after == Some(self.emitted) {
+                    return Err(ApiError::status("rate limited", 429, None, None).into());
                 }
-                None => Ok(None),
-            }
+                match self.frames.pop_front() {
+                    Some(a) => {
+                        self.emitted += 1;
+                        Ok(Some(a))
+                    }
+                    None => Ok(None),
+                }
+            })
         }
-        async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-            self.closed.fetch_add(1, Ordering::Relaxed);
-            Closed::Clean
+        fn close(self: Box<Self>, _deadline: Ts) -> crate::BoxFuture<'static, Closed> {
+            Box::pin(async move {
+                self.closed.fetch_add(1, Ordering::Relaxed);
+                Closed::Clean
+            })
         }
     }
 
@@ -1181,7 +1192,10 @@ mod tests {
         let said = "<expr type=\"emotion\" label=\"happy\"/>Hi there.";
         let markup = Markup::from_provider_key("cartesia");
         for on in [true, false] {
-            let tts = Arc::new(FakeTts { markup: "cartesia", ..Arc::into_inner(FakeTts::new(1)).unwrap() });
+            let tts = Arc::new(FakeTts {
+                markup: "cartesia",
+                ..Arc::into_inner(FakeTts::new(1)).unwrap()
+            });
             let xml_aware = Arc::new(AtomicBool::new(!on));
             let seen = xml_aware.clone();
             let adapter = StreamAdapter::new(

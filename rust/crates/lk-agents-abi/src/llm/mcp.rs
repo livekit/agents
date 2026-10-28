@@ -173,7 +173,6 @@ pub trait McpProgress: Send + Sync {
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[crate::host(class(name = "McpSession"))]
-#[async_trait::async_trait]
 pub trait McpSession: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError>;

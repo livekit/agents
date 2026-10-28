@@ -395,13 +395,19 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
         fn end_input(&self) {}
     }
     struct ScriptedSource(std::collections::VecDeque<VadEventType>);
-    #[async_trait]
     impl StreamSource<VadEvent> for ScriptedSource {
-        async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-            Ok(self.0.pop_front().map(|kind| VadEvent::new(kind, 0, 0.0, 0.0, 0.0)))
+        fn next(
+            &mut self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
+            Box::pin(async move {
+                Ok(self.0.pop_front().map(|kind| VadEvent::new(kind, 0, 0.0, 0.0, 0.0)))
+            })
         }
-        async fn close(self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-            lk_agents_abi::Closed::Clean
+        fn close(
+            self: Box<Self>,
+            _deadline: lk_agents_abi::Ts,
+        ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+            Box::pin(async move { lk_agents_abi::Closed::Clean })
         }
     }
 

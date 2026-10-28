@@ -94,13 +94,12 @@ impl StreamSink<AudioFrame> for DiscardAudio {
     fn end_input(&self) {}
 }
 struct EmptySpeech;
-#[async_trait]
 impl StreamSource<SpeechEvent> for EmptySpeech {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        Ok(None)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move { Ok(None) })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

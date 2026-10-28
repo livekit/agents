@@ -10,9 +10,8 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::eot::cloud::{WebSocketConnector, WebSocketSink, WebSocketStream};
 use crate::transport::TransportError;
 
-type Socket = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// `aiohttp.ClientSession.ws_connect(url, headers=...)` (`transports.py:_connect_ws`).
 pub struct TungsteniteEotConnector;
@@ -62,13 +61,14 @@ struct TungsteniteEotSink {
     sink: futures_util::stream::SplitSink<Socket, Message>,
 }
 
-#[async_trait]
 impl WebSocketSink for TungsteniteEotSink {
-    async fn send(&mut self, data: Vec<u8>) -> Result<(), ApiError> {
-        self.sink
-            .send(Message::binary(data))
-            .await
-            .map_err(|e| translate(crate::native::classify_tungstenite(e)))
+    fn send(&mut self, data: Vec<u8>) -> lk_agents_abi::BoxFuture<'_, Result<(), ApiError>> {
+        Box::pin(async move {
+            self.sink
+                .send(Message::binary(data))
+                .await
+                .map_err(|e| translate(crate::native::classify_tungstenite(e)))
+        })
     }
 }
 
@@ -76,18 +76,19 @@ struct TungsteniteEotStream {
     stream: futures_util::stream::SplitStream<Socket>,
 }
 
-#[async_trait]
 impl WebSocketStream for TungsteniteEotStream {
     /// `None` is the peer closing. Text, ping and pong are skipped (tungstenite answers pings).
-    async fn recv(&mut self) -> Option<Result<Vec<u8>, ApiError>> {
-        loop {
-            return match self.stream.next().await {
-                Some(Ok(Message::Binary(data))) => Some(Ok(data.to_vec())),
-                Some(Ok(Message::Close(_))) | None => None,
-                Some(Ok(_)) => continue,
-                Some(Err(e)) => Some(Err(translate(crate::native::classify_tungstenite(e)))),
-            };
-        }
+    fn recv(&mut self) -> lk_agents_abi::BoxFuture<'_, Option<Result<Vec<u8>, ApiError>>> {
+        Box::pin(async move {
+            loop {
+                return match self.stream.next().await {
+                    Some(Ok(Message::Binary(data))) => Some(Ok(data.to_vec())),
+                    Some(Ok(Message::Close(_))) | None => None,
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => Some(Err(translate(crate::native::classify_tungstenite(e)))),
+                };
+            }
+        })
     }
 }
 

@@ -58,19 +58,20 @@ impl FakeNodes {
 /// A node's own answer: one `str`, as the host glue hands it over.
 struct NodeText(Option<&'static str>);
 
-#[async_trait::async_trait]
 impl StreamSource<LlmChunk> for NodeText {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        Ok(self.0.take().map(|text| LlmChunk {
-            id: "node".into(),
-            delta: Some(ChoiceDelta { content: Some(text.into()), ..ChoiceDelta::default() }),
-            node_text: true,
-            ..LlmChunk::default()
-        }))
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            Ok(self.0.take().map(|text| LlmChunk {
+                id: "node".into(),
+                delta: Some(ChoiceDelta { content: Some(text.into()), ..ChoiceDelta::default() }),
+                node_text: true,
+                ..LlmChunk::default()
+            }))
+        })
     }
 
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

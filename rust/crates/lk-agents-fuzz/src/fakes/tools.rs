@@ -57,51 +57,57 @@ pub enum Body {
     AwaitOwnSpeech(ToolOutcome),
 }
 
-#[async_trait::async_trait]
 impl HostToolRunner for FakeTools {
-    async fn run(
+    fn run(
         &self,
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
         granted: bool,
         _task: bool,
-    ) -> Result<ToolReport, HostError> {
-        let handle = Arc::clone(&speech.0)
-            .downcast::<SpeechHandle>()
-            .ok()
-            .filter(|h| h.created().is_some())
-            .expect("a tool runs in a created speech");
-        // `needs_approval=True`: not granted, the call is its read-back, and the body never runs.
-        if call.name == APPROVAL_TOOL && !granted {
-            // The runner saw the call: one body opened and ended at once.
-            let detail = Detail::Tool {
-                call_id: call.call_id.clone(),
-                name: call.name.clone(),
-                speech: handle.id().0,
-            };
-            let (sender, _) = oneshot::channel();
-            let slot = self.registry.register(Kind::Tool, detail, Control::Tool(sender));
-            self.registry.mark_closed(slot);
-            let question =
-                format!("Please confirm: {} ({}). Yes or no?", call.name, call.arguments);
-            let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
-            return Ok(ToolReport { outcome, approval: Some(Approval::Asked), transition: None });
-        }
-        let mut outcome = self.answer(call, &handle).await;
-        // A question asked as written names its own tool to take the answer
-        // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does not.
-        if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
-            *tool = Some(call.name.clone());
-        }
-        // Every completion is handed over with a value, in a task's speech or not: whether it
-        // ends a task is the core's to decide (a host that validated an ordinary tool's
-        // `Completed` as a task's once silenced the call), so the rules see what it decides.
-        let transition =
-            matches!(outcome, ToolOutcome::Completed { .. }).then(|| {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<ToolReport, HostError>> {
+        let call = call.clone();
+        let speech = speech.clone();
+        Box::pin(async move {
+            let handle = Arc::clone(&speech.0)
+                .downcast::<SpeechHandle>()
+                .ok()
+                .filter(|h| h.created().is_some())
+                .expect("a tool runs in a created speech");
+            // `needs_approval=True`: not granted, the call is its read-back, and the body never runs.
+            if call.name == APPROVAL_TOOL && !granted {
+                // The runner saw the call: one body opened and ended at once.
+                let detail = Detail::Tool {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    speech: handle.id().0,
+                };
+                let (sender, _) = oneshot::channel();
+                let slot = self.registry.register(Kind::Tool, detail, Control::Tool(sender));
+                self.registry.mark_closed(slot);
+                let question =
+                    format!("Please confirm: {} ({}). Yes or no?", call.name, call.arguments);
+                let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
+                return Ok(ToolReport {
+                    outcome,
+                    approval: Some(Approval::Asked),
+                    transition: None,
+                });
+            }
+            let mut outcome = self.answer(&call, &handle).await;
+            // A question asked as written names its own tool to take the answer
+            // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does not.
+            if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
+                *tool = Some(call.name.clone());
+            }
+            // Every completion is handed over with a value, in a task's speech or not: whether it
+            // ends a task is the core's to decide (a host that validated an ordinary tool's
+            // `Completed` as a task's once silenced the call), so the rules see what it decides.
+            let transition = matches!(outcome, ToolOutcome::Completed { .. }).then(|| {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
-        Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition })
+            Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition })
+        })
     }
 
     fn cancel(&self, call_id: &str) {

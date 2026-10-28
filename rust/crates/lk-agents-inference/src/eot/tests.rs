@@ -366,11 +366,12 @@ struct FakeSink {
     sent: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
-#[async_trait]
 impl WebSocketSink for FakeSink {
-    async fn send(&mut self, data: Vec<u8>) -> Result<(), ApiError> {
-        self.sent.lock().unwrap().push(data);
-        Ok(())
+    fn send(&mut self, data: Vec<u8>) -> lk_agents_abi::BoxFuture<'_, Result<(), ApiError>> {
+        Box::pin(async move {
+            self.sent.lock().unwrap().push(data);
+            Ok(())
+        })
     }
 }
 
@@ -384,10 +385,9 @@ struct FakeStream {
     incoming: Incoming,
 }
 
-#[async_trait]
 impl WebSocketStream for FakeStream {
-    async fn recv(&mut self) -> Option<Result<Vec<u8>, ApiError>> {
-        self.incoming.recv().await
+    fn recv(&mut self) -> lk_agents_abi::BoxFuture<'_, Option<Result<Vec<u8>, ApiError>>> {
+        Box::pin(async move { self.incoming.recv().await })
     }
 }
 

@@ -120,14 +120,13 @@ struct Verdicts {
 
 struct Chunks(Vec<LlmChunk>);
 
-#[async_trait]
 impl StreamSource<LlmChunk> for Chunks {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        Ok(self.0.pop())
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move { Ok(self.0.pop()) })
     }
 
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

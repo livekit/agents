@@ -1,9 +1,8 @@
 //! [`SttStreamAdapter`] (`stt/stream_adapter.py`): a recognize-only STT as a streaming one. The VAD
 //! cuts the audio into utterances, each recognized on its own once it ends.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use super::events::{SpeechEvent, SpeechEventType};
 use super::stt::{Stt, SttCapabilities, SttSink, SttSource};
@@ -181,41 +180,42 @@ struct AdapterSource {
     clock: Arc<dyn Clock>,
 }
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for AdapterSource {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        loop {
-            if let Some(frames) = self.utterance.take() {
-                let event = self.stt.recognize(&frames, self.language.as_ref()).await?;
-                if let Some(mut transcript) = recognized(event) {
-                    transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
-                    return Ok(Some(transcript));
+    fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            loop {
+                if let Some(frames) = self.utterance.take() {
+                    let event = self.stt.recognize(&frames, self.language.as_ref()).await?;
+                    if let Some(mut transcript) = recognized(event) {
+                        transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
+                        return Ok(Some(transcript));
+                    }
+                }
+                let Some(event) = self.vad.next().await? else { return Ok(None) };
+                match event.kind {
+                    VadEventType::StartOfSpeech => {
+                        return Ok(Some(SpeechEvent::new(SpeechEventType::StartOfSpeech)));
+                    }
+                    VadEventType::EndOfSpeech => {
+                        let ended = crate::unix_secs(self.clock.wall())
+                            - event.silence_duration
+                            - event.inference_duration;
+                        self.speech_end = Some(ended);
+                        self.utterance = Some(
+                            event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default(),
+                        );
+                        let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
+                        end.speech_end_time = Some(ended);
+                        return Ok(Some(end));
+                    }
+                    VadEventType::InferenceDone => {}
                 }
             }
-            let Some(event) = self.vad.next().await? else { return Ok(None) };
-            match event.kind {
-                VadEventType::StartOfSpeech => {
-                    return Ok(Some(SpeechEvent::new(SpeechEventType::StartOfSpeech)));
-                }
-                VadEventType::EndOfSpeech => {
-                    let ended = crate::unix_secs(self.clock.wall())
-                        - event.silence_duration
-                        - event.inference_duration;
-                    self.speech_end = Some(ended);
-                    self.utterance = Some(
-                        event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default(),
-                    );
-                    let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
-                    end.speech_end_time = Some(ended);
-                    return Ok(Some(end));
-                }
-                VadEventType::InferenceDone => {}
-            }
-        }
+        })
     }
 
-    async fn close(self: Box<Self>, deadline: Ts) -> Closed {
-        self.vad.close(deadline).await
+    fn close(self: Box<Self>, deadline: Ts) -> crate::BoxFuture<'static, Closed> {
+        Box::pin(async move { self.vad.close(deadline).await })
     }
 }
 
@@ -255,13 +255,14 @@ mod tests {
 
     struct Events(VecDeque<VadEventType>);
 
-    #[async_trait]
     impl StreamSource<VadEvent> for Events {
-        async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-            Ok(self.0.pop_front().map(|kind| VadEvent::new(kind, 0, 0.0, 0.0, 0.0)))
+        fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
+            Box::pin(async move {
+                Ok(self.0.pop_front().map(|kind| VadEvent::new(kind, 0, 0.0, 0.0, 0.0)))
+            })
         }
-        async fn close(self: Box<Self>, _: Ts) -> Closed {
-            Closed::Clean
+        fn close(self: Box<Self>, _: Ts) -> crate::BoxFuture<'static, Closed> {
+            Box::pin(async move { Closed::Clean })
         }
     }
 

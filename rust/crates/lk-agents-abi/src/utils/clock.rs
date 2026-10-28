@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::task::Poll;
 use std::time::{Duration, SystemTime};
 
-use async_trait::async_trait;
 use tokio::sync::Notify;
 
 /// `t` as `time.time()` reads it: seconds since the Unix epoch, zero for anything before it.
@@ -49,13 +48,12 @@ impl Ts {
 }
 
 /// The core's only source of time: `now` drives scheduling, `wall` stamps chat items.
-#[async_trait]
 pub trait Clock: Send + Sync {
     /// Monotonic. Repeated calls at the same instant return the same value.
     fn now(&self) -> Ts;
 
     /// The only thing that sleeps; every timeout in the workspace is [`timeout`] over this.
-    async fn wait_until(&self, at: Ts);
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()>;
 
     /// For `ChatItem::created_at` only. Strictly increasing even within one instant: `ChatContext`
     /// orders by `created_at` (the reference nudges 1 µs, `tests/virtual_time.py:57`).
@@ -121,14 +119,13 @@ impl Default for SimClock {
     }
 }
 
-#[async_trait]
 impl Clock for SimClock {
     fn now(&self) -> Ts {
         self.real.now()
     }
 
-    async fn wait_until(&self, at: Ts) {
-        self.real.wait_until(at).await
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move { self.real.wait_until(at).await })
     }
 
     fn wall(&self) -> SystemTime {
@@ -169,7 +166,6 @@ impl RealClock {
     }
 }
 
-#[async_trait]
 impl Clock for RealClock {
     #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn now(&self) -> Ts {
@@ -183,11 +179,13 @@ impl Clock for RealClock {
     }
 
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    async fn wait_until(&self, at: Ts) {
-        let now = self.now();
-        if at > now {
-            tokio::time::sleep(at.saturating_duration_since(now)).await;
-        }
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let now = self.now();
+            if at > now {
+                tokio::time::sleep(at.saturating_duration_since(now)).await;
+            }
+        })
     }
 }
 
@@ -243,23 +241,24 @@ impl Default for VirtualClock {
     }
 }
 
-#[async_trait]
 impl Clock for VirtualClock {
     fn now(&self) -> Ts {
         self.state.lock().unwrap().now
     }
 
-    async fn wait_until(&self, at: Ts) {
-        loop {
-            // Armed before the read, so an `advance` in between is not missed.
-            let parked = self.wake.notified();
-            let mut parked = pin!(parked);
-            parked.as_mut().enable();
-            if self.now() >= at {
-                return;
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            loop {
+                // Armed before the read, so an `advance` in between is not missed.
+                let parked = self.wake.notified();
+                let mut parked = pin!(parked);
+                parked.as_mut().enable();
+                if self.now() >= at {
+                    return;
+                }
+                parked.await;
             }
-            parked.await;
-        }
+        })
     }
 
     fn wall(&self) -> SystemTime {
@@ -457,7 +456,10 @@ mod tests {
     // saturating ops degenerating into "always zero".
     #[test]
     fn ts_arithmetic_saturates_instead_of_panicking() {
-        assert_eq!(Ts::from_nanos(500).saturating_sub(Duration::from_nanos(200)), Ts::from_nanos(300));
+        assert_eq!(
+            Ts::from_nanos(500).saturating_sub(Duration::from_nanos(200)),
+            Ts::from_nanos(300)
+        );
         assert_eq!(
             Ts::from_nanos(500).saturating_duration_since(Ts::from_nanos(200)),
             Duration::from_nanos(300)
@@ -469,9 +471,6 @@ mod tests {
             u64::MAX
         );
     }
-
-
-
 
     // Catches: `RealClock::wall` reporting the nudge origin instead of the real time.
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]

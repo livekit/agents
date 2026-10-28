@@ -76,20 +76,21 @@ impl Llm for FakeLlm {
     }
 }
 
-#[async_trait::async_trait]
 impl StreamSource<LlmChunk> for Response {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        self.receiver.recv().await.transpose()
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move { self.receiver.recv().await.transpose() })
     }
 
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        self.closed.store(true, Ordering::SeqCst);
-        self.registry.mark_closed(self.slot);
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.closed.store(true, Ordering::SeqCst);
+            self.registry.mark_closed(self.slot);
+            Closed::Clean
+        })
     }
 }
 
@@ -143,7 +144,10 @@ pub(super) fn deliver(
         Input::LlmEnd { .. } => {
             let finish = LlmChunk {
                 id: response_id.clone(),
-                delta: Some(lk_agents_abi::ChoiceDelta { content: Some(String::new()), ..assistant() }),
+                delta: Some(lk_agents_abi::ChoiceDelta {
+                    content: Some(String::new()),
+                    ..assistant()
+                }),
                 ..Default::default()
             };
             let usage = LlmChunk {

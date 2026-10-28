@@ -20,6 +20,7 @@ use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers}
 use crate::ids::{RequestKind, create_inference_request_id};
 use crate::transport::{WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url};
 use async_trait::async_trait;
+
 use futures_util::future::{Either, select};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, sentence_tokenizer_of};
@@ -620,63 +621,72 @@ pub struct TtsSourceHandle {
     clock: Arc<dyn Clock>,
 }
 
-#[async_trait]
 impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
-    async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        if self.done {
-            return Ok(None);
-        }
-        let next = if let Ok(item) = self.audio.try_recv() {
-            Some(item)
-        } else {
-            let received = {
-                match select(pin!(self.audio.recv()), pin!(self.failed.changed())).await {
-                    Either::Left((next, _)) => Ok(next),
-                    Either::Right(_) => Err(()),
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            if self.done {
+                return Ok(None);
+            }
+            let next = if let Ok(item) = self.audio.try_recv() {
+                Some(item)
+            } else {
+                let received = {
+                    match select(pin!(self.audio.recv()), pin!(self.failed.changed())).await {
+                        Either::Left((next, _)) => Ok(next),
+                        Either::Right(_) => Err(()),
+                    }
+                };
+                match received {
+                    Ok(next) => next,
+                    Err(()) => self.failed.borrow().clone().map(Err),
                 }
             };
-            match received {
-                Ok(next) => next,
-                Err(()) => self.failed.borrow().clone().map(Err),
-            }
-        };
-        match next {
-            Some(Ok(audio)) => Ok(Some(audio)),
-            Some(Err(error)) => {
-                self.done = true;
-                Err(error.into())
-            }
-            None => {
-                self.done = true;
-                match self.settled.take() {
-                    Some(settled) => match settled.await {
-                        Ok(Ok(())) => Ok(None),
-                        Ok(Err(error)) => Err(error.into()),
-                        Err(_) => {
-                            Err(ApiError::new("TTS pump ended without a terminal outcome").into())
-                        }
-                    },
-                    None => Ok(None),
+            match next {
+                Some(Ok(audio)) => Ok(Some(audio)),
+                Some(Err(error)) => {
+                    self.done = true;
+                    Err(error.into())
+                }
+                None => {
+                    self.done = true;
+                    match self.settled.take() {
+                        Some(settled) => match settled.await {
+                            Ok(Ok(())) => Ok(None),
+                            Ok(Err(error)) => Err(error.into()),
+                            Err(_) => {
+                                Err(ApiError::new("TTS pump ended without a terminal outcome")
+                                    .into())
+                            }
+                        },
+                        None => Ok(None),
+                    }
                 }
             }
-        }
+        })
     }
 
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    async fn close(mut self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-        let _ = self.stop.send(true);
-        self.done = true;
-        self.audio.close();
-        let settled = self.settled.take();
-        lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async move {
-            if let Some(settled) = settled {
-                let _ = settled.await;
-            }
+    fn close(
+        mut self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move {
+            let _ = self.stop.send(true);
+            self.done = true;
+            self.audio.close();
+            let settled = self.settled.take();
+            lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async move {
+                if let Some(settled) = settled {
+                    let _ = settled.await;
+                }
+            })
+            .await
         })
-        .await
     }
 }
 

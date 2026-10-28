@@ -33,27 +33,28 @@ enum Attempt {
     Done,
 }
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for Attempt {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        match std::mem::replace(self, Attempt::Done) {
-            Attempt::Fail => Err(ApiError::new("hiccup").into()),
-            Attempt::Cancelled => Err(ProviderError::Host {
-                error: lk_agents_abi::errors::HostError {
-                    kind: "CancelledError".into(),
-                    message: String::new(),
-                    host_ref: None,
-                },
-                api_kind: None,
-                retryable: false,
-                status_code: None,
-            }),
-            Attempt::Final => Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript))),
-            Attempt::Done => Ok(None),
-        }
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            match std::mem::replace(self, Attempt::Done) {
+                Attempt::Fail => Err(ApiError::new("hiccup").into()),
+                Attempt::Cancelled => Err(ProviderError::Host {
+                    error: lk_agents_abi::errors::HostError {
+                        kind: "CancelledError".into(),
+                        message: String::new(),
+                        host_ref: None,
+                    },
+                    api_kind: None,
+                    retryable: false,
+                    status_code: None,
+                }),
+                Attempt::Final => Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript))),
+                Attempt::Done => Ok(None),
+            }
+        })
     }
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 
@@ -158,14 +159,15 @@ struct Dropping {
 
 struct Silent(std::time::Duration, Arc<dyn Clock>);
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for Silent {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        self.1.wait_until(self.1.now().saturating_add(self.0)).await;
-        Err(ApiError::connection(Some("socket dropped".into())).into())
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            self.1.wait_until(self.1.now().saturating_add(self.0)).await;
+            Err(ApiError::connection(Some("socket dropped".into())).into())
+        })
     }
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 
@@ -292,14 +294,15 @@ impl StreamSink<AudioFrame> for RefusingSink {
     fn end_input(&self) {}
 }
 struct StalledSource(Arc<StalledInput>);
-#[async_trait]
 impl StreamSource<SpeechEvent> for StalledSource {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        std::future::pending().await
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move { std::future::pending().await })
     }
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        self.0.closed.store(true, std::sync::atomic::Ordering::SeqCst);
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.0.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Closed::Clean
+        })
     }
 }
 

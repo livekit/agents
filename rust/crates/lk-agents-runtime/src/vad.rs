@@ -4,7 +4,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
 use lk_agents_inference::vad::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
@@ -109,32 +108,35 @@ impl Drop for Output {
     }
 }
 
-#[async_trait]
 impl StreamSource<VadOutput> for Output {
-    async fn next(&mut self) -> Result<Option<VadOutput>, ProviderError> {
-        if let Some(event) = self.events.recv().await {
-            return Ok(Some(event));
-        }
-        if let Some(worker) = self.worker.as_mut() {
-            let result = worker.await;
-            self.worker.take();
-            result.map_err(|error| failed(format!("VAD worker failed: {error}")))??;
-        }
-        Ok(None)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadOutput>, ProviderError>> {
+        Box::pin(async move {
+            if let Some(event) = self.events.recv().await {
+                return Ok(Some(event));
+            }
+            if let Some(worker) = self.worker.as_mut() {
+                let result = worker.await;
+                self.worker.take();
+                result.map_err(|error| failed(format!("VAD worker failed: {error}")))??;
+            }
+            Ok(None)
+        })
     }
 
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        self.cancelled.cancel();
-        self.events.close();
-        let Some(mut worker) = self.worker.take() else { return Closed::Clean };
-        // A timed-out receipt transfers to MediaWorker's supervisor; its permit remains held
-        // until a native model that ignored cancellation actually returns.
-        let deadline =
-            deadline.min(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
-        Closed::bounded(self.clock.as_ref(), deadline, async {
-            let _ = (&mut worker).await;
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.cancelled.cancel();
+            self.events.close();
+            let Some(mut worker) = self.worker.take() else { return Closed::Clean };
+            // A timed-out receipt transfers to MediaWorker's supervisor; its permit remains held
+            // until a native model that ignored cancellation actually returns.
+            let deadline =
+                deadline.min(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
+            Closed::bounded(self.clock.as_ref(), deadline, async {
+                let _ = (&mut worker).await;
+            })
+            .await
         })
-        .await
     }
 }
 

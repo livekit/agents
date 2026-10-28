@@ -17,6 +17,7 @@ mod python;
 
 use crate::abi::{AudioFrame, StreamSink, StreamSource};
 use async_trait::async_trait;
+
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{
     MediaRef, ProviderId, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource,
@@ -164,23 +165,27 @@ impl Vad for NativeVad {
 /// [`VadOutput`] as the session reads it: the event, with the speech it ended on.
 struct VadEventSource(VadOutputSource);
 
-#[async_trait]
 impl StreamSource<VadEvent> for VadEventSource {
-    async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-        let Some(output) = self.0.next().await? else { return Ok(None) };
-        if output.slow_inference {
-            log::warn!(target: "livekit.agents", delay = output.extra_inference_time; "inference is slower than realtime");
-        }
-        let mut event = output.event;
-        // Only an end of speech's audio is read (a non-streaming STT recognizes it).
-        if event.kind == VadEventType::EndOfSpeech {
-            event.frames = speech_ref(output.frames);
-        }
-        Ok(Some(event))
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
+        Box::pin(async move {
+            let Some(output) = self.0.next().await? else { return Ok(None) };
+            if output.slow_inference {
+                log::warn!(target: "livekit.agents", delay = output.extra_inference_time; "inference is slower than realtime");
+            }
+            let mut event = output.event;
+            // Only an end of speech's audio is read (a non-streaming STT recognizes it).
+            if event.kind == VadEventType::EndOfSpeech {
+                event.frames = speech_ref(output.frames);
+            }
+            Ok(Some(event))
+        })
     }
 
-    async fn close(self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-        Box::new(self.0).close(deadline).await
+    fn close(
+        self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move { Box::new(self.0).close(deadline).await })
     }
 }
 
@@ -237,13 +242,15 @@ pub struct VadOutputSource {
     source: Box<dyn StreamSource<VadOutput>>,
 }
 
-#[async_trait]
 impl StreamSource<VadOutput> for VadOutputSource {
-    async fn next(&mut self) -> Result<Option<VadOutput>, ProviderError> {
-        self.source.next().await
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadOutput>, ProviderError>> {
+        Box::pin(async move { self.source.next().await })
     }
 
-    async fn close(self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-        self.source.close(deadline).await
+    fn close(
+        self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move { self.source.close(deadline).await })
     }
 }

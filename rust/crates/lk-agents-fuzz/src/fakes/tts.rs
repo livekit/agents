@@ -88,7 +88,8 @@ impl Synthesis {
     /// frames of at most [`FRAME_MS`]: each frame a chunk of its own, the text and its word
     /// timings on the first.
     fn emit(&self, state: &mut SynthesisState, text: String) {
-        let total = ((text.chars().count() as f64 * state.samples_per_char) as usize).max(SAMPLES_PER_CHUNK);
+        let total = ((text.chars().count() as f64 * state.samples_per_char) as usize)
+            .max(SAMPLES_PER_CHUNK);
         let span = total as f64 / f64::from(SAMPLE_RATE);
         let mut timed_transcript =
             if self.stamps { stamps(&text, state.spoken, span) } else { Vec::new() };
@@ -99,18 +100,29 @@ impl Synthesis {
             let samples = left.min(FRAME_SAMPLES);
             let chunk = state.chunks;
             let sample = Tag::synthesized(self.nth(), chunk);
-            let frame = AudioFrame::new(sample.to_le_bytes().repeat(samples), SAMPLE_RATE, 1, samples as u32);
+            let frame = AudioFrame::new(
+                sample.to_le_bytes().repeat(samples),
+                SAMPLE_RATE,
+                1,
+                samples as u32,
+            );
             let words = std::mem::take(&mut timed_transcript);
-            let stamped = words
-                .iter()
-                .map(|w| (w.text.clone(), w.start_time.unwrap_or_default()))
-                .collect();
-            let audio = SynthesizedAudio { timed_transcript: words, ..SynthesizedAudio::new(frame, "synthesis") };
+            let stamped =
+                words.iter().map(|w| (w.text.clone(), w.start_time.unwrap_or_default())).collect();
+            let audio = SynthesizedAudio {
+                timed_transcript: words,
+                ..SynthesizedAudio::new(frame, "synthesis")
+            };
             if sender.send(Ok(audio)).is_err() {
                 return;
             }
             state.spoken += samples as f64 / f64::from(SAMPLE_RATE);
-            self.registry.record_produced(self.nth(), chunk, text.take().unwrap_or_default(), stamped);
+            self.registry.record_produced(
+                self.nth(),
+                chunk,
+                text.take().unwrap_or_default(),
+                stamped,
+            );
             state.chunks += 1;
             left -= samples;
         }
@@ -219,7 +231,10 @@ impl Tts for FakeTts {
         synthesis.state.lock().unwrap().samples_per_char =
             ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
         let first_audio = self.latency.as_ref().map(|rng| {
-            let ms = crate::corpus::draw_ms(&mut rng.lock().unwrap(), &["tts", TTS_MODEL, "first_audio"]);
+            let ms = crate::corpus::draw_ms(
+                &mut rng.lock().unwrap(),
+                &["tts", TTS_MODEL, "first_audio"],
+            );
             tokio::time::Instant::now() + std::time::Duration::from_millis(ms)
         });
         if first_audio.is_some() {
@@ -284,29 +299,34 @@ impl StreamSink<String> for InputSide {
     }
 }
 
-#[async_trait::async_trait]
 impl StreamSource<SynthesizedAudio> for Output {
-    async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        let next = self.receiver.recv().await.transpose();
-        // The first audio leaves no earlier than the voice can produce it; a failure or the end
-        // is reported as soon as it is known.
-        if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
-            tokio::time::sleep_until(at).await;
-            self.registry.voice_due(self.slot.nth, None);
-        }
-        if matches!(next, Ok(Some(_))) && !std::mem::replace(&mut self.delivered, true) {
-            self.registry.record_delivered(self.slot);
-        }
-        next
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            let next = self.receiver.recv().await.transpose();
+            // The first audio leaves no earlier than the voice can produce it; a failure or the end
+            // is reported as soon as it is known.
+            if let (Ok(Some(_)), Some(at)) = (&next, self.first_audio.take()) {
+                tokio::time::sleep_until(at).await;
+                self.registry.voice_due(self.slot.nth, None);
+            }
+            if matches!(next, Ok(Some(_))) && !std::mem::replace(&mut self.delivered, true) {
+                self.registry.record_delivered(self.slot);
+            }
+            next
+        })
     }
 
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        self.registry.voice_due(self.slot.nth, None);
-        self.registry.mark_closed(self.slot);
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.registry.voice_due(self.slot.nth, None);
+            self.registry.mark_closed(self.slot);
+            Closed::Clean
+        })
     }
 }

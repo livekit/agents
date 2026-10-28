@@ -57,25 +57,28 @@ impl Vad for FakeVad {
     }
 }
 
-#[async_trait::async_trait]
 impl StreamSource<VadEvent> for Detection {
-    async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-        // A real stream ends once its input has: what was already produced first, then the end.
-        // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
-        tokio::select! {
-            biased;
-            event = self.events.recv() => event.transpose(),
-            () = self.ended.notified() => Ok(None),
-        }
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
+        Box::pin(async move {
+            // A real stream ends once its input has: what was already produced first, then the end.
+            // Without it a stream the driver replaced stays open, and a case keeps speaking into it.
+            tokio::select! {
+                biased;
+                event = self.events.recv() => event.transpose(),
+                () = self.ended.notified() => Ok(None),
+            }
+        })
     }
 
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        self.registry.mark_closed(self.slot);
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.registry.mark_closed(self.slot);
+            Closed::Clean
+        })
     }
 }
 

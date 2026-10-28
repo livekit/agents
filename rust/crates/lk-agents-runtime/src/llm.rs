@@ -3,11 +3,11 @@
 //! runs ahead of demand; transport observations wait in a bounded queue, stamped with the instant
 //! they were made, and are applied in that order with every deadline due before them.
 
+use async_trait::async_trait;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::provider_format::PreResolved;
 use lk_agents_abi::resources::ResourceId;
@@ -464,17 +464,16 @@ impl Drop for Demand<'_> {
     }
 }
 
-#[async_trait]
 impl StreamSource<LlmChunk> for LlmChunks {
     fn cancel_safe(&self) -> bool {
         true
     }
 
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        LlmChunks::next(self).await.map_err(ProviderError::Local)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move { LlmChunks::next(self).await.map_err(ProviderError::Local) })
     }
 
-    async fn close(self: Box<Self>, deadline: Ts) -> Closed {
-        LlmChunks::close(*self, deadline).await
+    fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { LlmChunks::close(*self, deadline).await })
     }
 }

@@ -597,32 +597,37 @@ struct ReplyUpdates {
     delivered: watch::Sender<bool>,
 }
 
-#[async_trait::async_trait]
 impl StreamSource<TaskUpdate> for ReplyUpdates {
-    async fn next(&mut self) -> Result<Option<TaskUpdate>, ProviderError> {
-        let update = self.rx.recv().await.transpose().map_err(|e| match e {
-            ClientError::Transport(error) => ProviderError::Local(error),
-            error => ProviderError::from(ApiError::new(error.to_string()).with_retryable(false)),
-        })?;
-        if update.as_ref().is_some_and(TaskUpdate::is_settled) {
-            self.delivered.send_replace(true);
-        }
-        Ok(update)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TaskUpdate>, ProviderError>> {
+        Box::pin(async move {
+            let update = self.rx.recv().await.transpose().map_err(|e| match e {
+                ClientError::Transport(error) => ProviderError::Local(error),
+                error => {
+                    ProviderError::from(ApiError::new(error.to_string()).with_retryable(false))
+                }
+            })?;
+            if update.as_ref().is_some_and(TaskUpdate::is_settled) {
+                self.delivered.send_replace(true);
+            }
+            Ok(update)
+        })
     }
     fn cancel_safe(&self) -> bool {
         true
     }
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        self.operation.cancel();
-        let clock = self.clock.clone();
-        Closed::bounded(&*clock, deadline, async move {
-            while !*self.operation.settled.borrow_and_update() {
-                if self.operation.settled.changed().await.is_err() {
-                    break;
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.operation.cancel();
+            let clock = self.clock.clone();
+            Closed::bounded(&*clock, deadline, async move {
+                while !*self.operation.settled.borrow_and_update() {
+                    if self.operation.settled.changed().await.is_err() {
+                        break;
+                    }
                 }
-            }
+            })
+            .await
         })
-        .await
     }
 }
 

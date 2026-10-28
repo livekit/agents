@@ -25,6 +25,7 @@ use crate::transport::{
     to_ws_url, within,
 };
 use async_trait::async_trait;
+
 use base64::Engine as _;
 use lifecycle::{SttEffect, SttEvent, SttProtocol};
 use lk_agents_abi::AudioByteStream;
@@ -636,44 +637,50 @@ pub struct SttSourceHandle {
     clock: Arc<dyn Clock>,
 }
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for SttSourceHandle {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        if self.done {
-            return Ok(None);
-        }
-        match self.events.recv().await {
-            Some(Ok(event)) => Ok(Some(event)),
-            Some(Err(error)) => {
-                self.done = true;
-                Err(error.into())
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            if self.done {
+                return Ok(None);
             }
-            None => {
-                self.done = true;
-                match self.failure.borrow().clone() {
-                    Some(error) => Err(error.into()),
-                    None => Ok(None),
+            match self.events.recv().await {
+                Some(Ok(event)) => Ok(Some(event)),
+                Some(Err(error)) => {
+                    self.done = true;
+                    Err(error.into())
+                }
+                None => {
+                    self.done = true;
+                    match self.failure.borrow().clone() {
+                        Some(error) => Err(error.into()),
+                        None => Ok(None),
+                    }
                 }
             }
-        }
+        })
     }
 
-    async fn close(mut self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-        self.done = true;
-        self.stop.send_replace(true);
-        self.events.close();
-        let mut settled = false;
-        let mut closed = lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async {
-            settled = (&mut self.joined).await.is_ok();
+    fn close(
+        mut self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move {
+            self.done = true;
+            self.stop.send_replace(true);
+            self.events.close();
+            let mut settled = false;
+            let mut closed = lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async {
+                settled = (&mut self.joined).await.is_ok();
+            })
+            .await;
+            if !settled {
+                closed = lk_agents_abi::Closed::TimedOut;
+            }
+            if closed == lk_agents_abi::Closed::TimedOut {
+                log::error!("STT pump cleanup incomplete; pump remains owned until settlement");
+            }
+            closed
         })
-        .await;
-        if !settled {
-            closed = lk_agents_abi::Closed::TimedOut;
-        }
-        if closed == lk_agents_abi::Closed::TimedOut {
-            log::error!("STT pump cleanup incomplete; pump remains owned until settlement");
-        }
-        closed
     }
 }
 

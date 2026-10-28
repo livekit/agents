@@ -199,7 +199,6 @@ impl From<ToolOutcome> for ToolReport {
 /// and classifies what the body returned or raised. A report, not a decision; `lk-agents-voice`'s
 /// `tool_executor::answer` owns the output.
 #[crate::host(proxy(host = "livekit.agents.voice.tool_executor.ToolRunner"))]
-#[async_trait::async_trait]
 pub trait HostToolRunner: Send + Sync {
     /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
     /// whose `host` is the host's own object once it made one. `granted`: the call repeats a
@@ -208,13 +207,13 @@ pub trait HostToolRunner: Send + Sync {
     /// validated against the agent's `output_type` and reported with its value, which ends the
     /// task.
     #[host(await, name = "_core_run")]
-    async fn run(
+    fn run(
         &self,
         call: &crate::FunctionCall,
         speech: &crate::CoreObject,
         granted: bool,
         task: bool,
-    ) -> Result<ToolReport, crate::errors::HostError>;
+    ) -> crate::BoxFuture<'_, Result<ToolReport, crate::errors::HostError>>;
 
     /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
     /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.

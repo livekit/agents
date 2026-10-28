@@ -243,13 +243,12 @@ impl StreamSink<Verdict> for Verdicts {
 /// The handler's events, as the host's source.
 struct Events(mpsc::UnboundedReceiver<Result<TurnEvent, ProviderError>>);
 
-#[async_trait::async_trait]
 impl StreamSource<TurnEvent> for Events {
-    async fn next(&mut self) -> Result<Option<TurnEvent>, ProviderError> {
-        self.0.recv().await.transpose()
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
+        Box::pin(async move { self.0.recv().await.transpose() })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

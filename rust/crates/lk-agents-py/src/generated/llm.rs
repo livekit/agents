@@ -925,15 +925,15 @@ impl HostToolRunnerProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::tool_executor::HostToolRunner>(|obj| HostToolRunnerProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy {
-    async fn run(&self, call: &::lk_agents_abi::FunctionCall, speech: &::lk_agents_abi::CoreObject, granted: bool, task: bool) -> ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError> {
+    fn run(&self, call: &::lk_agents_abi::FunctionCall, speech: &::lk_agents_abi::CoreObject, granted: bool, task: bool) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let call_arg = ::std::clone::Clone::clone(call);
         let speech_arg = ::std::clone::Clone::clone(speech);
         let granted_arg = granted;
         let task_arg = task;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(granted_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
@@ -949,6 +949,7 @@ impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy
             let o = out.bind(py);
             let out = (o.extract::<::lk_agents_abi::llm::tool_executor::ToolReport>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 

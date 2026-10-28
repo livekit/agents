@@ -452,26 +452,29 @@ impl RetrySource {
     }
 }
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for RetrySource {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        let (clock, deadline) = (Arc::clone(&self.clock), self.deadline);
-        match before(&*clock, deadline, self.next_attempted()).await {
-            Ok(next) => next,
-            Err(_) => {
-                self.close_current().await;
-                Err(total_expired(&mut self.attempts, self.clock.now(), &*self.stt))
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            let (clock, deadline) = (Arc::clone(&self.clock), self.deadline);
+            match before(&*clock, deadline, self.next_attempted()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    self.close_current().await;
+                    Err(total_expired(&mut self.attempts, self.clock.now(), &*self.stt))
+                }
             }
-        }
+        })
     }
 
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        self.attempts.cancel(self.clock.now(), &mut Vec::new());
-        self.input.clear();
-        match self.current.take() {
-            Some(source) => source.close(deadline).await,
-            None => Closed::Clean,
-        }
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.attempts.cancel(self.clock.now(), &mut Vec::new());
+            self.input.clear();
+            match self.current.take() {
+                Some(source) => source.close(deadline).await,
+                None => Closed::Clean,
+            }
+        })
     }
 
     fn report_retries(&mut self, report: RetryReport) {

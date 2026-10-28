@@ -18,7 +18,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::python::captured;
 use lk_agents_abi::utils::clock::{Clock, Ts};
@@ -112,34 +111,37 @@ impl<T> HostStream<T> {
     }
 }
 
-#[async_trait]
 impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
-    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
-        if self.ended {
-            return Ok(None);
-        }
-        let pull = match &mut self.pending {
-            Some(pull) => pull,
-            None => self.pending.insert(self.start("__anext__")?),
-        };
-        let pulled = pull.settled().await;
-        self.pending = None;
-        let item = Python::attach(|py| match pulled {
-            Ok(item) => (self.convert)(item.bind(py)).map(Some),
-            Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) => Ok(None),
-            Err(e) => Err(e),
-        });
-        match item {
-            Ok(Some(item)) => Ok(Some(item)),
-            Ok(None) => {
-                self.ended = true;
-                Ok(None)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        Box::pin(async move {
+            if self.ended {
+                return Ok(None);
             }
-            Err(e) => {
-                self.ended = true;
-                Err(captured(e))
+            let pull = match &mut self.pending {
+                Some(pull) => pull,
+                None => self.pending.insert(self.start("__anext__")?),
+            };
+            let pulled = pull.settled().await;
+            self.pending = None;
+            let item = Python::attach(|py| match pulled {
+                Ok(item) => (self.convert)(item.bind(py)).map(Some),
+                Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) => {
+                    Ok(None)
+                }
+                Err(e) => Err(e),
+            });
+            match item {
+                Ok(Some(item)) => Ok(Some(item)),
+                Ok(None) => {
+                    self.ended = true;
+                    Ok(None)
+                }
+                Err(e) => {
+                    self.ended = true;
+                    Err(captured(e))
+                }
             }
-        }
+        })
     }
 
     /// A dropped pull is kept and resumed, never repeated.
@@ -147,30 +149,32 @@ impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
         true
     }
 
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        let clock = self.clock.clone();
-        let pending = self.pending.take();
-        let has_aclose = Python::attach(|py| self.iterator.bind(py).hasattr("aclose"));
-        let mut failed = false;
-        let teardown = async {
-            if let Some(mut pull) = pending {
-                pull.cancel();
-                let _ = pull.settled().await;
-            }
-            if !matches!(has_aclose, Ok(true)) {
-                return;
-            }
-            let closed = match self.start("aclose") {
-                Ok(mut closing) => closing.settled().await.map_err(captured),
-                Err(e) => Err(e),
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            let clock = self.clock.clone();
+            let pending = self.pending.take();
+            let has_aclose = Python::attach(|py| self.iterator.bind(py).hasattr("aclose"));
+            let mut failed = false;
+            let teardown = async {
+                if let Some(mut pull) = pending {
+                    pull.cancel();
+                    let _ = pull.settled().await;
+                }
+                if !matches!(has_aclose, Ok(true)) {
+                    return;
+                }
+                let closed = match self.start("aclose") {
+                    Ok(mut closing) => closing.settled().await.map_err(captured),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = closed {
+                    log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
+                    failed = true;
+                }
             };
-            if let Err(e) = closed {
-                log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
-                failed = true;
-            }
-        };
-        let closed = Closed::bounded(&*clock, deadline, teardown).await;
-        if failed { closed.and(Closed::Failed) } else { closed }
+            let closed = Closed::bounded(&*clock, deadline, teardown).await;
+            if failed { closed.and(Closed::Failed) } else { closed }
+        })
     }
 }
 

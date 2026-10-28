@@ -85,8 +85,12 @@ impl AgentRunner for Runner {
                 frame_id: None,
                 context_scope: None,
                 application_context: None,
-                history: input.history.iter().cloned()
-                    .chain([ChatItem::Message(input.message.clone())]).collect(),
+                history: input
+                    .history
+                    .iter()
+                    .cloned()
+                    .chain([ChatItem::Message(input.message.clone())])
+                    .collect(),
                 function_call: None,
                 approval: None,
                 host_context: Some(request.host_context),
@@ -130,17 +134,18 @@ pub struct Updates {
     clock: Arc<dyn Clock>,
 }
 
-#[async_trait::async_trait]
 impl StreamSource<RunUpdate> for Updates {
     /// A run that failed on its model raises the provider's own error.
-    async fn next(&mut self) -> Result<Option<RunUpdate>, ProviderError> {
-        let update = self.updates.recv().await;
-        if let Some(RunUpdate::Failed(RunError::Model(_))) = &update
-            && let Some(error) = self.run.model_error()
-        {
-            return Err(error);
-        }
-        Ok(update)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RunUpdate>, ProviderError>> {
+        Box::pin(async move {
+            let update = self.updates.recv().await;
+            if let Some(RunUpdate::Failed(RunError::Model(_))) = &update
+                && let Some(error) = self.run.model_error()
+            {
+                return Err(error);
+            }
+            Ok(update)
+        })
     }
 
     fn cancel_safe(&self) -> bool {
@@ -148,14 +153,14 @@ impl StreamSource<RunUpdate> for Updates {
     }
 
     /// Cancels the run and waits, until `deadline`, for its work to settle.
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        self.run.cancel();
-        let clock = self.clock.clone();
-        Closed::bounded(
-            &*clock,
-            deadline,
-            async move { while self.updates.recv().await.is_some() {} },
-        )
-        .await
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.run.cancel();
+            let clock = self.clock.clone();
+            Closed::bounded(&*clock, deadline, async move {
+                while self.updates.recv().await.is_some() {}
+            })
+            .await
+        })
     }
 }

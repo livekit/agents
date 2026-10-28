@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{Clock, Closed, StreamSource, Ts};
@@ -151,38 +150,41 @@ impl<T> Drop for ChannelSource<T> {
     }
 }
 
-#[async_trait]
-impl<T: Send> StreamSource<T> for ChannelSource<T> {
+impl<T: Send + 'static> StreamSource<T> for ChannelSource<T> {
     /// An `mpsc` drain: dropping a `next()` mid-poll loses nothing, and `close` aborts the filler.
     fn cancel_safe(&self) -> bool {
         true
     }
 
     /// `Ok(None)` is the chain task finishing; `Err` is what it reported.
-    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
-        match self.rx.recv().await {
-            None => Ok(None),
-            Some(Ok(v)) => Ok(Some(v)),
-            Some(Err(e)) => Err(e),
-        }
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        Box::pin(async move {
+            match self.rx.recv().await {
+                None => Ok(None),
+                Some(Ok(v)) => Ok(Some(v)),
+                Some(Err(e)) => Err(e),
+            }
+        })
     }
 
     /// Stop the chain task and wait for it under the deadline; the receiver closes first so a
     /// pending `send` fails rather than blocks. An unanswered task is aborted and `TimedOut`.
-    async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
-        let _ = self.chain.stop.send(true);
-        self.rx.close();
-        let done = self.chain.done.take();
-        let closed = Closed::bounded(self.chain.clock.as_ref(), deadline, async move {
-            if let Some(done) = done {
-                let _ = done.await;
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            let _ = self.chain.stop.send(true);
+            self.rx.close();
+            let done = self.chain.done.take();
+            let closed = Closed::bounded(self.chain.clock.as_ref(), deadline, async move {
+                if let Some(done) = done {
+                    let _ = done.await;
+                }
+            })
+            .await;
+            if let Some(h) = self.task.take() {
+                // Finished tasks ignore the abort; a wedged one is cut here.
+                h.abort();
             }
+            closed
         })
-        .await;
-        if let Some(h) = self.task.take() {
-            // Finished tasks ignore the abort; a wedged one is cut here.
-            h.abort();
-        }
-        closed
     }
 }

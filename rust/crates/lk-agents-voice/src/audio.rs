@@ -122,16 +122,23 @@ struct TaggedSource<T> {
     inner: Box<dyn StreamSource<T>>,
 }
 
-#[async_trait::async_trait]
 impl<T: Send + 'static> StreamSource<Tagged<T>> for TaggedSource<T> {
-    async fn next(&mut self) -> Result<Option<Tagged<T>>, lk_agents_abi::errors::ProviderError> {
-        Ok(self.inner.next().await?.map(|item| Tagged { stream: self.stream, item }))
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<Tagged<T>>, lk_agents_abi::errors::ProviderError>>
+    {
+        Box::pin(async move {
+            Ok(self.inner.next().await?.map(|item| Tagged { stream: self.stream, item }))
+        })
     }
     fn cancel_safe(&self) -> bool {
         self.inner.cancel_safe()
     }
-    async fn close(self: Box<Self>, deadline: lk_agents_abi::Ts) -> Closed {
-        self.inner.close(deadline).await
+    fn close(
+        self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { self.inner.close(deadline).await })
     }
 }
 

@@ -737,14 +737,16 @@ async fn running(api: SessionApi) -> SessionApi {
 /// A host stream of these items, then its end.
 struct Items<T>(std::collections::VecDeque<T>);
 
-#[async_trait::async_trait]
-impl<T: Send> lk_agents_abi::StreamSource<T> for Items<T> {
-    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
-        Ok(self.0.pop_front())
+impl<T: Send + 'static> lk_agents_abi::StreamSource<T> for Items<T> {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        Box::pin(async move { Ok(self.0.pop_front()) })
     }
 
-    async fn close(self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-        lk_agents_abi::Closed::Clean
+    fn close(
+        self: Box<Self>,
+        _deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move { lk_agents_abi::Closed::Clean })
     }
 }
 

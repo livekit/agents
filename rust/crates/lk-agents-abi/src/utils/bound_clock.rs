@@ -5,8 +5,6 @@
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use async_trait::async_trait;
-
 use super::clock::{Clock, RealClock, Ts};
 
 /// [`RealClock`] at construction; [`bind`](Self::bind) replaces it. A wait already parked finishes
@@ -31,14 +29,13 @@ impl BoundClock {
     }
 }
 
-#[async_trait]
 impl Clock for BoundClock {
     fn now(&self) -> Ts {
         self.current().now()
     }
 
-    async fn wait_until(&self, at: Ts) {
-        self.current().wait_until(at).await
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move { self.current().wait_until(at).await })
     }
 
     fn wall(&self) -> SystemTime {

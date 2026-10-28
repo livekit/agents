@@ -1,6 +1,7 @@
 //! End-to-end over the three modality adapters: what a wrapped provider receives and what comes
 //! out. The chain's own machine is pinned in `tests.rs`.
 
+use async_trait::async_trait;
 use std::collections::VecDeque;
 
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
@@ -9,12 +10,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
-    AlignedTranscript, AudioBuffer, AudioFrame, ChatRequest, Closed, Llm, LlmStream, StreamSink,
-    StreamSource, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, Ts, Tts,
+    AlignedTranscript, AudioBuffer, AudioFrame, BoxFuture, ChatRequest, Closed, Llm, LlmStream,
+    StreamSink, StreamSource, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, Ts, Tts,
     TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_abi::{
@@ -133,17 +133,18 @@ struct VecStream {
     fail_after: bool,
 }
 
-#[async_trait]
 impl StreamSource<LlmChunk> for VecStream {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        match self.left.pop_front() {
-            Some(c) => Ok(Some(c)),
-            None if self.fail_after => Err(boom("stream died")),
-            None => Ok(None),
-        }
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            match self.left.pop_front() {
+                Some(c) => Ok(Some(c)),
+                None if self.fail_after => Err(boom("stream died")),
+                None => Ok(None),
+            }
+        })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 
@@ -280,13 +281,12 @@ struct HangingLlm {
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct HangingStream(Arc<AtomicBool>);
 
-#[async_trait]
 impl StreamSource<LlmChunk> for HangingStream {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        std::future::pending().await
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move { std::future::pending().await })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 
@@ -523,22 +523,25 @@ struct SttSessSource {
     rx: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
 }
 
-#[async_trait]
 impl StreamSource<SpeechEvent> for SttSessSource {
-    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        match self.rx.recv().await {
-            None => Ok(None),
-            Some(Ok(ev)) => {
-                self.sess.emitted.fetch_add(1, Ordering::SeqCst);
-                Ok(Some(ev))
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move {
+            match self.rx.recv().await {
+                None => Ok(None),
+                Some(Ok(ev)) => {
+                    self.sess.emitted.fetch_add(1, Ordering::SeqCst);
+                    Ok(Some(ev))
+                }
+                Some(Err(e)) => Err(e),
             }
-            Some(Err(e)) => Err(e),
-        }
+        })
     }
-    async fn close(mut self: Box<Self>, _deadline: Ts) -> Closed {
-        self.sess.closed.store(true, Ordering::SeqCst);
-        self.rx.close();
-        Closed::Clean
+    fn close(mut self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.sess.closed.store(true, Ordering::SeqCst);
+            self.rx.close();
+            Closed::Clean
+        })
     }
 }
 
@@ -883,25 +886,26 @@ struct Frames {
     dies: bool,
 }
 
-#[async_trait]
 impl StreamSource<SynthesizedAudio> for Frames {
-    async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        if self.left == 0 {
-            return if self.dies { Err(boom("the provider's socket died")) } else { Ok(None) };
-        }
-        self.left -= 1;
-        // 10 ms of interleaved silence at the provider's own rate.
-        let n = (self.rate / 100) as usize;
-        let ch = self.channels as usize;
-        let mut a = SynthesizedAudio::new(
-            AudioFrame::new(vec![0u8; n * ch * 2], self.rate, self.channels, n as u32),
-            "r",
-        );
-        a.is_final = self.left == 0 && !self.dies;
-        Ok(Some(a))
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            if self.left == 0 {
+                return if self.dies { Err(boom("the provider's socket died")) } else { Ok(None) };
+            }
+            self.left -= 1;
+            // 10 ms of interleaved silence at the provider's own rate.
+            let n = (self.rate / 100) as usize;
+            let ch = self.channels as usize;
+            let mut a = SynthesizedAudio::new(
+                AudioFrame::new(vec![0u8; n * ch * 2], self.rate, self.channels, n as u32),
+                "r",
+            );
+            a.is_final = self.left == 0 && !self.dies;
+            Ok(Some(a))
+        })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 
@@ -1103,17 +1107,18 @@ struct AfterEnd {
     frames: Option<Frames>,
 }
 
-#[async_trait]
 impl StreamSource<SynthesizedAudio> for AfterEnd {
-    async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        if self.frames.is_none() {
-            self.ended.notified().await;
-            self.frames = Some(Frames { left: 1, rate: 24_000, channels: 1, dies: false });
-        }
-        self.frames.as_mut().expect("just set").next().await
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            if self.frames.is_none() {
+                self.ended.notified().await;
+                self.frames = Some(Frames { left: 1, rate: 24_000, channels: 1, dies: false });
+            }
+            self.frames.as_mut().expect("just set").next().await
+        })
     }
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

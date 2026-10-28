@@ -240,20 +240,21 @@ struct Events {
     context: String,
 }
 
-#[async_trait]
 impl StreamSource<TurnEvent> for Events {
-    async fn next(&mut self) -> Result<Option<TurnEvent>, ProviderError> {
-        let event = self.source.next().await?;
-        if let Some(event) = &event {
-            self.publisher.event(event, &self.context).await.map_err(provider_error)?;
-        }
-        Ok(event)
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
+        Box::pin(async move {
+            let event = self.source.next().await?;
+            if let Some(event) = &event {
+                self.publisher.event(event, &self.context).await.map_err(provider_error)?;
+            }
+            Ok(event)
+        })
     }
     fn cancel_safe(&self) -> bool {
         self.source.cancel_safe()
     }
-    async fn close(self: Box<Self>, deadline: Ts) -> Closed {
-        self.source.close(deadline).await
+    fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { self.source.close(deadline).await })
     }
 }
 

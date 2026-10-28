@@ -155,7 +155,6 @@ pub struct McpSession {
     allowed: Mutex<Vec<String>>,
 }
 
-#[async_trait::async_trait]
 impl McpSessionPort for McpSession {
     fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError> {
         Ok(Self {

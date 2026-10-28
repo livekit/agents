@@ -27,13 +27,12 @@ impl StreamSink<Verdict> for Sink {
     fn end_input(&self) {}
 }
 
-#[async_trait]
 impl StreamSource<TurnEvent> for Events {
-    async fn next(&mut self) -> Result<Option<TurnEvent>, ProviderError> {
-        Ok(self.0.take())
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
+        Box::pin(async move { Ok(self.0.take()) })
     }
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
     }
 }
 

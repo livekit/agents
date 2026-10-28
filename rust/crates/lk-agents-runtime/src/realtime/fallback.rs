@@ -534,7 +534,6 @@ mod python {
     use super::{RealtimeChild, RealtimeFallbackModel};
     use lk_agents_inference::fallback::ChainObserver;
 
-    #[async_trait::async_trait]
     impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFallbackModel {
         fn new(
             models: Vec<HostRef>,

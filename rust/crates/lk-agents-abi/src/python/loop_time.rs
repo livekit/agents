@@ -136,20 +136,22 @@ fn applies_to(event_loop: &Bound<'_, PyAny>) -> bool {
     match mode() {
         Mode::On => true,
         Mode::Off => false,
-        Mode::Auto => event_loop
-            .getattr(VIRTUAL_TIME_MARKER)
-            .and_then(|v| v.is_truthy())
-            .unwrap_or(false),
+        Mode::Auto => {
+            event_loop.getattr(VIRTUAL_TIME_MARKER).and_then(|v| v.is_truthy()).unwrap_or(false)
+        }
     }
 }
 
 /// Drops every listed loop that is closed, and cancels its runtime's tasks. No lock is held
 /// while Python runs.
 fn sweep(py: Python<'_>) {
-    let listed: Vec<Py<PyAny>> = lock(&REGISTRY).iter().map(|e| e.event_loop.clone_ref(py)).collect();
+    let listed: Vec<Py<PyAny>> =
+        lock(&REGISTRY).iter().map(|e| e.event_loop.clone_ref(py)).collect();
     let closed: Vec<usize> = listed
         .iter()
-        .filter(|l| l.bind(py).call_method0("is_closed").and_then(|c| c.is_truthy()).unwrap_or(true))
+        .filter(|l| {
+            l.bind(py).call_method0("is_closed").and_then(|c| c.is_truthy()).unwrap_or(true)
+        })
         .map(|l| l.as_ptr() as usize)
         .collect();
     if closed.is_empty() {
@@ -186,7 +188,8 @@ fn lookup(py: Python<'_>, event_loop: &Bound<'_, PyAny>) -> Option<Arc<LoopRunti
     } else {
         None
     };
-    lock(&REGISTRY).push(Entry { event_loop: event_loop.clone().unbind(), runtime: runtime.clone() });
+    lock(&REGISTRY)
+        .push(Entry { event_loop: event_loop.clone().unbind(), runtime: runtime.clone() });
     runtime
 }
 
@@ -256,12 +259,17 @@ impl LoopRuntime {
             pump: OnceLock::new(),
         });
         let weak = Arc::downgrade(&rt);
-        let pump = PyCFunction::new_closure(py, Some(c"lk_loop_pump"), None, move |args, _kwargs| -> PyResult<()> {
-            if let Some(rt) = weak.upgrade() {
-                rt.run_pump(args.py());
-            }
-            Ok(())
-        })?;
+        let pump = PyCFunction::new_closure(
+            py,
+            Some(c"lk_loop_pump"),
+            None,
+            move |args, _kwargs| -> PyResult<()> {
+                if let Some(rt) = weak.upgrade() {
+                    rt.run_pump(args.py());
+                }
+                Ok(())
+            },
+        )?;
         let _ = rt.pump.set(pump.into_any().unbind());
         Ok(rt)
     }
@@ -402,11 +410,15 @@ impl LoopRuntime {
         let secs = self
             .on_loop_thread()
             .then(|| {
-                Python::attach(|py| -> PyResult<f64> { py.import("time")?.call_method0("time")?.extract() }).ok()
+                Python::attach(|py| -> PyResult<f64> {
+                    py.import("time")?.call_method0("time")?.extract()
+                })
+                .ok()
             })
             .flatten()
             .unwrap_or_else(|| self.wall_origin + self.now().as_nanos() as f64 / 1e9);
-        let candidate = SystemTime::UNIX_EPOCH + Duration::try_from_secs_f64(secs.max(0.0)).unwrap_or_default();
+        let candidate =
+            SystemTime::UNIX_EPOCH + Duration::try_from_secs_f64(secs.max(0.0)).unwrap_or_default();
         let mut last = lock(&self.last_wall);
         *last = if candidate > *last { candidate } else { *last + TICK_EPSILON };
         *last
@@ -421,25 +433,32 @@ impl LoopRuntime {
         let fired = {
             let timer = Arc::clone(timer);
             let rt = Arc::downgrade(self);
-            PyCFunction::new_closure(py, Some(c"lk_loop_timer"), None, move |_args, _kwargs| -> PyResult<()> {
-                if let Some(rt) = rt.upgrade() {
-                    rt.high_water.raise(at.as_nanos());
-                }
-                let waker = {
-                    let mut t = lock(&timer);
-                    t.fired = true;
-                    t.handle = None;
-                    t.waker.take()
-                };
-                if let Some(w) = waker {
-                    w.wake();
-                }
-                Ok(())
-            })
+            PyCFunction::new_closure(
+                py,
+                Some(c"lk_loop_timer"),
+                None,
+                move |_args, _kwargs| -> PyResult<()> {
+                    if let Some(rt) = rt.upgrade() {
+                        rt.high_water.raise(at.as_nanos());
+                    }
+                    let waker = {
+                        let mut t = lock(&timer);
+                        t.fired = true;
+                        t.handle = None;
+                        t.waker.take()
+                    };
+                    if let Some(w) = waker {
+                        w.wake();
+                    }
+                    Ok(())
+                },
+            )
         };
         let Ok(fired) = fired else { return };
         // A closed loop refuses: the wait never ends, and the task is dropped with the loop.
-        let Ok(handle) = self.event_loop.bind(py).call_method1("call_at", (loop_when(self.origin, at), fired)) else {
+        let Ok(handle) =
+            self.event_loop.bind(py).call_method1("call_at", (loop_when(self.origin, at), fired))
+        else {
             return;
         };
         let cancel_now = {
@@ -460,7 +479,11 @@ impl LoopRuntime {
 
     /// `future_into_py` for this loop: the asyncio future is resolved directly on the loop thread,
     /// and cancelling it aborts the task.
-    pub fn future_into_py<'py, F, T>(self: &Arc<Self>, py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+    pub fn future_into_py<'py, F, T>(
+        self: &Arc<Self>,
+        py: Python<'py>,
+        fut: F,
+    ) -> PyResult<Bound<'py, PyAny>>
     where
         F: Future<Output = PyResult<T>> + Send + 'static,
         T: for<'a> IntoPyObject<'a> + Send + 'static,
@@ -470,7 +493,8 @@ impl LoopRuntime {
         let py_fut = event_loop.call_method0("create_future")?;
         let target = py_fut.clone().unbind();
         let task = self.spawn_task(Box::pin(async move {
-            let result = pyo3_async_runtimes::tokio::scope(locals, CatchUnwind(Box::pin(fut))).await;
+            let result =
+                pyo3_async_runtimes::tokio::scope(locals, CatchUnwind(Box::pin(fut))).await;
             Python::attach(|py| {
                 let target = target.bind(py);
                 if target.call_method0("done").and_then(|d| d.is_truthy()).unwrap_or(true) {
@@ -483,12 +507,17 @@ impl LoopRuntime {
                 };
             });
         }));
-        let on_done = PyCFunction::new_closure(py, Some(c"lk_loop_future_done"), None, move |args, _kwargs| -> PyResult<()> {
-            if args.get_item(0)?.call_method0("cancelled")?.is_truthy()? {
-                task.abort();
-            }
-            Ok(())
-        })?;
+        let on_done = PyCFunction::new_closure(
+            py,
+            Some(c"lk_loop_future_done"),
+            None,
+            move |args, _kwargs| -> PyResult<()> {
+                if args.get_item(0)?.call_method0("cancelled")?.is_truthy()? {
+                    task.abort();
+                }
+                Ok(())
+            },
+        )?;
         py_fut.call_method1("add_done_callback", (on_done,))?;
         Ok(py_fut)
     }
@@ -513,7 +542,9 @@ where
                     .map(|s| (*s).to_owned())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "unknown error".to_owned());
-                Poll::Ready(Err(pyo3::exceptions::PyRuntimeError::new_err(format!("rust future panicked: {msg}"))))
+                Poll::Ready(Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "rust future panicked: {msg}"
+                ))))
             }
         }
     }
@@ -676,7 +707,12 @@ impl Future for LoopWait {
             }
             return Poll::Pending;
         }
-        let timer = Arc::new(Mutex::new(Timer { fired: false, dropped: false, waker: Some(cx.waker().clone()), handle: None }));
+        let timer = Arc::new(Mutex::new(Timer {
+            fired: false,
+            dropped: false,
+            waker: Some(cx.waker().clone()),
+            handle: None,
+        }));
         self.timer = Some(Arc::clone(&timer));
         let (rt, at) = (Arc::clone(&self.rt), self.at);
         if rt.on_loop_thread() {
@@ -711,14 +747,13 @@ impl Drop for LoopWait {
     }
 }
 
-#[async_trait::async_trait]
 impl Clock for LoopClock {
     fn now(&self) -> Ts {
         self.0.now()
     }
 
-    async fn wait_until(&self, at: Ts) {
-        LoopWait { rt: Arc::clone(&self.0), at, timer: None }.await
+    fn wait_until(&self, at: Ts) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move { LoopWait { rt: Arc::clone(&self.0), at, timer: None }.await })
     }
 
     fn wall(&self) -> SystemTime {

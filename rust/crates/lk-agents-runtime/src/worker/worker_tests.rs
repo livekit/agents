@@ -129,7 +129,6 @@ fn runtime_cfg(max_retry: u32) -> RuntimeConfig {
 }
 
 struct FrozenClock;
-#[async_trait::async_trait]
 impl Clock for FrozenClock {
     fn now(&self) -> Ts {
         Ts::ZERO
@@ -138,8 +137,8 @@ impl Clock for FrozenClock {
         SystemTime::UNIX_EPOCH
     }
     /// Frozen: a wait on it never ends. No test here arms one.
-    async fn wait_until(&self, _at: Ts) {
-        std::future::pending::<()>().await
+    fn wait_until(&self, _at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move { std::future::pending::<()>().await })
     }
 }
 
@@ -351,7 +350,6 @@ async fn a_user_load_function_wins_and_is_asked_exactly_once() {
 
 // Runtime scheduling tests use channels for the peer and gates for slow host operations.
 struct TestClock(tokio::time::Instant);
-#[async_trait]
 impl Clock for TestClock {
     fn now(&self) -> Ts {
         Ts::from_nanos(self.0.elapsed().as_nanos() as u64)
@@ -360,8 +358,10 @@ impl Clock for TestClock {
         SystemTime::UNIX_EPOCH
     }
 
-    async fn wait_until(&self, at: Ts) {
-        tokio::time::sleep(at.saturating_duration_since(self.now())).await;
+    fn wait_until(&self, at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            tokio::time::sleep(at.saturating_duration_since(self.now())).await;
+        })
     }
 }
 

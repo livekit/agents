@@ -83,18 +83,20 @@ fn final_error(error: ProviderError) -> ProviderError {
 
 struct Final<T>(Box<dyn StreamSource<T>>);
 
-#[async_trait]
-impl<T: Send> StreamSource<T> for Final<T> {
-    async fn next(&mut self) -> Result<Option<T>, ProviderError> {
-        self.0.next().await.map_err(final_error)
+impl<T: Send + 'static> StreamSource<T> for Final<T> {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
+        Box::pin(async move { self.0.next().await.map_err(final_error) })
     }
 
     fn cancel_safe(&self) -> bool {
         self.0.cancel_safe()
     }
 
-    async fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::Closed {
-        self.0.close(deadline).await
+    fn close(
+        self: Box<Self>,
+        deadline: Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move { self.0.close(deadline).await })
     }
 
     fn started_time(&self) -> Option<f64> {

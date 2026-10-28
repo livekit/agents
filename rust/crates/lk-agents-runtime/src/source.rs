@@ -140,18 +140,21 @@ mod tests {
         closes: Arc<AtomicUsize>,
     }
 
-    #[async_trait::async_trait]
     impl StreamSource<u32> for Scripted {
-        async fn next(&mut self) -> Result<Option<u32>, ProviderError> {
-            if self.items.is_empty() {
-                std::future::pending::<()>().await;
-            }
-            Ok(Some(self.items.remove(0)))
+        fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<u32>, ProviderError>> {
+            Box::pin(async move {
+                if self.items.is_empty() {
+                    std::future::pending::<()>().await;
+                }
+                Ok(Some(self.items.remove(0)))
+            })
         }
 
-        async fn close(self: Box<Self>, _: Ts) -> Closed {
-            self.closes.fetch_add(1, Ordering::SeqCst);
-            Closed::Clean
+        fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+            Box::pin(async move {
+                self.closes.fetch_add(1, Ordering::SeqCst);
+                Closed::Clean
+            })
         }
     }
 

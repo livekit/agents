@@ -60,19 +60,22 @@ struct Scripted {
     closed: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl StreamSource<LlmChunk> for Scripted {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        match self.chunks.pop_front() {
-            Some(chunk) => Ok(Some(chunk)),
-            None if self.hang => std::future::pending().await,
-            None => Ok(None),
-        }
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            match self.chunks.pop_front() {
+                Some(chunk) => Ok(Some(chunk)),
+                None if self.hang => std::future::pending().await,
+                None => Ok(None),
+            }
+        })
     }
 
-    async fn close(self: Box<Self>, _deadline: Ts) -> Closed {
-        self.closed.fetch_add(1, Ordering::SeqCst);
-        Closed::Clean
+    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.closed.fetch_add(1, Ordering::SeqCst);
+            Closed::Clean
+        })
     }
 }
 
@@ -235,7 +238,9 @@ impl AgentHost for FakeHost {
         Ok(ValidatedOutput::Accepted {
             text: None,
             value: Some(self.host_ref()),
-            serialized: Some(lk_agents_abi::agent::SerializedOutput { value: serde_json::json!({"accepted": true}) }),
+            serialized: Some(lk_agents_abi::agent::SerializedOutput {
+                value: serde_json::json!({"accepted": true}),
+            }),
         })
     }
 
