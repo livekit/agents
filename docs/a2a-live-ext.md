@@ -81,6 +81,7 @@ ignored.
 | `livekit/interrupted`        | the final `TaskStatusUpdateEvent` of a `canceled` task | the server | `true` |
 | `livekit/interruptionReason` | the same event | the server | string: `new-message` |
 | `livekit/mergedInto`         | the final `TaskStatusUpdateEvent` of a `completed` task | the server | string: a task id |
+| `livekit/background`         | a `working` `TaskStatusUpdateEvent` | the server | `true`: the task's turn ended and a tool of it runs on in the background: its updates are `working` frames at once, its end is delivered to the task. `false` once all of it ended |
 | `livekit/verbatim`           | a text `Part` of a `working` status message, of the answer artifact, or of an `input-required` status message | the server | `true`: this part reaches the person exactly as written; the agent facing them words every other part |
 
 ### Exact text

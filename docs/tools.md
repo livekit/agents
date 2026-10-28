@@ -60,9 +60,15 @@ text, said as written with no model step and recorded as the agent's
 message: spoken on a call, a flagged `working` status in text
 ([a2a-live-ext.md](a2a-live-ext.md#exact-text)). On a call the first of
 them releases the tool to the background, and a first `say` is the turn's
-reply; later ones are delivered at idle in call order, consecutive updates
-as one reply, and a `say` cut off before it played is said again. A model
-that cannot say text as written is asked to, with a warning.
+reply; in text a first `update` does so under the `live` inbox
+([text-endpoints.md](text-endpoints.md)). On a call later ones are delivered
+at idle in call order, consecutive updates as one reply, and a `say` cut off
+before it played is said again. In text a later one is a `working` frame at
+once, and the model reads it with the next turn. On a call the reply to an update calls no
+tools and the reply to a tool's end may, as after any tool; in text an update gets no reply,
+the receiver words it. `ctx.update(text, silent=True)` is for the model alone: no reply on a
+call, no `working` frame in text. A model that cannot say text
+as written is asked to, with a warning.
 
 The calls of one step run together. A verbatim result the model goes on
 from is said when its tool returns. Those that end the turn are the
@@ -161,8 +167,10 @@ The clients in `deps` are per run by design; see
 ## On a call
 
 Tools that run while the agent speaks have options that only matter on a
-call: `flags=ToolFlag.CANCELLABLE`, and `on_duplicate=` with
-`duplicate_scope=` for a call made while the same tool is still running
+call, or in text while a tool runs in the background under the `live`
+inbox: `flags=ToolFlag.CANCELLABLE`, which offers the model
+`lk_agents_cancel_task` for the tool's running calls, and `on_duplicate=`
+with `duplicate_scope=` for a call made while the same tool is still running
 (`"allow"`, `"reject"`, `"replace"`, or `"confirm"`, which asks the model to
 call again to confirm). See [voice.md](voice.md).
 

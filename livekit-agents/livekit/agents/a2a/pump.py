@@ -18,7 +18,7 @@ from pydantic import JsonValue
 
 from .._core import Boundary, Streams
 from .._generated.storage_run import TaskRecord
-from .._generated.storage_turn import HandlerOutput, TurnContext
+from .._generated.storage_turn import Background, HandlerOutput, TurnContext
 from ..log import logger
 from ..storage.context import TokenHook, TurnHost, UpdateHook
 from ..storage.protocol import TERMINAL_TASK_STATES, StorageError
@@ -245,6 +245,9 @@ class WireHost(Generic[S]):
     async def on_end(self, record: TaskRecord, output: JsonValue) -> None:
         """Rust calls it under ``live`` after each commit, for every task the turn carried."""
         self._ended.add(record.id)
+        if record.status == "working":
+            # the reply beside work in the background was not the answer, which streams anew
+            self._answers.pop(record.id, None)
         verbatim = output is not None and self._host.verbatim
         if output is not None and record.data.artifacts:
             artifact_id = str(record.data.artifacts[0]["artifactId"])
@@ -256,6 +259,10 @@ class WireHost(Generic[S]):
             self._pump.forget(record.id)
         elif record.status in TERMINAL_TASK_STATES:
             start(self._pump.close(record.id))
+
+    async def background(self, wait: float) -> Background:
+        """Rust calls it under ``live`` between turns, to learn what runs and what is ready."""
+        return await self._host.background(wait)
 
     async def finish(self, outcome: TurnOutcome) -> None:
         """The request's turn returned: once its task's row has an end that no turn of this host

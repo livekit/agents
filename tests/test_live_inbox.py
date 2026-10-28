@@ -356,7 +356,6 @@ async def in_the_background(desk: Door, thread: str, count: int = 1) -> list[dic
 
 
 @pytest.mark.rule("R8", "R9", "R11")
-@pytest.mark.xfail(strict=True, reason="R8, R9, R11: a tool's update in text never frees the run")
 async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
     door: Callable[..., Door],
 ) -> None:
@@ -394,7 +393,6 @@ async def test_a_tool_that_reports_progress_runs_on_beside_the_next_message(
 
 
 @pytest.mark.rule("R8")
-@pytest.mark.xfail(strict=True, reason="R8: in text a tool's update never lets the run go on")
 async def test_a_task_waits_for_all_its_work_in_the_background(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1", day="monday"), call("book", "b2", day="tuesday")]),
@@ -431,7 +429,6 @@ async def test_a_task_waits_for_all_its_work_in_the_background(door: Callable[..
 
 
 @pytest.mark.rule("R28")
-@pytest.mark.xfail(strict=True, reason="R28: in text no work runs in the background to deliver")
 async def test_later_progress_is_told_while_the_work_runs_on(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1", day="monday")]),
@@ -475,9 +472,6 @@ async def test_later_progress_is_told_while_the_work_runs_on(door: Callable[...,
 
 
 @pytest.mark.rule("R28", "R58")
-@pytest.mark.xfail(
-    strict=True, reason="R28, R58: in text no work runs in the background to deliver"
-)
 async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_task(
     door: Callable[..., Door],
 ) -> None:
@@ -532,7 +526,6 @@ async def test_results_that_end_during_a_turn_come_back_in_one_reply_on_each_tas
 
 
 @pytest.mark.rule("R29")
-@pytest.mark.xfail(strict=True, reason="R29: in text no work runs in the background to ask")
 async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     door: Callable[..., Door],
 ) -> None:
@@ -559,7 +552,6 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
 
 
 @pytest.mark.rule("R55")
-@pytest.mark.xfail(strict=True, reason="R55: in text no tool goes to the background")
 async def test_a_reply_beside_the_call_is_the_only_acknowledgement(
     door: Callable[..., Door],
 ) -> None:
@@ -581,7 +573,6 @@ async def test_a_reply_beside_the_call_is_the_only_acknowledgement(
 
 
 @pytest.mark.rule("R57")
-@pytest.mark.xfail(strict=True, reason="R57: in text no tool goes to the background")
 async def test_the_reply_to_progress_calls_no_tools(door: Callable[..., Door]) -> None:
     model = ScriptedLLM(
         Reply(tool_calls=[call("book", "b1", day="monday")]),
@@ -606,7 +597,6 @@ async def test_the_reply_to_progress_calls_no_tools(door: Callable[..., Door]) -
 
 
 @pytest.mark.rule("R30", "B25")
-@pytest.mark.xfail(strict=True, reason="R30, B25: in text no call runs on to be duplicated")
 async def test_a_duplicate_of_a_call_in_the_background_follows_the_tools_policy(
     door: Callable[..., Door],
 ) -> None:
@@ -636,7 +626,6 @@ async def test_a_duplicate_of_a_call_in_the_background_follows_the_tools_policy(
 
 @pytest.mark.rule("R30")
 @pytest.mark.parametrize("cancellable", [False, True])
-@pytest.mark.xfail(strict=True, reason="R30: in text no call runs on to be replaced")
 async def test_a_replace_cancels_the_running_call_only_when_it_is_cancellable(
     door: Callable[..., Door], cancellable: bool
 ) -> None:
@@ -674,7 +663,6 @@ async def test_a_replace_cancels_the_running_call_only_when_it_is_cancellable(
 
 
 @pytest.mark.rule("B53")
-@pytest.mark.xfail(strict=True, reason="B53: in text the model gets no cancel tool")
 async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
     door: Callable[..., Door],
 ) -> None:

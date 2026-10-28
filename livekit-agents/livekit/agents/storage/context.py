@@ -9,6 +9,7 @@ takes, runs it with the run hooks of ``Agent.run()`` installed, and reports the 
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import Generic, cast
 
@@ -17,10 +18,18 @@ from typing_extensions import TypeVar
 
 from .._core import Boundary
 from .._generated.storage_run import RunUsage, TaskRecord
-from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
+from .._generated.storage_turn import (
+    Background,
+    HandlerOutput,
+    HostEvent,
+    Message,
+    PendingCall,
+    TurnContext,
+)
 from ..llm import ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
 from ..log import logger
-from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
+from ..voice.agent_run import RunHooks, TextTools, reset_run_hooks, set_run_hooks
+from ..voice.generation import ToolExecutionOutput
 from ..voice.run_result import RunResult
 from .protocol import (
     TERMINAL_TASK_STATES,
@@ -134,7 +143,8 @@ class A2ASessionContext(Generic[S]):
 
 
 class TurnHost(Generic[S]):
-    """What ``_core.Turn`` calls back into for one door: the handler, and the wire hooks."""
+    """What ``_core.Turn`` calls back into for one door: the handler, and the wire hooks. Under
+    ``live`` the holder runs every turn and keeps its tools in the background and their state."""
 
     def __init__(
         self,
@@ -155,19 +165,34 @@ class TurnHost(Generic[S]):
         self.verbatim = False
         """The last turn's answer, or its question, reaches the person exactly as written: the
         door flags its part."""
+        self._tools = TextTools(live=True, on_update=self.on_update)
+        self._delivery: list[ToolExecutionOutput] = []
+        """What the next turn with no message delivers."""
+        self._waiting: set[str] = set()
+        """The tasks whose last turn asked the person: nothing is delivered to them meanwhile."""
+        self._state: S | None = None
 
     async def handle(self, ctx: TurnContext, boundary: Boundary) -> HandlerOutput:
         """The developer's handler on one turn, the run hooks installed around it."""
+        if ctx.live:
+            # one state object per holder: a tool in the background writes it after its turn
+            if self._state is None:
+                self._state = self._load_state(ctx.state)
+            state = self._state
+        else:
+            state = self._load_state(ctx.state)
         context = A2ASessionContext(
             ctx,
             boundary,
-            state=self._load_state(ctx.state),
+            state=state,
             thread=self._thread,
             on_update=self._on_update,
             on_token=self._on_token,
         )
         results: list[RunResult[object]] = []
         added: list[ChatItem] = []
+        # a task that waited on the person and ended meanwhile holds nothing back any more
+        self._waiting -= {r.id for r in ctx.tasks if r.status in TERMINAL_TASK_STATES}
         hooks = RunHooks(
             boundary=boundary.check,
             on_result=results.append,
@@ -186,9 +211,22 @@ class TurnHost(Generic[S]):
             open_tasks=frozenset(
                 r.id
                 for r in ctx.tasks
-                if r.id != ctx.task_id and r.status not in TERMINAL_TASK_STATES
+                if r.id != ctx.task_id
+                and r.id not in {m.task_id for m in ctx.batch}  # a delivery's other tasks
+                and r.status not in TERMINAL_TASK_STATES
             ),
+            tools=self._tools if ctx.live else None,
         )
+        progress: list[ChatItem] = []
+        if ctx.batch and all(m.metadata.get("livekit/kind") == "delivery" for m in ctx.batch):
+            hooks.delivery, self._delivery = self._delivery, []
+        elif ctx.live:
+            # progress of work in the background since the last turn: the model reads it first
+            for out in self._tools.progress():
+                for item in (out.fnc_call, out.fnc_call_out):
+                    item.created_at = time.time()
+                    progress.append(item)
+            context.message_history.insert(progress)
 
         token = set_run_hooks(hooks)
         try:
@@ -210,15 +248,18 @@ class TurnHost(Generic[S]):
                 "the a2a_session handler raised; the task fails",
                 extra={"lane": ctx.lane, "taskId": ctx.task_id},
             )
-            # the tool calls that ran are kept, so the next turn does not run them again
+            # the calls that ran are kept, the state writes are not: the next turn reloads it
+            self._state = None
             return HandlerOutput(
                 error=RUN_FAILED,
-                new_items=[item_to_payload(item) for item in added],
+                new_items=[item_to_payload(item) for item in [*progress, *added]],
             )
         finally:
             reset_run_hooks(token)
 
-        return self._output(context, output, results)
+        handled_output = self._output(context, output, results)
+        handled_output.new_items[:0] = [item_to_payload(item) for item in progress]
+        return handled_output
 
     async def on_update(self, task_id: str, text: str, verbatim: bool = False) -> None:
         if self._on_update is not None:
@@ -235,6 +276,12 @@ class TurnHost(Generic[S]):
     async def on_end(self, record: TaskRecord, output: JsonValue) -> None:
         """Rust calls it under ``live`` after each commit; a host with no stream does nothing."""
 
+    async def background(self, wait: float) -> Background:
+        """Rust calls it under ``live`` between turns: what runs on, and the tasks a turn with no
+        message delivers to now, after waiting up to ``wait`` seconds for an end."""
+        ready, self._delivery = await self._tools.take(wait, self._waiting)
+        return Background(running=self._tools.owed(), ready=ready)
+
     def _load_state(self, stored: JsonValue) -> S:
         if self._state_type is None:
             return cast(S, None)  # a door declared with no state: ``A2ASessionContext[None]``
@@ -250,6 +297,10 @@ class TurnHost(Generic[S]):
             output = output.input_required if output.input_required is not None else output.output
 
         asked = next((r for r in reversed(results) if r.input_required is not None), None)
+        if asked is not None:
+            self._waiting.add(ctx.task_id)
+        else:
+            self._waiting.discard(ctx.task_id)
         last = results[-1] if results else None
         # exact when the handler answered with the last run's exact answer or question
         self.verbatim = last is not None and last.verbatim is not None and output == last.verbatim
@@ -272,6 +323,8 @@ class TurnHost(Generic[S]):
                 (r._agent_stack for r in reversed(results) if r._agent_stack is not None), None
             ),
             interrupted=ctx.interrupted or any(r.interrupted for r in results),
+            # the task waits for its tools in the background, whose end answers it
+            background=ctx.task_id in self._tools.owed(),
             metadata=dict(ctx.metadata),
             events=[*_tool_events(results), *ctx.events],
         )

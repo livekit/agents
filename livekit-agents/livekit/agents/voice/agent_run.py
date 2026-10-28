@@ -18,7 +18,8 @@ import asyncio
 import contextvars
 import inspect
 import json
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
+import time
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Container, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -41,6 +42,7 @@ from ..llm import (
     RawFunctionTool,
     RealtimeModel,
     Tool,
+    ToolChoice,
     ToolContext,
     Toolset,
 )
@@ -59,16 +61,14 @@ from ..llm.tool_context import (
     ToolResult,
     Transition,
     Working,
-    approval_granted,
-    approval_scope,
     as_model_reads,
     delivered,
     function_tool,
     is_transition,
 )
-from ..llm.utils import answer_arguments, prepare_function_arguments
+from ..llm.utils import answer_arguments, parse_function_arguments
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from .agent import AgentTask, ModelSettings, TaskAwaited
 from .events import RunContext
@@ -79,6 +79,17 @@ from .generation import (
     update_instructions,
 )
 from .run_result import RunResult, RunUsage
+from .tool_executor import (
+    AsyncToolOptions,
+    _reply_instructions,
+    _reply_tool_choice,
+    _resolve_async_tool_options,
+    _RunningTask,
+    _ToolExecutor,
+    cancel_task,
+    get_running_tasks,
+    has_cancellable_tool,
+)
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -116,6 +127,9 @@ class RunHooks:
     the agent facing the person does. ``lane`` is the door's lane of the thread, what
     ``A2ADelegate`` names as the caller's. ``task_id`` marks what the run records
     (``TASK_KEY``); ``open_tasks`` are the lane's other open tasks, whose later items it skips.
+    ``tools`` is set under the ``live`` inbox: a tool's first ``ctx.update()`` is its output, the
+    run goes on, and the tool runs on there; ``delivery`` is what its tools queued that this turn
+    delivers, in place of a message.
     """
 
     boundary: Callable[[], Awaitable[bool]] | None = None
@@ -133,6 +147,152 @@ class RunHooks:
     lane: str | None = None
     task_id: str | None = None
     open_tasks: frozenset[str] = frozenset()
+    tools: TextTools | None = None
+    delivery: Sequence[ToolExecutionOutput] = ()
+
+
+class TextTools:
+    """The sink of a text door's tools: under ``live`` a tool's first update lets its turn go on,
+    and what it reports later is sent at once and queued for the next turn."""
+
+    def __init__(
+        self, *, live: bool = False, on_update: Callable[[str, str, bool], Awaitable[None]] | None
+    ) -> None:
+        self.executor = _ToolExecutor(sink=self)
+        self._live = live
+        self._on_update = on_update
+        self._released: dict[str, str] = {}
+        """The calls whose turn went on without them, with their task."""
+        self._queue: list[tuple[str, ToolExecutionOutput, bool]] = []
+        """By task, in call order: each update, said text and end, and whether it is progress."""
+        self._ended = asyncio.Event()
+
+    def started(self, task: _RunningTask) -> None:
+        pass
+
+    def done(self, task: _RunningTask, output: Any) -> None:
+        call_id = task.ctx.function_call.call_id
+        if call_id not in self._released:
+            return
+        # a call stopped or failed with no end of its own: its task still hears that it ended
+        error = "the call was cancelled" if task.exe_task.cancelled() else str(output)
+        self._end(task.ctx, ToolError(error))
+
+    async def stop(self, task: _RunningTask) -> None:
+        await utils.aio.cancel_and_wait(task.exe_task)
+
+    async def arguments(
+        self, tool: FunctionTool | RawFunctionTool, raw: dict[str, Any], ctx: RunContext[Any, Any]
+    ) -> dict[str, Any]:
+        return raw
+
+    def returned(self, ctx: RunContext[Any, Any], output: Any) -> Any:
+        return output
+
+    async def update(
+        self,
+        ctx: RunContext[Any, Any],
+        pair: tuple[FunctionCall, FunctionCallOutput],
+        text: str,
+        message: Any,
+        *,
+        silent: bool,
+    ) -> None:
+        call_id = ctx.function_call.call_id
+        if (task_id := self._released.get(call_id)) is None:
+            # in its turn: progress on the turn's response, and under live the call's output
+            hooks = current_run_hooks()
+            if not silent and hooks is not None and hooks.on_update is not None:
+                out = hooks.on_update(text)
+                if inspect.isawaitable(out):
+                    await out
+            if self._live and ctx._first_update_fut is not None:
+                self._released[call_id] = hooks.task_id or "" if hooks is not None else ""
+                # marked on the run now: the work may end before the run reads its output
+                assert ctx._run is not None
+                ctx._run._background_calls.add(call_id)
+                self.executor._report(ctx, message, silent=silent)
+            return
+        if not silent and self._on_update is not None:
+            await self._on_update(task_id, text, False)
+        self._queue.append(
+            (task_id, make_tool_output(fnc_call=pair[0], output=message, exception=None), True)
+        )
+
+    async def say(self, ctx: RunContext[Any, Any], text: str) -> None:
+        call_id = ctx.function_call.call_id
+        if (task_id := self._released.get(call_id)) is None:
+            assert ctx._run is not None
+            await ctx._run._say(text)
+            return
+        if self._on_update is not None:
+            await self._on_update(task_id, text, True)
+        step = len(ctx._updates)
+        pair = ctx._make_update_pair(
+            ToolResult(DELIVERED.format(text=text), reply_required=False),
+            call_id_suffix=f"_update_{step}",
+        )
+        ctx._updates.append(pair)
+        out = make_tool_output(fnc_call=pair[0], output=pair[1].output, exception=None)
+        self._queue.append((task_id, out, True))
+
+    async def ended(self, ctx: RunContext[Any, Any], output: Any) -> None:
+        # as in the turn: the model reads why, and may retry
+        self._end(ctx, ToolError(output.message) if isinstance(output, ModelRetry) else output)
+
+    def _end(self, ctx: RunContext[Any, Any], output: Any) -> None:
+        task_id = self._released.pop(ctx.function_call.call_id)
+        final_call, _ = ctx._make_update_pair(None, call_id_suffix="_final")
+        out = make_tool_output(fnc_call=final_call, output=output, exception=None)
+        self._queue.append((task_id, out, False))
+        self._ended.set()
+
+    def owed(self) -> list[str]:
+        """The tasks whose work runs on, or whose queue waits."""
+        tasks = [*self._released.values(), *(task_id for task_id, _, _ in self._queue)]
+        return list(dict.fromkeys(tasks))
+
+    def progress(self) -> list[ToolExecutionOutput]:
+        """The progress queued before any end, which the next turn records before its message."""
+        taken = 0
+        while taken < len(self._queue) and self._queue[taken][2]:
+            taken += 1
+        progress, self._queue = self._queue[:taken], self._queue[taken:]
+        return [out for _, out, _ in progress]
+
+    async def take(
+        self, wait: float, waiting: Container[str]
+    ) -> tuple[list[str], list[ToolExecutionOutput]]:
+        """What is delivered next, after waiting up to ``wait`` seconds for an end, and the tasks it
+        ends or asks: the queue in call order, a question on its own, nothing of a task that waits
+        on the person's answer, and nothing while only progress waits."""
+
+        def ready() -> bool:
+            return any(not progress and t not in waiting for t, _, progress in self._queue)
+
+        if wait and not ready():
+            self._ended.clear()
+            try:
+                await asyncio.wait_for(self._ended.wait(), wait)
+            except asyncio.TimeoutError:
+                pass
+        if not ready():
+            return [], []
+        taken: list[tuple[str, ToolExecutionOutput, bool]] = []
+        kept: list[tuple[str, ToolExecutionOutput, bool]] = []
+        asked = closed = False
+        for task_id, out, progress in self._queue:
+            asks = isinstance(out.transition, InputRequired)
+            if task_id not in waiting:
+                closed = closed or bool(taken and (asks or asked))
+            if task_id in waiting or closed:
+                kept.append((task_id, out, progress))
+                continue
+            taken.append((task_id, out, progress))
+            asked = asks
+        self._queue = kept
+        ends = dict.fromkeys(task_id for task_id, _, progress in taken if not progress)
+        return list(ends), [out for _, out, _ in taken]
 
 
 _run_hooks = contextvars.ContextVar[RunHooks | None]("agents_run_hooks", default=None)
@@ -205,6 +365,9 @@ class AgentRun(Generic[Run_T]):
         self._said: list[ChatMessage] = []
         # what the lane's other open tasks added that this run's model does not read
         self._hidden: frozenset[str] = frozenset()
+        # the calls whose tool went on in the background at its first update
+        self._background_calls: set[str] = set()
+        self._tools = TextTools(on_update=None)
 
     async def __aiter__(self) -> AsyncIterator[str]:
         if self._result is not None:
@@ -281,6 +444,8 @@ class AgentRun(Generic[Run_T]):
             self._stack = self._resolve_stack(hooks)
             if self._stack:
                 self._agent = self._stack[-1]
+            if hooks.tools is not None:
+                self._tools = hooks.tools
 
         token = _AgentActivityContextVar.set(self)
         try:
@@ -513,10 +678,26 @@ class AgentRun(Generic[Run_T]):
                 await self._say(_tool_text(said.output), record=False)
             return out
 
-        record(self._message)
+        # what work in the background queued, in place of a message: one reply, or its question
+        delivery = hooks.delivery if hooks is not None else ()
+        for queued in delivery:
+            for item in (queued.fnc_call, queued.fnc_call_out):
+                item.created_at = time.time()  # told now, after all the history holds
+                record(item)
+            if isinstance(queued.transition, InputRequired):
+                # as on a call, no reply is generated: the question is what the person hears
+                return await ask(queued.transition, queued.fnc_call)
+        hint = None
+        if delivery:
+            call_ids = [queued.fnc_call.call_id for queued in delivery]
+            hint = _reply_instructions(self._tool_options(), at_tail=True, call_ids=call_ids)
+        else:
+            record(self._message)
         # a task that answers the person itself, a waiting graph, does before any model
         taken = (
-            await self._agent._take(self._message) if isinstance(self._agent, AgentTask) else None
+            await self._agent._take(self._message)
+            if isinstance(self._agent, AgentTask) and not delivery
+            else None
         )
         if taken is not None and (ended := await act(taken, None)) is not None:
             return ended
@@ -527,6 +708,8 @@ class AgentRun(Generic[Run_T]):
 
         # a toolset whose setup failed is not tried again in this run; the next run tries again
         unready: set[Toolset] = set()
+        # as on a call: the reply to a report calls no tools, the reply to a result may
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN
         for _ in range(self._max_steps):
             if hooks is not None and hooks.boundary is not None and await hooks.boundary():
                 # a newer message waits for the lane: stop here, what ran is kept, no reply
@@ -541,6 +724,9 @@ class AgentRun(Generic[Run_T]):
             )
 
             tools: list[Tool | Toolset] = list(agent.tools)
+            if hooks is not None and hooks.tools is not None and has_cancellable_tool(tools):
+                # as on a call, a cancellable tool's work in the background can be cancelled
+                tools += [cancel_task, get_running_tasks]
             for toolset in tools:
                 if not isinstance(toolset, Toolset) or toolset in unready:
                     continue
@@ -564,10 +750,25 @@ class AgentRun(Generic[Run_T]):
                 text, calls = "", [forwarded]
             else:
                 on_token = self._on_token or (hooks.on_token if hooks is not None else None)
+                request = _without_pending_calls(chat_ctx, self._hidden)
+                if hint is not None:
+                    # as on a call: told last, next to what it is about, and not recorded
+                    request.add_message(role="system", content=[hint])
+                    hint = None
                 text, calls, usage = await self._infer(
-                    _without_pending_calls(chat_ctx, self._hidden), tool_ctx, on_token=on_token
+                    request,
+                    tool_ctx,
+                    on_token=on_token,
+                    tool_choice=tool_choice,
                 )
                 self._usage._add_completion(usage)
+                if tool_choice == "none" and calls:
+                    logger.debug(
+                        "dropping tool calls made in the reply to a report",
+                        extra={"functions": [c.name for c in calls], "runId": self._id},
+                    )
+                    calls = []
+            tool_choice = NOT_GIVEN
 
             if text:
                 record(ChatMessage(role="assistant", content=[text]))
@@ -690,6 +891,14 @@ class AgentRun(Generic[Run_T]):
                 return finish("\n\n".join(held), verbatim=True)
             if stopped:
                 return finish(None)
+            reports = _reply_tool_choice(
+                out.reply_tool_choice for out in outs.values() if not isinstance(out, AgentTask)
+            )
+            tool_choice = reports if reports is not None else NOT_GIVEN
+            if tool_choice == "none" and not wants_tool_output and not isinstance(agent, AgentTask):
+                # every call went to the background: its progress went out as it is and the
+                # receiver words it, so the turn ends on the reply beside the calls, if any
+                return finish(text or None)
             await release_held()
 
         raise UnexpectedModelBehavior(
@@ -734,10 +943,13 @@ class AgentRun(Generic[Run_T]):
         tool_ctx: ToolContext,
         *,
         on_token: Callable[[str], Awaitable[None]] | None = None,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
     ) -> tuple[str, list[FunctionCall], CompletionUsage | None]:
         """One model request through the agent's ``llm_node``: text, calls and usage; each text
         delta reaches ``on_token`` as it arrives."""
-        node = self._agent.llm_node(chat_ctx, tool_ctx.flatten(), ModelSettings())
+        node = self._agent.llm_node(
+            chat_ctx, tool_ctx.flatten(), ModelSettings(tool_choice=tool_choice)
+        )
         if inspect.iscoroutine(node):
             node = await node
 
@@ -832,19 +1044,23 @@ class AgentRun(Generic[Run_T]):
                 exception=ToolError(f"unknown tool `{fnc_call.name}`"),
             )
 
+        try:
+            raw = parse_function_arguments(fnc_call.arguments or "{}")
+        except ValueError as e:
+            error = ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}")
+            return make_tool_output(fnc_call=fnc_call, output=None, exception=error)
         run_ctx = RunContext[Any, Any](function_call=fnc_call, run=self)
         run_ctx._answer_ref = answer_ref
-        granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
-        if granted:
-            granted = approval_granted(self._chat_ctx.items, fnc_call)
+        executor = self._tools.executor
+        executor.set_tool_options(self._tool_options())
         try:
-            args, kwargs = prepare_function_arguments(
-                fnc=tool, json_arguments=fnc_call.arguments, call_ctx=run_ctx, fnc_call=fnc_call
-            )
-            with approval_scope(fnc_call, granted):
-                output = tool(*args, **kwargs)
-                if inspect.isawaitable(output):
-                    output = await output
+            output = await executor.execute(tool=tool, run_ctx=run_ctx, raw_arguments=raw)
+            work = run_ctx._work
+            if work is not None and fnc_call.call_id not in self._background_calls:
+                await asyncio.wait({work})  # its task ends right after its output
+                if work.cancelled():
+                    error = ToolError("the call was cancelled")
+                    return make_tool_output(fnc_call=fnc_call, output=None, exception=error)
         except TaskAwaited as e:
             return e.task
         except ModelRetry as e:
@@ -856,11 +1072,26 @@ class AgentRun(Generic[Run_T]):
                     extra={"function": fnc_call.name, "runId": self._id},
                 )
             return make_tool_output(fnc_call=fnc_call, output=None, exception=e)
+        except BaseException:
+            if run_ctx._work is not None and fnc_call.call_id not in self._background_calls:
+                run_ctx._work.cancel()
+            raise
 
-        if isinstance(output, Completed) and not isinstance(self._agent, AgentTask):
+        if (
+            fnc_call.call_id not in self._background_calls
+            and isinstance(output, Completed)
+            and not isinstance(self._agent, AgentTask)
+        ):
             # a conversation tool never ends a task; the value is its output
             output = ToolResult(output.value, verbatim=True) if output.verbatim else output.value
-        return make_tool_output(fnc_call=fnc_call, output=output, exception=None)
+        out = make_tool_output(fnc_call=fnc_call, output=output, exception=None)
+        out.reply_tool_choice = run_ctx._reply_tool_choice
+        return out
+
+    def _tool_options(self) -> AsyncToolOptions:
+        """The agent's templates for its tools' progress and duplicates, as on a call."""
+        options = self._agent._async_tool_options
+        return _resolve_async_tool_options(options if is_given(options) else None)
 
     async def _validate(self, run_ctx: RunContext[Any, Any], output: Any) -> str | None:
         """Run the agent's output validators; the retry reason when one asks for it."""

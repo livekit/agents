@@ -1425,7 +1425,7 @@ class TestAsyncToolOptions:
         session, _activity = self._mock_scope(agent_update="agent-should-be-ignored")
         ts._attach_activity(activity=None, session=session)
         assert ts._executor._tool_options["update_template"] == "session"
-        assert ts._executor._owning_activity is None
+        assert ts._executor._sink._owning_activity is None
 
     def test_build_executor_map_routes_toolset_tools(self):
         from livekit.agents.llm.async_toolset import AsyncToolset
@@ -2399,8 +2399,8 @@ class TestToolCallEvents:
         while executor.has_running_tasks:
             await _asyncio.sleep(0)
         idle_event.set()
-        assert executor._reply_task is not None
-        await executor._reply_task
+        assert executor._sink._reply_task is not None
+        await executor._sink._reply_task
 
         items = _emitted_items(session)
         assert isinstance(items[0], ToolCallStarted)
@@ -2463,8 +2463,8 @@ class TestToolCallEvents:
 
             await _drain_executor(executor)
             idle.set()
-            if executor._reply_task is not None:
-                await executor._reply_task
+            if executor._sink._reply_task is not None:
+                await executor._sink._reply_task
 
             for chat_ctx in (activity._chat_ctx, session.history):
                 calls = [item.call_id for item in chat_ctx.items if item.type == "function_call"]
@@ -2517,11 +2517,11 @@ class TestToolCallEvents:
             run_ctx = _make_run_context_with_session(session, call_id="c6", name="progress_tool")
 
             await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
-            while executor._reply_task is None:
+            while executor._sink._reply_task is None:
                 import asyncio as _asyncio
 
                 await _asyncio.sleep(0)
-            await executor._reply_task
+            await executor._sink._reply_task
 
             speech.fire_done()
             last = _emitted_items(session)[-1]
@@ -2545,11 +2545,11 @@ class TestToolCallEvents:
         run_ctx = _make_run_context_with_session(session, call_id="c7", name="update_then_boom")
 
         await executor.execute(tool=update_then_boom, run_ctx=run_ctx, raw_arguments={})
-        while executor._reply_task is None:
+        while executor._sink._reply_task is None:
             import asyncio as _asyncio
 
             await _asyncio.sleep(0)
-        await executor._reply_task
+        await executor._sink._reply_task
 
         items = _emitted_items(session)
         terminal = next(i for i in items if isinstance(i, ToolCallEnded))
@@ -2591,8 +2591,8 @@ class TestToolCallEvents:
         while executor.has_running_tasks:
             await _asyncio.sleep(0)
         idle_event.set()
-        assert executor._reply_task is not None
-        await executor._reply_task
+        assert executor._sink._reply_task is not None
+        await executor._sink._reply_task
 
         scheduled = [i for i in _emitted_items(session) if isinstance(i, ToolReplyUpdated)]
         assert len(scheduled) == 1
