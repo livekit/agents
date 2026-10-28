@@ -2,7 +2,6 @@
 
 use super::machine::{Effect, Event, Synthesis};
 use super::*;
-use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::transport::{WsMessage, connect_error};
 use base64::Engine as _;
 use futures_util::future::{Either, select};
@@ -13,175 +12,110 @@ use std::pin::pin;
 impl Pump {
     pub(super) async fn run(mut self) {
         let done = self.done.take().expect("pump completion owned once");
-        let outcome = self.run_attempts().await;
+        let outcome = async {
+            let request_id =
+                create_inference_request_id(self.session_id.as_deref(), RequestKind::Tts, "");
+            let mut core = Synthesis::new(
+                request_id,
+                self.sample_rate,
+                self.expressive,
+                self.opts.conn_options.read_timeout.map(Duration::from_secs_f64),
+                self.opts.conn_options.total_timeout.map(|timeout| {
+                    self.accepted_at.saturating_add(Duration::from_secs_f64(timeout))
+                }),
+            );
+            let configuration = connection_configuration(&self.create_frame, &self.headers);
+            let (mut reused, mut expired) =
+                self.connections.lock().unwrap().take(pool_secs(&*self.clock));
+            if reused.as_ref().is_some_and(|(_, connection)| {
+                connection.configuration != configuration
+                    || connection.session_id != self.session_id
+            }) {
+                let (id, connection) = reused.take().unwrap();
+                self.connections.lock().unwrap().forget(id);
+                expired.push(connection);
+            }
+            for connection in expired {
+                connection.sender.close().await;
+            }
+            let total_deadline = core.total_deadline();
+            let opening = async {
+                match core.handle(Event::Start, self.clock.now()).into_iter().next() {
+                    Some(Effect::TtsSynthesisStart) => {}
+                    Some(Effect::TtsFailed(error)) => return Err(error),
+                    _ => return Err(ApiError::new("TTS synthesis was not authorized")),
+                }
+                match reused {
+                    Some(reused) => Ok(reused),
+                    None => {
+                        let (sender, receiver) = open_ws(
+                            self.ws.as_ref(),
+                            &self.url,
+                            self.headers.clone(),
+                            self.clock.as_ref(),
+                            &self.opts.conn_options,
+                            WHAT,
+                            &self.create_frame,
+                        )
+                        .await?;
+                        let id = self.connections.lock().unwrap().opened(pool_secs(&*self.clock));
+                        Ok((
+                            id,
+                            Connection {
+                                sender,
+                                receiver,
+                                session_id: self.session_id.clone(),
+                                configuration,
+                            },
+                        ))
+                    }
+                }
+            };
+            let total_timer = async {
+                match total_deadline {
+                    Some(at) => self.clock.wait_until(at).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let opened = match select(
+                pin!(select(
+                    pin!(self.stopped.wait_for(|stop| *stop)),
+                    pin!(self.audio_tx.closed())
+                )),
+                pin!(select(pin!(total_timer), pin!(opening))),
+            )
+            .await
+            {
+                Either::Left(_) => return Ok(()),
+                Either::Right((Either::Left(_), _)) => {
+                    return Err(ApiError::timed_out(TimeoutPhase::Total));
+                }
+                Either::Right((Either::Right((opened, _)), _)) => opened,
+            };
+            let (id, mut connection) = match opened {
+                Ok(opened) => opened,
+                Err(error) => return Err(error),
+            };
+            let outcome = self
+                .drive(&mut core, connection.receiver.as_mut(), connection.sender.as_ref())
+                .await;
+            if let Err(error) = &outcome {
+                self.publish_failure(error);
+            }
+            if matches!(outcome, Ok(true)) && !*self.stopped.borrow() && !self.audio_tx.is_closed()
+            {
+                self.connections.lock().unwrap().give_back(id, connection);
+            } else {
+                self.connections.lock().unwrap().forget(id);
+                connection.sender.close().await;
+            }
+            outcome.map(|_| ())
+        }
+        .await;
         if let Err(error) = &outcome {
             self.publish_failure(error);
         }
         let _ = done.send(outcome);
-    }
-
-    async fn run_attempts(&mut self) -> Result<(), ApiError> {
-        let mut policy = RequestPolicy::from_options(&self.opts.conn_options);
-        // The protocol and socket expose phase progress inside an attempt. This machine alone
-        // chooses reopen/replay and keeps the original acceptance deadline across its waits.
-        policy.connect_timeout = None;
-        policy.write_timeout = None;
-        policy.read_timeout = None;
-        let mut steps = Vec::new();
-        let mut attempts = Attempts::start(policy, self.accepted_at, &mut steps);
-        let request_id =
-            create_inference_request_id(self.session_id.as_deref(), RequestKind::Tts, "");
-        let mut replay = Replay::default();
-        loop {
-            if *self.stopped.borrow() || self.audio_tx.is_closed() {
-                attempts.cancel(self.clock.now(), &mut Vec::new());
-                return Ok(());
-            }
-            attempts.wake(self.clock.now(), None, &mut steps);
-            if let Some(error) = steps.iter().find_map(|step| match step {
-                AttemptStep::GiveUp(error) => Some(error.clone()),
-                _ => None,
-            }) {
-                return Err(error);
-            }
-            steps.clear();
-            let Some(id) = attempts.current() else {
-                let at = attempts.wake_at(None).expect("an undecided retry has a wake");
-                if matches!(
-                    select(
-                        pin!(select(
-                            pin!(self.stopped.wait_for(|stop| *stop)),
-                            pin!(self.audio_tx.closed())
-                        )),
-                        pin!(self.clock.wait_until(at)),
-                    )
-                    .await,
-                    Either::Left(_)
-                ) {
-                    attempts.cancel(self.clock.now(), &mut Vec::new());
-                    return Ok(());
-                }
-                continue;
-            };
-            match self.attempt(&request_id, &mut replay, &mut attempts).await {
-                Ok(completed) => {
-                    if completed {
-                        attempts.succeeded(id, self.clock.now());
-                    } else {
-                        attempts.cancel(self.clock.now(), &mut Vec::new());
-                    }
-                    attempts.closed(id, self.clock.now(), &mut Vec::new());
-                    return Ok(());
-                }
-                Err(error) => {
-                    steps.clear();
-                    attempts.failed_error(id, error, self.clock.now(), &mut steps);
-                    attempts.closed(id, self.clock.now(), &mut steps);
-                }
-            }
-        }
-    }
-
-    async fn attempt(
-        &mut self,
-        request_id: &str,
-        replay: &mut Replay,
-        attempts: &mut Attempts,
-    ) -> Result<bool, ApiError> {
-        let mut core = Synthesis::new(
-            request_id.to_owned(),
-            self.sample_rate,
-            self.expressive,
-            self.opts.conn_options.read_timeout.map(Duration::from_secs_f64),
-            self.opts
-                .conn_options
-                .total_timeout
-                .map(|timeout| self.accepted_at.saturating_add(Duration::from_secs_f64(timeout))),
-        );
-        let configuration = connection_configuration(&self.create_frame, &self.headers);
-        let (mut reused, mut expired) =
-            self.connections.lock().unwrap().take(pool_secs(&*self.clock));
-        if reused.as_ref().is_some_and(|(_, connection)| {
-            connection.configuration != configuration || connection.session_id != self.session_id
-        }) {
-            let (id, connection) = reused.take().unwrap();
-            self.connections.lock().unwrap().forget(id);
-            expired.push(connection);
-        }
-        for connection in expired {
-            connection.sender.close().await;
-        }
-        let total_deadline = core.total_deadline();
-        let opening = async {
-            match core.handle(Event::Start, self.clock.now()).into_iter().next() {
-                Some(Effect::TtsSynthesisStart) => {}
-                Some(Effect::TtsFailed(error)) => return Err(error),
-                _ => return Err(ApiError::new("TTS synthesis was not authorized")),
-            }
-            match reused {
-                Some(reused) => Ok(reused),
-                None => {
-                    let (sender, receiver) = open_ws(
-                        self.ws.as_ref(),
-                        &self.url,
-                        self.headers.clone(),
-                        self.clock.as_ref(),
-                        &self.opts.conn_options,
-                        WHAT,
-                        &self.create_frame,
-                    )
-                    .await?;
-                    let id = self.connections.lock().unwrap().opened(pool_secs(&*self.clock));
-                    Ok((
-                        id,
-                        Connection {
-                            sender,
-                            receiver,
-                            session_id: self.session_id.clone(),
-                            configuration,
-                        },
-                    ))
-                }
-            }
-        };
-        let total_timer = async {
-            match total_deadline {
-                Some(at) => self.clock.wait_until(at).await,
-                None => std::future::pending::<()>().await,
-            }
-        };
-        let opened = match select(
-            pin!(select(pin!(self.stopped.wait_for(|stop| *stop)), pin!(self.audio_tx.closed()))),
-            pin!(select(pin!(total_timer), pin!(opening))),
-        )
-        .await
-        {
-            Either::Left(_) => return Ok(false),
-            Either::Right((Either::Left(_), _)) => {
-                return Err(ApiError::timed_out(TimeoutPhase::Total));
-            }
-            Either::Right((Either::Right((opened, _)), _)) => opened,
-        };
-        let (id, mut connection) = match opened {
-            Ok(opened) => opened,
-            Err(error) => return Err(error),
-        };
-        let outcome = self
-            .drive(
-                &mut core,
-                connection.receiver.as_mut(),
-                connection.sender.as_ref(),
-                replay,
-                attempts,
-            )
-            .await;
-        if matches!(outcome, Ok(true)) && !*self.stopped.borrow() && !self.audio_tx.is_closed() {
-            self.connections.lock().unwrap().give_back(id, connection);
-        } else {
-            self.connections.lock().unwrap().forget(id);
-            connection.sender.close().await;
-        }
-        outcome
     }
 
     fn publish_failure(&self, error: &ApiError) {
@@ -199,8 +133,6 @@ impl Pump {
         core: &mut Synthesis,
         receiver: &mut dyn WsReceiver,
         sender: &dyn WsSender,
-        replay: &mut Replay,
-        attempts: &mut Attempts,
     ) -> Result<bool, ApiError> {
         let opts = &self.opts;
         let provider = &self.provider;
@@ -210,8 +142,6 @@ impl Pump {
         let stopped = &mut self.stopped;
         let mut effects = std::collections::VecDeque::new();
         let mut input_closed = false;
-        let replay_count = replay.commands.len();
-        let mut replayed = 0;
         loop {
             while let Some(effect) = effects.pop_front() {
                 match effect {
@@ -281,10 +211,6 @@ impl Pump {
                         if !delivered {
                             return Ok(false);
                         }
-                        attempts.delivered();
-                        replay.delivered = true;
-                        replay.commands.clear();
-                        replay.bytes = 0;
                         core.delivery_resumed(blocked_at, clock.now());
                     }
                     Effect::TtsFailed(error) => return Err(error),
@@ -303,23 +229,12 @@ impl Pump {
                 if input_closed {
                     return std::future::pending::<Event>().await;
                 }
-                let command = if replayed < replay_count {
-                    let command = replay.commands[replayed].clone();
-                    replayed += 1;
-                    command
-                } else {
-                    let command = text_rx.recv().await.unwrap_or(TextCmd::End);
-                    if let Err(error) = replay.accepted(&command) {
-                        return Event::Failed(error);
-                    }
-                    command
-                };
-                match command {
-                    TextCmd::Push(text) => Event::Text(text),
-                    TextCmd::Failed => Event::Failed(
+                match text_rx.recv().await {
+                    Some(TextCmd::Push(text)) => Event::Text(text),
+                    Some(TextCmd::Failed) => Event::Failed(
                         ApiError::new("TTS input queue overflowed at EOF").with_retryable(false),
                     ),
-                    TextCmd::End => Event::EndInput,
+                    Some(TextCmd::End) | None => Event::EndInput,
                 }
             };
             let event = match select(
@@ -399,34 +314,5 @@ impl Pump {
                 result.map_err(|error| connect_error(WHAT, error))
             }
         }
-    }
-}
-
-#[derive(Default)]
-struct Replay {
-    commands: Vec<TextCmd>,
-    bytes: usize,
-    delivered: bool,
-}
-
-impl Replay {
-    fn accepted(&mut self, command: &TextCmd) -> Result<(), ApiError> {
-        if self.delivered {
-            return Ok(());
-        }
-        let bytes = match command {
-            TextCmd::Push(text) => text.len(),
-            _ => 0,
-        };
-        // Empty pushes carry no synthesis input; retaining them would evade the byte bound.
-        if matches!(command, TextCmd::Push(text) if text.is_empty()) {
-            return Ok(());
-        }
-        if self.bytes.saturating_add(bytes) > MAX_PENDING_TEXT_BYTES {
-            return Err(ApiError::new("TTS replay input capacity exceeded").with_retryable(false));
-        }
-        self.bytes += bytes;
-        self.commands.push(command.clone());
-        Ok(())
     }
 }

@@ -756,13 +756,13 @@ impl Pump {
             attempts.failed_error(id, error.clone(), now, &mut steps);
             attempts.closed(id, now, &mut steps);
             if !steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
-                let error = if error.retryable && self.opts.conn_options.max_retry > 0 {
-                    ApiError::connection(Some(format!(
-                        "failed to recognize speech after {} attempts: {error}",
-                        attempts.retries()
-                    )))
-                } else {
-                    error
+                let error = match lk_agents_abi::types::retry::RequestKind::SttStream
+                    .terminal_failure(&error, self.opts.conn_options.max_retry, attempts.retries())
+                {
+                    lk_agents_abi::types::retry::RetryDecision::Exhausted(message) => {
+                        ApiError::connection(Some(format!("{message}: {error}")))
+                    }
+                    _ => error,
                 };
                 self.failed(error).await;
                 return;

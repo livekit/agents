@@ -1,10 +1,10 @@
 //! Host provider observations projected onto the shared supplied-time attempt machine.
 
 use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::ProviderAttempts as Port;
-use lk_agents_abi::types::retry::RequestKind;
+use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
 
 #[derive(Debug)]
@@ -67,18 +67,17 @@ impl Port for ProviderAttempts {
 
     fn failure(
         &mut self,
-        retryable: bool,
-        status: Option<i64>,
+        error: ProviderError,
         produced_output: bool,
         now_ns: u64,
-    ) -> Result<(String, f64, Option<String>), ApiError> {
+    ) -> Result<RetryDecision, ApiError> {
         let now = Ts::from_nanos(now_ns);
         self.poll_machine(now);
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
         if self.interrupted.take().is_some() {
-            return Ok(("retry".into(), self.retry_delay(now), None));
+            return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
         if self.kind == RequestKind::SttStream
             && self.options.attempt_connected(
@@ -87,40 +86,43 @@ impl Port for ProviderAttempts {
         {
             self.attempts.reset_retries();
         }
+        let error = error.attempt_error();
         if matches!(self.kind, RequestKind::Llm | RequestKind::TtsBatch | RequestKind::TtsStream)
-            && status == Some(499)
+            && error.status_code == Some(499)
         {
             self.cancel(now_ns);
-            return Ok(("stop".into(), 0.0, None));
+            return Ok(RetryDecision::Stop);
         }
         let Some(attempt) = self.attempts.current() else {
-            return Ok(("raise".into(), 0.0, None));
+            return Ok(RetryDecision::Raise);
         };
         if produced_output && self.kind != RequestKind::SttStream {
             self.attempts.delivered();
         }
-        let error = match status {
-            Some(status) => {
-                ApiError::status("provider attempt failed", status, None, Some(retryable))
-            }
-            None => ApiError::connection(None).with_retryable(retryable),
-        };
         let mut steps = Vec::new();
-        self.attempts.failed_error(attempt, error, now, &mut steps);
+        self.attempts.failed_error(attempt, error.clone(), now, &mut steps);
         self.attempts.closed(attempt, now, &mut steps);
         let retried = steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. }));
         self.apply(steps, now);
         if retried {
-            return Ok(("retry".into(), self.retry_delay(now), None));
+            return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
-        // The callback retains the original exception (including a host-owned cause). Only
-        // the scheduling decision crosses this boundary, never a replacement synthetic error.
-        self.error = None;
-        Ok(("raise".into(), 0.0, None))
+        // The callback still owns the original exception; it supplies the terminal cause.
+        let error = self.error.take().expect("the attempt owner gave up");
+        Ok(self.kind.terminal_failure(&error, self.options.max_retry, self.attempts.retries()))
     }
 
     fn wake_at(&self) -> Option<u64> {
         self.attempts.wake_at(self.expecting).map(Ts::as_nanos)
+    }
+
+    fn capacity_exceeded(&mut self, input: bool, now_ns: u64) -> Result<(), ApiError> {
+        let queue = if input { "input" } else { "event" };
+        let error = ApiError::new(format!("recognition {queue} queue capacity exceeded"))
+            .with_retryable(false);
+        self.error = Some(error.clone());
+        self.cancel(now_ns);
+        Err(error)
     }
 
     fn expect_response(&mut self, now_ns: u64) {
@@ -134,9 +136,7 @@ impl Port for ProviderAttempts {
 
     fn observe(&mut self, event: SpeechEvent, now_ns: u64) {
         match event.kind {
-            SpeechEventType::StartOfSpeech
-            | SpeechEventType::InterimTranscript
-            | SpeechEventType::PreflightTranscript => {
+            SpeechEventType::InterimTranscript | SpeechEventType::PreflightTranscript => {
                 self.pending_transcript = true;
                 self.response(false, now_ns);
             }
@@ -214,6 +214,7 @@ impl ProviderAttempts {
     }
 
     fn apply(&mut self, steps: Vec<AttemptStep>, now: Ts) {
+        let stopped = steps.iter().any(|step| matches!(step, AttemptStep::Stop(_)));
         for step in steps {
             match step {
                 AttemptStep::Launch(_) => {
@@ -222,7 +223,7 @@ impl ProviderAttempts {
                     self.reading(now);
                 }
                 AttemptStep::Retry { error, .. }
-                    if error.kind == lk_agents_abi::errors::ApiErrorKind::Timeout =>
+                    if stopped && error.kind == lk_agents_abi::errors::ApiErrorKind::Timeout =>
                 {
                     self.interrupted = Some(error);
                 }
@@ -267,15 +268,35 @@ mod tests {
     }
 
     #[test]
+    fn sdk_timeouts_retry_without_creating_a_second_transport_interruption() {
+        let options = ApiConnectOptions { max_retry: 1, ..Default::default() };
+        let mut operation = ProviderAttempts::new(RequestKind::Llm, options, 0).unwrap();
+        let timeout = ApiError::timed_out(TimeoutPhase::Read);
+        assert_eq!(operation.ready(0), Ok(true));
+        assert_eq!(
+            operation.failure(timeout.clone().into(), false, at(1)).unwrap(),
+            RetryDecision::Retry(0.1)
+        );
+        assert_eq!(operation.ready(at(2)), Ok(true), "the SDK failure was already observed");
+        assert_eq!(operation.failure(timeout.into(), false, at(2)).unwrap(), RetryDecision::Raise);
+    }
+
+    #[test]
     fn final_transcripts_reset_retries_without_restarting_the_total_deadline() {
         let options =
             ApiConnectOptions { max_retry: 1, total_timeout: Some(5.0), ..Default::default() };
         let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
-        assert_eq!(operation.failure(true, None, false, at(1)).unwrap().0, "retry");
+        assert_eq!(
+            operation.failure(ApiError::connection(None).into(), false, at(1)).unwrap(),
+            RetryDecision::Retry(0.1)
+        );
         assert_eq!(operation.ready(at(2)), Ok(true));
         operation.response(true, at(2));
-        assert_eq!(operation.failure(true, None, false, at(3)).unwrap().0, "retry");
+        assert_eq!(
+            operation.failure(ApiError::connection(None).into(), false, at(3)).unwrap(),
+            RetryDecision::Retry(0.1)
+        );
         assert_eq!(operation.ready(at(4)), Ok(true));
         operation.response(true, at(4));
         let error = operation.ready(at(5)).unwrap_err();
@@ -294,12 +315,18 @@ mod tests {
         assert_eq!(operation.ready(0), Ok(true));
         operation.expect_response(0);
         assert_eq!(operation.ready(at(1)).unwrap_err().phase, Some(TimeoutPhase::Read));
-        let (action, delay, _) = operation.failure(true, None, false, at(1)).unwrap();
-        assert_eq!(action, "retry");
-        assert_eq!(delay, 0.1);
+        assert_eq!(
+            operation.failure(ApiError::connection(None).into(), false, at(1)).unwrap(),
+            RetryDecision::Retry(0.1)
+        );
         assert_eq!(operation.ready(at(1)), Ok(false));
         assert_eq!(operation.ready(at(1) + 100_000_000), Ok(true));
-        assert_eq!(operation.failure(true, None, false, at(1) + 200_000_000).unwrap().0, "raise");
+        assert_eq!(
+            operation
+                .failure(ApiError::connection(None).into(), false, at(1) + 200_000_000)
+                .unwrap(),
+            RetryDecision::Exhausted("failed to recognize speech after 2 attempts".into())
+        );
     }
 
     #[test]
@@ -312,7 +339,20 @@ mod tests {
         assert!(operation.succeeded(0).is_err());
         operation.input_ended(0);
         assert_eq!(operation.ready(0).unwrap_err().phase, Some(TimeoutPhase::Read));
-        assert!(operation.failure(true, None, false, 0).is_err());
+        assert!(operation.failure(ApiError::connection(None).into(), false, 0).is_err());
+    }
+
+    #[test]
+    fn noise_start_and_end_do_not_require_a_transcript_or_arm_a_read_timer() {
+        let options =
+            ApiConnectOptions { max_retry: 0, read_timeout: Some(1.0), ..Default::default() };
+        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        operation.ready(0).unwrap();
+        operation.observe(SpeechEvent::new(SpeechEventType::StartOfSpeech), 0);
+        operation.observe(SpeechEvent::new(SpeechEventType::EndOfSpeech), 0);
+        assert_eq!(operation.ready(at(100)), Ok(false));
+        operation.input_ended(at(100));
+        assert_eq!(operation.succeeded(at(100)), Ok(()));
     }
 
     #[test]
@@ -322,7 +362,7 @@ mod tests {
         operation.ready(0).unwrap();
         assert!(operation.succeeded(0).is_err());
         operation.input_ended(0);
-        operation.observe(SpeechEvent::new(SpeechEventType::StartOfSpeech), 0);
+        operation.observe(SpeechEvent::new(SpeechEventType::InterimTranscript), 0);
         assert!(operation.succeeded(0).is_err());
         operation.response(true, 0);
         assert_eq!(operation.succeeded(0), Ok(()));

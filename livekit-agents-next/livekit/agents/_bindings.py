@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel
 
 from . import _core
-from ._exceptions import APIError, APIStatusError
+from ._exceptions import APIConnectionError
+from ._generated._retry import (
+    _core_RetryDecisionExhausted,
+    _core_RetryDecisionRaise,
+    _core_RetryDecisionRetry,
+    _core_RetryDecisionStop,
+)
 from .log import logger
 
 if TYPE_CHECKING:
@@ -87,10 +93,9 @@ class Attempts:
 
     def __init__(self, kind: str, conn: Any, emit_error: Callable[[Exception, bool], None]) -> None:
         self.kind = kind
-        self.conn = conn
         self.emit_error = emit_error
         self.core = False
-        self._request = _core.ProviderAttempts(kind, conn, _now_ns())
+        self._request = _core._core_ProviderAttempts(kind, conn, _now_ns())
         self._changed = asyncio.Event()
 
     @property
@@ -106,6 +111,12 @@ class Attempts:
     @property
     def cleanup_timeout(self) -> float:
         return self._request.cleanup_timeout
+
+    def capacity_exceeded(self, *, input: bool) -> None:
+        try:
+            self._request.capacity_exceeded(input, _now_ns())
+        finally:
+            self._changed.set()
 
     def expect_response(self) -> None:
         self._request.expect_response(_now_ns())
@@ -136,6 +147,7 @@ class Attempts:
             finally:
                 self._request.cancel(_now_ns())
         retrying = False
+        terminal_error: Exception | None = None
         try:
             while True:
                 while not self._request.ready(_now_ns()):
@@ -150,21 +162,23 @@ class Attempts:
                     self._request.succeeded(_now_ns())
                     return value
                 except Exception as error:
-                    action, delay, _ = self._request.failure(
-                        isinstance(error, APIError) and error.retryable,
-                        error.status_code if isinstance(error, APIStatusError) else None,
-                        produced(),
-                        _now_ns(),
-                    )
-                    if action == "stop":
-                        return cast(_T, None)
-                    if action == "raise":
-                        raise
-                    self.emit_error(error, True)
-                    logger.warning(f"{self.kind} attempt failed: {error}, retrying in {delay}s")
+                    decision = self._request.failure(error, produced(), _now_ns())
+                    match decision:
+                        case _core_RetryDecisionStop():
+                            return cast(_T, None)
+                        case _core_RetryDecisionRaise():
+                            raise
+                        case _core_RetryDecisionExhausted(message=message):
+                            terminal_error = error
+                            raise APIConnectionError(message) from error
+                        case _core_RetryDecisionRetry(delay=delay):
+                            self.emit_error(error, True)
+                            logger.warning(
+                                f"{self.kind} attempt failed: {error}, retrying in {delay}s"
+                            )
                     retrying = True
         except Exception as error:
-            self.emit_error(error, False)
+            self.emit_error(terminal_error if terminal_error is not None else error, False)
             raise
         finally:
             self._request.cancel(_now_ns())

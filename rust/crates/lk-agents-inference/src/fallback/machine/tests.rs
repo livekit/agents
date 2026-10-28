@@ -89,3 +89,27 @@ fn fallback_retries_share_the_request_attempt_backoff() {
         ChainEffect::SttStreamOpen { index: 0, .. }
     ));
 }
+
+#[test]
+fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
+    let mut request = request(None);
+    request.handle(ChainEvent::Wake, at(0));
+    let effects = request.handle(
+        ChainEvent::Failed {
+            attempt: 1,
+            error: ProviderError::Host {
+                error: lk_agents_abi::errors::HostError::new("application failure"),
+                api_kind: None,
+                retryable: true,
+                status_code: Some(503),
+            },
+            produced_output: false,
+        },
+        at(0),
+    );
+    assert_eq!(effects, vec![ChainEffect::WakeAt(at(0))]);
+    assert!(matches!(
+        request.handle(ChainEvent::Wake, at(0))[0],
+        ChainEffect::SttStreamOpen { index: 1, .. }
+    ));
+}

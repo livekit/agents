@@ -331,7 +331,7 @@ fn native(ty: &Ty) -> bool {
     match ty {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
         Ty::Record(r) => r.in_place || !matches!(r.host, HostForm::Record { .. }),
-        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str => true,
+        Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Error(_) => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),

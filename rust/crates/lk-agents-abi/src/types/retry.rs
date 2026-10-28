@@ -1,8 +1,9 @@
 //! Per-provider attempt policy. Hosts run callbacks and enact these decisions.
 use super::connect::ApiConnectOptions;
+use crate::errors::{ApiError, ApiErrorKind};
 
 /// Crosses to a host as its tag (`FromStr` / `as_str`).
-/// The wire strings are what `_provider_retry.py` passes.
+/// The operation whose failures share an attempt allowance.
 #[crate::host(string)]
 #[crate::host(wire_strs(err = UnknownRequestKind, msg = UnknownRequestKind(s.to_owned())))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,45 +30,35 @@ impl std::fmt::Display for UnknownRequestKind {
 impl std::error::Error for UnknownRequestKind {}
 
 #[derive(Debug, PartialEq)]
+#[crate::host(record(module = "_retry", name = "_core_RetryDecision", emit))]
 pub enum RetryDecision {
     Stop,
     Raise,
+    #[host(field = "message")]
     Exhausted(String),
+    #[host(field = "delay")]
     Retry(f64),
 }
 
-impl RetryDecision {
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            RetryDecision::Stop => "stop",
-            RetryDecision::Raise => "raise",
-            RetryDecision::Exhausted(_) => "exhausted",
-            RetryDecision::Retry(_) => "retry",
+impl RequestKind {
+    /// The attempt owner gave up. Timeouts keep their class/phase and caller-owned cause;
+    /// other exhausted recognition/completion allowances carry one shared diagnostic.
+    pub fn terminal_failure(self, error: &ApiError, max_retry: u32, retries: u32) -> RetryDecision {
+        if max_retry == 0 || !error.retryable || error.kind == ApiErrorKind::Timeout {
+            return RetryDecision::Raise;
         }
+        exhaustion_message(self, retries).map_or(RetryDecision::Raise, RetryDecision::Exhausted)
     }
 }
 
-/// The decision for one failed attempt, as the host's retry loops read it: `(action, delay,
-/// exhausted message)` -- only `retry` carries a delay and only `exhausted` a message.
-#[crate::host(export(name = "provider_retry", pid = false))]
-pub fn decide_for_host(
-    kind: RequestKind,
-    maximum: u32,
-    interval: f64,
-    attempt: u32,
-    retryable: bool,
-    status: Option<i64>,
-    produced_output: bool,
-) -> Result<(&'static str, f64, Option<String>), super::connect::ApiConnectOptionsError> {
-    let options = ApiConnectOptions { max_retry: maximum, retry_interval: interval, ..ApiConnectOptions::default() };
-    options.validate()?;
-    let decision = decide(kind, &options, attempt, retryable, status, produced_output);
-    let (delay, message) = match &decision {
-        RetryDecision::Retry(delay) => (*delay, None),
-        RetryDecision::Exhausted(message) => (0.0, Some(message.clone())),
-        RetryDecision::Stop | RetryDecision::Raise => (0.0, None),
+fn exhaustion_message(kind: RequestKind, retries: u32) -> Option<String> {
+    let action = match kind {
+        RequestKind::Llm => "generate LLM completion",
+        RequestKind::SttBatch | RequestKind::SttStream => "recognize speech",
+        RequestKind::Interruption => "detect interruption",
+        RequestKind::TtsBatch | RequestKind::TtsStream | RequestKind::Avatar => return None,
     };
-    Ok((decision.kind_str(), delay, message))
+    Some(format!("failed to {action} after {} attempts", u64::from(retries) + 1))
 }
 
 pub fn decide(
@@ -88,23 +79,8 @@ pub fn decide(
         return RetryDecision::Raise;
     }
     if attempt >= options.max_retry {
-        return match kind {
-            Llm => RetryDecision::Exhausted(format!(
-                "failed to generate LLM completion after {} attempts",
-                options.max_retry as u64 + 1
-            )),
-            SttBatch => RetryDecision::Exhausted(format!(
-                "failed to recognize speech after {} attempts",
-                options.max_retry as u64 + 1
-            )),
-            SttStream => RetryDecision::Exhausted(format!(
-                "failed to recognize speech after {attempt} attempts"
-            )),
-            Interruption => RetryDecision::Exhausted(format!(
-                "failed to detect interruption after {attempt} attempts"
-            )),
-            TtsBatch | TtsStream | Avatar => RetryDecision::Raise,
-        };
+        return exhaustion_message(kind, attempt)
+            .map_or(RetryDecision::Raise, RetryDecision::Exhausted);
     }
     RetryDecision::Retry(options.interval_for_retry(attempt))
 }
@@ -136,7 +112,8 @@ mod tests {
     use super::*;
     #[test]
     fn gateway_and_interruption_preserve_their_error_contracts() {
-        let opts = ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
+        let opts =
+            ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
         assert_eq!(decide(RequestKind::Avatar, &opts, 2, true, None, false), RetryDecision::Raise);
         assert_eq!(
             decide(RequestKind::Avatar, &opts, 0, false, Some(400), false),
@@ -144,7 +121,7 @@ mod tests {
         );
         assert_eq!(
             decide(RequestKind::Interruption, &opts, 2, true, None, false),
-            RetryDecision::Exhausted("failed to detect interruption after 2 attempts".into())
+            RetryDecision::Exhausted("failed to detect interruption after 3 attempts".into())
         );
         assert_eq!(
             decide(RequestKind::Interruption, &opts, 0, true, Some(499), false),
@@ -153,7 +130,8 @@ mod tests {
     }
     #[test]
     fn modality_and_partial_output_control_retries() {
-        let opts = ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
+        let opts =
+            ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
         assert_eq!(decide(RequestKind::Llm, &opts, 0, false, Some(499), true), RetryDecision::Stop);
         assert_eq!(
             decide(RequestKind::TtsStream, &opts, 0, true, None, true),

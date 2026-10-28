@@ -61,7 +61,7 @@ pub enum McpError {
     #[error("transport_type must be 'sse' or 'streamable_http', got '{0}'")]
     #[host(kind = "ValueError")]
     InvalidTransport(String),
-    #[error("{0} must be a finite number of seconds >= 0")]
+    #[error("{0} must be a finite number of seconds >= 0 and <= 100 years")]
     #[host(kind = "ValueError")]
     InvalidTimeout(String),
     #[error("MCP protocol error {code}: {message}")]

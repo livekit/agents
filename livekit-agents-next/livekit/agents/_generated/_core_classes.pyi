@@ -567,15 +567,6 @@ async def wait_for_track_publication(
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
 def video_queue_frames() -> int: ...
 async def tts_adapter_stream(provider: Any, conn_options: Any) -> FallbackTtsStream: ...
-def provider_retry(
-    kind: str,
-    maximum: int,
-    interval: float,
-    attempt: int,
-    retryable: bool,
-    status: int | None,
-    produced_output: bool,
-) -> tuple[str, float, str | None]: ...
 def validate_synthesis(
     text: str,
     duration: float,

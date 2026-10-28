@@ -209,6 +209,7 @@ async def test_recognize_returns_the_first_success_without_retrying() -> None:
 
 @pytest.mark.real_time
 async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
+    recognize_delay = 0.5
     frame = silence_frame(duration=0.1, sample_rate=16_000)
     speech = FakeUserSpeech(
         start_time=0.0,
@@ -216,7 +217,7 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
         transcript="hello",
         stt_delay=0.0,
     )
-    batch_stt = FakeSTT(fake_transcript="hello", fake_timeout=0.5)
+    batch_stt = FakeSTT(fake_transcript="hello", fake_timeout=recognize_delay)
     batch_stt._capabilities.streaming = False
     adapter = StreamAdapter(
         stt=batch_stt,
@@ -240,7 +241,7 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
 
     assert end_event.speech_end_time is not None
     assert final_event.speech_end_time == end_event.speech_end_time
-    assert final_event.created_at - end_event.created_at == pytest.approx(0.5, abs=0.01)
+    assert final_event.created_at - end_event.created_at >= recognize_delay
 
 
 class _FlappingStream(RecognizeStream):

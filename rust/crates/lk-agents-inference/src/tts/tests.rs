@@ -10,8 +10,6 @@ fn opts() -> TtsOptions {
         base_url: "https://gw/v1".into(),
         api_key: "k".into(),
         api_secret: "s".into(),
-        // Scripted failures below exercise one attempt unless a test explicitly enables retries.
-        conn_options: ApiConnectOptions { max_retry: 0, ..Default::default() },
         ..Default::default()
     }
 }
@@ -412,83 +410,27 @@ async fn a_call_policy_replaces_native_tts_defaults_before_connecting() {
 }
 
 #[tokio::test]
-async fn a_failed_connection_uses_the_single_native_retry_budget() {
-    let ws = Arc::new(FakeWs::failing(crate::transport::TransportError::Connect("offline".into())));
-    let client = tts(ws.clone()).configured(Some(ApiConnectOptions {
-        max_retry: 1,
-        retry_interval: 0.0,
-        ..Default::default()
-    }));
-    let mut source = client.synthesize("hello").await.unwrap();
-    assert!(source.next().await.is_err());
-    assert_eq!(ws.connect_count(), 2, "one initial attempt plus one retry");
-}
-
-#[tokio::test]
-async fn a_retry_before_audio_replays_the_accepted_text_and_eof() {
-    let ws = Arc::new(
-        FakeWs::new(vec![
-            Err(crate::transport::TransportError::Connect("first connection lost".into())),
-            text(json!({"type": "output_audio", "audio": pcm(4)})),
-            text(json!({"type": "done"})),
-        ])
-        .keep_open(),
+async fn input_capacity_failure_at_eof_is_not_retryable() {
+    let ws = Arc::new(FakeWs::new(Vec::new()).keep_open());
+    let client = tts(ws);
+    let (sink, mut source) = client.stream().await.unwrap();
+    for _ in 0..TEXT_QUEUE_CAPACITY - 1 {
+        sink.push("hello".to_owned()).unwrap();
+        sink.flush().unwrap();
+    }
+    sink.push("tail".to_owned()).unwrap();
+    sink.end_input();
+    let error = lk_agents_abi::timeout(
+        &lk_agents_abi::RealClock::new(),
+        Duration::from_secs(1),
+        source.next(),
+    )
+    .await
+    .expect("EOF capacity refusal must settle the synthesis")
+    .expect_err("the final buffered text could not be enqueued");
+    assert!(error.message().contains("input queue overflowed at EOF"));
+    assert!(
+        !error.retryable(),
+        "deterministic local capacity failure must not reopen the provider"
     );
-    let client = tts(ws.clone()).configured(Some(ApiConnectOptions {
-        max_retry: 1,
-        retry_interval: 0.0,
-        ..Default::default()
-    }));
-    let mut source = client.synthesize("hello").await.unwrap();
-    let audio = source.next().await.expect("the retry can answer").expect("audio");
-    assert_eq!(&*audio.frame.data, &[1u8; 4]);
-    assert!(source.next().await.unwrap().unwrap().is_final);
-    assert!(source.next().await.unwrap().is_none());
-    assert_eq!(ws.connect_count(), 2);
-    let sent = ws.sent_json();
-    let transcripts: Vec<_> = sent
-        .iter()
-        .filter(|frame| frame["type"] == "input_transcript")
-        .map(|frame| frame["transcript"].clone())
-        .collect();
-    assert_eq!(transcripts, [json!("hello "), json!("hello ")]);
-    assert_eq!(sent.iter().filter(|frame| frame["type"] == "session.flush").count(), 2);
-}
-
-#[tokio::test]
-async fn native_retries_cannot_replay_audio_already_delivered() {
-    let ws = Arc::new(
-        FakeWs::new(vec![
-            text(json!({"type": "output_audio", "audio": pcm(4)})),
-            Err(crate::transport::TransportError::Connect("connection lost after audio".into())),
-        ])
-        .keep_open(),
-    );
-    let client = tts(ws.clone()).configured(Some(ApiConnectOptions {
-        max_retry: 1,
-        retry_interval: 0.0,
-        ..Default::default()
-    }));
-    let mut source = client.synthesize("hello").await.unwrap();
-    assert!(source.next().await.unwrap().is_some());
-    assert!(source.next().await.is_err());
-    assert_eq!(ws.connect_count(), 1, "delivered audio must never be repeated");
-}
-
-#[tokio::test]
-async fn retry_backoff_cannot_outlive_the_native_synthesis_deadline() {
-    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    let ws = Arc::new(FakeWs::failing(crate::transport::TransportError::Connect("offline".into())));
-    let client = tts(ws.clone()).with_clock(clock.clone()).configured(Some(ApiConnectOptions {
-        max_retry: 1,
-        retry_interval: 0.0,
-        total_timeout: Some(0.01),
-        ..Default::default()
-    }));
-    let mut source = client.synthesize("hello").await.unwrap();
-    crate::testkit::arm_then_advance(&clock, Duration::from_millis(10)).await;
-    let error = source.next().await.expect_err("the total deadline bounds the retry wait");
-    assert!(matches!(error, ProviderError::Local(error)
-        if error.phase == Some(lk_agents_abi::errors::TimeoutPhase::Total)));
-    assert_eq!(ws.connect_count(), 1, "the deadline expires before another attempt");
 }

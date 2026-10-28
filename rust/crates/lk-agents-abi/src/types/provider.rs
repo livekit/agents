@@ -1,12 +1,12 @@
 //! The supplied-time request lifecycle used by host-authored providers.
 
 use crate::SpeechEvent;
-use crate::errors::ApiError;
+use crate::errors::{ApiError, ProviderError};
 use crate::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
-use crate::types::retry::RequestKind;
+use crate::types::retry::{RequestKind, RetryDecision};
 
 /// Host callbacks execute attempts authorized by the shared inference request machine.
-#[crate::host(class(name = "ProviderAttempts"))]
+#[crate::host(class(name = "_core_ProviderAttempts"))]
 pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
@@ -21,13 +21,14 @@ pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     #[host(call)]
     fn failure(
         &mut self,
-        retryable: bool,
-        status: Option<i64>,
+        error: ProviderError,
         produced_output: bool,
         now_ns: u64,
-    ) -> Result<(String, f64, Option<String>), ApiError>;
+    ) -> Result<RetryDecision, ApiError>;
     #[host(call)]
     fn wake_at(&self) -> Option<u64>;
+    #[host(call)]
+    fn capacity_exceeded(&mut self, input: bool, now_ns: u64) -> Result<(), ApiError>;
     #[host(call)]
     fn expect_response(&mut self, now_ns: u64);
     #[host(call)]

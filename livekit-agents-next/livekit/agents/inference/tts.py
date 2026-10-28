@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import functools
-from dataclasses import replace
 from typing import Any
 
 from .. import _bindings, _core, tts
@@ -213,10 +212,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        # The generated operation owns retries; this native stream executes one attempt.
-        native = await self._tts._core_native().stream(
-            conn_options=replace(self._conn_options, max_retry=0)
-        )
+        native = await self._tts._core_native().stream(conn_options=self._conn_options)
         output_emitter.initialize(
             request_id=shortuuid("tts_"),
             sample_rate=self._tts.sample_rate,

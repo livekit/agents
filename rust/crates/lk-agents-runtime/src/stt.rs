@@ -7,15 +7,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use tokio::sync::Notify;
 
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::errors::{ProviderError, chained_connection_error};
 use lk_agents_abi::stt::HELD_FRAMES;
 use lk_agents_abi::stt::events::{SpeechEvent, SpeechEventType};
 use lk_agents_abi::stt::stt::{Stt, SttCapabilities, SttSink, SttSource};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::identity::ProviderId;
-use lk_agents_abi::types::retry::RequestKind;
+use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamSink, StreamSource};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
@@ -79,12 +79,8 @@ impl Failure<'_> {
         let Some(id) = attempts.current() else { return Err(error) };
         let retries = attempts.retries();
         let mut steps = Vec::new();
-        let adapted = match &error {
-            ProviderError::Local(error) => error.clone(),
-            _ => ApiError::connection(Some(error.message().to_owned()))
-                .with_retryable(error.api_kind().is_some() && error.retryable()),
-        };
-        attempts.failed_error(id, adapted, now, &mut steps);
+        let adapted = error.attempt_error();
+        attempts.failed_error(id, adapted.clone(), now, &mut steps);
         attempts.closed(id, now, &mut steps);
         if steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
             let delay = attempts.wake_at(None).expect("retry wake").saturating_duration_since(now);
@@ -97,15 +93,10 @@ impl Failure<'_> {
             Ok(())
         } else {
             report.failed(error.clone(), false);
-            if options.max_retry != 0 && error.api_kind().is_some() && error.retryable() {
-                let count = match kind {
-                    RequestKind::SttBatch => u64::from(options.max_retry) + 1,
-                    _ => u64::from(retries),
-                };
-                Err(chained_connection_error(
-                    format!("failed to recognize speech after {count} attempts"),
-                    &error,
-                ))
+            if let RetryDecision::Exhausted(message) =
+                kind.terminal_failure(&adapted, options.max_retry, attempts.retries())
+            {
+                Err(chained_connection_error(message, &error))
             } else {
                 Err(error)
             }
@@ -283,6 +274,7 @@ enum Pushed {
 #[derive(Default)]
 struct Input {
     state: Mutex<InputState>,
+    failed: Notify,
 }
 
 #[derive(Default)]
@@ -290,17 +282,24 @@ struct InputState {
     sink: Option<SttSink>,
     held: VecDeque<Pushed>,
     ended: bool,
+    failure: Option<ProviderError>,
 }
 
 impl Input {
     /// The next attempt's sink: what arrived meanwhile first, then the end if it came.
     fn install(&self, sink: SttSink) {
         let mut st = self.state.lock().expect("stt input");
-        for item in st.held.drain(..) {
-            let _ = match item {
+        while let Some(item) = st.held.pop_front() {
+            let sent = match item.clone() {
                 Pushed::Audio(frame) => sink.push(frame),
                 Pushed::Flush => sink.flush(),
             };
+            if let Err(error) = sent {
+                st.held.push_front(item);
+                st.failure = Some(error);
+                self.failed.notify_one();
+                return;
+            }
         }
         if st.ended {
             sink.end_input();
@@ -309,7 +308,19 @@ impl Input {
     }
 
     fn clear(&self) {
-        self.state.lock().expect("stt input").sink = None;
+        let mut st = self.state.lock().expect("stt input");
+        st.sink = None;
+        st.failure = None;
+    }
+
+    async fn failure(&self) -> ProviderError {
+        loop {
+            let notified = self.failed.notified();
+            if let Some(error) = self.state.lock().expect("stt input").failure.take() {
+                return error;
+            }
+            notified.await;
+        }
     }
 
     /// Held while no attempt takes it, a failed attempt's refusal included: the next one hears it.
@@ -320,10 +331,12 @@ impl Input {
                 Pushed::Audio(frame) => sink.push(frame),
                 Pushed::Flush => sink.flush(),
             };
-            if sent.is_ok() {
-                return Ok(());
+            match sent {
+                Ok(()) => return Ok(()),
+                Err(error) => st.failure = Some(error),
             }
             st.sink = None;
+            self.failed.notify_one();
         }
         if st.held.len() == HELD_FRAMES {
             st.held.pop_front();
@@ -387,7 +400,11 @@ impl RetrySource {
             wake_attempts(&mut self.attempts, self.clock.now(), &*self.stt)?;
             let error = match (self.failed.take(), self.current.as_mut()) {
                 (Some(error), _) => error,
-                (None, Some(source)) => match source.next().await {
+                (None, Some(source)) => match tokio::select! {
+                    biased;
+                    error = self.input.failure() => Err(error),
+                    event = source.next() => event,
+                } {
                     Ok(Some(event)) => {
                         if event.kind == SpeechEventType::FinalTranscript {
                             // a recognition succeeded: the budget restarts

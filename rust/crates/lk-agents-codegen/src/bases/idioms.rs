@@ -110,6 +110,12 @@ pub(super) const RECOGNIZE: &str = r#"
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)
 
+    def _send_input(self, item: rtc.AudioFrame | {Stream}.Flush) -> None:
+        try:
+            self.input.send_nowait(item)
+        except aio.ChanFull:
+            self._core_attempts.capacity_exceeded(input=True)
+
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized."""
         self._check_not_closed()
@@ -122,7 +128,7 @@ pub(super) const RECOGNIZE: &str = r#"
                 frame.sample_rate, self._needed_sr, quality=rtc.AudioResamplerQuality.HIGH
             )
         for f in self._resampler.push(frame) if self._resampler else [frame]:
-            self.input.send_nowait(f)
+            self._send_input(f)
 
     def flush(self) -> None:
         """Mark the end of the current segment."""
@@ -130,8 +136,8 @@ pub(super) const RECOGNIZE: &str = r#"
         self._check_input_not_ended()
         if self._resampler:
             for frame in self._resampler.flush():
-                self.input.send_nowait(frame)
-        self.input.send_nowait(self.Flush())
+                self._send_input(frame)
+        self._send_input(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input: no more audio will be pushed."""
@@ -163,7 +169,10 @@ pub(super) const RECOGNIZE: &str = r#"
         self._core_attempts.observe(event)
         record, _ = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
         _bindings.emit_metrics(self._stt, "STTMetrics", record)
-        self._event_ch.send_nowait(event)
+        try:
+            self._event_ch.send_nowait(event)
+        except aio.ChanFull:
+            self._core_attempts.capacity_exceeded(input=False)
 
     @property
     def closed(self) -> bool:

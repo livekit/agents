@@ -12,6 +12,37 @@ fn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyEr
     ::pyo3::exceptions::PyTypeError::new_err(format!("expected {expected}, got {got}"))
 }
 
+pub mod _retry {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/types/retry.rs.
+    static _CORE__RETRY_DECISION_STOP: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static _CORE__RETRY_DECISION_RAISE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static _CORE__RETRY_DECISION_EXHAUSTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static _CORE__RETRY_DECISION_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn _core__retry_decision_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::types::retry::RetryDecision) -> PyResult<Bound<'py, PyAny>> {
+            match value {
+                ::lk_agents_abi::types::retry::RetryDecision::Stop => _CORE__RETRY_DECISION_STOP.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionStop")?.call0(),
+                ::lk_agents_abi::types::retry::RetryDecision::Raise => _CORE__RETRY_DECISION_RAISE.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRaise")?.call0(),
+                ::lk_agents_abi::types::retry::RetryDecision::Exhausted(message) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                    _CORE__RETRY_DECISION_EXHAUSTED.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionExhausted")?.call((), Some(&kwargs))
+                },
+                ::lk_agents_abi::types::retry::RetryDecision::Retry(delay) => {
+                    let kwargs = ::pyo3::types::PyDict::new(py);
+                    kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay, py)?)?;
+                    _CORE__RETRY_DECISION_RETRY.import(py, "livekit.agents._generated._retry", "_core_RetryDecisionRetry")?.call((), Some(&kwargs))
+                },
+            }
+    }
+}
+
 pub mod a2a_auth {
     use pyo3::prelude::*;
 

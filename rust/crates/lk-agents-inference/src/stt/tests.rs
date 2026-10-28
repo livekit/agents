@@ -52,7 +52,7 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     .expect("the retries settle")
     .expect_err("every attempt failed");
     assert_eq!(ws.connect_count(), 3, "the first attempt and two retries");
-    assert!(err.message().contains("after 2 attempts"), "{}", err.message());
+    assert!(err.message().contains("after 3 attempts"), "{}", err.message());
 }
 
 // Catches: an option change or a keyterm change reaching only streams opened after it.

@@ -408,3 +408,82 @@ async def test_native_tts_public_calls_have_one_retry_owner(streaming: bool) -> 
         finally:
             await source.aclose()
             await provider.aclose()
+
+
+@pytest.mark.parametrize("failure_after_audio", [False, True])
+async def test_native_tts_replays_input_only_before_audio_is_delivered(
+    failure_after_audio: bool,
+) -> None:
+    import asyncio
+    import base64
+    from contextlib import nullcontext
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.agents import APIError
+
+    commands: list[list[dict]] = []
+    delivered = asyncio.Event()
+    pcm = b"\x00\x00" * 2400
+
+    async def gateway(request: web.Request) -> web.WebSocketResponse:
+        observed: list[dict] = []
+        commands.append(observed)
+        attempt = len(commands)
+        socket = web.WebSocketResponse(timeout=0.1)
+        await socket.prepare(request)
+        async for message in socket:
+            record = message.json()
+            observed.append(record)
+            if record["type"] != "session.flush":
+                continue
+            if attempt > 1 or failure_after_audio:
+                await socket.send_json(
+                    {"type": "output_audio", "audio": base64.b64encode(pcm).decode()}
+                )
+            if attempt > 1:
+                await socket.send_json({"type": "done"})
+            elif failure_after_audio:
+                await delivered.wait()
+            await socket.close()
+            return socket
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/tts", gateway)
+    async with TestServer(app) as server:
+        provider = inference.TTS(
+            model="cartesia/sonic-3",
+            api_key="k",
+            api_secret="s",
+            base_url=str(server.make_url("")).rstrip("/"),
+        )
+        frames = []
+        try:
+            expected_error = pytest.raises(APIError) if failure_after_audio else nullcontext()
+            with expected_error:
+                async with provider.stream(
+                    conn_options=APIConnectOptions(max_retry=1, retry_interval=0, total_timeout=2),
+                ) as source:
+                    source.push_text("hello")
+                    source.end_input()
+                    async for audio in source:
+                        frames.append(audio.frame)
+                        delivered.set()
+            received = b"".join(bytes(frame.data) for frame in frames)
+            if failure_after_audio:
+                assert 0 < len(received) <= len(pcm)
+                assert received == pcm[: len(received)]
+            else:
+                assert received == pcm
+            assert len(commands) == (1 if failure_after_audio else 2)
+            for observed in commands:
+                assert [record["type"] for record in observed] == [
+                    "session.create",
+                    "input_transcript",
+                    "session.flush",
+                ]
+                assert observed[1]["transcript"] == "hello "
+        finally:
+            await provider.aclose()

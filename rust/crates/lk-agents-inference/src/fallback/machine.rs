@@ -108,7 +108,7 @@ pub enum ChainEvent {
 enum Phase {
     Ready,
     Active(u64),
-    Waiting(Ts),
+    Waiting,
     Finished,
 }
 
@@ -182,7 +182,7 @@ impl ChainRequest {
         match event {
             ChainEvent::Wake => match self.phase {
                 Phase::Ready => self.launch(now),
-                Phase::Waiting(at) if now >= at => self.retry(now),
+                Phase::Waiting => self.retry(now),
                 _ => Vec::new(),
             },
             ChainEvent::Succeeded { attempt } if matches!(self.phase, Phase::Active(id) if id == attempt) =>
@@ -207,16 +207,12 @@ impl ChainRequest {
                 let attempts = self.attempts.as_mut().expect("active backend attempts");
                 let id = attempts.current().expect("active attempt");
                 let mut steps = Vec::new();
-                let api_error = match &error {
-                    ProviderError::Local(error) => error.clone(),
-                    _ => ApiError::connection(Some(error.message().to_owned()))
-                        .with_retryable(error.retryable()),
-                };
+                let api_error = error.attempt_error();
                 attempts.failed_error(id, api_error, now, &mut steps);
                 attempts.closed(id, now, &mut steps);
                 if steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
                     let at = attempts.wake_at(None).expect("retry wake");
-                    self.phase = Phase::Waiting(at);
+                    self.phase = Phase::Waiting;
                     return vec![ChainEffect::WakeAt(at)];
                 }
                 self.cursor += 1;

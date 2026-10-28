@@ -11,12 +11,12 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APITimeoutError,
     NotGivenOr,
     stt,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils import aio
 from livekit.agents.utils.audio import AudioBuffer, silence_frame
 
 pytestmark = pytest.mark.unit
@@ -54,9 +54,12 @@ async def test_recognition_input_is_bounded_while_provider_is_stalled() -> None:
     stream = Provider().stream(conn_options=APIConnectOptions(max_retry=0))
     frame = silence_frame(duration=0.02, sample_rate=16000)
     try:
-        with pytest.raises(aio.ChanFull):
+        with pytest.raises(APIError, match="queue capacity exceeded") as overflow:
             for _ in range(257):
                 stream.push_frame(frame)
+        assert not overflow.value.retryable
+        with pytest.raises(APIError, match="queue capacity exceeded"):
+            await anext(stream)
     finally:
         await stream.aclose()
 
@@ -65,9 +68,13 @@ async def test_recognition_event_queue_refuses_unconsumed_transcripts() -> None:
     stream = Provider().stream(conn_options=APIConnectOptions(max_retry=0))
     event = stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[])
     try:
-        with pytest.raises(aio.ChanFull):
+        with pytest.raises(APIError, match="queue capacity exceeded") as overflow:
             for _ in range(65):
                 stream.send(event)
+        assert not overflow.value.retryable
+        with pytest.raises(APIError, match="queue capacity exceeded"):
+            async for _ in stream:
+                pass
     finally:
         await stream.aclose()
 
@@ -218,3 +225,69 @@ async def test_recognition_admission_preserves_the_terminal_timeout_cause(ended:
             assert failed_input.value.phase == "total"
     finally:
         await stream.aclose()
+
+
+async def test_noise_start_and_end_without_words_do_not_require_a_final_transcript() -> None:
+    class Noise(Stream):
+        async def _run(self) -> None:
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            await asyncio.sleep(0.2)
+            async for _ in self.input:
+                pass
+
+    stream = Noise(stt=Provider(), conn_options=APIConnectOptions(max_retry=0, read_timeout=0.1))
+    try:
+        stream.end_input()
+        assert [event.type async for event in stream] == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+
+
+async def test_a_stalled_host_behind_the_retry_bridge_terminates_on_input_overflow() -> None:
+    entered = asyncio.Event()
+
+    class Stalled(Stream):
+        async def _run(self) -> None:
+            entered.set()
+            await asyncio.Future[None]()
+
+    class Host(Provider):
+        def stream(
+            self,
+            *,
+            language: NotGivenOr[str] = NOT_GIVEN,
+            conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        ) -> Stream:
+            return Stalled(stt=self, conn_options=conn_options)
+
+    provider = Host()
+    adapter = stt.FallbackAdapter(stt=[provider], max_retry_per_stt=0)
+    stream = adapter.stream(conn_options=APIConnectOptions(max_retry=0))
+
+    async def drain() -> None:
+        async for _ in stream:
+            pass
+
+    consuming = asyncio.create_task(drain())
+    frame = silence_frame(duration=0.02, sample_rate=16000)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        for _ in range(600):
+            if consuming.done():
+                break
+            try:
+                stream.push_frame(frame)
+            except APIError:
+                break
+            await asyncio.sleep(0.001)
+        with pytest.raises(APIError):
+            await asyncio.wait_for(asyncio.shield(consuming), timeout=1)
+    finally:
+        consuming.cancel()
+        await asyncio.gather(consuming, return_exceptions=True)
+        await stream.aclose()
+        await adapter.aclose()

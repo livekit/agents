@@ -1051,8 +1051,7 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
         | Ty::Source { .. }
         | Ty::Handle { .. }
         | Ty::Instance { .. }
-        | Ty::Unit
-        | Ty::Error(_) => Err(format!("{at}: `{}` is not an input", ty.rust())),
+        | Ty::Unit => Err(format!("{at}: `{}` is not an input", ty.rust())),
         Ty::HostSource(item) => check_input(at, item),
         Ty::HostDuplex { input, output } => {
             check_output(at, input)?;

@@ -247,7 +247,6 @@ from ._generated._core_classes import (
     otel_turn_records as otel_turn_records,
     parse_function_arguments as parse_function_arguments,
     plan_session_start as plan_session_start,
-    provider_retry as provider_retry,
     receive_dtmf as receive_dtmf,
     recording_enabled as recording_enabled,
     remove_instructions as remove_instructions,
@@ -362,7 +361,7 @@ from ._generated._core_text_session import (
     _core_restore_text_session_state as _core_restore_text_session_state,
 )
 from ._generated._core_types import (
-    ProviderAttempts as ProviderAttempts,
+    _core_ProviderAttempts as _core_ProviderAttempts,
 )
 from ._generated._core_worker import (
     ExitSignals as ExitSignals,

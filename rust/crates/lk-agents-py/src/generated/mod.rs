@@ -117,7 +117,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::_core_TelemetryWorker>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
-    m.add_class::<types::ProviderAttempts>()?;
+    m.add_class::<types::_core_ProviderAttempts>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;

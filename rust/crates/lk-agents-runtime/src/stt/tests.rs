@@ -270,3 +270,148 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
     );
     assert_eq!(clock.now().saturating_duration_since(started), std::time::Duration::from_secs(30));
 }
+
+struct StalledInput {
+    accepted: std::sync::atomic::AtomicUsize,
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct RefusingSink(Arc<StalledInput>);
+impl StreamSink<AudioFrame> for RefusingSink {
+    fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
+        if self.0.accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 256 {
+            return Err(ApiError::new("recognition input queue capacity exceeded")
+                .with_retryable(false)
+                .into());
+        }
+        Ok(())
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+struct StalledSource(Arc<StalledInput>);
+#[async_trait]
+impl StreamSource<SpeechEvent> for StalledSource {
+    async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
+        std::future::pending().await
+    }
+    async fn close(self: Box<Self>, _: Ts) -> Closed {
+        self.0.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        Closed::Clean
+    }
+}
+
+struct StalledHost(Arc<StalledInput>);
+#[async_trait]
+impl Stt for StalledHost {
+    fn label(&self) -> String {
+        "stalled host".into()
+    }
+    fn capabilities(&self) -> SttCapabilities {
+        SttCapabilities { streaming: true, ..Default::default() }
+    }
+    async fn recognize(
+        &self,
+        _: &[AudioFrame],
+        _: Option<&LanguageCode>,
+    ) -> Result<SpeechEvent, ProviderError> {
+        unreachable!()
+    }
+    async fn stream(
+        &self,
+        _: Option<&LanguageCode>,
+        _: Option<f64>,
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+        Ok(Some((Box::new(RefusingSink(self.0.clone())), Box::new(StalledSource(self.0.clone())))))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing_its_input() {
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let host = Arc::new(StalledInput {
+        accepted: std::sync::atomic::AtomicUsize::new(0),
+        closed: closed.clone(),
+    });
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let stt = RetryingStt {
+        inner: Arc::new(StalledHost(host)),
+        options: ApiConnectOptions { max_retry: 0, ..Default::default() },
+        clock,
+    };
+    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+    let waiting = tokio::spawn(async move { source.next().await });
+    tokio::task::yield_now().await;
+    for _ in 0..257 {
+        sink.push(AudioFrame::new(vec![0; 640], 16_000, 1, 320)).unwrap();
+    }
+    sink.end_input();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await;
+    let error =
+        result.expect("a refused live sink must wake its pending source").unwrap().unwrap_err();
+    assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Api));
+    assert!(error.message().contains("capacity exceeded"));
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+struct ReplayRefuses {
+    opened: std::sync::atomic::AtomicUsize,
+    state: Arc<StalledInput>,
+}
+
+#[async_trait]
+impl Stt for ReplayRefuses {
+    fn label(&self) -> String {
+        "refuses replay".into()
+    }
+    fn capabilities(&self) -> SttCapabilities {
+        SttCapabilities { streaming: true, ..Default::default() }
+    }
+    async fn recognize(
+        &self,
+        _: &[AudioFrame],
+        _: Option<&LanguageCode>,
+    ) -> Result<SpeechEvent, ProviderError> {
+        unreachable!()
+    }
+    async fn stream(
+        &self,
+        _: Option<&LanguageCode>,
+        _: Option<f64>,
+    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
+        let source: SttSource =
+            if self.opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Box::new(Attempt::Fail)
+            } else {
+                self.state.accepted.store(256, std::sync::atomic::Ordering::SeqCst);
+                Box::new(StalledSource(self.state.clone()))
+            };
+        Ok(Some((Box::new(RefusingSink(self.state.clone())), source)))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappearing() {
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = Arc::new(StalledInput {
+        accepted: std::sync::atomic::AtomicUsize::new(0),
+        closed: closed.clone(),
+    });
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_abi::utils::clock::SimClock::new());
+    let stt = RetryingStt {
+        inner: Arc::new(ReplayRefuses { opened: std::sync::atomic::AtomicUsize::new(0), state }),
+        options: ApiConnectOptions { max_retry: 1, ..Default::default() },
+        clock,
+    };
+    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+    let waiting = tokio::spawn(async move { source.next().await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    sink.push(AudioFrame::new(vec![0; 640], 16_000, 1, 320)).unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await;
+    let error = result.expect("refused replay must wake its pending source").unwrap().unwrap_err();
+    assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Api));
+    assert!(error.message().contains("capacity exceeded"));
+    assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+}

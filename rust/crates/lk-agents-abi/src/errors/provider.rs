@@ -1,8 +1,8 @@
 //! A host exception travels through Rust behind a [`CapturedError`] and is re-raised as the same
 //! object; `retryable` and `status_code` are copied out so `FallbackChain` decides with no GIL.
 
-use crate::errors::api::{ApiError, ApiErrorKind};
 use super::{CapturedError, HostError};
+use crate::errors::api::{ApiError, ApiErrorKind};
 
 /// A provider failure, from either side of the seam.
 // Clones share the side-table entry. Crossing to the host re-raises the original exception.
@@ -41,7 +41,25 @@ impl ProviderError {
             ProviderError::Host { error, api_kind, status_code, .. } => {
                 ProviderError::Host { error, api_kind, retryable: false, status_code }
             }
-            ProviderError::Local(error) => ProviderError::Local(ApiError { retryable: false, ..error }),
+            ProviderError::Local(error) => {
+                ProviderError::Local(ApiError { retryable: false, ..error })
+            }
+        }
+    }
+
+    /// Scalar policy input. A host error outside the API taxonomy never grants a retry,
+    /// even if foreign metadata includes a truthy retryable flag or a status code.
+    pub fn attempt_error(&self) -> ApiError {
+        match self {
+            ProviderError::Local(error) => error.clone(),
+            ProviderError::Host { error, api_kind, retryable, status_code } => ApiError {
+                kind: api_kind.unwrap_or(ApiErrorKind::Api),
+                message: error.message.clone(),
+                retryable: api_kind.is_some() && *retryable,
+                status_code: *status_code,
+                request_id: None,
+                phase: None,
+            },
         }
     }
 
@@ -112,7 +130,8 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ProviderError {
 /// reference's `__str__` reads its root failure from; without a host, the bare connection error.
 #[cfg_attr(not(feature = "python"), allow(unused_variables))]
 pub fn chained_connection_error(message: String, cause: &ProviderError) -> ProviderError {
-    let local = ProviderError::Local(ApiError { kind: ApiErrorKind::Connection, ..ApiError::new(message) });
+    let local =
+        ProviderError::Local(ApiError { kind: ApiErrorKind::Connection, ..ApiError::new(message) });
     #[cfg(feature = "python")]
     {
         return pyo3::Python::attach(|py| {
