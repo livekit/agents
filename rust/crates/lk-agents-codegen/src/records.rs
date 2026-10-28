@@ -287,6 +287,12 @@ pub(crate) fn conversion(module: &str, name: &str) -> String {
 }
 
 fn record_rust(r: &RecordDecl, as_trait: bool) -> Result<String, String> {
+    if r.transparent {
+        if as_trait {
+            return Err(format!("{}: a transparent record is not converted in place", r.rust));
+        }
+        return transparent_rust(r);
+    }
     let module = format!("{PACKAGE}.{}", r.module);
     let rust = &r.rust;
     let mut s = String::new();
@@ -579,6 +585,70 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
     })
 }
 
+/// A transparent record's conversions: each variant's value crosses as itself; reading tries the
+/// variants in declaration order by the value's class (a record's model class, else its Python
+/// type, `bool` before `int`).
+fn transparent_rust(r: &RecordDecl) -> Result<String, String> {
+    let RecordBody::Variants(variants) = &r.body else {
+        return Err(format!("{}: a transparent record is an enum", r.rust));
+    };
+    let (rust, snake) = (&r.rust, cell(&r.name).to_lowercase());
+    let mut reads = String::new();
+    let mut arms = String::new();
+    let mut kinds = Vec::new();
+    for v in variants {
+        let VariantShape::Tuple(Some(f)) = &v.shape else {
+            return Err(format!(
+                "{}::{}: a transparent variant carries its value",
+                r.rust, v.rust_name
+            ));
+        };
+        let test = match &f.ty {
+            Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => format!(
+                "obj.is_instance(&obj.py().import({:?})?.getattr({name:?})?)?",
+                format!("{PACKAGE}.{module}")
+            ),
+            Ty::Str => "obj.is_instance_of::<::pyo3::types::PyString>()".into(),
+            Ty::Bool => "obj.is_instance_of::<::pyo3::types::PyBool>()".into(),
+            Ty::Int(_) => "(obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into(),
+            Ty::Float => "obj.is_instance_of::<::pyo3::types::PyFloat>()".into(),
+            Ty::Map(..) | Ty::JsonObject => "obj.is_instance_of::<::pyo3::types::PyDict>()".into(),
+            Ty::List(_) => "obj.is_instance_of::<::pyo3::types::PyList>()".into(),
+            other => {
+                return Err(format!(
+                    "{}::{}: `{}` is not told apart by its class in a transparent record",
+                    r.rust,
+                    v.rust_name,
+                    other.rust()
+                ));
+            }
+        };
+        if kinds.contains(&test) {
+            return Err(format!("{}::{}: two variants share a class", r.rust, v.rust_name));
+        }
+        kinds.push(test.clone());
+        reads.push_str(&format!(
+            "    if {test} {{\n        return Ok({rust}::{}({}?));\n    }}\n",
+            v.rust_name,
+            read(&f.ty, "obj", &format!("{}.{}", r.name, v.rust_name))?
+        ));
+        arms.push_str(&format!("        {rust}::{}(x) => {},\n", v.rust_name, emit(&f.ty, "x")?));
+    }
+    let mut s = String::new();
+    if r.extract {
+        s.push_str(&format!(
+            "\npub fn {snake}_from_py(obj: &Bound<'_, PyAny>) -> PyResult<{rust}> {{\n{reads}    Err(super::not_a(obj, {:?}))\n}}\n",
+            r.name
+        ));
+    }
+    if r.emit {
+        s.push_str(&format!(
+            "\npub fn {snake}_to_py<'py>(py: Python<'py>, value: {rust}) -> PyResult<Bound<'py, PyAny>> {{\n    Ok(match value {{\n{arms}    }})\n}}\n"
+        ));
+    }
+    Ok(s)
+}
+
 /// A legacy generated module with the declared records of the same module appended: their imports
 /// after the legacy ones, refusing a record that reuses a legacy name.
 pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
@@ -619,7 +689,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let own: Vec<String> = records
             .iter()
             .flat_map(|r| match &r.body {
-                RecordBody::Variants(vs) => std::iter::once(r.name.clone())
+                RecordBody::Variants(vs) if !r.transparent => std::iter::once(r.name.clone())
                     .chain(vs.iter().map(|v| v.name.clone()))
                     .collect::<Vec<_>>(),
                 _ => vec![r.name.clone()],
@@ -712,6 +782,22 @@ fn model(
                     name = r.name
                 ));
             }
+            s
+        }
+        RecordBody::Variants(variants) if r.transparent => {
+            runtime.add("typing", "TypeAlias");
+            let members: Vec<String> = variants
+                .iter()
+                .filter_map(|v| match &v.shape {
+                    VariantShape::Tuple(Some(f)) => {
+                        Some(annotation(&f.ty, module, own, out, typing))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let members: Vec<&str> = members.iter().map(String::as_str).collect();
+            let mut s = format!("\n\n{}\n", union_alias(&r.name, &members));
+            s.push_str(&docstring(&r.doc, ""));
             s
         }
         RecordBody::Variants(variants) => {

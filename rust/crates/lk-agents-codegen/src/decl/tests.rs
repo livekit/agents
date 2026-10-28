@@ -929,3 +929,34 @@ fn declared_records_join_a_legacy_module_without_replacing_it() {
     let clash = models.replace("class Declared", "class Legacy");
     assert!(crate::records::merge(legacy, &clash).unwrap_err().contains("`Legacy`"));
 }
+
+// Catches: a value-or-record union (`str | Message`) crossing through wrapper classes, a variant
+// read by the wrong class (a `bool` taken as an `int`), or two variants no class tells apart.
+#[test]
+fn a_transparent_record_crosses_as_its_variants_values() {
+    let decls = read(
+        r#"#[crate::host(record(module = "session", extract, emit))]
+        pub struct Message { pub text: String }
+        #[crate::host(record(module = "session", extract, emit, transparent))]
+        pub enum Input { Text(String), Count(i64), Flag(bool), Message(Message) }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(session.contains("Input: TypeAlias = str | int | bool | Message"), "{session}");
+    assert!(!session.contains("class InputText"), "{session}");
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("obj.is_instance_of::<::pyo3::types::PyString>()")
+            && shell.contains("!obj.is_instance_of::<::pyo3::types::PyBool>()")
+            && shell.contains("crate::generated::records::session::message_from_py(obj)")
+            && shell.contains("::lk_agents_abi::llm::class::Input::Text(x) =>"),
+        "{shell}"
+    );
+    let ambiguous = read(
+        r#"#[crate::host(record(module = "session", extract, transparent))]
+        pub enum Two { A(String), B(String) }"#,
+    )
+    .expect("resolves");
+    assert!(crate::records::conversions(&ambiguous).err().is_some_and(|e| e.contains("share a class")));
+}

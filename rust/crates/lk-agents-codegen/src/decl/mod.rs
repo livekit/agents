@@ -43,6 +43,9 @@ pub struct RecordDecl {
     /// Its conversions are pyo3 trait impls in ABI, which the in-place exports call
     /// (`crate::records::IN_PLACE`).
     pub in_place: bool,
+    /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
+    /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
+    pub transparent: bool,
     /// `persisted`: application-saved state. The model's `to_json()`/`from_json()` go through
     /// the record's own serde codec in Rust (`_core._core_persist_<name>`/`_core_restore_<name>`),
     /// so every variant, empty ones included, round-trips by its tag.

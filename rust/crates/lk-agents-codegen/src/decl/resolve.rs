@@ -699,6 +699,17 @@ impl Resolver<'_> {
         let ident = item_ident(item);
         let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
         let persisted = voc::find(&record.nested, "persisted").is_some();
+        let transparent = voc::find(&record.nested, "transparent").is_some();
+        let tuples = |en: &syn::ItemEnum| {
+            en.variants
+                .iter()
+                .all(|v| matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
+        };
+        if transparent && !matches!(item, syn::Item::Enum(en) if tuples(en)) {
+            return Err(format!(
+                "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value"
+            ));
+        }
         if persisted && !(extract && emit && matches!(item, syn::Item::Struct(_))) {
             return Err(format!(
                 "{at}: a persisted record is a struct crossing both ways (extract, emit): the application saves what it was given and restores it"
@@ -734,7 +745,7 @@ impl Resolver<'_> {
                 } else {
                     let mut variants = Vec::new();
                     for v in &en.variants {
-                        variants.push(self.variant(v, &name, (extract, emit))?);
+                        variants.push(self.variant(v, &name, (extract, emit), transparent)?);
                     }
                     RecordBody::Variants(variants)
                 }
@@ -769,6 +780,7 @@ impl Resolver<'_> {
             extract,
             emit,
             in_place: false,
+            transparent,
             persisted,
             members,
             body,
@@ -780,6 +792,7 @@ impl Resolver<'_> {
         v: &syn::Variant,
         owner: &str,
         dirs: (bool, bool),
+        transparent: bool,
     ) -> Result<Variant, String> {
         let at = format!("{}::{}", self.at, v.ident);
         let entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
@@ -805,9 +818,18 @@ impl Resolver<'_> {
                     }
                     VariantShape::Tuple(None)
                 } else {
-                    let field = voc::text(&at, &entries, "field")?.ok_or_else(|| {
-                        format!("{at}: a tuple variant names its value: #[host(field = \"..\")]")
-                    })?;
+                    let field = match voc::text(&at, &entries, "field")? {
+                        Some(field) if !transparent => field,
+                        None if transparent => "value".to_owned(),
+                        Some(_) => {
+                            return Err(format!("{at}: a transparent variant's value has no name"));
+                        }
+                        None => {
+                            return Err(format!(
+                                "{at}: a tuple variant names its value: #[host(field = \"..\")]"
+                            ));
+                        }
+                    };
                     let ty = self.ty(&only.ty, &at)?;
                     let default = literal_default(&at, &entries)?;
                     check_default(&at, &ty, default.as_ref())?;
@@ -866,7 +888,11 @@ fn record_target(
     record: &Entry,
     ident: &str,
 ) -> Result<(String, String, bool, bool), String> {
-    voc::only(at, &record.nested, &["module", "name", "extract", "emit", "persisted"])?;
+    voc::only(
+        at,
+        &record.nested,
+        &["module", "name", "extract", "emit", "persisted", "transparent"],
+    )?;
     let module = voc::text(at, &record.nested, "module")?
         .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;
     let name = voc::text(at, &record.nested, "name")?.unwrap_or_else(|| ident.to_owned());
