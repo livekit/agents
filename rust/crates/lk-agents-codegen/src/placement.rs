@@ -11,6 +11,9 @@ use quote::ToTokens as _;
 use syn::{parse::Parser as _, punctuated::Punctuated, spanned::Spanned as _, visit::Visit as _};
 
 const BASELINE: &str = "rust/crates/lk-agents-codegen/export-placement-baseline.json";
+// These newly checked families have their own first baseline. Keeping it separate means
+// retired exemptions from the original placement ratchet can never be transferred here.
+const METADATA_BASELINE: &str = "rust/crates/lk-agents-codegen/export-metadata-baseline.json";
 
 pub fn check(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
@@ -45,7 +48,11 @@ pub fn check(root: &Path) -> Result<(), String> {
     }
     let source =
         std::fs::read_to_string(root.join(BASELINE)).map_err(|e| format!("{BASELINE}: {e}"))?;
-    let baseline = baseline(&source)?;
+    let mut baseline = baseline(&source)?;
+    let metadata = std::fs::read_to_string(root.join(METADATA_BASELINE))
+        .map_err(|e| format!("{METADATA_BASELINE}: {e}"))?;
+    let metadata = metadata_baseline(&metadata)?;
+    baseline.extend(metadata);
     validate(locations, &baseline)?;
     println!(
         "export placement: {} existing identities; baseline {}",
@@ -53,6 +60,19 @@ pub fn check(root: &Path) -> Result<(), String> {
         baseline.len()
     );
     Ok(())
+}
+
+fn metadata_baseline(source: &str) -> Result<BTreeSet<String>, String> {
+    let entries = baseline(source).map_err(|error| error.replace(BASELINE, METADATA_BASELINE))?;
+    if let Some(identity) = entries
+        .iter()
+        .find(|identity| !identity.starts_with("class|") && !identity.starts_with("binding|"))
+    {
+        return Err(format!(
+            "{METADATA_BASELINE}: only class/binding identities are allowed: {identity}"
+        ));
+    }
+    Ok(entries)
 }
 
 fn validate(locations: Vec<(String, usize)>, baseline: &BTreeSet<String>) -> Result<(), String> {
@@ -187,7 +207,7 @@ impl Exports<'_> {
         }
         let abi = self.path.starts_with("rust/crates/lk-agents-abi/");
         let kind = match name.as_str() {
-            "host" | "python" | "node" | "export" if !abi => Some(name),
+            "host" | "python" | "node" | "export" | "class" | "binding" if !abi => Some(name),
             "derive" if !abi => {
                 if let syn::Meta::List(list) = meta {
                     let paths = Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
@@ -334,6 +354,8 @@ mod tests {
         let path = "rust/crates/lk-agents-voice/src/lib.rs";
         for source in [
             "macro_rules! declare { () => { #[pyclass] struct Sneaky; }; } declare!();",
+            "macro_rules! declare { () => { #[lk_agents_abi::class] struct Sneaky; }; } declare!();",
+            "macro_rules! declare { () => { #[binding(emit)] struct Sneaky; }; } declare!();",
             "fn emit() { quote! { #[host(export)] fn sneaky() {} }; }",
         ] {
             let found = violations(path, source).unwrap();
@@ -361,6 +383,14 @@ mod tests {
             ("#[lk_agents_abi::export] fn call() {}", "export", "fn call"),
             ("#[derive(Clone, abi::Host)] struct Record;", "derive(Host)", "struct Record"),
             ("#[python(pydantic)] struct Record;", "python", "struct Record"),
+            ("#[lk_agents_abi::class(name = \"Record\")] struct Record;", "class", "struct Record"),
+            ("#[binding(emit)] struct Record;", "binding", "struct Record"),
+            ("#[cfg_attr(any(), lk_agents_abi::class)] struct Record;", "class", "struct Record"),
+            (
+                "#[cfg_attr(any(), abi::binding(extract))] struct Record;",
+                "binding",
+                "struct Record",
+            ),
             ("#[pyclass] struct Record;", "pyclass", "struct Record"),
             ("#[pymethods] impl Record {}", "pymethods", "impl  for Record"),
             ("#[pyfunction] fn call() {}", "pyfunction", "fn call"),
@@ -390,7 +420,7 @@ mod tests {
         assert!(
             violations(
                 "rust/crates/lk-agents-abi/src/lib.rs",
-                "#[derive(Host)] #[python(pydantic)] struct Record;"
+                "#[derive(Host)] #[python(pydantic)] #[binding(emit)] #[crate::class] struct Record;"
             )
             .unwrap()
             .is_empty()
@@ -450,5 +480,32 @@ mod tests {
         }
         assert!(super::baseline("[\"same\", \"same\"]").is_err());
         assert!(super::baseline("[1]").is_err());
+    }
+
+    #[test]
+    fn placement_metadata_baseline_cannot_restore_an_old_export_exemption() {
+        let path = "rust/crates/lk-agents-voice/src/lib.rs";
+        for source in ["#[class] struct Record;", "#[binding(emit)] struct Record;"] {
+            let existing = violations(path, source).unwrap();
+            let identity = &existing[0].0;
+            let json = format!("[{identity:?}]");
+            let baseline = metadata_baseline(&json).unwrap();
+            assert!(validate(existing, &baseline).is_ok());
+            assert!(
+                validate(
+                    violations(path, &source.replace("Record", "Another")).unwrap(),
+                    &baseline
+                )
+                .is_err()
+            );
+        }
+        for source in [
+            "[\"host|retired|fn old|host(export)\"]",
+            "[\"derive(Host)|retired|struct Old|derive(Host)\"]",
+            "[\"pyclass|retired|struct Old|pyclass\"]",
+        ] {
+            let error = metadata_baseline(source).unwrap_err();
+            assert!(error.contains(METADATA_BASELINE) && error.contains("only class/binding"));
+        }
     }
 }
