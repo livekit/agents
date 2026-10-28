@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import contextvars
 import functools
+import inspect
 import json
 import os
 import weakref
@@ -1206,48 +1207,40 @@ class AgentHandoffAssert:
         return self._event
 
 
-# to make testing easier, we allow sync Callable too
 if TYPE_CHECKING:
-    MockTools = dict[type[Agent], dict[str, Callable]]
+    MockTools = dict[Agent, dict[str, Callable[..., Any]]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
 _SessionMockTools: weakref.WeakKeyDictionary[VoiceSession, MockTools] = weakref.WeakKeyDictionary()
 
 
 @overload
 def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable]
+    agent: Agent, mocks: dict[str, Callable[..., Any]]
 ) -> contextlib.AbstractContextManager[None]: ...
 
 
 @overload
 def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: VoiceSession
+    agent: Agent, mocks: dict[str, Callable[..., Any]], *, session: VoiceSession
 ) -> None: ...
 
 
 def mock_tools(
-    agent: type[Agent], mocks: dict[str, Callable], *, session: VoiceSession | None = None
+    agent: Agent, mocks: dict[str, Callable[..., Any]], *, session: VoiceSession | None = None
 ) -> contextlib.AbstractContextManager[None] | None:
-    """Assign a set of mock tool callables to a specific Agent type.
+    """Replace the bodies of ``agent``'s tools by mocks, sync or async, keyed by tool name.
 
-    Mocks intercept tool *execution* only; the LLM keeps seeing the real tool
-    schemas. A mock may declare any subset of the real tool's parameters
-    (extra arguments are dropped when it is invoked).
+    Mocks intercept tool *execution* only; the model keeps seeing the real tool schemas. A mock
+    declares the subset of the real tool's parameters it wants, by name.
 
-    Without ``session``, returns a context manager scoping the mocks to the
-    current context (intended for tests):
+    Without ``session``, a context manager selecting the mocks for the runs started inside it
+    and the calls they make, and for no other concurrent run::
 
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
+        with mock_tools(scheduler, {"book": fake_book}):
+            result = await scheduler.run("Book Monday at two.")
 
-    With ``session``, ``mocks`` becomes the mock set for the Agent type on that
-    session, effective immediately and for the session's lifetime:
-
-        mock_tools(MyAgentClass, {"tool_name": mock_fn}, session=session)
-
-    Call it again to replace the mock set, or pass ``{}`` to remove all mocks
-    for the Agent type. When both forms are active, the context-manager mocks
-    take precedence over the session ones.
+    With ``session``, the mocks of ``agent``'s tools on that call, for its lifetime; ``{}``
+    removes them. A context's mocks take precedence over the session's.
     """
     if session is not None:
         _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
@@ -1256,51 +1249,35 @@ def mock_tools(
 
 
 @contextmanager
-def _mock_tools_ctx(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
-    current = _MockToolsContextVar.get({})
-    updated = {**current, agent: mocks}  # create a new dict
-    token = _MockToolsContextVar.set(updated)
+def _mock_tools_ctx(
+    agent: Agent, mocks: dict[str, Callable[..., Any]]
+) -> Generator[None, None, None]:
+    token = _MockToolsContextVar.set({**_MockToolsContextVar.get({}), agent: dict(mocks)})
     try:
         yield
     finally:
         _MockToolsContextVar.reset(token)
 
 
-async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
-    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
-    tool's parameters the mock actually declares."""
-    import inspect
+def _tool_body(
+    agent: Agent, name: str, tool: Callable[..., Any], session: VoiceSession | None = None
+) -> Callable[..., Any]:
+    """What a call of ``agent``'s tool ``name`` runs: the tool, or the mock selected for it."""
+    mock = _MockToolsContextVar.get({}).get(agent, {}).get(name)
+    if mock is None and session is not None:
+        mock = _SessionMockTools.get(session, {}).get(agent, {}).get(name)
+    if mock is None:
+        return tool
 
-    sig = inspect.signature(mock)
+    signature = inspect.signature(tool)
+    accepted = inspect.signature(mock).parameters
+    takes_all = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in accepted.values())
 
-    pos_param_names = [
-        name
-        for name, param in sig.parameters.items()
-        if param.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
-    max_positional = len(pos_param_names)
-    trimmed_args = fnc_args[:max_positional]
-    kw_param_names = [
-        name
-        for name, param in sig.parameters.items()
-        if param.kind
-        in (
-            inspect.Parameter.KEYWORD_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
-    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+    def call(*args: Any, **kwargs: Any) -> Any:
+        named = signature.bind(*args, **kwargs).arguments
+        return mock(**{k: v for k, v in named.items() if takes_all or k in accepted})
 
-    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
-    bound.apply_defaults()
-
-    if inspect.iscoroutinefunction(mock):
-        return await mock(*bound.args, **bound.kwargs)
-    return mock(*bound.args, **bound.kwargs)
+    return call
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:

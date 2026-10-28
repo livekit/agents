@@ -17,6 +17,7 @@ from livekit.agents import (
     RunResult,
     VoiceSession,
     function_tool,
+    mock_tools,
     persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
@@ -172,6 +173,84 @@ async def test_agent_chat_ctx_is_a_read_only_view_inside_its_hooks() -> None:
         await session.start(agent)
         assert refused == [True]
         assert not [i for i in session.history.items if i.type == "message"]
+
+
+async def test_mock_tools_replace_a_tool_only_in_the_runs_started_inside_it() -> None:
+    """``mock_tools`` selects mocks for the invocations started in its block; a concurrent run
+    outside it calls the real tool."""
+    calls: list[str] = []
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="weather?",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="lookup", arguments='{"city": "Paris"}', call_id="l1")
+                ],
+            ),
+            FakeLLMResponse(input="real: Paris", content="real", ttft=0, duration=0),
+            FakeLLMResponse(input="mock: Paris", content="mocked", ttft=0, duration=0),
+        ]
+    )
+    agent = Agent(instructions="x", llm=llm)
+
+    @agent.tool
+    async def lookup(ctx: RunContext, city: str) -> str:
+        """Look the weather up.
+
+        Args:
+            city: the city
+        """
+        calls.append(city)
+        return f"real: {city}"
+
+    async def mocked() -> str:
+        result = await agent.run("weather?")
+        return result.output if result.status == "completed" else ""
+
+    with mock_tools(agent, {"lookup": lambda city: f"mock: {city}"}):
+        mocked_run = asyncio.create_task(mocked())
+    real = await agent.run("weather?")
+
+    assert await mocked_run == "mocked"
+    assert real.status == "completed" and real.output == "real"
+    assert calls == ["Paris"]
+
+
+async def test_session_mock_tools_replace_a_tool_on_the_call() -> None:
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="weather?",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="lookup", arguments='{"city": "Paris"}', call_id="l1")
+                ],
+            ),
+            FakeLLMResponse(input="mock: Paris", content="mocked", ttft=0, duration=0),
+        ]
+    )
+    agent = Agent(instructions="x")
+
+    @agent.tool
+    async def lookup(ctx: RunContext, city: str) -> str:
+        """Look the weather up.
+
+        Args:
+            city: the city
+        """
+        raise AssertionError("the real tool ran")
+
+    async with VoiceSession(llm=llm) as session:
+        mock_tools(agent, {"lookup": lambda city: f"mock: {city}"}, session=session)
+        await session.start(agent)
+        result = await session.run(user_input="weather?")
+        result.expect.next_event().is_function_call(name="lookup", arguments={"city": "Paris"})
+        result.expect.next_event().is_function_call_output(output="mock: Paris")
 
 
 async def test_input_required_pauses_the_turn_until_the_next_message() -> None:

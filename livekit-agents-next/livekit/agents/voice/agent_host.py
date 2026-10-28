@@ -65,6 +65,7 @@ from ..llm.utils import (
 from ..log import logger
 from .agent import _BindingContextVar
 from .events import RunContext
+from .run_result import _tool_body
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -147,7 +148,8 @@ class AgentHost:
             prepared.ctx._function_call = _function_call(invocation)
             prepared.ctx._operation = invocation.operation
             try:
-                output = prepared.tool(*prepared.args, **prepared.kwargs)
+                body = _tool_body(self._agent, prepared.ctx.function_call.name, prepared.tool)
+                output = body(*prepared.args, **prepared.kwargs)
                 if inspect.isawaitable(output):
                     output = await output
             except asyncio.CancelledError:

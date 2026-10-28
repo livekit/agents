@@ -31,6 +31,7 @@ from ..llm.utils import is_context_type, prepare_function_arguments, tool_report
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
+from .run_result import _tool_body
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -119,7 +120,9 @@ class ToolRunner:
             work = (
                 _read_back(tool, args, kwargs, approval)  # type: ignore[arg-type]
                 if gated and not granted
-                else _call(tool, args, kwargs)
+                else _call(
+                    _tool_body(self._agent, fnc_call.name, tool, self._session), args, kwargs
+                )
             )
             body = asyncio.create_task(work, name=f"tool_{fnc_call.name}")
         finally:
@@ -161,9 +164,9 @@ class ToolRunner:
             task.cancel()
 
 
-async def _call(tool: Tool, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+async def _call(body: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     """The body, sync or async."""
-    out = tool(*args, **kwargs)  # type: ignore[operator]
+    out = body(*args, **kwargs)
     return await out if inspect.isawaitable(out) else out
 
 
