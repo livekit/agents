@@ -1,8 +1,8 @@
-//! [`SqliteStorage`]: threads in a local directory. `registry.sqlite` holds thread metadata,
-//! `threads/<AT_id>.sqlite` each thread's database, every lane in it, and `streams.sqlite` the
-//! response streams. Separate processes sharing the directory coordinate through the engine's
-//! database leases and fences. Each open file is executed by its own connection thread
-//! ([`FileConnection`]), so no query blocks the executor.
+//! SQLite threads use the same engine in memory and in a local directory. Memory threads
+//! keep one storage-owned, queued connection each. On disk, `registry.sqlite` holds metadata,
+//! `threads/<AT_id>.sqlite` each thread, and `streams.sqlite` its responses. Processes sharing
+//! a directory coordinate through database leases and fences. Each connection has its own
+//! worker ([`FileConnection`]), so no query blocks the executor.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ enum Request {
     Close(oneshot::Sender<()>),
 }
 
-/// One SQLite file, executed on a thread of its own; requests are served in order.
+/// One SQLite database, executed on a thread of its own; requests are served in order.
 pub struct FileConnection {
     tx: mpsc::Sender<Request>,
     closed: AtomicBool,
@@ -121,11 +121,25 @@ impl SqliteConnection for FileConnection {
     }
 }
 
+/// A thread handle borrows the storage-owned connection; all batches share its serial queue.
+struct MemoryConnection(Arc<FileConnection>);
+
+#[async_trait]
+impl SqliteConnection for MemoryConnection {
+    async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
+        self.0.query(statement).await
+    }
+
+    async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
+        self.0.batch(statements).await
+    }
+
+    async fn close(&self) {}
+}
+
 fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection, StorageError> {
     use rusqlite::OpenFlags;
-    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | OpenFlags::SQLITE_OPEN_URI;
+    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     if create {
         flags |= OpenFlags::SQLITE_OPEN_CREATE;
     }
@@ -165,7 +179,7 @@ const THREAD_COLUMNS: &str =
 
 enum Databases {
     Directory(PathBuf),
-    Memory { namespace: String, keepers: Mutex<HashMap<String, FileConnection>> },
+    Memory { connections: Mutex<HashMap<String, Arc<FileConnection>>> },
 }
 
 /// SQLite threads, either in an explicit local directory or owned entirely in memory.
@@ -201,10 +215,7 @@ impl SqliteStorage {
         registry.batch(vec![Statement::raw(REGISTRY_SCHEMA)]).await?;
         let streams = Arc::new(LocalStreams::open(":memory:".into()).await?);
         Ok(Self {
-            databases: Databases::Memory {
-                namespace: shortuuid("memory_"),
-                keepers: Mutex::new(HashMap::new()),
-            },
+            databases: Databases::Memory { connections: Mutex::new(HashMap::new()) },
             registry,
             streams,
             lease,
@@ -217,9 +228,7 @@ impl SqliteStorage {
             Databases::Directory(directory) => {
                 directory.join("threads").join(format!("{id}.sqlite"))
             }
-            Databases::Memory { namespace, .. } => {
-                format!("file:{namespace}_{id}?mode=memory&cache=shared").into()
-            }
+            Databases::Memory { .. } => ":memory:".into(),
         })
     }
 
@@ -285,15 +294,12 @@ impl Storage for SqliteStorage {
     /// leaves a file no lookup finds.
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
         let thread_id = shortuuid("AT_");
-        let file = FileConnection::open(self.file(&thread_id)?, true).await?;
-        file.batch(db::bootstrap()).await?;
-        match &self.databases {
-            Databases::Directory(_) => file.close().await,
-            Databases::Memory { keepers, .. } => {
-                // A keeper keeps the shared memory database alive between ordinary handles.
-                keepers.lock().await.insert(thread_id.clone(), file);
-            }
-        }
+        let connection = Arc::new(FileConnection::open(self.file(&thread_id)?, true).await?);
+        // Readers must not see a registry row before its memory connection is published.
+        let mut memory = match &self.databases {
+            Databases::Directory(_) => None,
+            Databases::Memory { connections } => Some(connections.lock().await),
+        };
         let now = unix_now();
         let idle_ttl = ttl_secs(request.idle_ttl.as_ref());
         let attributes: HashMap<&String, &String> =
@@ -312,7 +318,21 @@ impl Storage for SqliteStorage {
                 expiry(now, idle_ttl).into(),
             ],
         };
-        self.registry.batch(vec![insert]).await?;
+        let created = async {
+            connection.batch(db::bootstrap()).await?;
+            self.registry.batch(vec![insert]).await?;
+            Ok::<(), StorageError>(())
+        }
+        .await;
+        if created.is_ok()
+            && let Some(memory) = &mut memory
+        {
+            memory.insert(thread_id.clone(), connection);
+        } else {
+            connection.close().await;
+        }
+        drop(memory);
+        created?;
         self.live(&thread_id).await
     }
 
@@ -395,19 +415,20 @@ impl Storage for SqliteStorage {
 
     /// The registry row first, which makes the thread unavailable, then its files.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        let file = self.file(thread_id)?;
+        valid_thread_id(thread_id)?;
         let delete = Statement {
             sql: "DELETE FROM threads WHERE thread_id = ?1".into(),
             params: vec![thread_id.into()],
         };
         self.registry.batch(vec![delete]).await?;
-        if let Databases::Memory { keepers, .. } = &self.databases {
-            let keeper = keepers.lock().await.remove(thread_id);
-            if let Some(keeper) = keeper {
-                keeper.close().await;
+        if let Databases::Memory { connections } = &self.databases {
+            let connection = connections.lock().await.remove(thread_id);
+            if let Some(connection) = connection {
+                connection.close().await;
             }
             return Ok(());
         }
+        let file = self.file(thread_id)?;
         for suffix in ["", "-wal", "-shm"] {
             let mut path = file.clone().into_os_string();
             path.push(suffix);
@@ -423,9 +444,21 @@ impl Storage for SqliteStorage {
 
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
         self.live(thread_id).await?;
-        let conn = FileConnection::open(self.file(thread_id)?, false).await?;
-        let db =
-            ThreadDb::new(Arc::new(conn), thread_id, self.lease, SchemaCell::default()).await?;
+        let connection: Arc<dyn SqliteConnection> = match &self.databases {
+            Databases::Directory(_) => {
+                Arc::new(FileConnection::open(self.file(thread_id)?, false).await?)
+            }
+            Databases::Memory { connections } => {
+                let connection = connections
+                    .lock()
+                    .await
+                    .get(thread_id)
+                    .cloned()
+                    .ok_or_else(|| StorageError::ThreadNotFound(thread_id.into()))?;
+                Arc::new(MemoryConnection(connection))
+            }
+        };
+        let db = ThreadDb::new(connection, thread_id, self.lease, SchemaCell::default()).await?;
         Ok(Thread::new(db, holder))
     }
 
@@ -436,8 +469,8 @@ impl Storage for SqliteStorage {
     async fn close(&self) {
         self.registry.close().await;
         self.streams.shutdown().await;
-        if let Databases::Memory { keepers, .. } = &self.databases {
-            let connections = std::mem::take(&mut *keepers.lock().await);
+        if let Databases::Memory { connections } = &self.databases {
+            let connections = std::mem::take(&mut *connections.lock().await);
             for connection in connections.into_values() {
                 connection.close().await;
             }

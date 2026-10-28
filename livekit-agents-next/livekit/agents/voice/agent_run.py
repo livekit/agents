@@ -130,6 +130,7 @@ class _TextRun(Generic[Context_T]):
         self.hooks = hooks
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
+        self._owns_store = False
         self._owned_storage: Storage | None = None
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
@@ -177,6 +178,7 @@ class _TextRun(Generic[Context_T]):
                 self.thread.id, self.agent.name
             )
             self._store = ContextStore(activation=activation)
+            self._owns_store = True
 
     async def acquire_toolsets(self) -> None:
         """Sets up the agent's toolsets for this run (tools.md "Toolsets"); a failure releases
@@ -197,8 +199,10 @@ class _TextRun(Generic[Context_T]):
             await asyncio.gather(*(t._release() for t in toolsets))
         finally:
             try:
-                if self._store is not None:
-                    self._store.close()
+                store, self._store = self._store, None
+                owns_store, self._owns_store = self._owns_store, False
+                if owns_store and store is not None:
+                    store.close()
             finally:
                 storage, self._owned_storage = self._owned_storage, None
                 if storage is not None:

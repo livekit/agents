@@ -130,7 +130,11 @@ class RunContext(Generic[Context_T]):
 
     @property
     def thread(self) -> Thread:
-        """The conversation's thread; kept in memory when no storage is configured."""
+        """The conversation's thread; kept in memory when no storage is configured.
+
+        Raises:
+            RuntimeError: when a call has no configured thread.
+        """
         if self._run is not None:
             thread = self._run.thread
         else:

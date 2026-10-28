@@ -46,3 +46,44 @@ async fn memory_threads_keep_committed_state_between_handles_and_isolate_stores(
     storage.close().await;
     other.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn memory_handles_commit_concurrently_while_their_leases_renew() {
+    use lk_agents_runtime::storage::Thread;
+    use std::time::Duration;
+
+    async fn write(thread: &Thread, lane: &str) {
+        for index in 0..32 {
+            let mut run = thread
+                .lane(lane)
+                .open(RunOptions::new(format!("{lane}-{index}"), ""))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(3)).await;
+            assert!(!run.lease().unwrap().is_lost());
+            run.state = Some(json!({"saved": index}));
+            run.commit(CommitOptions::default()).await.unwrap();
+        }
+    }
+
+    let lease = LeaseTiming::new(Duration::from_secs(2), Duration::from_millis(1)).unwrap();
+    let storage = SqliteStorage::in_memory(lease).await.unwrap();
+    let info = storage.create_thread(CreateRequest::default()).await.unwrap();
+    let first = storage.open(&info.thread_id, "first").await.unwrap();
+    let second = storage.open(&info.thread_id, "second").await.unwrap();
+    tokio::join!(write(&first, "first"), write(&second, "second"));
+    for (thread, lane) in [(&first, "first"), (&second, "second")] {
+        assert_eq!(
+            thread.lane(lane).info().await.unwrap().unwrap().state,
+            Some(json!({"saved": 31}))
+        );
+    }
+    first.close().await;
+    assert_eq!(
+        second.lane("first").info().await.unwrap().unwrap().state,
+        Some(json!({"saved": 31}))
+    );
+    storage.close().await;
+    assert!(matches!(second.lane("second").info().await, Err(StorageError::Unavailable(_))));
+    second.close().await;
+}

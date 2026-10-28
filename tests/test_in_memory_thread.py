@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from typing import Self
 
 import pytest
 
 from livekit.agents import Agent, RunContext, persisted
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import FunctionToolCall, Toolset
+from livekit.agents.storage import Storage, StorageUnavailable
+from livekit.agents.storage.context_store import ContextStore
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -64,7 +68,90 @@ async def test_direct_runs_have_independent_in_memory_threads() -> None:
             result = await agent.run("remember")
             assert result.status == "completed" and result.output == "Remembered"
         assert threads[0].id != threads[1].id
-        assert (await threads[0].info()).attributes == {"title": "A conversation"}
+        for thread in threads:
+            with pytest.raises(StorageUnavailable, match="closed"):
+                await thread.info()
     finally:
         for thread in threads:
             await thread.storage.aclose()
+
+
+async def test_cancelled_direct_run_closes_its_in_memory_thread() -> None:
+    entered = asyncio.Event()
+    threads: list[Thread] = []
+    agent = Agent(
+        name="desk",
+        instructions="Help",
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="wait",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[FunctionToolCall(name="wait", arguments="{}", call_id="c1")],
+                )
+            ]
+        ),
+    )
+
+    @agent.tool
+    async def wait(ctx: RunContext) -> None:
+        """Wait for cancellation."""
+        threads.append(ctx.thread)
+        entered.set()
+        await asyncio.Future()
+
+    try:
+        async with agent.run_stream("wait") as stream:
+            await entered.wait()
+            stream.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stream.result()
+        with pytest.raises(StorageUnavailable, match="closed"):
+            await threads[0].info()
+    finally:
+        for thread in threads:
+            await thread.storage.aclose()
+
+
+async def test_toolset_setup_failure_releases_each_owned_resource_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    stores: list[ContextStore] = []
+    storages: list[Storage] = []
+    close_store = ContextStore.close
+    close_storage = Storage.aclose
+
+    def record_store_close(store: ContextStore) -> None:
+        stores.append(store)
+        close_store(store)
+
+    async def record_storage_close(storage: Storage) -> None:
+        storages.append(storage)
+        await close_storage(storage)
+
+    monkeypatch.setattr(ContextStore, "close", record_store_close)
+    monkeypatch.setattr(Storage, "aclose", record_storage_close)
+
+    class Startup(Toolset):
+        async def setup(self) -> Self:
+            events.append(f"setup:{self.id}")
+            if self.id == "refused":
+                raise ValueError("startup refused")
+            return self
+
+        async def aclose(self) -> None:
+            events.append(f"close:{self.id}")
+
+    agent = Agent(
+        name="desk",
+        instructions="Help",
+        llm=FakeLLM(),
+        tools=[Startup(id="ready"), Startup(id="refused")],
+    )
+    with pytest.raises(ValueError, match="startup refused"):
+        await agent.run("start")
+    assert events == ["setup:ready", "setup:refused", "close:ready"]
+    assert len(stores) == len(storages) == 1
