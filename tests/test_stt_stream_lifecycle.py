@@ -126,6 +126,28 @@ async def test_recognition_waits_for_final_transcript_after_input_eof() -> None:
         await stream.aclose()
 
 
+async def test_a_provider_that_stops_at_the_closing_flush_completes() -> None:
+    class StopsAtFlush(Stream):
+        async def _run(self) -> None:
+            async for item in self.input:
+                if isinstance(item, self.Flush):
+                    break
+            self.send(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text="last words")],
+                )
+            )
+
+    stream = StopsAtFlush(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
+    try:
+        stream.push_frame(silence_frame(duration=0.02, sample_rate=16000))
+        stream.end_input()
+        assert [event.alternatives[0].text async for event in stream] == ["last words"]
+    finally:
+        await stream.aclose()
+
+
 async def test_recognition_close_retains_cancellation_resistant_cleanup() -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
