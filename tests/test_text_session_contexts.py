@@ -136,7 +136,9 @@ async def test_only_the_owner_closes_the_store_shared_with_child_runs(
     monkeypatch.setattr(ContextStore, "close", close)
     child = Agent(name="child", instructions="Finish", output_type=str, llm=Script(Reply("OK")))
     parent = Agent(
-        name="parent", instructions="Delegate", tools=[child.as_tool(tool_name="child")],
+        name="parent",
+        instructions="Delegate",
+        tools=[child.as_tool(tool_name="child")],
         llm=Script(call("child", {}, "delegate"), Reply("Done")),
     )
     result = await TextSession(agent=parent).run("start")
