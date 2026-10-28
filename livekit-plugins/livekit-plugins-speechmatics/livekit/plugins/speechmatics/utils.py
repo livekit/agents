@@ -14,7 +14,7 @@ def get_tts_url(base_url: str, voice: str, sample_rate: int) -> str:
     Returns:
         str: The formatted TTS endpoint URL.
     """
-    query_params = {}
+    query_params: dict[str, str] = {}
     query_params["output_format"] = f"pcm_{sample_rate}"
     query_params["sm-app"] = f"livekit/{lk_version}"
     query = urlencode(query_params)

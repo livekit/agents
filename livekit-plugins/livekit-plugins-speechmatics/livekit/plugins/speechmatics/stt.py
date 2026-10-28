@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
-from collections.abc import Callable
+from collections.abc import Sequence
 from enum import Enum
-from typing import Any, cast
+from typing import SupportsFloat, TypeVar, cast
 from urllib.parse import urlparse
+
+from pydantic import TypeAdapter, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -64,6 +66,10 @@ from speechmatics.agent_stt import (
 
 from .log import logger
 from .version import __version__ as lk_version
+
+_OptionT = TypeVar("_OptionT")
+_SPEAKERS = TypeAdapter(list[SpeakerIdentifier])
+_VOCAB_ENTRY = TypeAdapter(AdditionalVocabEntry)
 
 # Endpoint resolution. The default is the EU real-time Agent STT host; the env var
 # overrides it (e.g. to target another region or a self-hosted endpoint), and an explicit
@@ -141,10 +147,14 @@ class STTOptions:
     speaker_format: str | None = None
 
     # Speakers
-    known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
+    known_speakers: list[SpeakerIdentifier] = dataclasses.field(
+        default_factory=list[SpeakerIdentifier]
+    )
 
     # Custom dictionary
-    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
+    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(
+        default_factory=list[AdditionalVocabEntry]
+    )
 
     # -------------------
     # Advanced features
@@ -293,7 +303,7 @@ class STT(stt.STT):
             )
 
         # Set STT options
-        def _set(value: Any) -> Any:
+        def _set(value: NotGivenOr[_OptionT]) -> _OptionT | None:
             return value if is_given(value) else None
 
         # Create STT options from parameters
@@ -395,6 +405,12 @@ class STT(stt.STT):
             turn_detection_mode=self._stt_options.turn_detection_mode,
             id=len(self._streams),
             vad_instance=self._vad,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            audio_encoding=self._audio_encoding,
+            sample_rate=self._sample_rate,
+            options=self._stt_options,
+            streams=self._streams,
         )
 
         # Add to the list of streams
@@ -439,12 +455,7 @@ class STT(stt.STT):
             model=cast(Model, opts.model),
             diarization="speaker" if opts.enable_diarization else None,
             speaker_diarization_config=_build_diarization_config(opts),
-            # `additional_vocab` accepts entries or raw dicts; our list is entries only, and
-            # list invariance makes the narrower type not assignable — widen it for the SDK.
-            additional_vocab=cast(
-                "list[AdditionalVocabEntry | dict[str, Any]] | None",
-                opts.additional_vocab or None,
-            ),
+            additional_vocab=list(opts.additional_vocab) or None,
             output_locale=opts.output_locale,
             domain=opts.domain,
             enable_partials=opts.include_partials,
@@ -457,15 +468,8 @@ class STT(stt.STT):
         service endpoints on its own and this is a no-op.
         """
 
-        # Iterate over the streams
         for stream in self._streams:
-            # Do not finalize if being handled by a client
-            if not stream._client or not stream._client.is_connected:
-                continue
-
-            # Only finalize() if EXTERNAL turn_detection_mode is selected
-            if stream._turn_detection_mode == TurnDetectionMode.EXTERNAL:
-                stream._client.finalize()
+            stream.finalize()
 
     async def get_speaker_ids(
         self,
@@ -480,44 +484,7 @@ class STT(stt.STT):
             list[SpeakerIdentifier]: List of speakers in the session.
         """
 
-        # Results
-        results: list[list[SpeakerIdentifier]] = []
-
-        # Iterate over all streams
-        for idx, stream in enumerate(self._streams):
-            # Skip streams that aren't actively connected
-            if stream._client is None or not stream._client.is_connected:
-                logger.warning(f"Not connected in stream {idx}")
-                results.append([])
-                continue
-
-            # Return if diarization is not enabled
-            if not stream._config.diarization:
-                logger.warning(f"Diarization is not enabled in stream {idx}")
-                results.append([])
-                continue
-
-            # Clear the speaker result
-            stream._speaker_result_event.clear()
-
-            # Send message to client
-            await stream._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
-
-            # Wait the result (5 second timeout)
-            try:
-                await asyncio.wait_for(
-                    stream._speaker_result_event.wait(),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"GetSpeakers timed-out for stream {idx}")
-                results.append([])
-                continue
-
-            # Return the list of speakers
-            results.append(stream._speaker_result or [])
-
-        # Return the list of speakers
+        results = [await stream.get_speaker_ids() for stream in self._streams]
         if len(results) == 1:
             return results[0]
         return results
@@ -545,19 +512,32 @@ class SpeechStream(stt.RecognizeStream):
         turn_detection_mode: TurnDetectionMode,
         id: int,
         vad_instance: VAD | None = None,
+        *,
+        api_key: str,
+        base_url: str,
+        audio_encoding: AudioEncoding,
+        sample_rate: int,
+        options: STTOptions,
+        streams: list[SpeechStream],
     ) -> None:
         super().__init__(
             stt=stt,
             conn_options=conn_options,
-            sample_rate=stt._sample_rate,
+            sample_rate=sample_rate,
         )
 
         self._stt: STT = stt
+        self._api_key = api_key
+        self._base_url = base_url
+        self._audio_encoding = audio_encoding
+        self._sample_rate = sample_rate
+        self._opts = options
+        self._streams = streams
         self._id: int = id
         self._config: TranscriptionConfig = config
         self._turn_detection_mode: TurnDetectionMode = turn_detection_mode
         self._client: AgentSttAsyncClient | None = None
-        self._msg_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._msg_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self._speech_duration: float = 0
 
         self._vad: VAD | None = vad_instance
@@ -579,7 +559,31 @@ class SpeechStream(stt.RecognizeStream):
         if self._client is None:
             return None
         info = self._client.session_info
-        return info.session_id if info is not None else None
+        return info.session_id
+
+    def finalize(self) -> None:
+        """End the current turn when external endpointing controls this stream."""
+        if self._client is not None and self._client.is_connected:
+            if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
+                self._client.finalize()
+
+    async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
+        """Request the current session's speaker identifiers."""
+        if self._client is None or not self._client.is_connected:
+            logger.warning(f"Not connected in stream {self._id}")
+            return []
+        if not self._config.diarization:
+            logger.warning(f"Diarization is not enabled in stream {self._id}")
+            return []
+
+        self._speaker_result_event.clear()
+        await self._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
+        try:
+            await asyncio.wait_for(self._speaker_result_event.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"GetSpeakers timed-out for stream {self._id}")
+            return []
+        return self._speaker_result or []
 
     async def _run(self) -> None:
         """Run the STT stream."""
@@ -593,22 +597,22 @@ class SpeechStream(stt.RecognizeStream):
         # of the transcription config on the wire), not a field on the transcription config;
         # audio encoding / sample rate go via AudioFormat.
         self._client = AgentSttAsyncClient(
-            api_key=self._stt._api_key,
-            url=self._stt._base_url,
+            api_key=self._api_key,
+            url=self._base_url,
             app=f"livekit/{lk_version}",
             transcription_config=self._config,
             turn_config=TurnConfig(
                 turn_detection_mode=_handle_turn_detection_mode(self._turn_detection_mode)
             ),
             audio_format=AudioFormat(
-                encoding=self._stt._audio_encoding,
-                sample_rate=self._stt._sample_rate,
+                encoding=self._audio_encoding,
+                sample_rate=self._sample_rate,
                 chunk_size=DEFAULT_CHUNK_SIZE,
             ),
         )
 
         # Add message handlers
-        def add_message(message: dict[str, Any]) -> None:
+        def add_message(message: dict[str, object]) -> None:
             self._msg_queue.put_nowait(message)
 
         # Default messages to listen to
@@ -629,6 +633,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # Add message handlers
         for event in messages:
+            # The inherited SDK emitter types RT events, while Agent STT adds its own enum.
             self._client.on(event, add_message)  # type: ignore[arg-type]
 
         # Connect to the service. A rejected session (e.g. invalid config) surfaces as an
@@ -695,15 +700,15 @@ class SpeechStream(stt.RecognizeStream):
                 pass
 
             # Remove from active streams so stale streams aren't iterated
-            if self in self._stt._streams:
-                self._stt._streams.remove(self)
+            if self in self._streams:
+                self._streams.remove(self)
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
         try:
             # Input audio stream
             audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._stt._sample_rate,
+                sample_rate=self._sample_rate,
                 num_channels=1,
             )
 
@@ -762,7 +767,7 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             pass
 
-    def _handle_message(self, message: dict[str, Any]) -> None:
+    def _handle_message(self, message: dict[str, object]) -> None:
         """Handle a message from the STT client."""
 
         # Get the message type
@@ -794,32 +799,35 @@ class SpeechStream(stt.RecognizeStream):
 
         # Handle the messages
         elif event == ServerMessageType.ADD_PARTIAL_SEGMENT:
-            self._handle_segment(message, is_final=False)
+            self._handle_segment(Segment.from_message(message), is_final=False)
         elif event == ServerMessageType.ADD_SEGMENT:
-            self._handle_segment(message, is_final=True)
+            self._handle_segment(Segment.from_message(message), is_final=True)
         elif event == ServerMessageType.START_OF_TURN:
-            self._handle_start_of_turn(message)
+            self._handle_start_of_turn()
         elif event == ServerMessageType.END_OF_TURN:
-            self._handle_end_of_turn(message)
+            self._handle_end_of_turn()
 
         # Handle the speaker result message
         elif event == ServerMessageType.SPEAKERS_RESULT:
-            self._handle_speakers_result(message)
+            try:
+                speakers = _SPEAKERS.validate_python(message.get("speakers", []))
+            except ValidationError as exc:
+                raise APIError(
+                    "Speechmatics returned invalid speaker identifiers", retryable=False
+                ) from exc
+            self._handle_speakers_result(speakers)
 
         # Log all other messages
         else:
             logger.debug(f"received {event} message", extra={"lk.pii.message": message})
 
-    def _handle_segment(self, message: dict[str, Any], is_final: bool) -> None:
+    def _handle_segment(self, seg: Segment, is_final: bool) -> None:
         """Handle AddSegment / AddPartialSegment events.
 
         agent-STT sends a singular `segment` (`transcript`/`speaker`) plus message-level
         `metadata`; `Segment.from_message` parses it into a SpeechData event.
         """
-        opts = self._stt._stt_options
-
-        # Parse the singular agent-STT segment
-        seg = Segment.from_message(message)
+        opts = self._opts
 
         # Segments the service did not attribute are labelled UU
         speaker_id = seg.speaker or "UU"
@@ -847,12 +855,12 @@ class SpeechStream(stt.RecognizeStream):
         # Send the event
         self.send(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
-    def _handle_start_of_turn(self, message: dict[str, Any]) -> None:
+    def _handle_start_of_turn(self) -> None:
         """Handle StartOfTurn events."""
         logger.debug("StartOfTurn received")
         self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
-    def _handle_end_of_turn(self, message: dict[str, Any]) -> None:
+    def _handle_end_of_turn(self) -> None:
         """Handle EndOfTurn events."""
         logger.debug("EndOfTurn received")
         self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
@@ -866,10 +874,10 @@ class SpeechStream(stt.RecognizeStream):
             self.send(usage_event)
             self._speech_duration = 0
 
-    def _handle_speakers_result(self, message: dict[str, Any]) -> None:
+    def _handle_speakers_result(self, speakers: list[SpeakerIdentifier]) -> None:
         """Handle SpeakersResult events."""
         logger.debug("SpeakersResult received")
-        self._speaker_result = message.get("speakers", [])
+        self._speaker_result = speakers
         self._speaker_result_event.set()
 
     async def aclose(self) -> None:
@@ -896,8 +904,8 @@ class SpeechStream(stt.RecognizeStream):
         self._client = None
 
         # Remove from active streams
-        if self in self._stt._streams:
-            self._stt._streams.remove(self)
+        if self in self._streams:
+            self._streams.remove(self)
 
 
 def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | None:
@@ -909,17 +917,19 @@ def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | No
     if not opts.enable_diarization:
         return None
 
-    fields: dict[str, Any] = {}
-    if opts.max_speakers is not None:
-        fields["max_speakers"] = opts.max_speakers
-    if opts.speaker_sensitivity is not None:
-        fields["speaker_sensitivity"] = opts.speaker_sensitivity
-    if opts.prefer_current_speaker is not None:
-        fields["prefer_current_speaker"] = opts.prefer_current_speaker
-    if opts.known_speakers:
-        fields["speakers"] = opts.known_speakers
-
-    return SpeakerDiarizationConfig(**fields) if fields else None
+    if not (
+        opts.max_speakers is not None
+        or opts.speaker_sensitivity is not None
+        or opts.prefer_current_speaker is not None
+        or opts.known_speakers
+    ):
+        return None
+    return SpeakerDiarizationConfig(
+        max_speakers=opts.max_speakers,
+        speaker_sensitivity=opts.speaker_sensitivity,
+        prefer_current_speaker=opts.prefer_current_speaker,
+        speakers=opts.known_speakers or None,
+    )
 
 
 # The pre-Agent-STT modes, all of which named a service-side endpointing strategy.
@@ -953,7 +963,7 @@ def _load_default_vad() -> VAD | None:
     return SileroVAD.load()
 
 
-def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry]:
+def _normalize_additional_vocab(entries: Sequence[object]) -> list[AdditionalVocabEntry]:
     """Accept vocab entries from either SDK, returning entries agent-STT can serialize.
 
     The pre-Agent-STT plugin took `speechmatics.voice`'s pydantic `AdditionalVocabEntry`.
@@ -963,7 +973,8 @@ def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry
     Both classes have the same two fields, so the value survives the copy.
 
     Entries are duck-typed on `content` instead of matched against the voice class, which
-    keeps the voice SDK off the runtime path. Dicts pass through: the SDK accepts them.
+    keeps the voice SDK off the runtime path. Dicts are decoded into the same SDK record
+    before entering the session config.
 
     No warning: the two classes hold the same two fields, so the entry is copied without
     losing anything and the word reaches the engine exactly as asked. There is nothing for
@@ -975,8 +986,11 @@ def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry
     normalized: list[AdditionalVocabEntry] = []
 
     for entry in entries:
-        if isinstance(entry, (AdditionalVocabEntry, dict)):
-            normalized.append(cast(AdditionalVocabEntry, entry))
+        if isinstance(entry, AdditionalVocabEntry):
+            normalized.append(entry)
+            continue
+        if isinstance(entry, dict):
+            normalized.append(_VOCAB_ENTRY.validate_python(entry))
             continue
 
         content = getattr(entry, "content", None)
@@ -987,7 +1001,9 @@ def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry
             )
 
         normalized.append(
-            AdditionalVocabEntry(content=content, sounds_like=getattr(entry, "sounds_like", None))
+            _VOCAB_ENTRY.validate_python(
+                {"content": content, "sounds_like": getattr(entry, "sounds_like", None)}
+            )
         )
 
     return normalized
@@ -1140,11 +1156,11 @@ _DROPPED_ARGS: dict[str, str] = {
     "vad_config": "turn detection is set with `turn_detection_mode`",
 }
 
-# Deprecated arguments that were renamed: old name -> (STTOptions field, value coercion).
-_MIGRATED_ARGS: dict[str, tuple[str, Callable[[Any], Any]]] = {
-    "diarization_sensitivity": ("speaker_sensitivity", float),
-    "enable_partials": ("include_partials", bool),
-    "speaker_active_format": ("speaker_format", str),
+# Deprecated arguments that were renamed: old name -> STTOptions field.
+_MIGRATED_ARGS = {
+    "diarization_sensitivity": "speaker_sensitivity",
+    "enable_partials": "include_partials",
+    "speaker_active_format": "speaker_format",
 }
 
 
@@ -1159,7 +1175,7 @@ def _check_deprecated_args(kwargs: dict[str, object], opts: STTOptions) -> None:
         if name in kwargs:
             logger.warning(f"`{name}` is deprecated and ignored: {reason}")
 
-    for name, (replacement, coerce) in _MIGRATED_ARGS.items():
+    for name, replacement in _MIGRATED_ARGS.items():
         if name not in kwargs:
             continue
 
@@ -1169,12 +1185,17 @@ def _check_deprecated_args(kwargs: dict[str, object], opts: STTOptions) -> None:
             continue
 
         try:
-            value = coerce(kwargs[name])
+            if replacement == "speaker_sensitivity":
+                # float() validates the deprecated value's numeric conversion at runtime.
+                opts.speaker_sensitivity = float(cast(SupportsFloat, kwargs[name]))
+            elif replacement == "include_partials":
+                opts.include_partials = bool(kwargs[name])
+            else:
+                opts.speaker_format = str(kwargs[name])
         except (TypeError, ValueError) as e:
             raise ValueError(f"`{name}` has an invalid value: {e}") from e
 
         logger.warning(f"`{name}` is deprecated, migrated to `{replacement}`")
-        setattr(opts, replacement, value)
 
     # Anything left is a typo or an argument from some other plugin. `**kwargs` swallows it,
     # so without this the caller never learns why their setting had no effect.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -113,14 +114,28 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=self._opts,
+            http_session=self._ensure_session,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        http_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._get_http_session = http_session
+        self._opts = replace(options)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -136,7 +151,7 @@ class ChunkedStream(tts.ChunkedStream):
             url = get_tts_url(self._opts.base_url, self._opts.voice, self._opts.sample_rate)
 
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_http_session(),
                 "POST",
                 url,
                 json=payload,

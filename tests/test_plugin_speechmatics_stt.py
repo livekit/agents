@@ -531,7 +531,9 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
         {"message": ServerMessageType.SPEAKERS_RESULT.value, "speakers": speakers}
     )
 
-    assert stream._speaker_result == speakers
+    assert stream._speaker_result == [
+        speechmatics_stt.SpeakerIdentifier(**item) for item in speakers
+    ]
     assert stream._speaker_result_event.is_set()
     assert _events(stream) == []
 
@@ -712,3 +714,36 @@ stt.update_speakers(focus_speakers=["S1"])
     assert namespace["stt"].model == DEFAULT_MODEL.value
     for deprecated in (OPERATING_POINT, SPEAKER_FOCUS_MODE, "ADAPTIVE", "focus_mode"):
         assert deprecated in caplog.text
+
+
+async def test_requested_speaker_ids_are_sdk_records() -> None:
+    stream = _stream(vad=None)
+
+    class SpeakerClient:
+        is_connected = True
+        speakers: list[dict[str, object]] = [{"label": "Agent", "speaker_identifiers": ["voice-1"]}]
+
+        async def send_message(self, message: dict[str, object]) -> None:
+            stream._handle_message(
+                {
+                    "message": ServerMessageType.SPEAKERS_RESULT.value,
+                    "speakers": self.speakers,
+                }
+            )
+
+        async def disconnect(self) -> None:
+            self.is_connected = False
+
+    client = SpeakerClient()
+    stream._client = client
+    try:
+        speakers = await stream._stt.get_speaker_ids()
+        assert len(speakers) == 1
+        assert speakers[0].label == "Agent"
+        assert speakers[0].speaker_identifiers == ["voice-1"]
+
+        client.speakers = [{"label": "Agent", "speaker_identifiers": 7}]
+        with pytest.raises(APIError, match="invalid speaker identifiers"):
+            await stream._stt.get_speaker_ids()
+    finally:
+        await stream.aclose()

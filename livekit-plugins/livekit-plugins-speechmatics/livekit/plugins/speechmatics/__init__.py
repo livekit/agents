@@ -15,7 +15,13 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from speechmatics.voice import (
+        OperatingPoint as OperatingPoint,
+        SpeakerFocusMode as SpeakerFocusMode,
+    )
 
 from speechmatics.agent_stt import (
     AdditionalVocabEntry,
@@ -68,7 +74,7 @@ def _warn_deprecated(name: str, guidance: str) -> None:
         logger.warning(f"`{name}` is deprecated and will be removed after 2026-10-05; {guidance}")
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     if name == "OperatingPoint":
         from speechmatics.voice import OperatingPoint
 
