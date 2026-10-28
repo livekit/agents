@@ -10,7 +10,8 @@ from livekit.plugins.langchain import LLMAdapter
 pytestmark = pytest.mark.unit
 
 
-async def test_closing_chat_releases_the_graph_iterator() -> None:
+@pytest.mark.parametrize("use_generator", [False, True])
+async def test_closing_chat_releases_the_graph_iterator(use_generator: bool) -> None:
     closed = asyncio.Event()
 
     class GraphIterator:
@@ -29,9 +30,16 @@ async def test_closing_chat_releases_the_graph_iterator() -> None:
         async def aclose(self):
             closed.set()
 
+    async def stream_graph():
+        try:
+            yield "hello"
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
     class Graph:
         def astream(self, *args, **kwargs):
-            return GraphIterator()
+            return stream_graph() if use_generator else GraphIterator()
 
     model = LLMAdapter(Graph(), stream_mode="custom")
     async with model.chat(

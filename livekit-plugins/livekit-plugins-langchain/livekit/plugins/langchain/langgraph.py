@@ -14,8 +14,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from typing import Any, Generic
+from typing import Any, Generic, Never, cast
 
 from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -36,7 +37,7 @@ from livekit.agents.types import (
 _SUPPORTED_MODES: set[StreamMode] = {"messages", "custom"}
 
 
-class LLMAdapter(llm.LLM, Generic[ContextT]):
+class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
     def __init__(
         self,
         graph: PregelProtocol[Any, ContextT, Any, Any],
@@ -138,8 +139,9 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 stream_mode=self._stream_mode,
             )
 
-        async with aclosing(aiter):
-            async for item in aiter:
+        # LangGraph's astream is an async generator, annotated as the narrower AsyncIterator.
+        async with aclosing(cast(AsyncGenerator[object, None], aiter)) as events:
+            async for item in events:
                 # Multi-mode: item is (mode, data) tuple wrapper
                 if is_multi_mode and isinstance(item, tuple) and len(item) == 2:
                     mode, data = item
