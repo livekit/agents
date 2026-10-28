@@ -1,22 +1,22 @@
-//! Duplex provider execution and host integration; gate and segment decisions live in inference.
+//! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
 #[cfg(feature = "python")]
-#[path = "../../../lk-agents-inference/src/duplex/python.rs"]
+#[path = "python.rs"]
 mod python;
 
-use crate::realtime::queue::{self, Delivery, EventReceiver};
+use crate::realtime::native::queue::{self, Delivery, EventReceiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 
+pub use crate::duplex::{
+    AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
+    Fragment, Segmenter, Step,
+};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
 use lk_agents_abi::{
     ChatContext, ChatItem, Clock, Realtime, RealtimeCommand, RealtimeSession, WallAnchor,
-};
-pub use lk_agents_inference::duplex::{
-    AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
-    Fragment, Segmenter, Step,
 };
 
 /// A plugin's `DuplexModel`.
@@ -85,7 +85,7 @@ impl Realtime for DuplexModel {
         let segmenter = Segmenter::new(
             self.label.clone(),
             self.audio_timeout,
-            format!("{}_", lk_agents_inference::ids::shortuuid("item_")),
+            format!("{}_", crate::ids::shortuuid("item_")),
         );
         let (delivery, events) = queue::events();
         Ok(Arc::new(DuplexSession {

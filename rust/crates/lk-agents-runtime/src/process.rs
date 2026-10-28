@@ -103,6 +103,16 @@ impl lk_agents_inference::env::Env for Process {
     fn workers() -> Result<MediaWorkers, String> {
         workers().map_err(|error| error.to_string())
     }
+
+    #[cfg(feature = "media-images")]
+    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+        Arc::new(crate::images::NativeImages)
+    }
+
+    #[cfg(not(feature = "media-images"))]
+    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+        <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
+    }
 }
 
 lk_agents_abi::inventory::submit! {

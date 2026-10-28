@@ -24,8 +24,9 @@ impl Pump {
             let clock = self.clock.clone();
             let label = self.label.clone();
             let events = self.events.clone();
+            let workers = self.shared.workers;
             let _owner = self.spawner.spawn_unboxed(async move {
-                run(shared, wake, clock, label, events, settled, crate::process::workers()).await;
+                run(shared, wake, clock, label, events, settled, workers()).await;
             });
         }
         self.shared.retirement_wake.notify_one();
@@ -39,7 +40,7 @@ pub(super) async fn run(
     label: String,
     events: super::super::queue::Delivery,
     settled: watch::Sender<bool>,
-    workers: Result<lk_agents_media::workers::MediaWorkers, crate::process::ProcessError>,
+    workers: Result<lk_agents_media::workers::MediaWorkers, String>,
 ) {
     let mut retained = None;
     loop {
@@ -110,11 +111,14 @@ pub(super) async fn run(
                 return;
             }
         };
-        let permit = match workers.try_admit(lk_agents_media::workers::MediaWorkerClass::Formatting) {
+        let permit = match workers.try_admit(lk_agents_media::workers::MediaWorkerClass::Formatting)
+        {
             Ok(permit) => permit,
             Err(_) => {
                 // Do not move a destructor-bearing owner into a closure until admission succeeds.
-                workers.wait_for_capacity(lk_agents_media::workers::MediaWorkerClass::Formatting).await;
+                workers
+                    .wait_for_capacity(lk_agents_media::workers::MediaWorkerClass::Formatting)
+                    .await;
                 retained = Some(shared);
                 continue;
             }

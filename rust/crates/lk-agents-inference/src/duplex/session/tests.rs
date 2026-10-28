@@ -31,7 +31,7 @@ impl DuplexHostSession for SilentHost {
 }
 
 async fn session(clock: Arc<VirtualClock>) -> Arc<dyn RealtimeSession> {
-    DuplexModel::new(Arc::new(SilentHost), lk_agents_inference::duplex::AUDIO_TIMEOUT, clock)
+    DuplexModel::new(Arc::new(SilentHost), crate::duplex::AUDIO_TIMEOUT, clock)
         .session(false)
         .await
         .unwrap()
@@ -61,7 +61,7 @@ async fn duplex_command_outcome_wakes_a_reader_parked_without_host_output() {
         if supersede {
             session.send(reply("second"));
         } else {
-            clock.advance(lk_agents_inference::duplex::segmenter::REPLY_TIMEOUT);
+            clock.advance(crate::duplex::segmenter::REPLY_TIMEOUT);
         }
         let event = tokio::time::timeout(Duration::from_secs(1), &mut next)
             .await
@@ -76,7 +76,7 @@ async fn duplex_command_outcome_wakes_a_reader_parked_without_host_output() {
 #[tokio::test]
 async fn duplex_command_backlog_preserves_a_terminal_overload_outcome() {
     let session = session(Arc::new(VirtualClock::new())).await;
-    let capacity = crate::realtime::queue::EVENT_BACKLOG;
+    let capacity = crate::realtime::native::queue::EVENT_BACKLOG;
     for index in 0..capacity + 2 {
         session.send(reply(&format!("request_{index}")));
     }
@@ -136,7 +136,7 @@ impl DuplexHostSession for EndingSession {
 async fn duplex_host_eof_delivers_unclaimed_final_text_before_stream_end() {
     let session = DuplexModel::new(
         Arc::new(EndingHost),
-        lk_agents_inference::duplex::AUDIO_TIMEOUT,
+        crate::duplex::AUDIO_TIMEOUT,
         Arc::new(VirtualClock::new()),
     )
     .session(false)

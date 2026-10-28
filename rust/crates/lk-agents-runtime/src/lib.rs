@@ -34,13 +34,11 @@ pub mod a2a_client;
 pub mod agent_run;
 pub mod avatar_output;
 pub mod codecs;
-pub mod duplex;
 pub mod host;
 #[cfg(feature = "media-images")]
 pub mod images;
 pub mod mcp;
 pub mod process;
-pub mod realtime;
 pub mod recording;
 pub mod source;
 pub mod storage;

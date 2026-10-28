@@ -1,9 +1,7 @@
 //! Round-robin realtime core steps at 1/8/32/64 sessions and 1k/10k-item histories.
 //! LK_REALTIME_STEP_QUALIFICATION=1 enforces K-31 CPU gates with optimized core packages.
-#![cfg(unix)]
 
-mod realtime_support;
-use realtime_support::{RetirementStats, thread_cpu};
+use super::support::{RetirementStats, thread_cpu};
 
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -79,7 +77,7 @@ fn observe(step: Step, ids: &mut Vec<String>) {
 }
 
 fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples) {
-    let stats = realtime_support::execute_retirements(machine, |_| {});
+    let stats = super::support::execute_retirements(machine, |_| {});
     samples.cleanup.jobs += stats.jobs;
     samples.cleanup.cpu += stats.cpu;
     samples.cleanup.maximum = samples.cleanup.maximum.max(stats.maximum);

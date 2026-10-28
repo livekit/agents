@@ -1,0 +1,88 @@
+//! `_core.RealtimeFallbackModel`: the host's model objects resolved to the chain's members, a
+//! native model by its registry entry and a plugin's through its host view.
+
+use std::sync::Arc;
+
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::llm::realtime::{HostRealtime, RealtimeCapabilities};
+use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
+use lk_agents_abi::python::{Ambient, HostProxy, native};
+use lk_agents_abi::{HostRef, Realtime, RealtimeSession, Spawner, WallAnchor};
+use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
+use lk_agents_runtime::inference::realtime::native::fallback::{
+    RealtimeChild, RealtimeFallbackModel,
+};
+use pyo3::prelude::*;
+
+pub struct RealtimeFallback(RealtimeFallbackModel);
+
+impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFallback {
+    fn new(
+        models: Vec<HostRef>,
+        cooldown: f64,
+        regenerate_on_swap: bool,
+        on_availability: Option<HostRef>,
+    ) -> Result<Self, RealtimeConfigurationError> {
+        let (children, observer) = Python::attach(|py| -> PyResult<_> {
+            let children = models
+                .into_iter()
+                .map(|model| {
+                    let model = model.into_pyobject(py)?;
+                    match native::<dyn Realtime>(&model) {
+                        Some(native) => Ok(RealtimeChild::Native(native)),
+                        None => <dyn HostRealtime as HostProxy>::from_host(&model, None)
+                            .map(|host| RealtimeChild::Host(host, <Arc<dyn Spawner>>::ambient())),
+                    }
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            let observer: Arc<dyn ChainObserver> = match on_availability {
+                Some(observer) => {
+                    <dyn ChainObserver as HostProxy>::from_host(&observer.into_pyobject(py)?, None)?
+                }
+                None => Arc::new(IgnoreEvents),
+            };
+            Ok((children, observer))
+        })
+        .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
+        let clock = lk_agents_runtime::process::host_clock();
+        RealtimeFallbackModel::new(
+            children,
+            cooldown,
+            regenerate_on_swap,
+            observer,
+            WallAnchor::of(&*clock),
+        )
+        .map(RealtimeFallback)
+        .map_err(RealtimeConfigurationError::Invalid)
+    }
+
+    fn active_index(&self) -> usize {
+        self.0.active_index()
+    }
+
+    fn capabilities(&self) -> RealtimeCapabilities {
+        Realtime::capabilities(&self.0)
+    }
+
+    async fn restart(&self, switch_model: bool) {
+        self.0.restart(switch_model).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl Realtime for RealtimeFallback {
+    fn label(&self) -> String {
+        self.0.label()
+    }
+
+    fn capabilities(&self) -> RealtimeCapabilities {
+        Realtime::capabilities(&self.0)
+    }
+
+    async fn session(
+        &self,
+        turn_detection_disabled: bool,
+    ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
+        self.0.session(turn_detection_disabled).await
+    }
+}

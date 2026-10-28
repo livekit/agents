@@ -77,7 +77,6 @@
   "pyo3-file:rust/crates/lk-agents-media/src/audio_emitter.rs",
   "pyo3-file:rust/crates/lk-agents-media/src/decoder.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/images.rs",
-  "pyo3-file:rust/crates/lk-agents-runtime/src/realtime/fallback.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/source.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/telemetry/loop_monitor/python.rs",
   "pyo3-file:rust/crates/lk-agents-runtime/src/telemetry/upload.rs",

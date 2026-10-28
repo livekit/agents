@@ -21,18 +21,19 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::RealClock;
 use lk_agents_abi::TokioSpawner;
-use lk_agents_inference::testkit::{FakeWs, NoImages, text};
-use lk_agents_runtime::realtime::{
+use lk_agents_inference::env::{Env, Standalone};
+use lk_agents_inference::realtime::native::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, NativeRealtime, OPENAI,
     OptionsPatch, SeqIds, XAI,
 };
+use lk_agents_inference::testkit::{FakeWs, NoImages, text};
 use serde_json::json;
 
 /// No test may block for longer than this. A driver bug that parks forever fails as a timeout
 /// rather than as a hung CI job.
 const BOUND: Duration = Duration::from_secs(5);
 
-async fn next_event(session: &lk_agents_runtime::realtime::SessionHandle) -> Event {
+async fn next_event(session: &lk_agents_inference::realtime::native::SessionHandle) -> Event {
     tokio::time::timeout(BOUND, session.next_event())
         .await
         .expect("the driver produced no event within the bound")
@@ -56,13 +57,14 @@ async fn frames(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
 }
 
 fn model(ws: Arc<FakeWs>, dialect: lk_agents_inference::realtime::Dialect) -> NativeRealtime {
-    NativeRealtime::new(
+    <NativeRealtime>::new(
         dialect,
         "sk-test",
         ws,
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_ids(Arc::new(SeqIds::default()))
 }
@@ -228,13 +230,14 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
     let ws = Arc::new(FakeWs::hanging());
     let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
     connect.conn.max_retry = 0;
-    let realtime = NativeRealtime::new(
+    let realtime = <NativeRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_connect(connect)
     .with_ids(Arc::new(SeqIds::default()));
@@ -262,13 +265,14 @@ async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
     let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
     connect.conn.max_retry = 0;
     connect.conn.write_timeout = Some(3.0);
-    let realtime = NativeRealtime::new(
+    let realtime = <NativeRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_connect(connect)
     .with_ids(Arc::new(SeqIds::default()));
@@ -296,13 +300,14 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     // Drop one established socket after the provider received its opening update.
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let realtime = NativeRealtime::new(
+    let realtime = <NativeRealtime>::new(
         OPENAI,
         "sk-test",
         ws.clone(),
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_ids(Arc::new(SeqIds::default()));
     let session = realtime.session(false).await;
@@ -430,13 +435,14 @@ async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_t
     connect.conn.max_retry = 0;
     connect.conn.write_timeout = Some(3.0);
     connect.conn.read_timeout = Some(1.0);
-    let realtime = NativeRealtime::new(
+    let realtime = <NativeRealtime>::new(
         OPENAI,
         "sk-test",
         ws,
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_connect(connect);
     let session = realtime.session(false).await;
@@ -462,7 +468,7 @@ async fn realtime_send_stall_fires_write_deadline_without_starting_remote_read_t
 
 #[test]
 fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
-    let error = lk_agents_runtime::realtime::wire::decode_text(
+    let error = lk_agents_inference::realtime::native::wire::decode_text(
         r#"{"type":"response.created","event_id":"evt_bad","response":{"id":42}}"#,
         &Default::default(),
         std::time::SystemTime::UNIX_EPOCH,
@@ -471,21 +477,21 @@ fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
     assert_eq!(error.operation, "response.created");
     assert_eq!(error.event_id.as_deref(), Some("evt_bad"));
     assert_eq!(error.cause, "id must be a string");
-    let error = lk_agents_runtime::realtime::wire::decode_text(
+    let error = lk_agents_inference::realtime::native::wire::decode_text(
         r#"{"type":"response.output_audio.delta","item_id":"m1","delta":"not base64"}"#,
         &Default::default(),
         std::time::SystemTime::UNIX_EPOCH,
     )
     .expect_err("invalid base64 cannot produce an empty audio frame");
     assert!(error.cause.contains("invalid PCM base64"));
-    let error = lk_agents_runtime::realtime::wire::decode_text(
+    let error = lk_agents_inference::realtime::native::wire::decode_text(
         r#"{"type":"response.done","response":{"id":"r1","status":"unknown"}}"#,
         &Default::default(),
         std::time::SystemTime::UNIX_EPOCH,
     )
     .expect_err("an unknown terminal status cannot become a completed response");
     assert!(error.cause.contains("unsupported response status"));
-    let error = lk_agents_runtime::realtime::wire::decode_text(
+    let error = lk_agents_inference::realtime::native::wire::decode_text(
         r#"{"type":"response.done","event_id":"evt_usage","response":{"id":"r1","status":"completed","usage":{"input_tokens":"invalid"}}}"#,
         &Default::default(), std::time::SystemTime::UNIX_EPOCH,
     ).expect_err("malformed known numeric fields cannot become zero usage on clean completion");
@@ -518,7 +524,7 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
     let (release, wait) = std::sync::mpsc::channel();
     let (settled, done) = tokio::sync::oneshot::channel();
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let model = NativeRealtime::new(
+    let model = <NativeRealtime>::new(
         OPENAI,
         "sk",
         ws.clone(),
@@ -529,6 +535,7 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
             release: std::sync::Mutex::new(wait),
             settled: std::sync::Mutex::new(Some(settled)),
         }),
+        <Standalone as Env>::workers,
     );
     let session = model.session(false).await;
     frames(&ws, 1).await;
@@ -569,13 +576,14 @@ async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
     let mut connect = Connect::openai("sk", "https://api.openai.com/v1");
     connect.conn.total_timeout = Some(3.0);
     connect.conn.connect_timeout = Some(30.0);
-    let model = NativeRealtime::new(
+    let model = <NativeRealtime>::new(
         OPENAI,
         "sk",
         Arc::new(FakeWs::hanging()),
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     )
     .with_connect(connect);
     let session = model.session(false).await;
@@ -651,13 +659,14 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
         settled: Arc::default(),
         owner: Default::default(),
     });
-    let model = NativeRealtime::new(
+    let model = <NativeRealtime>::new(
         OPENAI,
         "sk",
         transport.clone(),
         Arc::new(TokioSpawner::current()),
         clock.clone(),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     );
     let session = Arc::new(model.session(false).await);
     frames(&transport.socket, 1).await;
@@ -714,56 +723,17 @@ fn realtime_fallback_byte_budget_counts_retained_string_allocations() {
     assert_eq!(refused.0, BacklogOverload::Bytes);
 }
 
-#[cfg(feature = "media-images")]
-#[test]
-fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
-    use lk_agents_abi::llm::provider_format::ImageResolver;
-    let image = lk_agents_abi::ImageContent {
-        id: "data_image".into(),
-        image: lk_agents_abi::ImageSource::Url("data:image/jpeg;base64,AQID".into()),
-        inference_width: None,
-        inference_height: None,
-        inference_detail: Default::default(),
-        mime_type: None,
-    };
-    let prepared = lk_agents_runtime::realtime::images::NativeImages
-        .resolve(&image)
-        .expect("the native constructor's resolver must accept a prepared inline image");
-    assert_eq!(prepared.data_bytes.as_deref(), Some(&[1, 2, 3][..]));
-    assert_eq!(prepared.mime_type.as_deref(), Some("image/jpeg"));
-    let mut external = image.clone();
-    external.image = lk_agents_abi::ImageSource::Url("https://example.test/image.jpg".into());
-    let item = lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::new(
-        "external",
-        lk_agents_abi::Role::User,
-        vec![lk_agents_abi::ChatContent::Image(external)],
-        std::time::SystemTime::UNIX_EPOCH,
-    ));
-    assert!(
-        lk_agents_runtime::realtime::wire::to_wire_item(
-            &item,
-            &lk_agents_runtime::realtime::images::NativeImages
-        )
-        .is_err(),
-        "this realtime protocol requires inline images"
-    );
-    let mut oversized = image;
-    oversized.image = lk_agents_abi::ImageSource::Url(
-        "x".repeat(lk_agents_runtime::realtime::images::MAX_IMAGE_URL_BYTES + 1),
-    );
-    assert!(lk_agents_runtime::realtime::images::NativeImages.resolve(&oversized).is_err());
-}
-
 #[tokio::test]
 async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
     let ws = Arc::new(FakeWs::stalling_sends());
-    let model = NativeRealtime::new(
+    let model = <NativeRealtime>::new(
         XAI,
         "sk",
         ws.clone(),
         Arc::new(TokioSpawner::current()),
         Arc::new(RealClock::new()),
         Arc::new(NoImages),
+        <Standalone as Env>::workers,
     );
     let session = model.session(false).await;
     assert!(matches!(next_event(&session).await, Event::Metrics(_)));

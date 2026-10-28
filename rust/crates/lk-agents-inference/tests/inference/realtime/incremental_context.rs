@@ -1,8 +1,6 @@
 //! Core context preparation, acknowledgements and retirement under long histories.
-#![cfg(unix)]
 
-mod realtime_support;
-use realtime_support::thread_cpu as cpu_time;
+use super::support::thread_cpu as cpu_time;
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -77,7 +75,7 @@ impl Samples {
 }
 
 fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples, controls: bool) {
-    let stats = realtime_support::execute_retirements(machine, |machine| {
+    let stats = super::support::execute_retirements(machine, |machine| {
         if controls {
             assert!(
                 samples.step("tick_during_cleanup", || machine.tick(Ts::ZERO)).frames.is_empty()

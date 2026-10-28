@@ -1,8 +1,8 @@
 use super::*;
+use crate::realtime::OPENAI;
+use crate::testkit::{FakeWs, NoImages};
 use lk_agents_abi::llm::realtime::{GenerateReply, UpdateChatCtx};
 use lk_agents_abi::{ChatMessage, RealClock, Role, TokioSpawner};
-use lk_agents_inference::realtime::OPENAI;
-use lk_agents_inference::testkit::{FakeWs, NoImages};
 
 fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
     let clock = Arc::new(RealClock::new());
@@ -17,7 +17,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         machine.incoming_on(
             machine.connection_generation(),
             clock.now(),
-            lk_agents_inference::realtime::Incoming::ItemAdded {
+            crate::realtime::Incoming::ItemAdded {
                 previous_item_id: id.checked_sub(1).map(|id: usize| id.to_string()),
                 item: ChatMessage::text(
                     id.to_string(),
@@ -46,6 +46,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
+        workers: <crate::env::Standalone as crate::env::Env>::workers,
     });
     let (events, receiver) = super::super::queue::events();
     let pump = Pump {
@@ -144,7 +145,7 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
         pump.label.clone(),
         pump.events.clone(),
         settled,
-        Err(crate::process::ProcessError::Forked),
+        Err("forked".to_owned()),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -224,7 +225,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     })
     .await
     .unwrap();
-    ws.feed(lk_agents_inference::testkit::text(serde_json::json!({
+    ws.feed(crate::testkit::text(serde_json::json!({
         "type": "input_audio_buffer.speech_started", "item_id": "speaker",
     })));
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -330,7 +331,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     })
     .await
     .expect("a written reply's deadline was blocked by cleanup admission");
-    ws.feed(lk_agents_inference::testkit::text(serde_json::json!({
+    ws.feed(crate::testkit::text(serde_json::json!({
         "type": "response.created", "response": {"id": "control-response"},
     })));
     tokio::time::timeout(Duration::from_secs(5), async {

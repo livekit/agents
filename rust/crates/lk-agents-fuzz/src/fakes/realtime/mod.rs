@@ -5,7 +5,7 @@
 //!
 //! So what reaches the driver is what the production core makes of real server traffic: its
 //! reconnects, its stale-response bookkeeping, its transcripts and its errors are under test with
-//! the driver, not stood in for. The pump is the runtime's (`lk_agents_runtime::realtime::session`)
+//! the driver, not stood in for. The pump is inference's (`lk_agents_inference::realtime::native::session`)
 //! without its I/O: the socket is the server's typed records, the person's audio reaches it in the
 //! writer's 100 ms batches, and the server answers on its own clock with the delays the corpus
 //! measured. What the server does of its own accord -- hears the person start and stop (its VAD),

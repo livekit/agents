@@ -1,11 +1,10 @@
-//! Realtime WebSocket execution, framing, media preparation and host integration.
+//! The realtime model over its WebSocket: session execution, framing and the declared classes.
 
 mod encode;
 mod event_retention;
 pub mod fallback;
 #[cfg(test)]
 mod machine_tests;
-#[cfg(feature = "media-images")]
 mod model;
 pub(crate) mod queue;
 pub mod session;
@@ -14,12 +13,7 @@ mod testfix;
 pub mod wire;
 mod writer;
 
+pub use super::{Dialect, INFERENCE, OPENAI, OptionsPatch, SessionOptions, XAI};
 pub use lk_agents_abi::llm::realtime::{AudioDelta, Event, GenerationCreated};
-pub use lk_agents_inference::realtime::{
-    Dialect, INFERENCE, OPENAI, OptionsPatch, SessionOptions, XAI,
-};
 pub use session::{Auth, Connect, NativeRealtime, SessionHandle};
 pub use wire::{Azure, RandomIds, SeqIds};
-
-#[cfg(feature = "media-images")]
-pub mod images;

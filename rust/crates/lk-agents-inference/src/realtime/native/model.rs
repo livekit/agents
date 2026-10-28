@@ -13,8 +13,9 @@ use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, NativeRealtime};
 use super::wire::Azure;
-use lk_agents_inference::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
-use lk_agents_inference::realtime::machine::{OptionsPatch, SessionOptions};
+use crate::env::Env;
+use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
+use crate::realtime::machine::{OptionsPatch, SessionOptions};
 
 fn json_option(value: Option<RealtimeJsonOption>) -> Maybe<Option<Value>> {
     match value {
@@ -51,14 +52,12 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
-impl NativeRealtimeModel for NativeRealtime {
+impl<E: Env> NativeRealtimeModel for NativeRealtime<E> {
     fn new(config: NativeRealtimeConfig) -> Result<Self, RealtimeConfigurationError> {
         let dialect = match config.dialect {
-            Some(name) => name.parse().map_err(
-                |e: lk_agents_inference::realtime::dialect::UnknownDialect| {
-                    RealtimeConfigurationError::Invalid(e.to_string())
-                },
-            )?,
+            Some(name) => name.parse().map_err(|e: crate::realtime::dialect::UnknownDialect| {
+                RealtimeConfigurationError::Invalid(e.to_string())
+            })?,
             None => Dialect::for_base_url(&config.base_url),
         };
         let is_inference = dialect.provider_label == INFERENCE.provider_label;
@@ -125,15 +124,15 @@ impl NativeRealtimeModel for NativeRealtime {
             auth,
             conn: config.conn_options,
         };
-        let runtime = crate::process::handle()
-            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+        let runtime = E::runtime().map_err(|error| ApiError::new(error).with_retryable(false))?;
         let mut native = NativeRealtime::new(
             dialect,
             "",
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_abi::RealClock::default()),
-            Arc::new(super::images::NativeImages),
+            E::images(),
+            E::workers,
         )
         .with_options(opts, turn_detection_given)
         .with_connect(connect);

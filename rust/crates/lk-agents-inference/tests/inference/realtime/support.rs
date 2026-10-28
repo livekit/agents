@@ -1,4 +1,4 @@
-//! Execute context disposal through the same process-owned admission pool as live sessions.
+//! Execute context disposal through an admission pool like a live session's.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -25,11 +25,16 @@ struct Executor {
     workers: MediaWorkers,
 }
 
+static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
 fn executor() -> &'static Executor {
     static EXECUTOR: OnceLock<Executor> = OnceLock::new();
     EXECUTOR.get_or_init(|| Executor {
-        handle: lk_agents_runtime::process::handle().expect("process runtime"),
-        workers: lk_agents_runtime::process::workers().expect("process Formatting admission"),
+        handle: RUNTIME
+            .get_or_init(|| tokio::runtime::Runtime::new().expect("runtime"))
+            .handle()
+            .clone(),
+        workers: MediaWorkers::new(Default::default()).expect("worker pool"),
     })
 }
 

@@ -15,10 +15,8 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
-use lk_agents_inference::fallback::realtime::{
-    FallbackBacklog, RealtimeCapabilities, merge_capabilities,
-};
-use lk_agents_inference::fallback::{ChainObserver, RealtimePolicy};
+use crate::fallback::realtime::{FallbackBacklog, RealtimeCapabilities, merge_capabilities};
+use crate::fallback::{ChainObserver, RealtimePolicy};
 
 /// One model of the chain: the core's own, or a plugin's seen through its host view. A host model
 /// is wrapped afresh at each open: `HostRealtimeModel` keeps the session it opened.
@@ -227,7 +225,7 @@ impl FallbackSession {
         let _ = self.restart_tx.send(switch_model);
     }
 
-    fn announce(&self, changes: Vec<lk_agents_inference::fallback::AvailabilityChange>) {
+    fn announce(&self, changes: Vec<crate::fallback::AvailabilityChange>) {
         for c in changes {
             let label = self.children[c.index].label();
             self.observer.availability_changed(AvailabilityChanged {
@@ -519,68 +517,6 @@ impl RealtimeSession for FallbackSession {
     }
 }
 
-/// Conversion of opaque provider instances uses the same native registry and host bridge as
-/// the provider boundary; the generated facade owns the resulting native model.
-#[cfg(feature = "python")]
-mod python {
-    use std::sync::Arc;
-
-    use lk_agents_abi::llm::realtime::HostRealtime;
-    use lk_agents_abi::llm::realtime_native::RealtimeConfigurationError;
-    use lk_agents_abi::python::{HostProxy, native};
-    use lk_agents_abi::{HostRef, Realtime, WallAnchor};
-    use pyo3::prelude::*;
-
-    use super::{RealtimeChild, RealtimeFallbackModel};
-    use lk_agents_inference::fallback::ChainObserver;
-
-    impl lk_agents_abi::llm::realtime_native::RealtimeFallbackModel for RealtimeFallbackModel {
-        fn new(
-            models: Vec<HostRef>,
-            cooldown: f64,
-            regenerate_on_swap: bool,
-            on_availability: Option<HostRef>,
-        ) -> Result<Self, RealtimeConfigurationError> {
-            let (children, observer) = Python::attach(|py| -> PyResult<_> {
-                let children = models.into_iter().map(|model| {
-                    let model = model.into_pyobject(py)?;
-                    match native::<dyn Realtime>(&model) {
-                        Some(native) => Ok(RealtimeChild::Native(native)),
-                        None => <dyn HostRealtime as HostProxy>::from_host(&model, None).map(|host| {
-                            let spawner = <Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient();
-                            RealtimeChild::Host(host, spawner)
-                        }),
-                    }
-                }).collect::<PyResult<Vec<_>>>()?;
-                let observer: Arc<dyn ChainObserver> = match on_availability {
-                    Some(observer) => <dyn ChainObserver as HostProxy>::from_host(&observer.into_pyobject(py)?, None)?,
-                    None => Arc::new(lk_agents_inference::fallback::IgnoreEvents),
-                };
-                Ok((children, observer))
-            }).map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
-            let clock = crate::process::host_clock();
-            RealtimeFallbackModel::new(
-                children,
-                cooldown,
-                regenerate_on_swap,
-                observer,
-                WallAnchor::of(&*clock),
-            )
-            .map_err(RealtimeConfigurationError::Invalid)
-        }
-
-        fn active_index(&self) -> usize {
-            self.active_index()
-        }
-        fn capabilities(&self) -> lk_agents_abi::llm::realtime::RealtimeCapabilities {
-            Realtime::capabilities(self)
-        }
-        async fn restart(&self, switch_model: bool) {
-            self.restart(switch_model).await;
-        }
-    }
-}
-
 #[cfg(test)]
 mod fallback_session_tests {
     use super::*;
@@ -762,7 +698,7 @@ mod fallback_session_tests {
             ],
             10.0,
             false,
-            Arc::new(lk_agents_inference::fallback::IgnoreEvents),
+            Arc::new(crate::fallback::IgnoreEvents),
             WallAnchor::of(&lk_agents_abi::RealClock::default()),
         )
         .unwrap();

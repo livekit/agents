@@ -11,7 +11,7 @@ use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCa
 use serde_json::{Map, Value, json};
 use std::time::SystemTime;
 
-use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 
 /// Azure's deployment, for the URL.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -141,7 +141,7 @@ pub struct RandomIds;
 
 impl IdGen for RandomIds {
     fn short(&self, prefix: &str) -> String {
-        lk_agents_inference::shortuuid(prefix)
+        crate::shortuuid(prefix)
     }
 }
 
@@ -451,7 +451,7 @@ pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, 
     }
 }
 
-pub use lk_agents_inference::realtime::protocol::{
+pub use crate::realtime::protocol::{
     Incoming, ResponseDone, ServerError, TranscriptionCompleted, TranscriptionUsage,
 };
 
@@ -759,8 +759,8 @@ pub fn audio_frame(pcm: Vec<u8>) -> lk_agents_abi::AudioFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::realtime::testfix::{TIME, msg};
-    use lk_agents_inference::testkit::NoImages;
+    use crate::realtime::native::testfix::{TIME, msg};
+    use crate::testkit::NoImages;
 
     // Catches: appending `/realtime` to xAI's `/v1/realtime`, a global `replace("http", "ws")`, or
     // appending `&model=` when one is pinned.

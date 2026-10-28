@@ -24,6 +24,8 @@ pub mod generated;
 pub mod host;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.
 pub mod nodes;
+
+pub mod realtime_fallback;
 /// `init(role)` and the registration table.
 pub mod runtime;
 /// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
@@ -46,20 +48,25 @@ impl generated::Implementations for Selected {
     type VoiceSessionExecution = Selected;
     type ExpFilter = lk_agents_runtime::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::filters::MovingAverage;
-    type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<lk_agents_runtime::process::Process>;
+    type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<
+        lk_agents_runtime::process::Process,
+    >;
     type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
-    type NativeRealtimeModel = lk_agents_runtime::realtime::NativeRealtime;
-    type RealtimeFallbackModel = lk_agents_runtime::realtime::fallback::RealtimeFallbackModel;
+    type NativeRealtimeModel = lk_agents_runtime::inference::realtime::native::NativeRealtime<
+        lk_agents_runtime::process::Process,
+    >;
+    type RealtimeFallbackModel = crate::realtime_fallback::RealtimeFallback;
     type AgentClient = lk_agents_runtime::a2a_client::AgentClient;
     type Reply = lk_agents_runtime::a2a_client::Reply;
     type RemoteInteraction = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
-    type JudgeRunner = lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
+    type JudgeRunner =
+        lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
     type Evaluations = lk_agents_runtime::inference::evals::Rules;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;
@@ -83,9 +90,13 @@ impl generated::Implementations for Selected {
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
     type DataStreamAudioOutput = crate::avatar_output::DataStreamAudioOutput;
-    type InferenceAvatar = lk_agents_runtime::inference::avatar::gateway::GatewayAvatar<lk_agents_runtime::process::Process>;
-    type FallbackLlm = lk_agents_runtime::inference::fallback::FallbackLlm<lk_agents_runtime::process::Process>;
-    type InferenceLlm = lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
+    type InferenceAvatar = lk_agents_runtime::inference::avatar::gateway::GatewayAvatar<
+        lk_agents_runtime::process::Process,
+    >;
+    type FallbackLlm =
+        lk_agents_runtime::inference::fallback::FallbackLlm<lk_agents_runtime::process::Process>;
+    type InferenceLlm =
+        lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;
     type CompletionWire = lk_agents_runtime::cores::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;

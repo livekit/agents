@@ -1,11 +1,11 @@
 //! Serialize typed realtime effects at the transport boundary.
 
 use super::wire::{self, SessionPatch};
+use crate::realtime::dialect::{Dialect, TurnDetection};
+use crate::realtime::machine::Outgoing;
+use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{Maybe, ToolSpec};
-use lk_agents_inference::realtime::dialect::{Dialect, TurnDetection};
-use lk_agents_inference::realtime::machine::Outgoing;
-use lk_agents_inference::realtime::machine::{OptionsPatch, SessionOptions};
 use serde_json::{Map, Value, json};
 
 pub fn encode(effect: Outgoing, images: &dyn ImageResolver) -> Result<Value, String> {

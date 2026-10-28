@@ -2,7 +2,9 @@
 
 use super::testfix::{RealtimeMachine, Step};
 use super::wire;
-use crate::realtime::testfix::{machine, msg};
+use crate::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
+use crate::realtime::machine::{OptionsPatch, SessionOptions};
+use crate::realtime::native::testfix::{machine, msg};
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::llm::realtime::*;
 use lk_agents_abi::llm::realtime::{
@@ -11,8 +13,6 @@ use lk_agents_abi::llm::realtime::{
 };
 use lk_agents_abi::{ChatContext, ChatItem, Maybe, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
-use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, OPENAI, SAMPLE_RATE, XAI};
-use lk_agents_inference::realtime::machine::{OptionsPatch, SessionOptions};
 use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
@@ -744,8 +744,8 @@ fn the_session_carries_every_option_as_the_reference_sends_it() {
         OPENAI,
         opts,
         caps,
-        Arc::new(crate::realtime::wire::SeqIds::default()),
-        Arc::new(lk_agents_inference::testkit::NoImages),
+        Arc::new(crate::realtime::native::wire::SeqIds::default()),
+        Arc::new(crate::testkit::NoImages),
     );
     let s = &m.open(at(0)).frames[0]["session"];
     assert_eq!(s["tracing"], Value::Null);

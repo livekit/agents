@@ -1,5 +1,6 @@
 //! The driver: the only file in this crate that awaits anything; no decision is made here.
 
+use std::marker::PhantomData;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -12,11 +13,12 @@ use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::realtime::wire::{self, Azure, IdGen, RandomIds, WireShape};
+use crate::env::{Env, Standalone, WorkerPool};
+use crate::headers::BoundIdentity;
+use crate::realtime::dialect::{Dialect, TurnDetection};
+use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
+use crate::realtime::native::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
-use lk_agents_inference::headers::BoundIdentity;
-use lk_agents_inference::realtime::dialect::{Dialect, TurnDetection};
-use lk_agents_inference::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 
 /// How a connection authenticates.
 pub enum Auth {
@@ -78,20 +80,17 @@ impl Connect {
             Auth::Inference { api_key, api_secret, provider, inference_class, identity } => {
                 // `get_inference_headers()` as the host bound it; unbound, the job-less half.
                 let mut h = identity.for_connection().unwrap_or_else(|| {
-                    let mut h = lk_agents_inference::headers::Headers::new();
-                    h.set(
-                        "User-Agent",
-                        lk_agents_inference::headers::user_agent(env!("CARGO_PKG_VERSION")),
-                    );
+                    let mut h = crate::headers::Headers::new();
+                    h.set("User-Agent", crate::headers::user_agent(env!("CARGO_PKG_VERSION")));
                     if let Some(class) = inference_class {
-                        h.set(lk_agents_inference::HEADER_INFERENCE_PRIORITY, class.clone());
+                        h.set(crate::HEADER_INFERENCE_PRIORITY, class.clone());
                     }
                     h
                 });
                 let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
                 h.set("Authorization", format!("Bearer {token}"));
                 if let Some(p) = provider {
-                    h.set(lk_agents_inference::HEADER_INFERENCE_PROVIDER, p.clone());
+                    h.set(crate::HEADER_INFERENCE_PROVIDER, p.clone());
                 }
                 h.into_vec()
             }
@@ -100,7 +99,8 @@ impl Connect {
 }
 
 /// `RealtimeModel`; its sessions are already running when `session()` returns, as in the reference.
-pub struct NativeRealtime {
+/// `E` is the process a host-constructed model runs in (decision 88).
+pub struct NativeRealtime<E: Env = Standalone> {
     dialect: Dialect,
     /// The model's options: what each new session starts from, and what `update_options` edits.
     opts: std::sync::Mutex<SessionOptions>,
@@ -109,6 +109,7 @@ pub struct NativeRealtime {
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
+    workers: WorkerPool,
     ids: Arc<dyn IdGen>,
     /// Whether the caller passed a turn-detection configuration; `can_disable_turn_detection`
     /// reports intent (see [`Dialect::capabilities`]).
@@ -117,9 +118,10 @@ pub struct NativeRealtime {
     label: Option<String>,
     /// `self._sessions`: the live sessions an `update_options` reaches.
     sessions: std::sync::Mutex<Vec<Weak<super::queue::Ingress>>>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl NativeRealtime {
+impl<E: Env> NativeRealtime<E> {
     pub fn new(
         dialect: Dialect,
         api_key: impl Into<String>,
@@ -127,6 +129,7 @@ impl NativeRealtime {
         spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
         images: Arc<dyn ImageResolver + Send + Sync>,
+        workers: WorkerPool,
     ) -> Self {
         let opts = SessionOptions::from_dialect(&dialect, false);
         let connect = Connect::openai(api_key, dialect.default_base_url);
@@ -138,10 +141,12 @@ impl NativeRealtime {
             spawner,
             clock,
             images,
+            workers,
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
             label: None,
             sessions: std::sync::Mutex::new(Vec::new()),
+            env: PhantomData,
         }
     }
 
@@ -173,7 +178,7 @@ impl NativeRealtime {
 
     /// `get_inference_headers()` of the job the model now serves; every later connection carries
     /// them, with a fresh session id. A no-op off the gateway.
-    pub fn bind_identification(&self, headers: lk_agents_inference::headers::Headers) {
+    pub fn bind_identification(&self, headers: crate::headers::Headers) {
         if let Auth::Inference { identity, .. } = &self.connect.auth {
             identity.bind(headers);
         }
@@ -225,7 +230,7 @@ pub(crate) enum Cmd {
     Close,
 }
 
-impl NativeRealtime {
+impl<E: Env> NativeRealtime<E> {
     /// `provider`: `urlparse(base_url).netloc`.
     pub fn provider(&self) -> String {
         let url = &self.connect.base_url;
@@ -240,9 +245,7 @@ impl NativeRealtime {
     /// The `model_provider` the metrics name: the host's `provider` (LiveKit Inference reports
     /// `"livekit"`, as its host class does).
     fn metrics_provider(&self) -> String {
-        if self.dialect.provider_label
-            == lk_agents_inference::realtime::dialect::INFERENCE.provider_label
-        {
+        if self.dialect.provider_label == crate::realtime::dialect::INFERENCE.provider_label {
             "livekit".to_owned()
         } else {
             self.provider()
@@ -302,6 +305,7 @@ impl NativeRealtime {
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
             context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
+            workers: self.workers,
         });
         let commands = Arc::new(super::queue::Ingress {
             commands: cmd_tx,
@@ -346,7 +350,7 @@ impl NativeRealtime {
 pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
     pub(super) closing: tokio::sync::Notify,
-    cleanup: std::sync::Mutex<Option<lk_agents_inference::realtime::ConnectionEffect>>,
+    cleanup: std::sync::Mutex<Option<crate::realtime::ConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
     retirement: std::sync::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     retirement_wake: Arc<tokio::sync::Notify>,
@@ -354,6 +358,8 @@ pub(super) struct Shared {
     retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
+    /// Decoding and context retirement run on the process's admitted workers.
+    workers: WorkerPool,
 }
 
 impl Shared {
@@ -362,8 +368,7 @@ impl Shared {
         if cleanup.is_some() {
             return false;
         }
-        *cleanup =
-            Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation });
+        *cleanup = Some(crate::realtime::ConnectionEffect::CleanupIncomplete { generation });
         true
     }
 
@@ -374,14 +379,9 @@ impl Shared {
         log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime cleanup did not settle within its deadline");
     }
 
-    fn retirement_unavailable(
-        &self,
-        generation: u64,
-        label: &str,
-        error: &crate::process::ProcessError,
-    ) {
+    fn retirement_unavailable(&self, generation: u64, label: &str, error: &str) {
         if self.record_incomplete_cleanup(generation) {
-            log::error!(target: "livekit.agents", connection_generation = generation, model = label, cause = error.to_string().as_str(); "realtime context cleanup service is unavailable");
+            log::error!(target: "livekit.agents", connection_generation = generation, model = label, cause = error; "realtime context cleanup service is unavailable");
         }
     }
 }
@@ -406,7 +406,7 @@ impl SessionHandle {
     }
 
     /// Framework cleanup diagnostics stay separate from provider errors and conversation events.
-    pub fn cleanup_observation(&self) -> Option<lk_agents_inference::realtime::ConnectionEffect> {
+    pub fn cleanup_observation(&self) -> Option<crate::realtime::ConnectionEffect> {
         self.shared.cleanup.lock().unwrap_or_else(|error| error.into_inner()).clone()
     }
 
@@ -492,7 +492,7 @@ impl Pump {
     }
 
     async fn run_loop(&self, mut commands: mpsc::Receiver<Cmd>) {
-        use lk_agents_inference::realtime::connection::{ConnectionEffect, RealtimeConnection};
+        use crate::realtime::connection::{ConnectionEffect, RealtimeConnection};
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
         let mut reconnecting = false;
@@ -574,7 +574,7 @@ impl Pump {
         &self,
         commands: &mut mpsc::Receiver<Cmd>,
         reconnecting: bool,
-        connection: &mut lk_agents_inference::realtime::connection::RealtimeConnection,
+        connection: &mut crate::realtime::connection::RealtimeConnection,
         generation: u64,
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
@@ -588,7 +588,7 @@ impl Pump {
                 () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); }
                 () = async { match deadline { Some(at) => self.clock.wait_until(at).await, None => std::future::pending().await } } => {
                     let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                    if effects.iter().any(|effect| !matches!(effect, crate::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
                         return Ok(Outcome::ConnectionEffects(effects));
                     }
                     for effect in effects { self.observe_cleanup(effect); }
@@ -624,7 +624,7 @@ impl Pump {
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
-        connection: &mut lk_agents_inference::realtime::connection::RealtimeConnection,
+        connection: &mut crate::realtime::connection::RealtimeConnection,
     ) -> Result<Outcome, ApiError> {
         let generation = self.shared.machine.lock().await.connection_generation();
         let (sent, mut receipts) = mpsc::channel(super::writer::RESPONSE_RECEIPTS);
@@ -636,6 +636,7 @@ impl Pump {
             self.connect.conn,
             self.clock.clone(),
             self.images.clone(),
+            self.shared.workers,
             generation,
             sent,
         );
@@ -679,7 +680,7 @@ impl Pump {
                 biased;
                 () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
                     let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                    if effects.iter().any(|effect| !matches!(effect, crate::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
                         return Ok(Outcome::ConnectionEffects(effects));
                     }
                     for effect in effects { self.observe_cleanup(effect); }
@@ -710,8 +711,9 @@ impl Pump {
                         }
                         let shape = self.shape.clone();
                         let created_at = self.clock.wall();
+                        let workers = self.shared.workers;
                         decoding = Some(Box::pin(async move {
-                            let workers = crate::process::workers().map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                            let workers = workers().map_err(|error| ApiError::new(error).with_retryable(false))?;
                             let worker = workers.try_spawn(lk_agents_media::workers::MediaWorkerClass::Decoder, move || {
                                 wire::decode_text(&text, &shape, created_at)
                             }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
@@ -802,7 +804,7 @@ impl Pump {
     fn dispatch(
         &self,
         step: Step,
-        outgoing: &mpsc::Sender<Vec<lk_agents_inference::realtime::machine::Outgoing>>,
+        outgoing: &mpsc::Sender<Vec<crate::realtime::machine::Outgoing>>,
     ) -> Result<(), ApiError> {
         self.wake_retirement();
         if !step.frames.is_empty() {
@@ -839,10 +841,9 @@ impl Pump {
         }
     }
 
-    fn observe_cleanup(&self, effect: lk_agents_inference::realtime::connection::ConnectionEffect) {
-        if let lk_agents_inference::realtime::connection::ConnectionEffect::CleanupIncomplete {
-            generation,
-        } = effect
+    fn observe_cleanup(&self, effect: crate::realtime::connection::ConnectionEffect) {
+        if let crate::realtime::connection::ConnectionEffect::CleanupIncomplete { generation } =
+            effect
         {
             self.shared.incomplete_cleanup(generation, &self.label);
         }
@@ -865,7 +866,7 @@ impl Pump {
 }
 
 enum Outcome {
-    ConnectionEffects(Vec<lk_agents_inference::realtime::connection::ConnectionEffect>),
+    ConnectionEffects(Vec<crate::realtime::connection::ConnectionEffect>),
     Recycle,
     Closed,
     /// The server said the session cannot go on: no reconnect.
@@ -877,7 +878,7 @@ enum Outcome {
 // =============================================================================================
 
 #[async_trait::async_trait]
-impl lk_agents_abi::Realtime for NativeRealtime {
+impl<E: Env> lk_agents_abi::Realtime for NativeRealtime<E> {
     fn label(&self) -> String {
         NativeRealtime::label(self)
     }

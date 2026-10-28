@@ -55,7 +55,12 @@ fn diff_allocation_scaling() {
             // The budget covers indexes, the retained subsequence and the resulting edit script.
             // Each input item gets 512 bytes; no input-dependent product of the two lengths fits.
             assert!(
-                allocated <= if name == "reorder" { 512 * (old.len() + new.len()) } else { 128 * new.len() },
+                allocated
+                    <= if name == "reorder" {
+                        512 * (old.len() + new.len())
+                    } else {
+                        128 * new.len()
+                    },
                 "{name}: {allocated} temporary/output bytes for {count} items"
             );
             match name {

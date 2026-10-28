@@ -52,7 +52,7 @@ pub const VOICE: Boundary = Boundary {
     ],
     outside: &[
         "the voice runtime: its Tokio session loop and effect execution (K-30 conformance and stress)",
-        "the runtime's realtime pump, wire codec and fallback adapter (lk_agents_runtime::realtime; \
+        "inference's realtime pump, wire codec and fallback adapter (lk_agents_inference::realtime::native; \
          K-30 conformance; the fake pump and fallback mirror their contracts)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",

@@ -1490,6 +1490,7 @@ dependencies = [
  "futures-util",
  "inventory",
  "jsonwebtoken 9.3.1",
+ "libc",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",

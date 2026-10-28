@@ -3,9 +3,10 @@
 
 mod support;
 
+mod avatar_peer;
 mod interruption_transport;
 mod interruption_websocket;
 mod live_gateway;
-mod avatar_peer;
 mod llm_live;
 mod llm_peer;
+mod realtime;

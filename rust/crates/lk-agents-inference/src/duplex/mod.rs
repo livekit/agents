@@ -4,6 +4,7 @@
 
 pub mod gate;
 pub mod segmenter;
+pub mod session;
 #[cfg(test)]
 mod tests;
 

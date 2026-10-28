@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::{Clock, Spawner};
+use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
+use lk_agents_abi::{Clock, ImageContent, Spawner};
 use lk_agents_media::workers::MediaWorkers;
 
 pub trait Env: Send + Sync + 'static {
@@ -23,7 +24,13 @@ pub trait Env: Send + Sync + 'static {
     fn clock() -> Arc<dyn Clock>;
     /// The process's admitted CPU workers for model, codec and image work.
     fn workers() -> Result<MediaWorkers, String>;
+    /// How a realtime model prepares the images it sends.
+    fn images() -> Arc<dyn ImageResolver + Send + Sync>;
 }
+
+/// [`Env::workers`] handed to a client that acquires the pool where it uses it: after a fork the
+/// process refuses, where a pool held from before would wait on threads the child lacks.
+pub type WorkerPool = fn() -> Result<MediaWorkers, String>;
 
 /// A Rust caller with no host: the current Tokio runtime, the wall clock and one worker pool.
 pub struct Standalone;
@@ -45,5 +52,18 @@ impl Env for Standalone {
                 MediaWorkers::new(Default::default()).map_err(|error| error.to_string())
             })
             .clone()
+    }
+
+    fn images() -> Arc<dyn ImageResolver + Send + Sync> {
+        Arc::new(NoImagePreparation)
+    }
+}
+
+/// Images need the host process's preparation service.
+struct NoImagePreparation;
+
+impl ImageResolver for NoImagePreparation {
+    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
+        Err(format!("image {}: no image preparation in this process", image.id))
     }
 }

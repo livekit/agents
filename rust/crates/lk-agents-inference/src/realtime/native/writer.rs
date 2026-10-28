@@ -2,11 +2,11 @@
 //! a stalled peer cannot suspend the owner's timer or command dispatch.
 
 use super::wire::WireShape;
+use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::realtime::machine::Outgoing;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, AudioByteStream, Clock, Elapsed, Ts};
-use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
-use lk_agents_inference::realtime::machine::Outgoing;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
 use lk_agents_net::transport::WsSender;
 use std::sync::Arc;
@@ -94,11 +94,11 @@ pub(super) async fn run(
     conn: ApiConnectOptions,
     clock: Arc<dyn Clock>,
     images: Arc<dyn ImageResolver + Send + Sync>,
+    workers: crate::env::WorkerPool,
     generation: u64,
     receipts: mpsc::Sender<ResponseSent>,
 ) -> Result<(), ApiError> {
-    let workers = crate::process::workers()
-        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+    let workers = workers().map_err(|error| ApiError::new(error).with_retryable(false))?;
     let mut encoder = Encoder::new();
     while let Some(batch) = effects.recv().await {
         let worker_images = images.clone();

@@ -97,6 +97,10 @@ pyo3 = { workspace = true, optional = true }
 lk-agents-inference = { path = ".", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+# Thread CPU time for the realtime step-budget tests.
+libc = "0.2"
+
 [features]
 # libsoxr behind the fallback TTS's and the VAD machine's rate conversions
 # (`lk_agents_media::new_resampler`); off, `lk-agents-media`'s linear one. On by default.

@@ -1,11 +1,11 @@
 //! Realtime feature fixtures exercise the core through the runtime encoder and decoder.
 
 use super::wire::{IdGen, Incoming, WireShape};
+use crate::realtime::machine::{RealtimeMachine as Core, Step as CoreStep};
+use crate::realtime::{Dialect, OptionsPatch, SessionOptions};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities, RealtimeModelError};
 use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
-use lk_agents_inference::realtime::machine::{RealtimeMachine as Core, Step as CoreStep};
-use lk_agents_inference::realtime::{Dialect, OptionsPatch, SessionOptions};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -23,7 +23,7 @@ pub fn machine(dialect: Dialect) -> RealtimeMachine {
         opts,
         caps,
         Arc::new(super::wire::SeqIds::default()),
-        Arc::new(lk_agents_inference::testkit::NoImages),
+        Arc::new(crate::testkit::NoImages),
     )
 }
 
