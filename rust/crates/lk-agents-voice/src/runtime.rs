@@ -32,15 +32,20 @@ pub struct Runtime {
     frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, AbortHandle)>,
+    /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, AbortHandle)>,
+    /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
         crate::agent_activity::scheduling::SpeechId,
         tokio::sync::mpsc::UnboundedSender<lk_agents_abi::llm::realtime::Event>,
     >,
+    /// The camera read now, its forwarder, and what a new forwarder is built from.
     video_parts: crate::audio::VideoForwarderParts,
     video_forwarder: Option<AbortHandle>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
+    /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: std::collections::BTreeMap<ResourceId, effects::PendingLeg>,
+    /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
     interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
 }
@@ -296,7 +301,7 @@ impl Drop for Runtime {
         self.shared.calls.close();
         self.release();
         self.driver.release_all_providers();
-        let effects = std::mem::take(&mut *self.driver.pending_effects.borrow_mut());
+        let effects = std::mem::take(&mut self.driver.outbox);
         self.perform_voice(effects);
     }
 }

@@ -219,7 +219,8 @@ impl DriverBuilder {
         );
         let mut driver = Driver {
             activity_changed: Default::default(),
-            pending_effects: Default::default(),
+            outbox: Vec::new(),
+            view: Arc::clone(&self.view.borrow()),
             session,
             activity,
             input,
@@ -270,7 +271,7 @@ impl DriverBuilder {
             peer.events.clone(),
             peer.watch.clone(),
         );
-        let effects = std::mem::take(&mut *runtime.driver.pending_effects.borrow_mut());
+        let effects = std::mem::take(&mut runtime.driver.outbox);
         runtime.perform_voice(effects);
         Ok((
             runtime,
@@ -513,7 +514,7 @@ impl Driver {
                 self.push_activity(Some(opening), &mut out);
             }
             let effects = self.settle_step(out);
-            self.pending_effects.borrow_mut().extend(effects);
+            self.outbox.extend(effects);
         }
         self.session.forward_chat_context = forward_chat_context;
         // `KeytermDetector.start`: the static terms reach the recogniser now.
@@ -521,7 +522,7 @@ impl Driver {
             let mut out = self.out();
             self.keyterms_start(setup, llm, &mut out);
             let effects = self.settle_step(out);
-            self.pending_effects.borrow_mut().extend(effects);
+            self.outbox.extend(effects);
         }
     }
 }

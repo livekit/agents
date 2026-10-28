@@ -521,7 +521,7 @@ impl Driver {
     /// The one write of `session.output`, published to the data plane at once.
     pub(crate) fn set_outputs<R>(&mut self, f: impl FnOnce(&mut Outputs) -> R) -> R {
         let r = f(&mut self.session.outputs);
-        self.pending_effects.borrow_mut().push(Effect::Outputs(self.session.outputs.clone()));
+        self.outbox.push(Effect::Outputs(self.session.outputs.clone()));
         r
     }
 }
@@ -559,7 +559,7 @@ impl Driver {
     pub(crate) fn release_all_providers(&mut self) {
         self.session.providers.extend(self.providers_held());
         for id in std::mem::take(&mut self.session.providers) {
-            self.pending_effects.borrow_mut().push(Effect::Provider(ProviderCall::Release(id)));
+            self.outbox.push(Effect::Provider(ProviderCall::Release(id)));
         }
     }
 }

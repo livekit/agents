@@ -722,9 +722,9 @@ impl Driver {
     pub(crate) fn on_session_closed(&mut self) {
         if let Some(room) = self.session.room.request_deletion() {
             self.journal(Step::Room(RoomStep::Link(RoomLinkStep::DeleteRoomRequested)));
-            self.pending_effects.borrow_mut().push(crate::agent_session::effects::Effect::Host(
-                HostEvent::Room(RoomIoEvent::DeleteRoomRequested(DeleteRoomRequested { room })),
-            ));
+            self.outbox.push(crate::agent_session::effects::Effect::Host(HostEvent::Room(
+                RoomIoEvent::DeleteRoomRequested(DeleteRoomRequested { room }),
+            )));
         }
     }
 }

@@ -64,7 +64,9 @@ pub(crate) struct AgentActivity {
     /// Per tool step: whether the activity that made the speech drains, so the step's reply
     /// offers no tools.
     pub(crate) tools_committed: BTreeMap<(SpeechId, u32), bool>,
-    pub(crate) reply_plans: std::collections::VecDeque<crate::generation::ReplyPlan>,
+    /// Replies waiting for their step's or predecessor's commit before they are planned.
+    pub(crate) reply_plans:
+        std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
     pub(crate) tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
@@ -459,9 +461,7 @@ impl Driver {
             return;
         }
         self.prune_settled_speeches();
-        self.pending_effects
-            .borrow_mut()
-            .push(Effect::ChatContext(Arc::new(self.session.chat_ctx.agent_chat_ctx())));
+        self.outbox.push(Effect::ChatContext(Arc::new(self.session.chat_ctx.agent_chat_ctx())));
     }
 
     /// What the driver keeps per speech outlives it only while something may still ask: the

@@ -269,7 +269,7 @@ pub enum Effect {
         session: ResourceId,
         command: lk_agents_abi::RealtimeCommand,
     },
-    FlushStream(Option<ResourceId>),
+    FlushStream(ResourceId),
     InterruptionSignal {
         overlap: Option<ReqId>,
         signal: InterruptionSignal,
@@ -588,7 +588,7 @@ impl Driver {
     pub(crate) fn settle_step(&mut self, mut out: Out) -> Vec<Effect> {
         let mut effects = Vec::new();
         loop {
-            effects.append(&mut self.pending_effects.borrow_mut());
+            effects.append(&mut self.outbox);
             for effect in out.take() {
                 match effect {
                     Effect::Arm(timer, at) => {
@@ -603,7 +603,9 @@ impl Driver {
                         } else {
                             crate::audio::AudioChannel::Vad
                         };
-                        effects.push(Effect::FlushStream(self.input.sinks.get(&channel).copied()));
+                        if let Some(&sink) = self.input.sinks.get(&channel) {
+                            effects.push(Effect::FlushStream(sink));
+                        }
                     }
                     Effect::Detector(DetectorCall::Signal(signal)) => {
                         let overlap = self.activity.audio_recognition.open_overlap();
@@ -624,12 +626,19 @@ impl Driver {
             }
         }
         self.flush_activity();
-        effects.push(Effect::SessionView(Arc::new(crate::agent_session::SessionView {
-            config: self.session.config.clone(),
-            agent: self.activity.agent.clone(),
-            vad: self.session.vad.clone(),
-        })));
-        effects.append(&mut self.pending_effects.borrow_mut());
+        let view = &self.view;
+        if view.config != self.session.config
+            || view.agent != self.activity.agent
+            || view.vad != self.session.vad
+        {
+            self.view = Arc::new(crate::agent_session::SessionView {
+                config: self.session.config.clone(),
+                agent: self.activity.agent.clone(),
+                vad: self.session.vad.clone(),
+            });
+            effects.push(Effect::SessionView(Arc::clone(&self.view)));
+        }
+        effects.append(&mut self.outbox);
         effects
     }
 
@@ -790,7 +799,7 @@ impl Driver {
             | SessionEvent::Close { .. } => {}
             // `_on_conversation_item_added`: the keyterm pass's turn gate.
             SessionEvent::ConversationItemAdded { item, .. } => {
-                self.forward_chat_context(item);
+                self.forward_chat_context(item, out);
                 if self.session.keyterms.is_some() {
                     let item = (**item).clone();
                     self.keyterms_on_item(now, &item, out);
@@ -801,14 +810,14 @@ impl Driver {
 
     /// `stt._push_conversation_item` on `conversation_item_added`: a message's role and text reach
     /// an STT that consumes conversation context, unless `forward_chat_context` is off.
-    fn forward_chat_context(&self, item: &lk_agents_abi::ChatItem) {
+    fn forward_chat_context(&self, item: &lk_agents_abi::ChatItem, out: &mut Out) {
         if !self.session.forward_chat_context {
             return;
         }
         let Some(message) = item.as_message() else { return };
         let Some(text) = message.text_content().filter(|t| !t.is_empty()) else { return };
         let Some(stt) = self.session.stt.as_ref() else { return };
-        self.pending_effects.borrow_mut().push(Effect::SttConversationItem {
+        out.machine().push(Effect::SttConversationItem {
             stt: stt.id,
             role: message.role.as_str().to_owned(),
             text,

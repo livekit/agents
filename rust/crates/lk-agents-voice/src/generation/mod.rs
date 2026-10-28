@@ -655,12 +655,6 @@ pub struct ReplyContext {
     /// The first request is re-planned once the speech playing at creation is on the record.
     pub replan: Option<Replan>,
     pub source: ReplySource,
-    /// Runtime-owned stream; the core always constructs contexts without it.
-    pub(crate) realtime_events: Option<
-        tokio::sync::Mutex<
-            tokio::sync::mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>,
-        >,
-    >,
     /// Every host call inherits it.
     pub frame: FrameId,
     /// Fixed before the first frame; the anchor for `e2e_latency`.
@@ -799,10 +793,10 @@ impl PlanSpec {
     }
 }
 
-/// A correlated request to plan against the core's accepted conversation and instructions.
+/// A reply's request to be planned against the core's accepted record and instructions, once
+/// `after` is on that record: finished, or (with `step`) that step's tools committed.
 #[derive(Debug)]
 pub struct ReplyPlan {
-    pub call: crate::agent_session::RequestId,
     pub speech: SpeechId,
     pub after: SpeechId,
     pub step: Option<u32>,
@@ -811,6 +805,7 @@ pub struct ReplyPlan {
     pub tool_choice: Option<lk_agents_abi::ToolChoice>,
 }
 
+/// The core's answer to a [`ReplyPlan`]; a draining activity's follow-up offers no tools.
 #[derive(Debug)]
 pub struct PlannedReply {
     pub request: Request,
@@ -821,7 +816,11 @@ pub struct PlannedReply {
 /// cross-machine write the task may not make itself.
 #[derive(Debug)]
 pub enum GenEvent {
-    Plan(Box<ReplyPlan>),
+    /// Answered with [`Answer::ReplyPlan`](crate::agent_session::Answer::ReplyPlan) under `call`.
+    Plan {
+        call: crate::agent_session::RequestId,
+        plan: Box<ReplyPlan>,
+    },
     /// With an audio output the edge is [`GenEvent::PlaybackStarted`]'s. Between them the only
     /// setters of `_agent_speaking`.
     FirstFrame {

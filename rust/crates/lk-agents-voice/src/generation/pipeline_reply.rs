@@ -15,15 +15,21 @@ use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// A realtime speech's end of the socket's events (`RealtimeWake` routes them by speech).
+type RealtimePlayer =
+    tokio::sync::Mutex<mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>>;
+
 /// `_pipeline_reply_task`, and **the one task every speech runs** (`say` and realtime generations
 /// too). Spawned through the injected [`Spawner`](lk_agents_abi::Spawner), never `tokio::spawn`.
+/// `player`: a realtime speech's events, which the runtime routes to it from the socket.
 pub async fn pipeline_reply_task(
     shared: Arc<SessionShared>,
     handle: Arc<SpeechHandle>,
     ctx: ReplyContext,
+    player: Option<RealtimePlayer>,
 ) {
     let speech = handle.id();
-    let error = match run(&shared, &handle, ctx).await {
+    let error = match run(&shared, &handle, ctx, player).await {
         Ok(Finished { outcome, interrupted }) => {
             shared.report(GenEvent::Done { speech, outcome: Box::new(outcome), interrupted });
             return;
@@ -69,12 +75,12 @@ async fn run(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     mut ctx: ReplyContext,
+    player: Option<RealtimePlayer>,
 ) -> Result<Finished, DriverError> {
     if let Some(replan) = ctx.replan.take() {
         let Some(planned) = request_plan(
             shared,
             crate::generation::ReplyPlan {
-                call: crate::agent_session::RequestId(0),
                 speech: handle.id(),
                 after: replan.after,
                 step: None,
@@ -96,7 +102,7 @@ async fn run(
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
             ReplySource::Realtime => {
                 let events =
-                    ctx.realtime_events.as_ref().expect("runtime installed realtime player");
+                    player.as_ref().expect("the runtime gives a realtime speech its player");
                 realtime_generation_task(shared, handle, &ctx, events, &shared.queue).await?
             }
             _ => pipeline_reply_task_impl(shared, handle, &ctx).await?,
@@ -317,7 +323,6 @@ async fn follow_up(
     let planned = request_plan(
         shared,
         crate::generation::ReplyPlan {
-            call: crate::agent_session::RequestId(0),
             speech: handle.id(),
             after: handle.id(),
             step: Some(spoken_step),
@@ -343,7 +348,6 @@ async fn follow_up(
         request: planned.request,
         replan: None,
         source: ReplySource::Llm,
-        realtime_events: None,
         // Always concrete on a follow-up: `"none"` or `"auto"`, never `"required"`.
         tool_choice: planned.tool_choice,
         frame: prev.frame,
@@ -362,11 +366,10 @@ async fn follow_up(
 /// The runtime owns the waiter; the core owns when the accepted record is ready.
 async fn request_plan(
     shared: &SessionShared,
-    mut plan: crate::generation::ReplyPlan,
+    plan: crate::generation::ReplyPlan,
 ) -> Option<crate::generation::PlannedReply> {
     let (call, result) = shared.calls.open(crate::agent_session::Answer::reply_plan);
-    plan.call = call;
-    shared.report(GenEvent::Plan(Box::new(plan)));
+    shared.report(GenEvent::Plan { call, plan: Box::new(plan) });
     result.await.ok().flatten().map(|planned| *planned)
 }
 

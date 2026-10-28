@@ -305,7 +305,9 @@ impl Queue {
             Policy::Arrival => heads
                 .iter()
                 .copied()
-                .min_by_key(|&i| (self.pending[i].source != Source::Frames, self.pending[i].arrival))
+                .min_by_key(|&i| {
+                    (self.pending[i].source != Source::Frames, self.pending[i].arrival)
+                })
                 .map(Pick::Event)
                 .or(tasks_ready.then_some(Pick::Pool)),
             Policy::BasicPos | Policy::TaskBridge => {
@@ -752,7 +754,12 @@ mod tests {
 
     /// A microphone frame, told apart by its sample count.
     fn frame(n: u32) -> AudioFrame {
-        AudioFrame { data: Arc::from(vec![0u8; 2 * n as usize]), sample_rate: 48_000, num_channels: 1, samples_per_channel: n }
+        AudioFrame {
+            data: Arc::from(vec![0u8; 2 * n as usize]),
+            sample_rate: 48_000,
+            num_channels: 1,
+            samples_per_channel: n,
+        }
     }
 
     /// The frames that arrive between two steps are one step, in their order; a frame after it
@@ -791,7 +798,9 @@ mod tests {
     #[test]
     fn bridged_tasks_are_ordered_by_the_seed() {
         let firsts: BTreeSet<String> = (0..128)
-            .map(|seed| name(&Queue::new(seed, Policy::TaskBridge).next(false, false, &[1, 2]).unwrap()))
+            .map(|seed| {
+                name(&Queue::new(seed, Policy::TaskBridge).next(false, false, &[1, 2]).unwrap())
+            })
             .collect();
         assert_eq!(firsts, BTreeSet::from(["task1".to_owned(), "task2".to_owned()]));
     }

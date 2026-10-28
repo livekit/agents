@@ -325,26 +325,29 @@ pub struct Driver {
     pub(super) opened: bool,
     /// The activity changed this cycle: published once, as the cycle's effects are done.
     pub(crate) activity_changed: std::cell::Cell<bool>,
-    pub(crate) pending_effects: std::cell::RefCell<Vec<crate::agent_session::effects::Effect>>,
+    /// What the core decided outside a step's [`Out`] (opening, the loop's end, published views),
+    /// returned with the step's own effects.
+    pub(crate) outbox: Vec<crate::agent_session::effects::Effect>,
+    /// The [`SessionView`](crate::agent_session::SessionView) last published, so a step that changed
+    /// none of it publishes nothing.
+    pub(crate) view: Arc<crate::agent_session::SessionView>,
 }
 
 impl Driver {
     /// Only while performing an effect, when no cycle exists.
-    pub(crate) fn journal(&self, step: Step) {
+    pub(crate) fn journal(&mut self, step: Step) {
         if !self.journalled {
             return;
         }
-        self.pending_effects
-            .borrow_mut()
-            .push(crate::agent_session::effects::Effect::Journal(Box::new(step)));
+        self.outbox.push(crate::agent_session::effects::Effect::Journal(Box::new(step)));
     }
 
     /// An event sent to the host where no cycle exists, journalled first.
-    pub(crate) fn emit_now(&self, ev: SessionEvent) {
+    pub(crate) fn emit_now(&mut self, ev: SessionEvent) {
         if self.journalled {
             self.journal(Step::Emitted(ev.journal_form()));
         }
-        self.pending_effects.borrow_mut().push(crate::agent_session::effects::Effect::Emit(ev));
+        self.outbox.push(crate::agent_session::effects::Effect::Emit(ev));
     }
 
     pub(crate) fn out(&self) -> Out {
@@ -389,11 +392,9 @@ impl Driver {
     }
 
     /// Answer an awaited command; `None` is a command nobody awaits.
-    pub(crate) fn answer(&self, call: Option<RequestId>, answer: Answer) {
+    pub(crate) fn answer(&mut self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
-            self.pending_effects
-                .borrow_mut()
-                .push(crate::agent_session::effects::Effect::Answer(call, answer));
+            self.outbox.push(crate::agent_session::effects::Effect::Answer(call, answer));
         }
     }
 
@@ -419,7 +420,7 @@ impl Driver {
     }
 
     /// The host's call is answered once its speech exists, in the cycle that announces it.
-    pub(crate) fn answer_speech(&self, call: Option<SpeechCall>) {
+    pub(crate) fn answer_speech(&mut self, call: Option<SpeechCall>) {
         if let Some(call) = call {
             self.answer(Some(call.id), Answer::Speech);
         }
@@ -456,7 +457,7 @@ impl Driver {
                     | crate::agent_session::effects::Effect::DiscardLeg(_)
                     | crate::agent_session::effects::Effect::Journal(_)
             ) {
-                self.pending_effects.borrow_mut().push(effect);
+                self.outbox.push(effect);
             }
         }
         self.run_close_at_end();
@@ -469,7 +470,7 @@ impl Driver {
         let mut effects = self.settle_step(out);
         self.settle_waiters_at_end();
         self.release_all_providers();
-        effects.append(&mut self.pending_effects.borrow_mut());
+        effects.append(&mut self.outbox);
         effects
     }
 
@@ -531,7 +532,7 @@ impl Driver {
                     self.pump_schedule(now, &mut out);
                     let mut effects = self.settle_step(out);
                     self.publish_gate();
-                    effects.append(&mut self.pending_effects.borrow_mut());
+                    effects.append(&mut self.outbox);
                     return effects;
                 }
                 self.on_api(now, command, &mut out);
@@ -584,7 +585,7 @@ impl Driver {
         effects.extend(self.settle_step(out));
         self.activity.live_speech_at_final = false;
         self.publish_gate();
-        effects.append(&mut self.pending_effects.borrow_mut());
+        effects.append(&mut self.outbox);
         effects
     }
 
@@ -762,9 +763,7 @@ impl Driver {
     /// Sent to the data plane and journalled only when the verdict changed. Through
     /// [`Driver::journal`]: no cycle exists here.
     pub(super) fn publish_gate(&mut self) {
-        self.pending_effects
-            .borrow_mut()
-            .push(crate::agent_session::effects::Effect::LaunchHold(self.launch_hold()));
+        self.outbox.push(crate::agent_session::effects::Effect::LaunchHold(self.launch_hold()));
         let session = &self.session;
         let inputs = crate::audio::GateInputs {
             agent_state: session.states.agent_state(),
@@ -782,11 +781,9 @@ impl Driver {
         };
         let discard = crate::audio::audio_gate(&inputs);
         if self.input.gate_discard.replace(discard) != Some(discard) {
-            self.pending_effects.borrow_mut().push(
-                crate::agent_session::effects::Effect::Forwarder(
-                    crate::data_plane::ForwarderCommand::SetGateDiscard(discard),
-                ),
-            );
+            self.outbox.push(crate::agent_session::effects::Effect::Forwarder(
+                crate::data_plane::ForwarderCommand::SetGateDiscard(discard),
+            ));
             self.journal(Step::Playout(PlayoutStep::GatePublished {
                 stt_real: !discard,
                 realtime_real: !discard,

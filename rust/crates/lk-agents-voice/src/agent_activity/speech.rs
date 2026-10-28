@@ -658,7 +658,6 @@ impl Driver {
             request,
             replan,
             source: spec.source,
-            realtime_events: None,
             tool_choice: spec.tool_choice,
             frame: self.current,
             toolset: spec.toolset,
@@ -724,7 +723,7 @@ impl Driver {
 
     pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent, out: &mut Out) {
         match ev {
-            GenEvent::Plan(plan) => self.activity.reply_plans.push_back(*plan),
+            GenEvent::Plan { call, plan } => self.activity.reply_plans.push_back((call, *plan)),
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
 
@@ -862,10 +861,12 @@ impl Driver {
         }
     }
 
+    /// Answers each waiting [`ReplyPlan`](crate::generation::ReplyPlan) whose record is ready, or
+    /// with `None` once its speech is gone or the close passed its edge. `true` when one was.
     pub(crate) fn settle_reply_plans(&mut self, out: &mut Out) -> bool {
         let mut ready = false;
         let mut waiting = std::collections::VecDeque::new();
-        while let Some(plan) = self.activity.reply_plans.pop_front() {
+        while let Some((call, plan)) = self.activity.reply_plans.pop_front() {
             let cancelled = self.session.closing_past_edge()
                 || self
                     .activity
@@ -884,7 +885,7 @@ impl Driver {
                 }
             };
             if !cancelled && !committed {
-                waiting.push_back(plan);
+                waiting.push_back((call, plan));
                 continue;
             }
             ready = true;
@@ -910,7 +911,7 @@ impl Driver {
                     },
                 }))
             };
-            out.answer(Some(plan.call), Answer::ReplyPlan(reply));
+            out.answer(Some(call), Answer::ReplyPlan(reply));
         }
         self.activity.reply_plans = waiting;
         ready

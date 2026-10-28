@@ -958,6 +958,7 @@ async fn answer_hook(
                 .await
                 .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
         }
+        // Unanswered: the reference's templates.
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler { text: None, spoke: false })
         }
@@ -967,7 +968,7 @@ async fn answer_hook(
                 FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
                 FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
             })
-        } // Unanswered: the reference's templates.
+        }
     };
     let outcome = outcome.unwrap_or_else(|e| {
         hooks.hook_failed(kind.as_str(), e.host_ref.clone());
