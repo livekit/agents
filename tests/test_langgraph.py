@@ -6,7 +6,10 @@ from itertools import cycle
 from typing import Annotated
 
 import pytest
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.language_models.fake_chat_models import (
+    FakeMessagesListChatModel,
+    GenericFakeChatModel,
+)
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -259,3 +262,23 @@ async def test_messages_mode_no_custom_output():
     chunks = await collect_chunks(stream)
 
     assert chunks == []
+
+
+async def test_messages_mode_preserves_complete_nonstreaming_messages():
+    model = FakeMessagesListChatModel(
+        responses=[AIMessage(content="Complete response", id="whole")]
+    )
+
+    def chat_node(state: MessagesState):
+        return {"messages": [model.invoke(state["messages"])]}
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("chat", chat_node)
+    graph.add_edge(START, "chat")
+    graph.add_edge("chat", END)
+    adapter = LLMAdapter(graph.compile())
+    context = ChatContext()
+    context.add_message(role="user", content="Hi")
+    async with adapter.chat(chat_ctx=context) as stream:
+        chunks = [chunk async for chunk in stream]
+    assert [(chunk.id, chunk.delta.content) for chunk in chunks] == [("whole", "Complete response")]

@@ -18,11 +18,11 @@ from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import aclosing
 from typing import Generic, Never, Protocol, TypeVar, cast, runtime_checkable
 
-from langchain_core.messages import AIMessage, BaseMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 # The SDK ships annotated namespace modules without a recognized typing marker.
-from langgraph.pregel import Pregel  # pyright: ignore[reportMissingTypeStubs]
+from langgraph.pregel.protocol import PregelProtocol  # pyright: ignore[reportMissingTypeStubs]
 from langgraph.types import StreamMode
 from langgraph.typing import ContextT, InputT, OutputT, StateT
 
@@ -61,7 +61,7 @@ class _Content(Protocol):
 class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
     def __init__(
         self,
-        graph: Pregel[StateT, ContextT, InputT, OutputT],
+        graph: PregelProtocol[StateT, ContextT, InputT, OutputT],
         *,
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
@@ -122,7 +122,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         chat_ctx: ChatContext,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
-        graph: Pregel[StateT, ContextT, InputT, OutputT] | _StreamingGraph[ContextT],
+        graph: _StreamingGraph[ContextT],
         config: RunnableConfig | None = None,
         context: ContextT | None = None,
         subgraphs: bool = False,
@@ -134,8 +134,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
             tools=tools,
             conn_options=conn_options,
         )
-        # LangGraph accepts partial state updates; its input type describes the full state.
-        self._graph = cast(_StreamingGraph[ContextT], graph)
+        self._graph = graph
         self._config = config
         self._context = context
         self._subgraphs = subgraphs
@@ -224,9 +223,9 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         return {"messages": messages}
 
 
-def _extract_message_chunk(item: object) -> BaseMessageChunk | str | None:
+def _extract_message_chunk(item: object) -> BaseMessage | str | None:
     """Extract a message from LangGraph's optional namespace and mode wrappers."""
-    if isinstance(item, (BaseMessageChunk, str)):
+    if isinstance(item, (BaseMessage, str)):
         return item
     if not isinstance(item, tuple):
         return None
@@ -242,7 +241,7 @@ def _extract_message_chunk(item: object) -> BaseMessageChunk | str | None:
         if len(inner) != 2:
             return None
         token = inner[0]
-    return token if isinstance(token, (BaseMessageChunk, str)) else None
+    return token if isinstance(token, (BaseMessage, str)) else None
 
 
 def _to_chat_chunk(msg: object) -> llm.ChatChunk | None:
@@ -251,7 +250,7 @@ def _to_chat_chunk(msg: object) -> llm.ChatChunk | None:
 
     if isinstance(msg, str):
         content = msg
-    elif isinstance(msg, BaseMessageChunk):
+    elif isinstance(msg, BaseMessage):
         content = msg.text
         if msg.id:
             message_id = msg.id
