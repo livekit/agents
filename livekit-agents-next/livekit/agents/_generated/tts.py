@@ -23,7 +23,6 @@ from livekit import rtc
 
 from .. import _bindings, _core
 from .._exceptions import APIError
-from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -303,7 +302,8 @@ class ChunkedStream(ABC):
         self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(False)
         self._core_attempts = _bindings.Attempts("tts_batch", conn_options, self._emit_error)
         self._synthesize_task = asyncio.create_task(
-            self._core_attempts.run(self._attempt), name="TTS._synthesize_task"
+            self._core_attempts.run(self._attempt, produced=self._produced),
+            name="TTS._synthesize_task",
         )
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
@@ -476,12 +476,6 @@ class SynthesizeStream(ABC):
         if not token or self.input.closed:
             return
         if not self._segment_open:
-            if self._num_segments >= 1:
-                logger.warning(
-                    "SynthesizeStream: handling multiple segments in a single instance is "
-                    "deprecated. Please create a new SynthesizeStream instance for each segment."
-                )
-                return
             self._segment_open = True
             self._num_segments += 1
         self._pushed_text += token
