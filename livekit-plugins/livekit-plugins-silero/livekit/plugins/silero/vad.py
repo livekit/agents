@@ -91,6 +91,12 @@ class VAD(agents.vad.VAD):
             This method is blocking and may take time to load the model into memory.
             It is recommended to call this method inside your prewarm mechanism.
 
+            Every call builds a new ``onnxruntime.InferenceSession``, which takes about 15 ms and
+            holds the GIL while it runs, so on a worker that runs jobs in threads it stalls every
+            other job's event loop in the same process for that long. To give one session its own
+            options, call :meth:`with_options` on a prewarmed instance instead of calling this
+            method again.
+
         **Example:**
 
             ```python
