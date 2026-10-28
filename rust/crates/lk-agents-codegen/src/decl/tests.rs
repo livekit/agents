@@ -720,6 +720,24 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
     assert!(llm.contains("Value::Object(map) => Ok(map)"), "{llm}");
 }
 
+// Catches: a host lookup answering an optional proxy refused at generation (a room's participant
+// by identity), or its absence read as a refused object instead of `None`.
+#[test]
+fn an_optional_proxy_is_absence_or_the_host_object_behind_its_proxy() {
+    let decls = read(&proxy(
+        r#"
+        #[host(call)] fn lookup(&self, id: &str) -> Result<Option<std::sync::Arc<dyn Callbacks>>, HostError>;
+        "#,
+    ))
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains("if o.is_none() { Ok(None) } else { (super::llm::CallbacksProxy::from_host(&o)).map(Some) }"),
+        "{llm}"
+    );
+}
+
 // Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
 // failure of a synchronous call turned into a default, a writer close that cannot consume its
 // proxy, a host object the core must own (`Box<dyn ..>`) refused, a failed close that returns
