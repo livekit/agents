@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `Stt`: the abstract path is batch (`stt/stt.py:204`); `stream()` is optional. `recognize` is
 //! always callable; `SttCapabilities::offline_recognize` says whether it works.
 
@@ -98,12 +90,7 @@ impl Default for SttCapabilities {
 
 /// May drop: the driver feeds it from a `BoundedLossy`.
 pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// Drained by `FallbackSttStream`: `stt.StreamAdapter`'s audio in, its recognitions out.
-#[crate::host(stream(name = "FallbackSttStream", doc = "One `RecognizeStream`'s worth of the chain: push audio in, pull `SpeechEvent`s out.", sink = dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>,
-    input = AudioFrame,
-    input_py = "rtc.AudioFrame", stub_import = "from livekit import rtc", end_input,
-    output = SpeechEvent))]
+/// What a recognition stream yields: its speech events.
 pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
 
 // A host `stt.STT` is this trait through its generated proxy (`SttProxy`), calling the `_core_*`

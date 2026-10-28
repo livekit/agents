@@ -72,7 +72,6 @@ from ._generated._core_classes import (
     CoreTextOutput as CoreTextOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     FakeRoom as FakeRoom,
-    FallbackSttStream as FallbackSttStream,
     FrameDecoder as FrameDecoder,
     GetAddressResult as GetAddressResult,
     GetCardNumberResult as GetCardNumberResult,
@@ -114,7 +113,6 @@ from ._generated._core_classes import (
     StartJobFields as StartJobFields,
     StreamBytesOptions as StreamBytesOptions,
     StreamTextOptions as StreamTextOptions,
-    SttStreamAdapter as SttStreamAdapter,
     Tagger as Tagger,
     TextChunks as TextChunks,
     TextStreamSender as TextStreamSender,
@@ -293,6 +291,8 @@ from ._generated._core_stt import (
     FallbackStt as FallbackStt,
     InferenceStt as InferenceStt,
     InferenceSttStream as InferenceSttStream,
+    SttAdapterStream as SttAdapterStream,
+    SttStreamAdapter as SttStreamAdapter,
 )
 from ._generated._core_telemetry import (
     LoopMonitor as LoopMonitor,

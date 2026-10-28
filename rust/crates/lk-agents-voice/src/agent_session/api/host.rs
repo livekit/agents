@@ -5,7 +5,7 @@ use super::{
     NodeFactory, NotAnImage, NotInterruptible, OpenRefused, Ready, Reply, SessionApi,
     SessionEvents, SessionJob, SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed,
     UnknownCloseReason, UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools,
-    session_usage_updated, stt_leg,
+    session_usage_updated,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
@@ -197,8 +197,7 @@ impl SessionApi {
                 agent_use_tts_aligned_transcript,
             )),
         };
-        let nodes = Nodes { llm: llm_node, tts: tts_node.clone(), stt: stt_node };
-        let stt = stt.map(|s| nodes.stt(stt_leg(s, vad.clone(), &conn.stt, clock.clone())));
+        let nodes = Nodes { llm: llm_node, tts: None, stt: None };
         let llm = llm.map(|l| nodes.llm(llm_leg(l, &conn.llm)));
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
@@ -332,6 +331,7 @@ impl SessionApi {
             tts,
             tts_node,
             stt,
+            stt_node,
             keyterms,
             forward_chat_context,
             vad,
@@ -893,7 +893,7 @@ impl SessionApi {
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
             llm: llm_leg(llm, &self.conn.llm),
             tools_host: tools,
-            stt: stt.map(|s| stt_leg(s, None, &self.conn.stt, self.time.clock())),
+            stt: stt.map(|s| s.with_conn_options(&self.conn.stt).unwrap_or(s)),
             room: self.host.call_room.clone(),
             participant: participant_identity,
         };

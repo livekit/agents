@@ -17,6 +17,10 @@ impl SessionExecutor for NoLegs {
         Arc::new(|tts, _, _| tts)
     }
 
+    fn stt_adapter(&self) -> crate::agent_session::SttAdapter {
+        Arc::new(|stt, _, _| stt)
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         _: &'a lk_agents_abi::resources::Resources,

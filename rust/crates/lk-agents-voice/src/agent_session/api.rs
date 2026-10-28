@@ -164,6 +164,7 @@ impl SessionApi {
             builder.room_io_events = room_io.events();
 
             let tts_adapter = executor.tts_adapter();
+            let stt_adapter = executor.stt_adapter();
             let (cores, handle) = builder.start(&mut *executor).await?;
             let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
                 handle;
@@ -205,6 +206,7 @@ impl SessionApi {
                 drained: Some(drained),
                 speech_ids,
                 tts_adapter,
+                stt_adapter,
             });
             // A drain that returned without reading drops the sender: nothing to wait for.
             let _ = opening_rx.await;
@@ -441,6 +443,7 @@ impl SessionApi {
         let r = &self.resources;
         // Before start nothing reaches the loop (the command is refused and the leg released).
         let adapter = self.running(|r| Ok(r.tts_adapter.clone())).ok();
+        let stt_adapter = self.running(|r| Ok(r.stt_adapter.clone())).ok();
         let vad_now = match &vad {
             Maybe::Given(given) => given.clone(),
             Maybe::NotGiven => {
@@ -458,7 +461,11 @@ impl SessionApi {
                 r.register_tts(nodes.tts(t))
             }),
             stt: map(stt, |s| {
-                r.register_stt(nodes.stt(stt_leg(s, vad_now, &self.conn.stt, clock.clone())))
+                let s = match &stt_adapter {
+                    Some(adapter) => stt_leg(s, adapter, vad_now, clock.clone(), &self.conn.stt),
+                    None => s,
+                };
+                r.register_stt(nodes.stt(s))
             }),
             vad: map(vad, |v| r.register_vad(v)),
         };
@@ -692,6 +699,8 @@ struct Running {
     speech_ids: Arc<std::sync::atomic::AtomicU64>,
     /// The executor's, for every TTS swapped in.
     tts_adapter: super::TtsAdapter,
+    /// The executor's, for every STT swapped in.
+    stt_adapter: super::SttAdapter,
 }
 
 impl Running {
@@ -1128,16 +1137,16 @@ fn one_attempt(conn: &lk_agents_abi::ApiConnectOptions) -> lk_agents_abi::ApiCon
     lk_agents_abi::ApiConnectOptions { max_retry: 0, ..*conn }
 }
 
-/// A host STT spends its budget in its `RetryingStt`; a recognize-only one goes over `vad`
-/// (`Agent.stt_node`'s default `StreamAdapter`).
-fn stt_leg(
+/// A host STT spends its budget in its `RetryingStt`; a recognize-only one is adapted by the
+/// executor over `vad`.
+pub(super) fn stt_leg(
     stt: Arc<dyn Stt>,
+    adapter: &super::SttAdapter,
     vad: Option<Arc<dyn Vad>>,
-    conn: &lk_agents_abi::ApiConnectOptions,
     clock: Arc<dyn Clock>,
+    conn: &lk_agents_abi::ApiConnectOptions,
 ) -> Arc<dyn Stt> {
-    let stt = stt.with_conn_options(conn).unwrap_or(stt);
-    lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad, clock)
+    adapter(stt.with_conn_options(conn).unwrap_or(stt), vad, clock)
 }
 
 fn llm_leg(llm: Arc<dyn Llm>, conn: &lk_agents_abi::ApiConnectOptions) -> Arc<dyn Llm> {

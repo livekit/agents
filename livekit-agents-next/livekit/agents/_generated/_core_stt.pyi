@@ -138,3 +138,29 @@ class InferenceSttStream:
         """A mid-stream `session.update`, for the providers that take one (AssemblyAI, Deepgram Flux)."""
     async def recv(self) -> dict[str, object] | None: ...
     async def aclose(self) -> None: ...
+
+class SttStreamAdapter:
+    """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
+    def __init__(self, stt: STT[Any], vad: VAD[Any]) -> None:
+        """The wrapped STT and VAD; each stream binds its own recognition policy."""
+    async def recognize(
+        self,
+        frames: Sequence[rtc.AudioFrame],
+        language: str | None = None,
+        conn_options: APIConnectOptions | None = None,
+    ) -> dict[str, object]:
+        """`_recognize_impl`: the wrapped STT's batch path."""
+    async def stream(
+        self,
+        language: str | None = None,
+        start_time_offset: float | None = None,
+        conn_options: APIConnectOptions | None = None,
+    ) -> SttAdapterStream:
+        """Audio into the VAD, its utterances recognized."""
+
+class SttAdapterStream:
+    def push(self, item: rtc.AudioFrame) -> None: ...
+    def flush(self) -> None: ...
+    def end_input(self) -> None: ...
+    async def recv(self) -> dict[str, object] | None: ...
+    async def aclose(self) -> None: ...

@@ -155,6 +155,10 @@ impl SessionExecutor for Observing {
         self.0.tts_adapter()
     }
 
+    fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
+        self.0.stt_adapter()
+    }
+
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a lk_agents_abi::resources::Resources,

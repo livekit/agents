@@ -85,6 +85,10 @@ impl Handover {
 }
 
 impl SessionExecutor for Handover {
+    fn stt_adapter(&self) -> lk_agents_voice::agent_session::SttAdapter {
+        Arc::new(lk_agents_inference::stt::stream_adapter::StreamAdapter::adapted)
+    }
+
     fn tts_adapter(&self) -> lk_agents_voice::agent_session::TtsAdapter {
         Arc::new(
             lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for::<

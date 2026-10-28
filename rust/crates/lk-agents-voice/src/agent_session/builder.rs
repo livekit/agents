@@ -63,11 +63,23 @@ pub type TtsAdapter = Arc<
         + Sync,
 >;
 
+/// How a recognize-only STT is made to stream over the session's VAD (`Agent.stt_node`'s default
+/// `StreamAdapter`): each utterance the VAD cuts recognized once it ends. A streaming STT, or one
+/// with no VAD, is kept as it is. The executor supplies it.
+pub type SttAdapter = Arc<
+    dyn Fn(Arc<dyn Stt>, Option<Arc<dyn Vad>>, Arc<dyn lk_agents_abi::Clock>) -> Arc<dyn Stt>
+        + Send
+        + Sync,
+>;
+
 /// What runs a session: the production runtime, or a simulation's own executor. It opens the
 /// opening STT and VAD streams before the cores exist, then takes the cores over.
 pub trait SessionExecutor: Send {
     /// Adapts each TTS handed over, at start and on every later swap.
     fn tts_adapter(&self) -> TtsAdapter;
+
+    /// Adapts each STT handed over, at start and on every later swap.
+    fn stt_adapter(&self) -> SttAdapter;
 
     /// Opens the streams and registers their sinks in `resources`; their sources are read once
     /// the executor owns the cores.
@@ -128,7 +140,9 @@ pub struct DriverBuilder {
     /// Adapted at start by the executor's [`TtsAdapter`], under `tts_node`.
     pub tts: Option<Arc<dyn Tts>>,
     pub tts_node: Option<Arc<dyn super::api::NodeFactory>>,
+    /// Adapted at start by the executor's [`SttAdapter`] over `vad`, under `stt_node`.
     pub stt: Option<Arc<dyn Stt>>,
+    pub stt_node: Option<Arc<dyn super::api::NodeFactory>>,
     /// `None`: nothing is pushed.
     pub keyterms: Option<crate::keyterm_detection::KeytermSetup>,
     /// `stt_context_options["forward_chat_context"]`: conversation turns reach an STT with the
@@ -184,11 +198,17 @@ impl DriverBuilder {
         if let Some(llm) = &self.llm {
             llm.prewarm();
         }
+        let nodes =
+            super::nodes::Nodes { llm: None, tts: self.tts_node.take(), stt: self.stt_node.take() };
+        let adapter = executor.stt_adapter();
+        self.stt = self.stt.take().map(|stt| {
+            let vad = self.vad.clone();
+            nodes.stt(super::api::stt_leg(stt, &adapter, vad, self.time.clock(), &self.conn.stt))
+        });
         if let Some(stt) = &self.stt {
             stt.prewarm();
         }
         let adapter = executor.tts_adapter();
-        let nodes = super::nodes::Nodes { llm: None, tts: self.tts_node.take(), stt: None };
         self.tts = self.tts.take().map(|tts| {
             nodes.tts(super::api::tts_leg(tts, &adapter, self.time.clock(), &self.conn.tts))
         });

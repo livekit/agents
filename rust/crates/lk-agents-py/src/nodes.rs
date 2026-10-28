@@ -556,8 +556,11 @@ fn stt_node(
     let stt = <dyn Stt as HostProxy>::from_host(stt, None)?;
     let vad = vad.map(|v| <dyn lk_agents_abi::Vad as HostProxy>::from_host(v, None)).transpose()?;
     let stt = stt.with_conn_options(&options).unwrap_or(stt);
-    let stt =
-        lk_agents_abi::stt::stream_adapter::SttStreamAdapter::adapted(stt, vad, Arc::clone(&clock));
+    let stt = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter::adapted(
+        stt,
+        vad,
+        Arc::clone(&clock),
+    );
     let input =
         caller_input(py, audio, Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)))?;
     let (output, events) = item_stream(py, speech_event)?;

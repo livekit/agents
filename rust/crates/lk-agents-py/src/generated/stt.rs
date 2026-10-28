@@ -294,6 +294,103 @@ impl InferenceSttStream {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/stt/stream_adapter.rs.
+type SttStreamAdapterImpl = <crate::Selected as super::Implementations>::SttStreamAdapter;
+
+fn _extract_stt_stream_adapter_stream_start_time_offset(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<f64>> {
+    if obj.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&obj, "start_time_offset")).map(Some) }
+}
+
+/// `stt.StreamAdapter`'s engine as the host builds it; the public class stays Python.
+#[pyclass(frozen, name = "SttStreamAdapter", module = "livekit.agents._core")]
+pub struct SttStreamAdapter(pub(crate) ::std::sync::Arc<SttStreamAdapterImpl>);
+
+#[pymethods]
+impl SttStreamAdapter {
+    /// The wrapped STT and VAD; each stream binds its own recognition policy.
+    #[new]
+    #[pyo3(signature = (stt, vad))]
+    fn new(stt: Bound<'_, PyAny>, vad: Bound<'_, PyAny>) -> PyResult<SttStreamAdapter> {
+        ::lk_agents_abi::python::check_pid()?;
+        let stt = crate::generated::stt::SttProxy::from_host(&stt)?;
+        let vad = crate::generated::vad::VadProxy::from_host(&vad)?;
+        let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::new(stt, vad);
+        Ok(SttStreamAdapter(::std::sync::Arc::new(out)))
+    }
+
+    /// `_recognize_impl`: the wrapped STT's batch path.
+    #[pyo3(signature = (frames, language = None, conn_options = None))]
+    fn recognize<'py>(&self, py: Python<'py>, frames: ::std::vec::Vec<::lk_agents_abi::AudioFrame>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::recognize(&this, frames, language, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    /// Audio into the VAD, its utterances recognized.
+    #[pyo3(signature = (language = None, start_time_offset = None, conn_options = None))]
+    fn stream<'py>(&self, py: Python<'py>, language: ::std::option::Option<::lk_agents_abi::LanguageCode>, #[pyo3(from_py_with = _extract_stt_stream_adapter_stream_start_time_offset)] start_time_offset: ::std::option::Option<f64>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::host::future_into_py(py, async move {
+            let out = <SttStreamAdapterImpl as ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter>::stream(&this, language, start_time_offset, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({ let (sink, source) = out; SttAdapterStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) }, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Stt`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Stt>(),
+        read: |obj| {
+            let this = obj.cast::<SttStreamAdapter>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Stt> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+type SttAdapterStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>;
+
+/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
+#[pyclass(frozen, name = "SttAdapterStream", module = "livekit.agents._core")]
+pub struct SttAdapterStream(::std::boxed::Box<SttAdapterStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::SpeechEvent>);
+
+#[pymethods]
+impl SttAdapterStream {
+    fn push(&self, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+    }
+
+    fn flush(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::flush(&*self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+    }
+
+    fn end_input(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::end_input(&*self.0);
+        Ok(())
+    }
+
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::recv(&self.1, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::end_input(&*self.0);
+        crate::host::source::aclose(&self.1, py)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/stt/stt.rs.
 
 /// [`::lk_agents_abi::Stt`] over a host `livekit.agents.stt.STT`.

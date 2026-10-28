@@ -145,6 +145,9 @@ impl generated::Implementations for Selected {
         lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
     type FallbackStt =
         lk_agents_runtime::inference::fallback::FallbackStt<lk_agents_runtime::process::Process>;
+    type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter<
+        lk_agents_runtime::process::Process,
+    >;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;

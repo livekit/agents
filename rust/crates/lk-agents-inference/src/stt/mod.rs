@@ -6,6 +6,7 @@ pub mod lifecycle;
 pub mod machine;
 pub mod options;
 pub mod retrying;
+pub mod stream_adapter;
 pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
