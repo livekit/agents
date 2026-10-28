@@ -74,12 +74,14 @@ ignored.
 | `livekit/channel`            | a message | the client | string: `a2a` (the default when absent), or the channel the platform's ingress received it on |
 | `livekit/kind`               | a message | a delegating agent | string: `delegation` |
 | `livekit/callerLane`         | a delegation in the caller's thread | a delegating agent | string: the caller's lane, whose history holds the person's own words; the expert's handler may read it |
+| `livekit/interrupt`          | a message | the client | `false`: under the `live` inbox the message waits for the reply under way instead of stopping it; absent is `true`. A delegating agent sends `false` |
 | `livekit/kind`               | a `DataPart` | a delegating agent | string: `chat_ctx` |
 | `livekit/reason`             | the `CancelTask` request's metadata | the client | string: why |
 | `livekit/reason`             | the final `TaskStatusUpdateEvent` of a task a client canceled; the status message of a `failed` task | the server | string: the client's reason, or section 5's |
 | `livekit/interrupted`        | the final `TaskStatusUpdateEvent` of a `canceled` task | the server | `true` |
 | `livekit/interruptionReason` | the same event | the server | string: `new-message` |
 | `livekit/mergedInto`         | the final `TaskStatusUpdateEvent` of a `completed` task | the server | string: a task id |
+| `livekit/background`         | a `working` `TaskStatusUpdateEvent` | the server | `true`: the task's turn ended and a tool of it runs on in the background: its updates are `working` frames at once, its end is delivered to the task. `false` once all of it ended |
 | `livekit/verbatim`           | a text `Part` of a `working` status message, of the answer artifact, or of an `input-required` status message | the server | `true`: this part reaches the person exactly as written; the agent facing them words every other part |
 
 ### Exact text

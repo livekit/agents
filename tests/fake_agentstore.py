@@ -9,6 +9,7 @@ token is accepted.
 from __future__ import annotations
 
 import asyncio
+import collections
 import concurrent.futures
 import functools
 import json
@@ -140,6 +141,10 @@ class Stream:
     records: list[bytes] = field(default_factory=list)
     closed: bool = False
     changed: asyncio.Condition = field(default_factory=asyncio.Condition)
+
+
+served: collections.Counter[str] = collections.Counter()
+"""The records each stream served to its readers, by stream id."""
 
 
 def sse(event: str, data: bytes) -> bytes:
@@ -281,6 +286,7 @@ class FakeAgentstore:
             headers = {"Stream-Next-Offset": str(len(stream.records)), "Stream-Up-To-Date": "true"}
             if stream.closed:
                 headers["Stream-Closed"] = "true"
+            served[request.match_info["id"]] += len(stream.records[start:])
             body = b"[" + b",".join(stream.records[start:]) + b"]"
             return web.Response(body=body, headers=headers, content_type="application/json")
 
@@ -293,6 +299,7 @@ class FakeAgentstore:
                 )
             records, closed = stream.records[start:], stream.closed
             start += len(records)
+            served[request.match_info["id"]] += len(records)
             if records:
                 await response.write(sse("data", b"[" + b",".join(records) + b"]"))
             control = {"streamNextOffset": str(start), "upToDate": True, "streamClosed": closed}

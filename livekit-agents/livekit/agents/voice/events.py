@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
@@ -27,6 +26,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -84,10 +84,37 @@ class RunContext(Generic[Deps_T, State_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+        # the tool's own task, which a stop cancels outside `uninterruptible()`
+        self._work: asyncio.Future[Any] | None = None
+        self._protected = 0
+        self._stop_pending = False
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
+        self._suppress_reply = False
+        self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state if session is not None else None
+
+    @contextmanager
+    def uninterruptible(self) -> Iterator[None]:
+        """In text, a step that a cancel or an interrupt does not cut in half: the tool stops at
+        its first wait point after it, so work done in an outside system is finished."""
+        self._protected += 1
+        try:
+            yield
+        finally:
+            self._protected -= 1
+            if self._protected == 0 and self._stop_pending:
+                # at the next wait point: a tool that returns right after the step keeps its result
+                asyncio.get_running_loop().call_soon(self._stop)
+
+    def _stop(self) -> None:
+        """The tool stops now, or once its protected step ended."""
+        self._stop_pending = True
+        if self._protected == 0 and self._work is not None and not self._work.done():
+            self._work.cancel()
 
     @property
     def session(self) -> LiveSession[Any]:
@@ -250,6 +277,7 @@ class RunContext(Generic[Deps_T, State_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -263,6 +291,10 @@ class RunContext(Generic[Deps_T, State_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Whether the person hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without a reply. A realtime model
+                that cannot keep a tool result silent may still answer it.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -296,37 +328,13 @@ class RunContext(Generic[Deps_T, State_T]):
         pair = self._make_update_pair(
             message, call_id_suffix=f"_update_{update_step}" if update_step > 0 else ""
         )
+        if silent:
+            # realtime providers read this to decide whether the output starts a turn
+            pair[1].reply_required = False
         self._updates.append(pair)
 
-        if self._executor is None:
-            # agent.run(): no tool lifecycle to report; the door that runs the turn forwards the
-            # text as progress when it installed a hook for it
-            from .agent_run import current_run_hooks
-
-            hooks = current_run_hooks()
-            if hooks is not None and hooks.on_update is not None:
-                out = hooks.on_update(raw_message)
-                if inspect.isawaitable(out):
-                    await out
-            return
-
-        self.session._tool_execution_updated(
-            ToolExecutionUpdatedEvent(
-                update=ToolCallUpdated(
-                    id=pair[0].call_id,
-                    call_id=self.function_call.call_id,
-                    message=raw_message,
-                )
-            ),
-        )
-
-        assert self._first_update_fut is not None
-        if not self._first_update_fut.done():
-            self._first_update_fut.set_result(message)
-            self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
-            return
-
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        if self._executor is not None:
+            await self._executor._sink.update(self, pair, raw_message, message, silent=silent)
 
     async def say(self, text: str) -> None:
         """Say ``text`` to the person exactly as written, now: spoken on a call, a flagged
@@ -340,35 +348,10 @@ class RunContext(Generic[Deps_T, State_T]):
         for s in self._filler_schedulers:
             s.reset_dwell()
 
-        if self._executor is None:
-            if self._run is not None:
-                await self._run._say(text)
-            return
-
-        from ..llm.tool_context import DELIVERED, ToolResult
-
-        update_step = len(self._updates)
-        pair = self._make_update_pair(
-            ToolResult(DELIVERED.format(text=text), reply_required=False),
-            call_id_suffix=f"_update_{update_step}" if update_step > 0 else "",
-        )
-        self._updates.append(pair)
-        self.session._tool_execution_updated(
-            ToolExecutionUpdatedEvent(
-                update=ToolCallUpdated(
-                    id=pair[0].call_id, call_id=self.function_call.call_id, message=text
-                )
-            ),
-        )
-
-        assert self._first_update_fut is not None
-        if not self._first_update_fut.done():
-            self._executor._speaker(self)._say_exactly(text)
-            self._first_update_fut.set_result(ToolResult(pair[1].output, reply_required=False))
-            self.function_call.extra["__livekit_agents_tool_non_blocking"] = True
-            return
-
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], say=text)
+        if self._executor is not None:
+            await self._executor._sink.say(self, text)
+        elif self._run is not None:
+            await self._run._say(text)
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -384,9 +367,11 @@ class RunContext(Generic[Deps_T, State_T]):
 
     async def _drain_pending_reply(self) -> None:
         """Wait for this tool's pending deferred reply to finish delivery, if any."""
-        if self._executor is None:
+        from .tool_executor import _CallSink
+
+        if self._executor is None or not isinstance(self._executor._sink, _CallSink):
             return
-        reply_task = self._executor._reply_task
+        reply_task = self._executor._sink._reply_task
         if reply_task is None or reply_task.done():
             return
         try:
@@ -616,6 +601,8 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Kept to the model: the person hears nothing about it."""
 
 
 class ToolCallEnded(BaseModel):

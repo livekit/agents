@@ -78,6 +78,8 @@ class TaskInternal(BaseModel):
     """The pending transition: the tool that takes the answer."""
     deadline: int | None = None
     parent: str | None = None
+    cancel: Any | None = None
+    """A client's `tasks/cancel` on the running task, with its reason: its holder stops it."""
 
 
 class LaneRow(BaseModel):

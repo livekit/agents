@@ -425,7 +425,7 @@ async fn a_stream_is_created_appended_read_and_closed() {
     streams.append(&info.stream_id, br#"{"n":1}"#.to_vec());
     streams.append(&info.stream_id, br#"{"n":2}"#.to_vec());
     streams.flush(&info.stream_id).await;
-    let mut reader = streams.read(&info.stream_id, None, false);
+    let mut reader = streams.read(&info.stream_id, None, false, false);
     let mut got = Vec::new();
     while let Some(r) = reader.next().await.unwrap() {
         got.push(String::from_utf8(r).unwrap());
@@ -437,7 +437,7 @@ async fn a_stream_is_created_appended_read_and_closed() {
     let streams2 = streams.clone();
     let id = info.stream_id.clone();
     let tail = tokio::spawn(async move {
-        let mut live = streams2.read(&id, Some(&resume_from), true);
+        let mut live = streams2.read(&id, Some(&resume_from), true, false);
         let mut got = Vec::new();
         while let Some(r) = live.next().await.unwrap() {
             got.push(String::from_utf8(r).unwrap());

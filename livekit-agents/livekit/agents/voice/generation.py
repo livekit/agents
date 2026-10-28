@@ -1018,6 +1018,7 @@ async def _execute_tools_task(
                     fnc_call: llm.FunctionCall,
                     tool_description: str | None,
                     agent_label: str,
+                    run_ctx: RunContext,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -1040,6 +1041,12 @@ async def _execute_tools_task(
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        if run_ctx._suppress_reply:
+                            # a silent update() keeps the output item but asks for no speech
+                            output.fnc_call_out.reply_required = False
+                        # set only when the tool released through update(): the step that
+                        # answers a report is bound by what the report asked for
+                        output.reply_tool_choice = run_ctx._reply_tool_choice
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
@@ -1084,6 +1091,7 @@ async def _execute_tools_task(
                         fnc_call,
                         _tool_description(function_tool),
                         activity.agent.label,
+                        run_ctx,
                     ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
@@ -1161,6 +1169,8 @@ class ToolExecutionOutput:
     raw_exception: BaseException | None
     transition: Transition | None = None
     """The transition the tool returned, applied by the activity once the call is recorded."""
+    reply_tool_choice: llm.ToolChoice | None = None
+    """Tool choice of the reply to this output: ``"none"`` for a report from ``update()``."""
 
 
 def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> ToolExecutionOutput:

@@ -60,8 +60,16 @@ from .codec import (
     task_to_pb,
     to_stream_response,
 )
-from .extension import CALLER_LANE, KIND, KIND_DELEGATION, REASON, Extensions, pb, to_json
-from .pump import ResponsePump, WireHost, start
+from .extension import (
+    CALLER_LANE,
+    KIND,
+    KIND_DELEGATION,
+    REASON,
+    Extensions,
+    pb,
+    to_json,
+)
+from .pump import ResponsePump, WireHost, start, tail
 
 if TYPE_CHECKING:
     from .endpoint import A2AEndpoint
@@ -96,6 +104,8 @@ READY_STREAMS = 2
 """Answer streams created ahead of the requests that will use them."""
 REASON_STORAGE_UNAVAILABLE = "storage-unavailable"
 """Plan 5.12: the ``failed`` reason of a message to an id the threads service does not know."""
+REQUEST_FAILED = "the request failed before it finished"
+"""A request's error message when it raised outside a turn; what raised stays in the log."""
 
 
 @dataclass
@@ -207,12 +217,10 @@ class A2AService(Generic[S]):
                 "an agent-store error ended an A2A request",
                 extra={"endpoint": self._endpoint.name, "error": str(e)},
             )
-            yield build_error_response(request_id, InternalError(message=str(e)))
-        except Exception as e:
+            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
+        except Exception:
             logger.exception("an A2A request failed", extra={"endpoint": self._endpoint.name})
-            yield build_error_response(
-                request_id, InternalError(message=f"{type(e).__name__}: {e}")
-            )
+            yield build_error_response(request_id, InternalError(message=REQUEST_FAILED))
 
     async def _results(
         self, name: str, params: Params, call: CallContext
@@ -242,12 +250,18 @@ class A2AService(Generic[S]):
         if thread_id is None:
             record, context_id = self._unknown_session(message, call)
         else:
-            pump: ResponsePump[TurnOutcome] | None = None
+            pump: ResponsePump | None = None
             try:
                 pump = await self._start(thread_id, message, call.extensions)
                 async for _ in pump.frames():
                     pass
-                record, context_id = pump.outcome.result.task, pump.outcome.context_id
+                # the response followed the task's stream, which ends once its row does
+                found = await self._find_task(thread_id, str(pump.acked))
+                if found is None:
+                    raise TaskNotFoundError(
+                        message=f"task {pump.acked} is not in session {thread_id}"
+                    )
+                record, context_id = found, thread_id
             except (RunRejected, ThreadNotFound):
                 raise
             except StorageError as e:
@@ -265,7 +279,9 @@ class A2AService(Generic[S]):
             )
         )
 
-    async def stream(self, params: Params, call: CallContext) -> AsyncIterator[StreamEvent]:
+    async def stream(
+        self, params: Params, call: CallContext
+    ) -> AsyncIterator[StreamEvent | pb.StreamResponse]:
         """``message/stream``: the acknowledgment, progress, the artifact, the final status."""
         message = _message_of(params)
         received = time.monotonic()
@@ -276,7 +292,7 @@ class A2AService(Generic[S]):
             yield final_event(record, context_id, exts=call.extensions)
             return
 
-        pump: ResponsePump[TurnOutcome] | None = None
+        pump: ResponsePump | None = None
         try:
             pump = await self._start(thread_id, message, call.extensions)
             logger.debug(
@@ -334,7 +350,7 @@ class A2AService(Generic[S]):
 
     async def _start(
         self, thread_id: str, message: StoredMessage, exts: Extensions
-    ) -> ResponsePump[TurnOutcome]:
+    ) -> ResponsePump:
         """The turn in a task of its own, its frames through the pump (plan 6)."""
         if metadata_from_wire(message.get("metadata")).get(CALLER_LANE) == self.lane:
             # it would wait for the lane its caller holds while the caller waits on it
@@ -357,12 +373,15 @@ class A2AService(Generic[S]):
             opening.add_done_callback(close)
             raise
         own_id: str | None = created.stream_id
+        continued_from: asyncio.Future[str | None] | None = None
         if continued:
             # the task answers on its own stream, which stayed open while it waited
             self._streams.appendleft(stream)
             message, own_id = {**message, "taskId": continued}, None
+            # its response follows the stream from where it ends now
+            continued_from = asyncio.ensure_future(tail(self._storage.streams, continued))
         task_id = continued or created.stream_id
-        pump: ResponsePump[TurnOutcome] = ResponsePump(self._storage.streams, task_id)
+        pump: ResponsePump = ResponsePump(self._storage.streams, task_id)
         wire = WireHost(
             lambda on_update, on_token: self._host(
                 thread_id, on_update=on_update, on_token=on_token
@@ -371,6 +390,7 @@ class A2AService(Generic[S]):
             task_id=task_id,
             context_id=thread_id,
             exts=exts,
+            continued_from=continued_from,
         )
 
         async def produce() -> None:
@@ -380,8 +400,7 @@ class A2AService(Generic[S]):
                 await pump.fail(e)
                 return
 
-            wire.finish(outcome)
-            await pump.finish(outcome, close=outcome.result.task.status in TERMINAL_TASK_STATES)
+            await wire.finish(outcome)
 
         start(produce())
         return pump
@@ -520,8 +539,8 @@ class A2AService(Generic[S]):
         return response
 
     async def cancel_task(self, params: Params, call: CallContext) -> pb.Task:
-        """``tasks/cancel``: the row goes ``canceled`` now; a running turn yields at its next
-        boundary and writes nothing over it (plan 5.5)."""
+        """``tasks/cancel``: a task that runs nothing goes ``canceled`` now; a running one is
+        answered as it is, and ends ``canceled`` on its stream once its holder stopped its tools."""
         thread_id = await self._context_for_tasks(params, call, flag="write")
         task_id = str(params.get("id") or "")
         record = await self._find_task(thread_id, task_id)
@@ -534,7 +553,11 @@ class A2AService(Generic[S]):
         reason = metadata_from_wire(params.get("metadata")).get(REASON)
         if reason is not None:
             metadata[REASON] = reason
-        await Thread(self._storage, thread_id, agent_name=record.lane).cancel(record, metadata)
+        thread = Thread(self._storage, thread_id, agent_name=record.lane)
+        request: dict[str, JsonValue] = {"reason": reason} if reason is not None else {}
+        # a running task's holder, on any worker, sees the request at its next check
+        if record.status != "working" or not await thread.request_cancel(record, request):
+            await thread.cancel(record, metadata)
 
         logger.info(
             "a client canceled a task",
@@ -672,6 +695,7 @@ __all__ = [
     "METHODS",
     "REASON_THREAD_NOT_FOUND",
     "REASON_STORAGE_UNAVAILABLE",
+    "REQUEST_FAILED",
     "STREAMING",
     "A2AService",
     "CallContext",

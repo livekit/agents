@@ -55,7 +55,7 @@ so on.
 | a message with `taskId`                        | continues that task while it is not terminal; see "Answering a task" |
 | `GetTask`, `tasks/get`                         | the task, with `historyLength` |
 | `ListTasks`, `tasks/list`                      | every task of the thread named by `contextId`, by last update, filtered by `status`, paged by `pageSize` and `pageToken` |
-| `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running turn stops at its next safe point |
+| `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running task is answered as it is, and ends `canceled` on its stream once its tools stopped |
 | `SubscribeToTask`, `tasks/resubscribe`         | the current `Task`, then the task's stream from its start, followed live while the task runs; from any worker |
 
 `GetTask`, `CancelTask` and `SubscribeToTask` find the thread from
@@ -127,6 +127,7 @@ the extension still receives the server-set keys and may ignore them.
 | ---------------------------- | -- | ----- |
 | `livekit/channel`            | a message | the channel it came from; absent means `a2a` |
 | `livekit/kind`               | a message, or a data part | `delegation` when another agent asks on its user's behalf; on a data part, `chat_ctx` for a caller's conversation |
+| `livekit/interrupt`          | a message | `false` when, under the `live` inbox, it waits for the reply under way instead of stopping it; a delegation sends `false` |
 | `livekit/interrupted`        | the final status of a `canceled` task | `true` when the server ended the turn for a newer message |
 | `livekit/interruptionReason` | the same | `new-message` |
 | `livekit/mergedInto`         | the final status of a `completed` task | the task whose turn answered this message too |

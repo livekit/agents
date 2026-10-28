@@ -70,12 +70,6 @@ async def let_the_lease_lapse() -> None:
     await asyncio.sleep(LEASE_TTL + LEASE_MARGIN)
 
 
-async def past_the_fresh_acquire() -> None:
-    """Waits out ``FRESH`` (``turn/host.rs``): for 100 ms after an acquire a boundary check is
-    answered from the acquire, so an interrupt or a cancel inside it waits for the next boundary."""
-    await asyncio.sleep(0.15)
-
-
 @pytest.fixture
 async def agentdb_worker() -> AsyncIterator[Callable[[str], AgentDBStorage]]:
     """``agentdb_worker("worker-c")`` is one more worker against the same project."""
@@ -89,9 +83,10 @@ async def agentdb_worker() -> AsyncIterator[Callable[[str], AgentDBStorage]]:
 
     # an A2A response ends before its turn has closed the durable stream (a2a/pump.py); that
     # close is a request to agent-db now, so it is given its time before the leak check
-    turns = [task for task in pump.running if not task.done()]
-    if turns:
-        await asyncio.wait(turns, timeout=5)
+    # a turn may start the close of a stream as it ends
+    for _ in range(3):
+        if turns := [task for task in pump.running if not task.done()]:
+            await asyncio.wait(turns, timeout=5)
 
 
 @pytest.fixture

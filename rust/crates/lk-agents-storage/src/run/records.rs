@@ -17,6 +17,12 @@ pub const MERGED_INTO_KEY: &str = "livekit/mergedInto";
 pub const CHANNEL_KEY: &str = "livekit/channel";
 pub const KIND_KEY: &str = "livekit/kind";
 pub const KEY_KEY: &str = "livekit/key";
+/// On a message under `live`: `false` when it waits for the reply instead of stopping it.
+pub const INTERRUPT_KEY: &str = "livekit/interrupt";
+/// On a task under `live`: a tool of it runs on in the background, whose end answers it.
+pub const BACKGROUND_KEY: &str = "livekit/background";
+/// The `livekit/kind` of the message of a turn that delivers what work in the background queued.
+pub const KIND_DELIVERY: &str = "delivery";
 /// The key `Tasks::fail` writes into the status message's metadata.
 pub const REASON_KEY: &str = "livekit/reason";
 

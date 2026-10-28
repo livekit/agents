@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .storage_run import Item, Ref, RunUsage, TaskRecord
 
-Policy = Literal["batch", "interrupt", "queue", "concurrent", "reject"]
-"""A message during a run: one of the five policies of plan 3.3.4."""
+Policy = Literal["batch", "interrupt", "queue", "concurrent", "reject", "live"]
+"""A message during a run: one of the five policies of plan 3.3.4, or `live`."""
 
 
 class Message(BaseModel):
@@ -59,6 +59,15 @@ class TurnOptions(BaseModel):
     """
 
 
+class Background(BaseModel):
+    """What [`TurnHost::background`] reports."""
+
+    running: list[str] = Field(default_factory=list)
+    """The tasks whose work runs on, or whose queue waits: the holder keeps the lane for them."""
+    ready: list[str] = Field(default_factory=list)
+    """The tasks whose progress and results are delivered now, in one turn with one reply."""
+
+
 class TurnContext(BaseModel):
     """What `A2ASessionContext` exposes today, the storage half: the message, the batch, the history,
     the state, the task, the lane's tasks, and the boundary the host polls. The host record is
@@ -96,6 +105,8 @@ class TurnContext(BaseModel):
     """
     answer_ref: str | None
     """What `answer_tool` continues with the answer, such as the expert's task."""
+    live: bool = False
+    """The turn runs under `live`: a tool may go on in the background after its first update."""
 
 
 class PendingCall(BaseModel):
@@ -144,6 +155,10 @@ class HandlerOutput(BaseModel):
     """
     interrupted: bool = False
     """The handler yielded at a boundary."""
+    background: bool = False
+    """A tool of the task still runs in the background: the task stays `working`, and a turn of
+    its own answers it when the tool ends.
+    """
     metadata: dict[str, Any] = Field(default_factory=dict)
     """What the handler put on the task's terminal row, under short keys."""
     error: str | None = None

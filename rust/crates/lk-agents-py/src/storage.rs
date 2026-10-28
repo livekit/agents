@@ -483,6 +483,21 @@ impl PyThreadDb {
         awaitable!(py, db.mark_orphan_failed(&lane, &task_id, &message))
     }
 
+    /// `tasks/cancel` on a running row: `request`, with the client's reason, in its internal
+    /// data for its holder to act on. `False` when the row is not `working`.
+    fn request_cancel<'py>(
+        &self,
+        py: Python<'py>,
+        lane: String,
+        task_id: String,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        check_pid()?;
+        let request = value_from_py(request, "request")?;
+        let db = self.inner.clone();
+        awaitable!(py, db.request_cancel(&lane, &task_id, &request))
+    }
+
     /// The journal, every lane, after `after_id`: `EventRow`s.
     #[pyo3(signature = (after_id=0, limit=100))]
     fn events<'py>(
@@ -685,12 +700,26 @@ impl PyStreams {
         awaitable!(py, streams.delete(&stream_id))
     }
 
-    /// A reader from `after` (an offset token; `None` is the beginning). `live` follows the tail
-    /// until the stream closes.
-    #[pyo3(signature = (stream_id, after=None, live=false))]
-    fn read(&self, stream_id: &str, after: Option<String>, live: bool) -> PyResult<PyStreamReader> {
+    /// Stops keeping the stream's records here while it stays open.
+    fn forget(&self, stream_id: &str) -> PyResult<()> {
         check_pid()?;
-        let reader = self.inner.read(stream_id, after.as_deref(), live);
+        self.inner.forget(stream_id);
+        Ok(())
+    }
+
+    /// A reader from `after` (an offset token; `None` is the beginning). `live` follows the tail
+    /// until the stream closes; `local` says this worker writes it, and the read follows the
+    /// records kept here while they are.
+    #[pyo3(signature = (stream_id, after=None, live=false, local=false))]
+    fn read(
+        &self,
+        stream_id: &str,
+        after: Option<String>,
+        live: bool,
+        local: bool,
+    ) -> PyResult<PyStreamReader> {
+        check_pid()?;
+        let reader = self.inner.read(stream_id, after.as_deref(), live, local);
         Ok(PyStreamReader { inner: Arc::new(tokio::sync::Mutex::new(reader)) })
     }
 }

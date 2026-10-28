@@ -5,13 +5,14 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::Message;
+use super::message::interrupts;
 use crate::StorageError;
 use crate::run::{Item, Ref, RunUsage, TaskRecord, TaskState};
 use crate::statements::{Lease, ThreadDb};
@@ -27,6 +28,35 @@ pub trait TurnHost: Send + Sync {
     async fn on_update(&self, task_id: &str, text: &str);
     /// Streamed answer text to the wire.
     async fn on_token(&self, task_id: &str, delta: &str);
+    /// Under `live`, once the message is in the inbox: its task `task_id` (its own, the one it
+    /// continues, or a resend's), whose stream `local` says this worker writes.
+    async fn accepted(&self, _task_id: &str, _local: bool) {}
+    /// Under `live`: a turn this host ran committed `task`, which goes on its own answer
+    /// stream; `output` is the reply when the task carried it.
+    async fn on_end(&self, _task: &TaskRecord, _output: Option<&Value>) {}
+    /// Under `live`: a client asked to cancel `task_id`, whose work runs in the background; the
+    /// work stops, and what it queued then ends the task.
+    async fn cancel(&self, _task_id: &str) {}
+    /// Under `live`: what the work this host left running in the background queued, after
+    /// waiting up to `wait` for some.
+    async fn background(&self, wait: Duration) -> Background {
+        tokio::time::sleep(wait).await;
+        Background::default()
+    }
+}
+
+/// What [`TurnHost::background`] reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Host)]
+#[python(pydantic, module = "storage_turn")]
+pub struct Background {
+    /// The tasks whose work runs on, or whose queue waits: the holder keeps the lane for them.
+    #[serde(default)]
+    #[python(default_factory = "list")]
+    pub running: Vec<String>,
+    /// The tasks whose progress and results are delivered now, in one turn with one reply.
+    #[serde(default)]
+    #[python(default_factory = "list")]
+    pub ready: Vec<String>,
 }
 
 /// What `handle` cannot report as a handler error: a storage error the host met, which fails the
@@ -74,6 +104,9 @@ pub struct TurnContext {
     pub answer_tool: Option<String>,
     /// What `answer_tool` continues with the answer, such as the expert's task.
     pub answer_ref: Option<String>,
+    /// The turn runs under `live`: a tool may go on in the background after its first update.
+    #[python(default = "False")]
+    pub live: bool,
     /// Asks whether to yield: before each model call and before the answer streams.
     #[python(skip)]
     pub boundary: Boundary,
@@ -144,6 +177,11 @@ pub struct HandlerOutput {
     #[serde(default)]
     #[python(default = "False")]
     pub interrupted: bool,
+    /// A tool of the task still runs in the background: the task stays `working`, and a turn of
+    /// its own answers it when the tool ends.
+    #[serde(default)]
+    #[python(default = "False")]
+    pub background: bool,
     /// What the handler put on the task's terminal row, under short keys.
     #[serde(default)]
     #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
@@ -167,19 +205,15 @@ struct BoundaryInner {
     lease: Option<Lease>,
     tripped: AtomicBool,
     client_canceled: AtomicBool,
-    /// When the acquire that made this boundary cleared the holder's waiter and picked the
-    /// task up: a check within [`FRESH`] of it is answered from it, without a read.
-    acquired: Instant,
+    /// Under `live`: the last inbox row the turn took. A newer one that interrupts yields.
+    arrivals_after: Option<i64>,
 }
-
-/// How long the acquire answers the boundary: an interrupt that lands inside this window
-/// waits for the next boundary.
-const FRESH: Duration = Duration::from_millis(100);
 
 /// The `boundary()` of `_turn`: the host asks before each model call and once more before the
 /// answer streams. `true` once means `true` from then on. The lease lost means the run cannot
-/// commit anyway, so nothing yields; under `interrupt` a waiter yields the lane; a row a client
-/// canceled with `tasks/cancel` yields too, and nothing is written over it (plan 5.5).
+/// commit anyway, so nothing yields; under `interrupt` a waiter yields the lane, under `live` a
+/// newer message that interrupts; a task a client asked to cancel with `tasks/cancel` yields too,
+/// as does a row a client already canceled, and nothing is written over that one (plan 5.5).
 #[derive(Clone)]
 pub struct Boundary {
     inner: Arc<BoundaryInner>,
@@ -215,9 +249,17 @@ impl Boundary {
                 lease,
                 tripped: AtomicBool::new(false),
                 client_canceled: AtomicBool::new(false),
-                acquired: Instant::now(),
+                arrivals_after: None,
             }),
         }
+    }
+
+    /// The boundary of a `live` turn that took the inbox up to row `last`.
+    pub(crate) fn live(mut self, last: i64) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.arrivals_after = Some(last);
+        }
+        self
     }
 
     pub fn task_id(&self) -> &str {
@@ -233,16 +275,24 @@ impl Boundary {
         if i.lease.as_ref().is_some_and(Lease::is_lost) {
             return Ok(false);
         }
-        if i.acquired.elapsed() < FRESH {
-            return Ok(false);
+        if let Some(last) = i.arrivals_after
+            && i.db
+                .inbox_pending(&i.lane)
+                .await?
+                .iter()
+                .any(|r| r.id > last && interrupts(&r.message))
+        {
+            i.tripped.store(true, Ordering::Release);
+            log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "a newer message interrupts the reply");
+            return Ok(true);
         }
-        let (waiter, status) = i.db.boundary(&i.lane, &i.task_id).await?;
+        let (waiter, status, cancel) = i.db.boundary(&i.lane, &i.task_id).await?;
         if i.interrupt && waiter.is_some_and(|w| !w.is_empty() && w != i.holder) {
             i.tripped.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "yielding the lane to a newer message");
             return Ok(true);
         }
-        if status.as_deref() == Some(TaskState::Canceled.as_str()) {
+        if cancel || status.as_deref() == Some(TaskState::Canceled.as_str()) {
             i.tripped.store(true, Ordering::Release);
             i.client_canceled.store(true, Ordering::Release);
             log::info!(target: "livekit.agents", lane = i.lane.as_str(), taskId = i.task_id.as_str(); "the task was canceled by a client; yielding");

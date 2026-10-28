@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 
 use crate::StorageError;
 use crate::run::shortuuid;
-use crate::run::{CHANNEL_KEY, KIND_KEY};
+use crate::run::{CHANNEL_KEY, INTERRUPT_KEY, KIND_KEY};
 
-/// A message during a run: one of the five policies of plan 3.3.4.
+/// A message during a run: one of the five policies of plan 3.3.4, or `live`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
 #[serde(rename_all = "lowercase")]
 #[python(literal, module = "storage_turn")]
@@ -28,6 +28,10 @@ pub enum Policy {
     Concurrent,
     #[host(rename = "reject")]
     Reject,
+    /// The inbox of `batch` with no debounce: a message waits while a reply is produced, and
+    /// stops it unless it says it does not interrupt. Messages that waited run as one turn.
+    #[host(rename = "live")]
+    Live,
 }
 
 impl Policy {
@@ -308,6 +312,12 @@ impl Message {
     }
 }
 
+/// Whether an A2A message stops the reply the lane is producing: its `livekit/interrupt`,
+/// `true` when absent. Only `live` reads it.
+pub fn interrupts(message: &Value) -> bool {
+    message.get("metadata").and_then(|m| m.get(INTERRUPT_KEY)) != Some(&Value::Bool(false))
+}
+
 /// The batch as one user chat message with every part in order (plan 3.3.4), in the stored item
 /// form of `item_to_payload`: `{id, type, role, content, interrupted, extra, created_at}`.
 pub fn batch_to_chat_message(messages: &[Message]) -> Value {
@@ -444,9 +454,10 @@ mod tests {
             "the defaults are filled in after the raw keys"
         );
         assert!(Message::from_a2a(&json!({"parts": []}), None, None).is_err());
-        let delegated =
-            json!({"messageId": "x", "parts": [], "metadata": {"livekit/kind": "delegation"}});
+        let delegated = json!({"messageId": "x", "parts": [],
+            "metadata": {"livekit/kind": "delegation", "livekit/interrupt": false}});
         assert_eq!(Message::from_a2a(&delegated, None, None).unwrap().channel, "delegation");
+        assert!(!interrupts(&delegated) && interrupts(&raw), "absent is an interrupt");
         let with_history = json!({"messageId": "y", "parts": [
             {"kind": "text", "text": "fare?"},
             {"kind": "data", "data": {"items": []}, "metadata": {"livekit/kind": "chat_ctx"}},

@@ -5,12 +5,13 @@
 //! from inside `handle` to ask whether to yield.
 //!
 //! The host is any Python object with three coroutine methods, `handle(ctx)`, `on_update(task_id,
-//! text)` and `on_token(task_id, delta)`. Rust calls them from the tokio runtime the
-//! way the worker calls `host.open`: the coroutine is scheduled on the event loop that built the
-//! `Turn` with `run_coroutine_threadsafe`, its result arrives on a oneshot channel the done
-//! callback fills, and dropping the Rust future (the turn cancelled from Python) cancels the
-//! Python task. The GIL is held only to build the call and to read its result, never across an
-//! await, and nothing here blocks the event loop thread on the runtime.
+//! text)` and `on_token(task_id, delta)`, and under `live` four more, `accepted(task_id, local)`,
+//! `on_end(task, output)`, `cancel(task_id)` and `background(wait)`. Rust calls them from the
+//! tokio runtime the way the worker calls `host.open`: the coroutine is scheduled on the event
+//! loop that built the `Turn` with `run_coroutine_threadsafe`, its result arrives on a oneshot
+//! channel the done callback fills, and dropping the Rust future (the turn cancelled from Python)
+//! cancels the Python task. The GIL is held only to build the call and to read its result, never
+//! across an await, and nothing here blocks the event loop thread on the runtime.
 //!
 //! `handle(ctx, boundary)` receives the `TurnContext` model of `_generated/storage_turn.py`
 //! (every field of the crate's record as JSON: `history` the items, `tasks` the task records,
@@ -24,11 +25,12 @@ use std::sync::Arc;
 
 use lk_agents_abi::python::{
     CancelPythonTask, check_pid, log, pyo3_async_runtimes, schedule_coroutine, value_from_py,
+    value_to_py,
 };
 use lk_agents_storage::StorageError as CoreError;
-use lk_agents_storage::run::Thread;
+use lk_agents_storage::run::{TaskRecord, Thread};
 use lk_agents_storage::turn::{
-    Boundary, HandlerOutput, HostError, Turn, TurnContext, TurnHost, TurnOptions,
+    Background, Boundary, HandlerOutput, HostError, Turn, TurnContext, TurnHost, TurnOptions,
 };
 use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -206,6 +208,7 @@ fn context_to_py<'py>(py: Python<'py>, ctx: &TurnContext) -> PyResult<(Py<PyAny>
         "caller_history": ctx.caller_history,
         "answer_tool": ctx.answer_tool,
         "answer_ref": ctx.answer_ref,
+        "live": ctx.live,
     });
     let model = model(py, "storage_turn", "TurnContext", &record)?;
     let boundary = Py::new(py, PyBoundary { inner: ctx.boundary.clone() })?;
@@ -279,6 +282,57 @@ impl TurnHost for PyTurnHost {
         {
             log::warn!(target: "livekit.agents", "the host's on_token raised: {e}");
         }
+    }
+
+    async fn accepted(&self, task_id: &str, local: bool) {
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("accepted", move |py| {
+                Ok((task_id, local).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's accepted raised: {e}");
+        }
+    }
+
+    async fn on_end(&self, task: &TaskRecord, output: Option<&serde_json::Value>) {
+        let (task, output) = (task.clone(), output.cloned().unwrap_or_default());
+        if let Err(e) = self
+            .call("on_end", move |py| {
+                let task = model(py, "storage_run", "TaskRecord", &task)?;
+                Ok((task, value_to_py(py, &output)?).into_pyobject(py)?.into_any().cast_into()?)
+            })
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's on_end raised: {e}");
+        }
+    }
+
+    async fn cancel(&self, task_id: &str) {
+        let task_id = task_id.to_owned();
+        if let Err(e) = self
+            .call("cancel", move |py| Ok((task_id,).into_pyobject(py)?.into_any().cast_into()?))
+            .await
+        {
+            log::warn!(target: "livekit.agents", "the host's cancel raised: {e}");
+        }
+    }
+
+    async fn background(&self, wait: std::time::Duration) -> Background {
+        let wait = wait.as_secs_f64();
+        let res = self
+            .call("background", move |py| Ok((wait,).into_pyobject(py)?.into_any().cast_into()?))
+            .await;
+        Python::attach(|py| {
+            res.and_then(|v| parse_request::<Background>(v.bind(py), "background")).unwrap_or_else(
+                |e| {
+                    // nothing known to run: the holder lets the lane go
+                    log::warn!(target: "livekit.agents", "the host's background raised: {e}");
+                    Background::default()
+                },
+            )
+        })
     }
 }
 

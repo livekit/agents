@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 
 from calendar_api import TIMEZONE, Calendar, Slot, SlotUnavailable, calendar
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 
 from livekit.agents import Agent, AgentHandler, InputRequired, RunContext, ToolError
 from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.llm import ToolFlag
 
 
 class Patient(BaseModel):
@@ -23,11 +25,11 @@ backend = Agent(
         "check-up or a toothache, is one half-hour slot. For openings, list_available_slots, "
         "with the day or the month the patient named, and offer a few at a time; a time that "
         "is not listed is not available, say so and offer the nearest listed ones. A booking "
-        "is schedule_appointment with the slot's id and the patient's email, never an email "
-        "the patient did not give; it asks for the email when it is missing, then reads the "
-        "appointment back and asks the patient to agree. Their answer is the next request: an "
-        "email means calling it again with that email, a yes means calling it again exactly "
-        "the same way, a no means offering other openings."
+        "is schedule_appointment with the slot's id and the patient's email, never one they "
+        "did not give; it asks for a missing email, then reads the appointment back for the "
+        "patient's yes. Their answer is the next request: an email means calling it again with "
+        "that email, a yes means calling it again the same way, a no means other openings. "
+        "Insurance is check_insurance; a check the patient no longer wants, you cancel."
     ),
     llm="google/gemma-4-31b-it",
     deps_type=Calendar,
@@ -130,6 +132,25 @@ async def schedule_appointment(
     return f"booked {spoken(slot.start)}; the confirmation goes to {email}"
 
 
+INSURANCE_CHECK_SECONDS = 8
+"""How long an insurance check takes: it stands in for a slow payer system."""
+ACCEPTED_INSURERS = ("aetna", "cigna", "delta dental", "metlife")
+
+
+@backend.tool(flags=ToolFlag.CANCELLABLE)
+async def check_insurance(ctx: RunContext[Calendar, Patient], provider: str) -> str:
+    """Whether the practice takes the patient's dental insurance; it takes a while.
+
+    Args:
+        provider: the insurance company, as the patient named it
+    """
+    await ctx.update(f"Checking with {provider}.")
+    await asyncio.sleep(INSURANCE_CHECK_SECONDS)
+    if any(name in provider.lower() for name in ACCEPTED_INSURERS):
+        return f"{provider} is accepted"
+    return f"{provider} is not accepted; visits are self-pay"
+
+
 cal = calendar()
 
 
@@ -140,7 +161,7 @@ back_office = AgentHandler(lane="backend")
     endpoint="backend",
     description="Pearl Dental's back office: openings and appointments.",
     public=False,
-    inbox="queue",
+    inbox="live",
     state=Patient,
 )
 async def text(ctx: A2ASessionContext[Patient]) -> str:

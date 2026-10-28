@@ -11,8 +11,8 @@ use super::{Ctx, LOOKUP_LIMIT, TASKS_IN_CONTEXT, Turn};
 use super::{TurnResult, interrupted_metadata};
 use crate::StorageError;
 use crate::run::{
-    Item, Lane, MERGED_INTO_KEY, REASON_KEY, Run, RunOutcome, TaskPatch, TaskRecord, TaskState,
-    WaitOptions, agent_message, artifact, shortuuid,
+    BACKGROUND_KEY, Item, KIND_DELIVERY, KIND_KEY, Lane, MERGED_INTO_KEY, REASON_KEY, Run,
+    RunOutcome, TaskPatch, TaskRecord, TaskState, WaitOptions, agent_message, artifact, shortuuid,
 };
 use crate::schema::TaskData;
 
@@ -26,6 +26,7 @@ pub(super) struct Outcome {
 
 impl Turn {
     /// One turn over a batch inside an open run; writes the task rows, commits nothing itself.
+    /// `arrivals_after` is the last inbox row a `live` turn took: a newer one may interrupt it.
     pub(super) async fn turn(
         &self,
         ctx: &Ctx,
@@ -33,6 +34,7 @@ impl Turn {
         batch: &[Message],
         task_ids: &[String],
         interrupt: bool,
+        arrivals_after: Option<i64>,
     ) -> Result<Outcome, StorageError> {
         let last = batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
         let answer_task = task_ids
@@ -51,15 +53,24 @@ impl Turn {
         // the task this batch continues, when it waits on a question: the batch is the answer,
         // recorded once as the person's message; the asking call keeps its question as its
         // output, and the tool the question named, if any, takes the answer and its reference first
-        let answered = run.tasks.get(&answer_task).await?.filter(|r| r.ask().is_some());
-        let ask = answered.as_ref().and_then(TaskRecord::ask);
+        // a turn that delivers what work in the background queued has no message, and answers
+        // no question
+        let delivery = batch
+            .iter()
+            .all(|m| m.metadata.get(KIND_KEY).and_then(Value::as_str) == Some(KIND_DELIVERY));
+        let row = run.tasks.get(&answer_task).await?;
+        let answered = row.as_ref().filter(|r| !delivery && r.ask().is_some());
+        let ask = answered.and_then(TaskRecord::ask);
         let field = |key: &str| ask.and_then(|a| a.get(key)).filter(|t| truthy(t)).map(text_of);
         let (answer_tool, answer_ref) = (field("answer_tool"), field("answer_ref"));
         // a continued task keeps its first messageId and adds the batch to its history
-        let row_message_id = answered.is_none().then(|| last.message_id.clone());
-        let mut history: Vec<Value> =
-            answered.as_ref().map(|r| r.data.history.clone()).unwrap_or_default();
-        history.extend(batch.iter().map(Message::to_a2a));
+        let row_message_id = (answered.is_none() && !delivery).then(|| last.message_id.clone());
+        let history = (!delivery).then(|| {
+            let mut history: Vec<Value> =
+                answered.map(|r| r.data.history.clone()).unwrap_or_default();
+            history.extend(batch.iter().map(Message::to_a2a));
+            history
+        });
 
         let mut user_message = batch_to_chat_message(batch);
         user_message["created_at"] = Value::from(now);
@@ -67,7 +78,7 @@ impl Turn {
             // `load_state`: a fresh lane starts from the door's default-constructed state
             run.state = self.opts.state_default.clone();
         }
-        let boundary = Boundary::new(
+        let mut boundary = Boundary::new(
             lane.thread().db().clone(),
             lane.name(),
             run.holder.as_str(),
@@ -75,6 +86,9 @@ impl Turn {
             interrupt,
             run.lease().cloned(),
         );
+        if let Some(last) = arrivals_after {
+            boundary = boundary.live(last);
+        }
         let turn_ctx = TurnContext {
             thread_id: self.thread.id().to_owned(),
             lane: lane.name().to_owned(),
@@ -88,6 +102,7 @@ impl Turn {
             caller_history: ctx.caller_history.clone(),
             answer_tool,
             answer_ref,
+            live: arrivals_after.is_some(),
             boundary: boundary.clone(),
         };
         let out: HandlerOutput = match run.guard(self.host.handle(turn_ctx)).await? {
@@ -121,7 +136,7 @@ impl Turn {
                     run.mark_message(id, &last.message_id);
                 }
             }
-        } else {
+        } else if !delivery {
             let user = Item::new(user_message)?;
             run.mark_message(&user.id, &last.message_id);
             insert_by_created_at(&mut run.history, user);
@@ -152,19 +167,71 @@ impl Turn {
             output,
             interrupted,
         };
+        // what the reply showed before it stopped, the answer of a task that ends with it
+        let shown = out.output.clone().filter(|o| o.as_str().is_some_and(|t| !t.is_empty()));
+        // the row as it is now: a client may have asked to cancel it during the turn, or ended it
+        let now = lane.task(&answer_task).await?;
+        let request = now.as_ref().and_then(|r| r.internal.as_ref()?.cancel.clone());
+        let requested = request.is_some();
         if boundary.client_canceled()
+            || requested
             || (interrupted
-                && lane
-                    .task(&answer_task)
-                    .await?
-                    .is_some_and(|row| row.status == TaskState::Canceled.as_str()))
+                && now.as_ref().is_some_and(|r| r.status == TaskState::Canceled.as_str()))
         {
-            // the row is the client's; the history keeps what ran, the run says why it ended
+            if now.is_some_and(|r| !r.terminal()) {
+                // its tools stopped: the task ends `canceled`, its status saying what ran
+                let ran: Vec<String> = out
+                    .new_items
+                    .iter()
+                    .filter(|i| {
+                        i.get("type").and_then(Value::as_str) == Some("function_call_output")
+                    })
+                    .map(|i| {
+                        let name = i.get("name").and_then(Value::as_str).unwrap_or("a tool");
+                        let output = i.get("output").map(text_of).unwrap_or_default();
+                        if i.get("is_error").is_some_and(truthy) {
+                            format!("{name} did not finish ({output})")
+                        } else {
+                            format!("{name} returned {output}")
+                        }
+                    })
+                    .collect();
+                let said = if ran.is_empty() {
+                    "stopped before any work ended".to_owned()
+                } else {
+                    format!("stopped after: {}", ran.join("; "))
+                };
+                let mut metadata = Map::new();
+                if let Some(reason) = request.as_ref().and_then(|r| r.get("reason")) {
+                    metadata.insert(REASON_KEY.into(), reason.clone());
+                }
+                run.tasks
+                    .write(
+                        &answer_task,
+                        TaskState::Canceled,
+                        TaskPatch {
+                            message_id: row_message_id.clone(),
+                            history: history.clone(),
+                            status_message: Some(agent_text(&answer_task, &said)),
+                            artifacts: shown.as_ref().map(|o| vec![artifact(o)]),
+                            metadata: Some(metadata),
+                            ..TaskPatch::default()
+                        },
+                    )
+                    .await?;
+            }
+            // a row the client ended is kept as it is; the history keeps what ran
             run.outcome = RunOutcome::Canceled;
             run.reason = Some("client-cancel".into());
-            return Ok(outcome(None, true));
+            return Ok(outcome(shown, true));
         }
-        for (tid, m) in task_ids[..task_ids.len() - 1].iter().zip(&batch[..batch.len() - 1]) {
+        // each task of a delivery stays `working` while work of it runs on
+        let working: Vec<bool> = batch
+            .iter()
+            .map(|m| m.metadata.get(BACKGROUND_KEY) == Some(&Value::Bool(true)))
+            .collect();
+        let merged = if delivery { 0 } else { task_ids.len() - 1 };
+        for (tid, m) in task_ids[..merged].iter().zip(&batch[..merged]) {
             run.tasks
                 .write(
                     tid,
@@ -178,42 +245,104 @@ impl Turn {
                 )
                 .await?;
         }
+        // a turn that stops ends the task that carries the reply; a delivery ends every task it
+        // carried when it fails, and those whose work ended when it is interrupted
+        let ended: Vec<&String> = if !delivery {
+            vec![&answer_task]
+        } else if out.error.is_some() {
+            task_ids.iter().collect()
+        } else {
+            task_ids.iter().zip(&working).filter(|(_, w)| !**w).map(|(t, _)| t).collect()
+        };
         if let Some(err) = &out.error {
-            run.tasks
-                .write(
-                    &answer_task,
-                    TaskState::Failed,
-                    TaskPatch {
-                        message_id: row_message_id.clone(),
-                        history: Some(history),
-                        status_message: Some(agent_text(&answer_task, err)),
-                        ..TaskPatch::default()
-                    },
-                )
-                .await?;
+            for tid in ended {
+                run.tasks
+                    .write(
+                        tid,
+                        TaskState::Failed,
+                        TaskPatch {
+                            message_id: row_message_id.clone(),
+                            history: history.clone(),
+                            status_message: Some(agent_text(tid, err)),
+                            ..TaskPatch::default()
+                        },
+                    )
+                    .await?;
+            }
             run.events.append("error", serde_json::json!({"error": err}));
             run.outcome = RunOutcome::Failed;
             run.reason = Some(err.clone());
             return Ok(outcome(None, false));
         }
         if interrupted {
+            // a task whose work runs on in the background waits for it; the others end with what
+            // the reply showed
+            let runs_on = !delivery && out.background;
+            for tid in ended {
+                let mut metadata = interrupted_metadata();
+                let mut patch = TaskPatch {
+                    message_id: row_message_id.clone(),
+                    history: history.clone(),
+                    ..TaskPatch::default()
+                };
+                let state = if runs_on {
+                    metadata.insert(BACKGROUND_KEY.into(), Value::Bool(true));
+                    TaskState::Working
+                } else {
+                    patch.artifacts = shown.as_ref().map(|o| vec![artifact(o)]);
+                    TaskState::Canceled
+                };
+                patch.metadata = Some(metadata);
+                run.tasks.write(tid, state, patch).await?;
+            }
+            run.outcome = RunOutcome::Canceled;
+            run.reason = Some(INTERRUPTION_NEW_MESSAGE.into());
+            return Ok(outcome((!runs_on).then_some(shown).flatten(), true));
+        }
+        let mut metadata = out.metadata.clone();
+        if delivery && out.input_required.is_none() {
+            // every task takes the one reply, as its answer once all its work ended
+            let output = out.output.clone().filter(|o| !o.is_null());
+            let text = output.as_ref().and_then(Value::as_str).filter(|t| !t.is_empty());
+            for (tid, working) in task_ids.iter().zip(working) {
+                let mut metadata = metadata.clone();
+                metadata.insert(BACKGROUND_KEY.into(), Value::Bool(working));
+                let state = if working { TaskState::Working } else { TaskState::Completed };
+                let patch = TaskPatch {
+                    artifacts: (!working).then(|| output.iter().map(artifact).collect()),
+                    status_message: text.map(|t| agent_text(tid, t)),
+                    metadata: Some(metadata),
+                    ..TaskPatch::default()
+                };
+                run.tasks.write(tid, state, patch).await?;
+            }
+            return Ok(outcome(output, false));
+        }
+        if out.background && out.input_required.is_none() {
+            // a tool of the task runs on: the task waits for it, and its end answers the task
+            metadata.insert(BACKGROUND_KEY.into(), Value::Bool(true));
+            let text = out.output.as_ref().and_then(Value::as_str).filter(|t| !t.is_empty());
             run.tasks
                 .write(
                     &answer_task,
-                    TaskState::Canceled,
+                    TaskState::Working,
                     TaskPatch {
-                        message_id: row_message_id.clone(),
-                        history: Some(history),
-                        metadata: Some(interrupted_metadata()),
+                        message_id: row_message_id,
+                        history,
+                        status_message: text.map(|t| agent_text(&answer_task, t)),
+                        metadata: Some(metadata),
                         ..TaskPatch::default()
                     },
                 )
                 .await?;
-            run.outcome = RunOutcome::Canceled;
-            run.reason = Some(INTERRUPTION_NEW_MESSAGE.into());
-            return Ok(outcome(None, true));
+            return Ok(outcome(out.output.clone(), false));
         }
-        let metadata = Some(out.metadata.clone()).filter(|m| !m.is_empty());
+        // a question asked beside work that runs on says so
+        let runs_on = if delivery { working.last() == Some(&true) } else { out.background };
+        if runs_on || delivery {
+            metadata.insert(BACKGROUND_KEY.into(), Value::Bool(runs_on));
+        }
+        let metadata = Some(metadata).filter(|m| !m.is_empty());
         if let Some(question) = &out.input_required {
             let call = out.pending_call.as_ref();
             run.tasks
@@ -235,7 +364,7 @@ impl Turn {
                     TaskState::InputRequired,
                     TaskPatch {
                         message_id: row_message_id.clone(),
-                        history: Some(history),
+                        history,
                         metadata,
                         ..TaskPatch::default()
                     },
@@ -253,7 +382,7 @@ impl Turn {
                 TaskState::Completed,
                 TaskPatch {
                     message_id: row_message_id,
-                    history: Some(history),
+                    history,
                     artifacts: Some(artifacts),
                     status_message: text.map(|t| agent_text(&answer_task, t)),
                     metadata,

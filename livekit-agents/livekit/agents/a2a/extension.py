@@ -51,6 +51,9 @@ KIND = "livekit/kind"
 CALLER_LANE = "livekit/callerLane"
 """On a delegation in the caller's thread: the caller's lane, whose history holds the person's
 own words. The expert's handler may read it; the framework gives the expert's model none of it."""
+INTERRUPT = "livekit/interrupt"
+"""On a message to a ``live`` inbox: ``false`` when it waits for the reply under way instead of
+stopping it; absent is ``true``. A delegation sends ``false``."""
 INTERRUPTED = "livekit/interrupted"
 INTERRUPTION_REASON = "livekit/interruptionReason"
 MERGED_INTO = "livekit/mergedInto"
