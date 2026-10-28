@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[allow(unused_imports)]
 use lk_agents_fuzz::{
+    boundary,
     check::KNOWN_FINDINGS,
     drive::{Outcome, PHASES, Policy, Setup},
     input::Input,
@@ -45,11 +46,12 @@ fn survey() {
     let env = |key: &str| std::env::var(key).ok().and_then(|v| v.parse::<u64>().ok());
     let single = env("VOICE_SEED");
     let seeds = if single.is_some() { 1 } else { env("VOICE_SEEDS").unwrap_or(32) };
+    assert!(seeds > 0, "VOICE_SEEDS=0: a survey of no seeds proves nothing");
     // `VOICE_FIRST_SEED` moves the window: the same campaign over another set of seeds is how the
     // noise floor is measured, and a change is only a change if it beats that floor.
     let first = single.or(env("VOICE_FIRST_SEED")).unwrap_or(0);
     let budget = env("VOICE_BUDGET").unwrap_or(BUDGET as u64) as usize;
-    // `VOICE_POLICY=FullPos` runs every seed under one queue policy instead of its own draw.
+    // `VOICE_POLICY=BasicPos` runs every seed under one queue policy instead of its own draw.
     let policy = std::env::var("VOICE_POLICY").ok().map(|name| {
         Policy::named(&name).unwrap_or_else(|| panic!("VOICE_POLICY: no policy {name}"))
     });
@@ -215,6 +217,8 @@ fn campaign(window: &Window) {
     let mut found: BTreeMap<String, [usize; BANDS]> = BTreeMap::new();
     // One example per contract, so a finding can be read without saving the corpus.
     let mut example: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    // One example per finding outside the known ones, by (contract, subject kind).
+    let mut new: BTreeMap<(String, String), (u64, String)> = BTreeMap::new();
     // Every failing seed, since one contract can fail for several causes.
     let mut failing: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     let mut exercised: BTreeMap<&'static str, u32> = BTreeMap::new();
@@ -255,7 +259,11 @@ fn campaign(window: &Window) {
         if !outcome.ok() {
             let mut here: BTreeSet<&str> = BTreeSet::new();
             for failure in &outcome.failures {
-                findings.insert((failure.contract.clone(), failure.subject.kind()));
+                let key = (failure.contract.clone(), failure.subject.kind());
+                if !failure.known() {
+                    new.entry(key.clone()).or_insert_with(|| (seed, failure.detail.clone()));
+                }
+                findings.insert(key);
                 if here.insert(&failure.contract) {
                     found.entry(failure.contract.clone()).or_default()[band_of] += 1;
                     failing.entry(failure.contract.clone()).or_default().push(seed);
@@ -353,21 +361,36 @@ fn campaign(window: &Window) {
         println!("       none");
     }
 
-    // The gate: a contract outside the known findings is new, whatever window found it.
-    let new: Vec<&String> =
-        found.keys().filter(|contract| !KNOWN_FINDINGS.contains(&contract.as_str())).collect();
+    // The gate: a (contract, subject kind) outside the known findings is new, whatever window
+    // found it.
     println!("\nfindings outside the known ones (check::KNOWN_FINDINGS):");
-    for contract in &new {
-        let (seed, what) = &example[*contract];
-        println!("  NEW {contract}: seed {seed}: {what}");
+    for ((contract, kind), (seed, what)) in &new {
+        println!("  NEW {contract} on a {kind}: seed {seed}: {what}");
         println!("    rerun: {}", rerun(*seed, budget));
     }
     if new.is_empty() {
         println!("  none");
     }
-    let unseen: Vec<&&str> = KNOWN_FINDINGS.iter().filter(|k| !found.contains_key(**k)).collect();
-    if !unseen.is_empty() && !window.single {
-        println!("known findings this window did not reach: {unseen:?}");
+    // A known finding this window did not reach: reported, or, over the full window
+    // (`VOICE_FULL_WINDOW=1`, the nightly gate) once its fixing regression exists, a failure
+    // until it comes off the list.
+    let full = std::env::var_os("VOICE_FULL_WINDOW").is_some();
+    let mut stale = Vec::new();
+    if !window.single {
+        for known in KNOWN_FINDINGS.iter() {
+            let key = (known.contract.to_owned(), known.subject.to_owned());
+            if findings.contains(&key) {
+                continue;
+            }
+            match known.fixed_by {
+                Some(test) if full => {
+                    println!("  FIXED {} on a {}: {test} fixes it; remove it", key.0, key.1);
+                    stale.push(key);
+                }
+                Some(test) => println!("  not reached: {} on a {} (fixed by {test})", key.0, key.1),
+                None => println!("  not reached: {} on a {} (no fix yet)", key.0, key.1),
+            }
+        }
     }
 
     // Only the sound direction: a row that opens something directly without declaring it.
@@ -399,5 +422,10 @@ fn campaign(window: &Window) {
             println!("{input}\t{}", row.join("\t"));
         }
     }
-    assert!(new.is_empty(), "new findings: {new:?}");
+    let delivered: BTreeSet<&str> = declared.keys().copied().collect();
+    let opened: BTreeSet<String> =
+        observed.values().flatten().map(|kind| format!("{kind:?}")).collect();
+    boundary::VOICE.report(&delivered, &opened.into_iter().collect::<Vec<_>>());
+    assert!(new.is_empty(), "new findings: {:?}", new.keys().collect::<Vec<_>>());
+    assert!(stale.is_empty(), "fixed known findings still listed: {stale:?}");
 }

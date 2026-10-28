@@ -13,7 +13,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::{
-    check::KNOWN_FINDINGS,
     drive::{Run, Setup, simulate_with},
     record::{Kind, Phase},
     search::{Dials, explore_at, sample_setup},
@@ -66,6 +65,7 @@ fn nothing_grows_with_the_conversation() {
     let env =
         |key: &str, or: u64| std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(or);
     let seeds = env("VOICE_SOAK_SEEDS", 8);
+    assert!(seeds > 0, "VOICE_SOAK_SEEDS=0: a soak of no calls proves nothing");
     let budget = env("VOICE_SOAK_BUDGET", 12_000) as usize;
     let mut problems: Vec<String> = Vec::new();
     let mut closed = 0;
@@ -78,7 +78,7 @@ fn nothing_grows_with_the_conversation() {
         };
         let outcome = explore_at(setup, seed, budget, Dials::conversation());
         for failure in &outcome.failures {
-            if !KNOWN_FINDINGS.contains(&failure.contract.as_str()) {
+            if !failure.known() {
                 problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
             }
         }

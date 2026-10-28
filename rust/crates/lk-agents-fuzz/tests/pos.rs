@@ -83,6 +83,8 @@ fn bench() {
     let setups = env("VOICE_SETUPS").unwrap_or(1024) as usize;
     let budget = env("VOICE_BUDGET").unwrap_or(1500) as usize;
     let first = env("VOICE_FIRST_SEED").unwrap_or(0);
+    assert!(seeds > 0 && schedules > 0 && setups > 0, "a benchmark of no seeds measures nothing");
+    assert!(seeds >= windows && schedules >= windows && setups >= windows, "fewer tries than windows");
     let range: Vec<u64> = (first..first + seeds as u64).collect();
 
     let mut campaigns: Vec<(Policy, Vec<Seeded>, f64)> = Vec::new();

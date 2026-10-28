@@ -1,0 +1,7 @@
+# The open findings the launch gate tolerates, one (contract, subject kind) per line; see
+# check::KNOWN_FINDINGS. Shrink-only: CI fails a change that adds a line. Columns, tab-separated:
+# contract, subject kind (`Subject::kind`), the regression test in tests/regressions/ that fixes it
+# or `-`, and why it is open.
+tool_lifecycle	Tool	-	listed since 6420a8baa with no cause recorded; not reached by the recent gate windows
+shown_transcript_is_conserved	Speech	-	the synchroniser takes the next turn's first frame or text, arriving while the last segment still plays out, for a lost playback_finished and rotates: the playing segment's pacer is closed (its transcript cut where it stood) and its later progress moves the new segment's pacer (words shown before their audio); reached once audio plays at its recorded length (seeds 1750, 2815, 21650)
+transcript_follows_audio	Speech	-	the same rotation as shown_transcript_is_conserved, seen as words shown before their audio

@@ -77,7 +77,15 @@ else
     )"
     dirty="$(git -C "$root" status --porcelain -- rust | wc -l | tr -d ' ') paths under rust/"
 fi
-out="${VOICE_BENCH_OUT:-${TMPDIR:-/tmp}/lk-known-bugs/$identity}"
+# One benchmark at a time: they share the copy and its target dir, apart from every checkout's
+# (cargo names path crates' artifacts by their place in the workspace, so a copy building in the
+# checkout's target dir and the checkout itself would overwrite each other's).
+home="${VOICE_BENCH_HOME:-${TMPDIR:-/tmp}/lk-known-bugs}"
+mkdir -p "$home"
+mkdir "$home/lock" 2>/dev/null \
+    || { echo "known_bugs: another benchmark holds $home/lock" >&2; exit 2; }
+trap 'rm -f "$files"; rmdir "$home/lock"' EXIT
+out="${VOICE_BENCH_OUT:-$home/$identity}"
 mkdir -p "$out"
 if [ -s "$out/identity" ] && [ "$(cat "$out/identity")" != "$identity" ]; then
     echo "known_bugs: $out holds results of another tree or configuration" >&2
@@ -95,10 +103,10 @@ cat "$out/build.txt"
 
 # The copy: what is tracked (or untracked) under rust/. Rewritten only where it differs, with a
 # fresh mtime, so cargo rebuilds exactly what changed; what is no longer there is deleted.
-tree="$out/tree"
+tree="$home/tree"
 mkdir -p "$tree"
 if [ -n "$rev" ]; then
-    staged="$out/rev"
+    staged="$home/rev"
     rm -rf "$staged"
     mkdir -p "$staged"
     git -C "$root" archive "$rev" rust | tar -x -C "$staged"
@@ -109,7 +117,7 @@ fi
 rsync -r --links --checksum --from0 --files-from="$files" "$source" "$tree/"
 (cd "$tree" && find rust -path rust/target -prune -o \( -type f -o -type l \) -print | sort) \
     | comm -23 - <(tr '\0' '\n' < "$files" | sort) | (cd "$tree" && xargs rm -f)
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/rust/target}"
+export CARGO_TARGET_DIR="$home/target"
 
 # `git apply` on the copy, which is no repository: paths are taken from the copy's root.
 apply() { (cd "$tree" && GIT_DIR=/dev/null git apply "$@"); }
@@ -117,17 +125,20 @@ apply() { (cd "$tree" && GIT_DIR=/dev/null git apply "$@"); }
 failed=()
 bench() {
     local name=$1 binary
-    binary="$(
-        cd "$tree/rust" && cargo test --release -p lk-agents-fuzz --test pos --no-run \
-            --message-format=json 2>"$out/$name.build" \
-            | python3 -c 'import json,sys
-for line in sys.stdin:
+    (cd "$tree/rust" && cargo test --release -p lk-agents-fuzz --test pos --no-run \
+        --message-format=json-diagnostic-rendered-ansi > "$out/$name.build" 2>&1) || true
+    binary="$(python3 -c 'import json, sys
+for line in open(sys.argv[1]):
+    if not line.startswith("{"):
+        continue
     m = json.loads(line)
-    if m.get("reason") == "compiler-artifact" and m["target"]["name"] == "pos" and m["executable"]:
-        print(m["executable"])'
-    )" || true
+    if m.get("reason") == "compiler-message" and m["message"]["level"] == "error":
+        print(m["message"]["rendered"], file=sys.stderr)
+    elif m.get("reason") == "compiler-artifact" and m["target"]["name"] == "pos" \
+            and m["executable"]:
+        print(m["executable"])' "$out/$name.build" 2>"$out/$name.errors")"
     if [ -z "$binary" ]; then
-        echo "== $name: the build failed (see $out/$name.build)"
+        echo "== $name: the build failed (see $out/$name.errors)"
         failed+=("$name")
         return
     fi

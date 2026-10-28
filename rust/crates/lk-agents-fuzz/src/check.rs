@@ -90,20 +90,43 @@ impl Check {
     }
 }
 
-/// The contracts with open findings: what the launch gate tolerates (COVERAGE.md, section 12).
-/// A finding of any other contract anywhere in the gate fails it, so a new kind of defect cannot
-/// hide among the known ones; a contract whose findings are all fixed comes off the list.
+/// An open finding the launch gate tolerates: a contract failing on a kind of subject.
+pub struct Known {
+    pub contract: &'static str,
+    /// [`Subject::kind`]: which speech or resource never splits a key.
+    pub subject: &'static str,
+    /// The regression test (`tests/regressions/<name>.rs`) whose fix closes it, once one exists:
+    /// a fixed finding the full window no longer reaches fails the gate until it is removed.
+    pub fixed_by: Option<&'static str>,
+    pub why: &'static str,
+}
+
+/// The open findings (`known_findings.tsv`, COVERAGE.md section 12). A finding of any other
+/// (contract, subject kind) anywhere in the gate fails it, so a new kind of defect cannot hide
+/// among the known ones; the file only shrinks (CI rejects an added line).
 /// `session_settles` is the release phase's own verdict, not a rule.
-pub const KNOWN_FINDINGS: &[&str] = &[
-    "tool_lifecycle",
-    // The synchroniser takes the next turn's first frame or text, arriving while the last
-    // segment still plays out, for a lost `playback_finished` and rotates: the playing segment's
-    // pacer is closed (its transcript cut where it stood) and its later progress moves the new
-    // segment's pacer (words shown before their audio). Reached once audio plays at its recorded
-    // length (seeds 1750, 2815, 21650).
-    "shown_transcript_is_conserved",
-    "transcript_follows_audio",
-];
+pub static KNOWN_FINDINGS: std::sync::LazyLock<Vec<Known>> = std::sync::LazyLock::new(|| {
+    include_str!("known_findings.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| {
+            let fields: Vec<&'static str> = line.split('\t').collect();
+            let [contract, subject, fixed_by, why] = fields[..] else {
+                panic!("known_findings.tsv: not four tab-separated fields: {line:?}")
+            };
+            let fixed_by = (fixed_by != "-").then_some(fixed_by);
+            Known { contract, subject, fixed_by, why }
+        })
+        .collect()
+});
+
+impl Failure {
+    /// Whether this failure is one of the open findings.
+    pub fn known(&self) -> bool {
+        let kind = self.subject.kind();
+        KNOWN_FINDINGS.iter().any(|k| k.contract == self.contract && k.subject == kind)
+    }
+}
 
 /// One guarantee the driver must keep.
 ///

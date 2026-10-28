@@ -19,6 +19,7 @@
 //! `VOICE_SEED=<n>` reruns one.
 
 pub mod authored;
+pub mod boundary;
 pub mod check;
 pub mod corpus;
 pub mod drive;

@@ -25,3 +25,10 @@ fail-fast = false
 [profile.nightly]
 slow-timeout = { period = "60s", terminate-after = 20 }
 fail-fast = false
+
+# The DST campaigns (launch-gate.sh): one test runs thousands of seeds, minutes by design. Each
+# simulation has its own watchdog (VOICE_HANG_S) that aborts a real hang with its seed, so the
+# cap here only bounds the campaign as a whole.
+[[profile.default.overrides]]
+filter = 'package(lk-agents-fuzz) & (binary(survey) | binary(soak) | binary(pos))'
+slow-timeout = { period = "60s", terminate-after = 30 }

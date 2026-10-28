@@ -779,14 +779,24 @@ Measured nowhere here, and each a separate source of production risk:
 
 ## 12. Keeping it true
 
-**The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`: the workspace
-build, the voice core's unit tests, the provider clients' unit tests (`lk-agents-inference`,
-`lk-agents-abi`: what the DST does not run), the fuzz suites (every contract's examples, counterexamples
-and probe, determinism, the regression tests), the 1,024-seed survey, a
-4,096-seed campaign on the next window (`VOICE_GATE_SEEDS`), and the soak. It fails on any
-finding of a contract not in `check::KNOWN_FINDINGS` (the open findings, listed so a new kind of
-defect cannot hide among them), on a soak residue, and on a campaign that did not run. About
-three minutes on a laptop.
+**The launch gate** is one command, `rust/crates/lk-agents-fuzz/launch-gate.sh`, and the merge gate
+in CI (`.github/workflows/launch-gate.yml`: 4,096 campaign seeds on every pull request and push to
+v2.0, 32,768 nightly). It prints a coverage table placing every workspace crate as executed,
+compiled only or outside (with the job that covers it), and fails on a crate in no list; then the
+workspace build, the voice core's unit tests, the provider clients' unit tests
+(`lk-agents-inference`, `lk-agents-abi`, and abi's `python` feature under nextest), the fuzz suites
+(the scheduler's small programs, every contract's examples, counterexamples and probe, determinism,
+the regression tests), the 1,024-seed survey, a campaign on the next window (`VOICE_GATE_SEEDS`,
+32,768 by default) and the soak (`VOICE_SOAK_SEEDS`, 8). Every verdict is a runner's exit status:
+the campaigns run under nextest, which fails a selection that runs no test, and zero seeds are
+refused. It fails on any finding outside `src/known_findings.tsv` (open findings keyed by
+contract and subject kind; CI rejects an added line), on a soak residue, and, nightly
+(`VOICE_FULL_WINDOW=1`), on a known finding the full window no longer reaches once its fixing
+regression exists. Each campaign prints its boundary (`src/boundary.rs`): the cores it steps, the
+fakes, what still runs as tasks, and the runtime adapters left to K-30's verification. About five
+minutes on a laptop (the 32,768-seed campaign is three). Not in the gate yet (K-12 closure):
+`pytest --unit --audio_eot`, the binding conformance suite, backend contracts, IPC stress and the
+runtime verification suites.
 
 **Reproducing a finding.** A seed is the whole of a run: its setup, its conversation, its
 providers' behaviour and its schedule are all drawn from it, and nothing carries over from the
@@ -838,9 +848,9 @@ cargo llvm-cov report --release --summary-only | grep lk-agents-voice/src
 
 Next:
 
-- **A known-bug benchmark**, once the rules are triaged: each confirmed driver bug, put back one
-  at a time, and how many seeds each search needs to catch it, with the protocol fixed before
-  the first run. This replaces reach as the yardstick for search changes.
+- **The known-bug benchmark** (`bench/known_bugs.sh`) reintroduces each fixed bug in a copy of
+  the tree and measures every queue policy's hit ratio on matched seeds; a change to `drive/` or
+  `fakes/` records its `--compare` against the commit before it (K-14).
 - **Generated**: add the phase columns of section 5, have each rule register the (promise,
   operation, phase) cells it judges, write sections 3 and 4 from what the survey observed, and
   fail a test when this file is stale (agent-store's `dst/COVERAGE.md` and `TestCoverageMatrix`).

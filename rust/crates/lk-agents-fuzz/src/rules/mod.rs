@@ -13,15 +13,25 @@ include!(concat!(env!("OUT_DIR"), "/rules.rs"));
 mod registry {
     use super::*;
 
-    /// The known findings name contracts that exist, so a renamed or deleted rule cannot leave the
-    /// gate tolerating a name nothing reports.
+    /// The known findings name contracts that exist, once each, and a fixing regression that
+    /// exists: a renamed or deleted rule or test cannot leave the gate tolerating a name nothing
+    /// reports.
     #[test]
     fn every_known_finding_is_a_contract() {
-        for known in crate::check::KNOWN_FINDINGS {
+        let mut keys = std::collections::BTreeSet::new();
+        for known in crate::check::KNOWN_FINDINGS.iter() {
             assert!(
-                *known == "session_settles" || RULES.iter().any(|rule| rule.id() == *known),
-                "{known} is listed as a known finding but is no contract"
+                known.contract == "session_settles"
+                    || RULES.iter().any(|rule| rule.id() == known.contract),
+                "{} is listed as a known finding but is no contract",
+                known.contract
             );
+            assert!(keys.insert((known.contract, known.subject)), "{} listed twice", known.contract);
+            assert!(!known.why.is_empty(), "{} has no reason", known.contract);
+            if let Some(test) = known.fixed_by {
+                let path = format!("{}/tests/regressions/{test}.rs", env!("CARGO_MANIFEST_DIR"));
+                assert!(std::path::Path::new(&path).exists(), "{test}: no such regression test");
+            }
         }
     }
 

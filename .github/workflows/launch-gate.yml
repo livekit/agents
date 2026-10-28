@@ -1,0 +1,78 @@
+name: Launch gate
+
+# The merge gate (rust/crates/lk-agents-fuzz/launch-gate.sh): bounded seeds on every pull request
+# and push to v2.0, the full campaign nightly. The script prints what it executed, compiled only,
+# skipped and left outside per workspace crate, and fails on any crate in no list, on zero seeds
+# and on any failed step. Bootstrap: the suites it does not run yet are listed as omissions there.
+
+on:
+  pull_request:
+  push:
+    branches: [v2.0]
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launch-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0 # the known findings ratchet against the base branch
+
+      # Shrink-only: a pull request may remove open findings, never add one.
+      - name: Known findings only shrink
+        if: github.event_name == 'pull_request'
+        run: |
+          list=rust/crates/lk-agents-fuzz/src/known_findings.tsv
+          keys() { grep -v '^#' | cut -f1,2 | sort -u; }
+          added=$(comm -13 <(git show "origin/${{ github.base_ref }}:$list" 2>/dev/null | keys) \
+              <(keys < "$list"))
+          if [ -n "$added" ]; then
+            echo "known findings added (fix them, or let the gate fail):"
+            echo "$added"
+            exit 1
+          fi
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Install cargo-nextest
+        run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+
+      # The abi tests behind the `python` feature run against the repository's venv.
+      - name: Install the repository's venv
+        run: make install
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: launch-gate-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: launch-gate-${{ runner.os }}-
+
+      # Pull requests and pushes: the 1024-seed survey plus 4096 campaign seeds. Nightly and on
+      # demand: the full 32768.
+      - name: Launch gate
+        env:
+          VOICE_GATE_SEEDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '32768' || '4096' }}
+          VOICE_FULL_WINDOW: ${{ github.event_name == 'schedule' && '1' || '' }}
+        run: rust/crates/lk-agents-fuzz/launch-gate.sh
