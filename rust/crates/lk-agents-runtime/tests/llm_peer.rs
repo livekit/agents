@@ -283,3 +283,22 @@ async fn nothing_is_sent_before_the_first_pull() {
     assert_eq!(peer.requests.load(Ordering::SeqCst), 0);
     assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
 }
+
+// Catches: a consumer's own pause (downstream backpressure) counted as remote silence: the read
+// limit fired on a stream that kept sending while nobody pulled.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_pausing_longer_than_the_read_limit_is_not_a_timeout() {
+    let event = b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n";
+    let mut parts = Vec::new();
+    for _ in 0..80 {
+        parts.push(Part::Bytes(event));
+        parts.push(Part::Pause(5));
+    }
+    parts.push(Part::Bytes(b"data: [DONE]\n\n"));
+    let peer = Peer::start(vec![Reply::Sse(parts)]).await;
+    let llm = llm(&peer);
+    let mut chunks = open(&llm, policy(0, 200));
+    assert!(chunks.next().await.unwrap().is_some());
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(text(&mut chunks).await.unwrap().len(), 79);
+}
