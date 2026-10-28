@@ -190,9 +190,10 @@ impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
             api.start(
                 capture_run,
                 Box::new(lk_agents_runtime::voice::Executor::default()),
+                Box::new(lk_agents_runtime::voice::remote_session::hosting),
                 lk_agents_runtime::voice::amd::spawn,
             )
-                .map_err(|e| e.to_py_err())
+            .map_err(|e| e.to_py_err())
         })
         .map_err(captured)?;
         reply.await.map_err(|e| Python::attach(|_| captured(e.to_py_err())))

@@ -198,27 +198,15 @@ impl SessionApi {
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
         let remote = remote_session
-            .map(|port| -> Result<_, lk_agents_abi::voice::rtc::RtcError> {
-                let transport = match &console {
-                    Some(console) => console.clone().as_transport(spawner.clone()),
-                    None => Arc::new(crate::remote_session::room::RoomTransport::new(
-                        rtc_room.clone().ok_or(lk_agents_abi::voice::rtc::RtcError::Closed(
-                            "remote RTC session",
-                        ))?,
-                        clock.clone(),
-                        spawner.clone(),
-                    ))
-                        as Arc<dyn crate::remote_session::SessionTransport>,
-                };
-                let wall = time.clone();
-                Ok(Arc::new(crate::remote_session::driver::Hosting::new(
+            .map(|port| {
+                if console.is_none() && rtc_room.is_none() {
+                    return Err(lk_agents_abi::voice::rtc::RtcError::Closed("remote RTC session"));
+                }
+                Ok(super::RemoteSessionConfig {
                     port,
-                    transport,
-                    console.as_ref().map(|c| c.clone().as_console()),
-                    clock.clone(),
-                    spawner.clone(),
-                    Box::new(move || wall.wall_secs()),
-                )))
+                    room: rtc_room.clone(),
+                    console: console.clone(),
+                })
             })
             .transpose()?;
 
@@ -383,11 +371,16 @@ impl SessionApi {
         &self,
         capture_run: bool,
         executor: Box<dyn crate::agent_session::SessionExecutor>,
+        hosting: super::RemoteHostingFactory,
         amd_factory: crate::amd::AmdFactory,
     ) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         let events = self.host.events.clone();
-        let remote = self.host.remote.clone();
+        let remote = self
+            .host
+            .remote
+            .clone()
+            .map(|config| hosting(config, self.time.clone(), self.spawner.clone()));
         let forwarding = remote.clone();
         let usage = Arc::clone(&self.host.usage);
         let hooks = self.host.hooks.clone();
@@ -396,7 +389,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         // The drain: one event per call, in driver order; a hook call handed to the host loop in
         // that order, then awaited on its own task.
-        let opening = self.open(capture_run, executor, Some(amd_factory), move |mut runner: SessionRunner| {
+        let opening = self.open(capture_run, executor, remote.clone(), Some(amd_factory), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {
@@ -902,12 +895,12 @@ impl SessionApi {
         // A session never started has nothing to wait for, and its turn-detector stream stays the
         // host's to close.
         let was_running = self.api().is_ok();
+        let remote = self.remote_host();
         let closing = self.close(reason, drain, None);
         let close_io = self.close_io();
         let clock = self.time.clock();
         let eot = self.host.eot.clone().filter(|_| was_running);
         let hooks = self.host.hooks.clone().filter(|_| was_running);
-        let remote = self.host.remote.clone();
         let closed = Arc::clone(&self.host.closed);
         Ok(Reply::new(async move {
             closed

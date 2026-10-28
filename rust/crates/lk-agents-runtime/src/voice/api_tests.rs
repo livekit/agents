@@ -112,7 +112,7 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let drain_ended = Arc::new(AtomicBool::new(false));
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
     let opening = api
-        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     match ev {
@@ -191,6 +191,7 @@ async fn a_session_nobody_observes_keeps_no_journal() {
             false,
             Box::new(Observing(Executor::default(), observed)),
             None,
+            None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
@@ -223,7 +224,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let (room, fixed) = fake_room("agent-state");
     let api = room_only(fixed, None);
     let opening = api
-        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -262,7 +263,7 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
-        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -528,7 +529,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 /// A session opened over a host that answers every hook at once.
 async fn running(api: SessionApi) -> SessionApi {
     let opening = api
-        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -682,4 +683,151 @@ fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionKwargs {
         session_close_transcript_timeout: 2.0,
         conn_options: Default::default(),
     }
+}
+
+/// A remote host whose transport records whether opening was attempted after session close.
+struct RemoteTransport {
+    started: AtomicBool,
+    closed: AtomicBool,
+}
+
+impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
+    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async move {
+            self.started.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn send_message<'a>(
+        &'a self,
+        _message: &'a livekit_protocol::agent::AgentSessionMessage,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn send_message_nowait(&self, _message: &livekit_protocol::agent::AgentSessionMessage) {}
+
+    fn recv(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            Option<livekit_protocol::agent::AgentSessionMessage>,
+            lk_agents_abi::errors::HostError,
+        >,
+    > {
+        Box::pin(std::future::pending())
+    }
+
+    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move { self.closed.store(true, Ordering::SeqCst) })
+    }
+}
+
+struct UnusedRemotePort;
+
+#[async_trait::async_trait]
+impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
+    async fn chat_history(
+        &self,
+    ) -> Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::errors::HostError> {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn agent_info(
+        &self,
+    ) -> Result<lk_agents_abi::worker::remote_session::AgentInfo, lk_agents_abi::errors::HostError>
+    {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn run_input(
+        &self,
+        _text: &str,
+    ) -> Result<lk_agents_abi::worker::remote_session::RunOutcome, lk_agents_abi::errors::HostError>
+    {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn session_state(
+        &self,
+    ) -> Result<lk_agents_abi::worker::remote_session::SessionState, lk_agents_abi::errors::HostError>
+    {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn rtc_stats(
+        &self,
+    ) -> Result<
+        Option<lk_agents_abi::worker::remote_session::RtcStats>,
+        lk_agents_abi::errors::HostError,
+    > {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn session_usage(
+        &self,
+    ) -> Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, lk_agents_abi::errors::HostError>
+    {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    fn framework_info(&self) -> (String, String) {
+        ("rust".to_owned(), "test".to_owned())
+    }
+    async fn update_io(
+        &self,
+        _update: lk_agents_abi::worker::remote_session::IoUpdate,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+    async fn finalize_simulation(
+        &self,
+        _verdict: lk_agents_abi::worker::remote_session::SimulationVerdict,
+    ) -> Result<
+        lk_agents_abi::worker::remote_session::VerdictOutcome,
+        lk_agents_abi::errors::HostError,
+    > {
+        unreachable!("the lifecycle test sends no remote requests")
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_during_opening_retires_only_the_accepted_remote_host() {
+    let api = unobserved(fake_room("remote-close-during-opening").1, None);
+    let make_host = || {
+        let transport = Arc::new(RemoteTransport {
+            started: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+        });
+        let host = Arc::new(super::remote_session::driver::Hosting::new(
+            Arc::new(UnusedRemotePort),
+            transport.clone(),
+            None,
+            api.time().clock(),
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            Box::new(|| 1.0),
+        ));
+        (host, transport)
+    };
+    let (accepted, accepted_transport) = make_host();
+    let (refused, refused_transport) = make_host();
+    let opening = api
+        .open(false, Box::<Executor>::default(), Some(accepted.clone()), None, |_| {
+            Box::pin(async {})
+        })
+        .expect("the first opening is accepted");
+    assert!(matches!(
+        api.open(false, Box::<Executor>::default(), Some(refused.clone()), None, |_| Box::pin(
+            async {}
+        )),
+        Err(OpenRefused::AlreadyStarted),
+    ));
+    api.aclose("user_initiated", false).unwrap().await;
+    // The still-pending startup must not reopen this host after close has returned.
+    accepted.start().await.unwrap();
+    refused.start().await.unwrap();
+    let accepted_started = accepted_transport.started.load(Ordering::SeqCst);
+    let refused_started = refused_transport.started.load(Ordering::SeqCst);
+    accepted.aclose().await;
+    refused.aclose().await;
+    drop(opening);
+    assert!(!accepted_started, "closing during opening lost the accepted remote host");
+    assert!(refused_started, "a refused opening closed a host the session never owned");
+    assert!(refused_transport.closed.load(Ordering::SeqCst));
 }

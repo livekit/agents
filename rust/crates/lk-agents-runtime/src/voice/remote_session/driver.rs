@@ -2,12 +2,9 @@
 //! correlation and timeouts (`voice/remote_session.py`'s `SessionHost` and `RemoteSession`).
 //! Tasks go through the injected [`Spawner`]; every wait is bounded on the injected [`Clock`].
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,11 +30,8 @@ pub struct HostRuntime {
 struct HostShared {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     events: Mutex<Option<mpsc::UnboundedSender<proto::AgentSessionMessage>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<proto::AgentSessionMessage>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<HostState>,
     handlers: Arc<TaskSet>,
     recv: Arc<TaskSet>,
@@ -53,8 +47,6 @@ struct HostState {
 
 /// `voice/remote_session.py`'s `SessionHost`, running in Rust. Events queue from construction.
 impl HostRuntime {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         HostRuntime {
@@ -190,7 +182,6 @@ pub const SHUTDOWN_DRAIN: Duration = Duration::from_secs(3);
 pub struct Hosting {
     host: Arc<HostRuntime>,
     spawner: Arc<dyn Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Set by the first close: a start after it (the session closed while opening) is a no-op.
     closing: std::sync::atomic::AtomicBool,
     /// Whether the close has run to its end; every close waits for it.
@@ -273,9 +264,7 @@ impl Hosting {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 async fn write_loop(
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     mut rx: mpsc::UnboundedReceiver<proto::AgentSessionMessage>,
     transport: Arc<dyn SessionTransport>,
 ) {
@@ -338,8 +327,7 @@ async fn handle_request(
     if let Err(e) = outcome {
         log::warn!(target: LOG, request_id = req.request_id.as_str(), error = e.to_string().as_str();
             "error handling session request");
-        let _ =
-            transport.send_message(&SessionHost::internal_error_response(&req.request_id)).await;
+        let _ = transport.send_message(&super::internal_error_response(&req.request_id)).await;
     }
 }
 
@@ -383,9 +371,7 @@ pub struct ClientRuntime {
 struct ClientShared {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<ClientState>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_pending_requests` (`remote_session.py:981`), by request id.
     pending: Mutex<HashMap<String, oneshot::Sender<proto::SessionResponse>>>,
     recv: Arc<TaskSet>,
@@ -402,14 +388,12 @@ struct ClientState {
 /// response stream.
 struct IdMint {
     keys: std::collections::hash_map::RandomState,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     counter: AtomicU64,
 }
 
 impl IdMint {
     const ALPHABET: &'static [u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new() -> Self {
         IdMint { keys: Default::default(), counter: AtomicU64::new(0) }
     }
@@ -439,7 +423,6 @@ impl Drop for Unregister<'_> {
 /// `voice/remote_session.py`'s `RemoteSession`, running in Rust: ids, correlation, timeouts and the
 /// ready poll.
 impl ClientRuntime {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         ClientRuntime {
             shared: Arc::new(ClientShared {
@@ -630,28 +613,21 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::super::{
-        AgentInfo, ChatItem, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict,
-        VerdictOutcome,
+        AgentInfo, IoUpdate, RtcStats, RunOutcome, SessionState, SimulationVerdict, VerdictOutcome,
     };
     use super::*;
     use async_trait::async_trait;
+    use lk_agents_abi::ChatItem;
     use lk_agents_abi::metrics::usage::ModelUsage;
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::atomic::AtomicBool;
-    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     use tokio::sync::Mutex as AsyncMutex;
 
     /// Two linked transports: what one sends, the other receives.
     struct Pipe {
-        #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
         tx: mpsc::UnboundedSender<proto::AgentSessionMessage>,
-        #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
         rx: AsyncMutex<mpsc::UnboundedReceiver<proto::AgentSessionMessage>>,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         fail: AtomicBool,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         closed: AtomicBool,
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         sent: Mutex<Vec<proto::AgentSessionMessage>>,
     }
 
@@ -686,8 +662,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn pair() -> (Arc<Pipe>, Arc<Pipe>) {
         let (a_tx, a_rx) = mpsc::unbounded_channel();
         let (b_tx, b_rx) = mpsc::unbounded_channel();
@@ -743,7 +717,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     struct Events(Mutex<Vec<String>>);
     impl ClientSink for Events {
         fn event(&self, name: &str, _event: &proto::AgentSessionEvent) {
@@ -758,7 +731,6 @@ mod tests {
         )
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn setup(release: Arc<Notify>) -> (HostRuntime, ClientRuntime, Arc<Pipe>, Arc<Events>) {
         let (ht, ct) = pair();
         let (clock, spawner) = rt();
@@ -815,7 +787,6 @@ mod tests {
 
     // Catches: aclose cancelling in-flight handlers instead of draining them, or a straggler not
     // reported by its type.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn aclose_drains_a_handler_that_finishes_and_names_one_that_does_not() {
         let release = Arc::new(Notify::new());
@@ -892,8 +863,6 @@ mod tests {
     }
 
     // Catches: a send failure reported as a bare timeout, or a late transport not polled through.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn wait_for_ready_raises_the_latched_send_error_and_polls_through_a_late_transport() {
         let (ht, ct) = pair();
@@ -919,8 +888,6 @@ mod tests {
 
     // Catches: a timed-out request leaving its slot, two requests sharing an id, or a close
     // leaving a pending caller hanging.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_client_times_out_mints_distinct_ids_and_cancels_at_close() {
         let (_ht, ct) = pair();
@@ -954,5 +921,27 @@ mod tests {
             .collect();
         assert_ne!(ids[0], ids[1]);
         assert!(ids.iter().all(|i| i.starts_with("req_") && i.len() == 15), "{ids:?}");
+    }
+}
+
+impl lk_agents_abi::worker::remote_session::SessionHosting for Hosting {
+    fn forward(&self, event: &lk_agents_abi::voice::events::HostWire) {
+        Hosting::forward(self, event);
+    }
+
+    fn forward_error(&self, message: String) {
+        Hosting::forward_error(self, message);
+    }
+
+    fn forward_tools_executed(&self, event: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
+        Hosting::forward_tools_executed(self, event);
+    }
+
+    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(Hosting::start(self))
+    }
+
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(Hosting::aclose(self))
     }
 }

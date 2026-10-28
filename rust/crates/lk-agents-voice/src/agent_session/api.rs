@@ -120,22 +120,23 @@ impl SessionApi {
         &self,
         capture_run: bool,
         mut executor: Box<dyn crate::agent_session::SessionExecutor>,
+        remote: Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>,
         amd_factory: Option<crate::amd::AmdFactory>,
         drain: impl FnOnce(SessionRunner) -> lk_agents_abi::BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<
         impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
         OpenRefused,
     > {
-        // Its own statement: an inline `MutexGuard` would live through the `match`, and the
-        // already-started arm's relock would deadlock.
-        let current = std::mem::replace(&mut *self.lock(), Stage::Closed);
-        let ready = match current {
-            Stage::Ready(ready) => *ready,
-            Stage::Running(r) => {
-                *self.lock() = Stage::Running(r);
-                return Err(OpenRefused::AlreadyStarted);
+        let ready = match &mut *self.lock() {
+            stage @ Stage::Ready(_) => {
+                let Stage::Ready(ready) = std::mem::replace(stage, Stage::Opening(remote.clone()))
+                else {
+                    unreachable!()
+                };
+                *ready
             }
-            Stage::Closed => return Err(OpenRefused::Closed),
+            Stage::Opening(_) | Stage::Running(_) => return Err(OpenRefused::AlreadyStarted),
+            Stage::Closed(_) => return Err(OpenRefused::Closed),
         };
 
         let room_io = Arc::clone(&self.room_io);
@@ -203,6 +204,7 @@ impl SessionApi {
                 chat_ctx,
                 peer,
                 amd: None,
+                remote,
                 amd_factory,
                 tasks,
                 drained: Some(drained),
@@ -230,7 +232,7 @@ impl SessionApi {
                 };
                 let _ = r.api.send(Command::Recorder(cmd));
             }
-            Stage::Closed => {}
+            Stage::Opening(_) | Stage::Closed(_) => {}
         }
     }
 
@@ -249,8 +251,18 @@ impl SessionApi {
     ) -> Result<R, SessionRefused> {
         match &mut *self.lock() {
             Stage::Running(r) => f(r),
-            Stage::Ready(_) => Err(SessionRefused::NotStarted),
-            Stage::Closed => Err(SessionRefused::Closed),
+            Stage::Ready(_) | Stage::Opening(_) => Err(SessionRefused::NotStarted),
+            Stage::Closed(_) => Err(SessionRefused::Closed),
+        }
+    }
+
+    fn remote_host(
+        &self,
+    ) -> Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>> {
+        match &*self.lock() {
+            Stage::Opening(remote) | Stage::Closed(remote) => remote.clone(),
+            Stage::Ready(_) => None,
+            Stage::Running(running) => running.remote.clone(),
         }
     }
 
@@ -357,13 +369,20 @@ impl SessionApi {
         error: Option<crate::events::ErrorEvent>,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let running = match &mut *self.lock() {
-            Stage::Running(r) => Some((r.api.clone(), r.drained.take(), r.tasks.clone())),
-            Stage::Ready(_) | Stage::Closed => None,
+            Stage::Running(r) => {
+                Some((r.api.clone(), r.drained.take(), r.tasks.clone(), r.remote.clone()))
+            }
+            stage @ Stage::Opening(_) => {
+                let Stage::Opening(remote) = stage else { unreachable!() };
+                *stage = Stage::Closed(remote.clone());
+                None
+            }
+            Stage::Ready(_) | Stage::Closed(_) => None,
         };
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, tasks)) = running else { return };
+            let Some((api, drained, tasks, remote)) = running else { return };
             let _ = api.send(Command::Close(Close { reason, drain, error }));
             // Every close phase is bounded on the session clock; this watchdog is a backstop. On a
             // virtual clock the host stopped advancing, so the clock is moved here.
@@ -374,7 +393,7 @@ impl SessionApi {
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on the
             // host stream, and the drain only ends when every sender is gone.
-            *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Closed;
+            *stage.lock().unwrap_or_else(|p| p.into_inner()) = Stage::Closed(remote);
             // Then the drain: the host's `close` is queued before this future completes.
             if let Some(drained) = drained {
                 let _ = time.timeout(CLOSE_TIMEOUT, drained).await;
@@ -665,8 +684,9 @@ pub enum OpenRefused {
 /// One enum, so "started twice" is a named error.
 enum Stage {
     Ready(Box<Ready>),
+    Opening(Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>),
     Running(Running),
-    Closed,
+    Closed(Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>),
 }
 
 struct Ready {
@@ -675,6 +695,7 @@ struct Ready {
 }
 
 struct Running {
+    remote: Option<Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>>,
     api: Tx,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
@@ -704,6 +725,23 @@ impl Running {
     }
 }
 
+/// Live inputs handed to the runtime when a remote session host is opened.
+#[derive(Clone)]
+pub struct RemoteSessionConfig {
+    pub port: Arc<dyn lk_agents_abi::worker::remote_session::SessionPort>,
+    pub room: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
+    pub console: Option<Arc<dyn lk_agents_abi::voice::console::ConsolePort>>,
+}
+
+pub type RemoteHostingFactory = Box<
+    dyn FnOnce(
+            RemoteSessionConfig,
+            Timebase,
+            Arc<dyn Spawner>,
+        ) -> Arc<dyn lk_agents_abi::worker::remote_session::SessionHosting>
+        + Send,
+>;
+
 /// Owns the turn-detector stream it closes once the loop is gone (the driver's legs never owned
 /// it); a session built with no options object answers `None`.
 #[derive(Default)]
@@ -721,7 +759,7 @@ struct HostParts {
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
     call_room: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The remote session protocol this session serves, if it does.
-    remote: Option<Arc<crate::remote_session::driver::Hosting>>,
+    remote: Option<RemoteSessionConfig>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn SessionJob>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]

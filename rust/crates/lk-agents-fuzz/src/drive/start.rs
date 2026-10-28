@@ -34,10 +34,8 @@ impl Run {
         let adaptive = setup.interruption
             && matches!(
                 resolve_interruption_detector(&InterruptionGateInputs {
-                    stt: (setup.stt && setup.realtime.is_none()).then_some(SttGate {
-                        aligned_transcript: true,
-                        streaming: true
-                    }),
+                    stt: (setup.stt && setup.realtime.is_none())
+                        .then_some(SttGate { aligned_transcript: true, streaming: true }),
                     realtime: setup.realtime.is_some().then_some(RealtimeGate {
                         server_turn_detection: !setup.vad && !setup.stt
                     }),
@@ -56,9 +54,7 @@ impl Run {
         // person's track, minted when they join.
         let legs = setup.room_legs;
         // The console's socket is a leg of the host's like the fakes, so the room's stay off.
-        let console = setup
-            .console
-            .then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
+        let console = setup.console.then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
         let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
@@ -103,11 +99,7 @@ impl Run {
                 setup.tts_alignment,
             ) as Arc<Tts>
         });
-        let providers = Legs {
-            llm: llm.clone(),
-            tts: tts.clone(),
-            stt: stt.clone(),
-        };
+        let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
         let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
         // The avatar worker is in the room before its stream is opened to it. Its reports cross
         // as they are sent, so the sink gives up on one after a clear as in production.
@@ -126,10 +118,7 @@ impl Run {
         });
         let api = Arc::new(
             SessionApi::host_new(
-                Arc::new(FixedRoom {
-                    rtc: room.clone(),
-                    time: time.clone(),
-                }),
+                Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
                 Some(instructions(&setup.instructions)),
                 None,
                 OPENING_AGENT.into(),
@@ -138,9 +127,7 @@ impl Run {
                 // The thread's storage: the voice storage core runs in the storage survey.
                 None,
                 stt,
-                setup
-                    .vad
-                    .then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
+                setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
                 llm,
                 setup.realtime.map(|server| {
                     let vad = server.turn_detection.then_some(if server.semantic {
@@ -196,9 +183,7 @@ impl Run {
                 None,
                 None,
                 setup.agent_aligned_transcript,
-                setup
-                    .eot
-                    .then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
+                setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
                 adaptive.then(|| {
                     Arc::new(fakes::FakeInterruptionSource(registry.clone()))
                         as Arc<dyn InterruptionSource>
@@ -215,9 +200,7 @@ impl Run {
                 nodes.stt,
                 match &console {
                     Some((io, _)) => Some(io.clone().as_audio_input()),
-                    None => host_mic
-                        .as_ref()
-                        .map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
+                    None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
                 },
                 match &console {
                     Some((io, _)) => Some(io.clone().as_audio_output()),
@@ -237,8 +220,7 @@ impl Run {
                     .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
                 setup.video_sampler.then_some((1.0, 0.3)),
                 false,
-                legs.is_none()
-                    .then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
+                legs.is_none().then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
                 false,
                 setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
                 setup.max_unrecoverable_errors,
@@ -259,9 +241,7 @@ impl Run {
                     }
                 }),
                 // `KeytermDetectionOptions(llm=...)`: the detection LLM the host resolved.
-                setup
-                    .keyterm_detection
-                    .map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+                setup.keyterm_detection.map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
                 None,
                 lk_agents_abi::Maybe::NotGiven,
                 Some("AS_fuzz".into()),
@@ -292,11 +272,7 @@ impl Run {
             let mut instant = (tokio::time::Instant::now(), 0u32);
             let step = Box::new(move |step: &Step| {
                 let now = tokio::time::Instant::now();
-                instant = if now == instant.0 {
-                    (now, instant.1 + 1)
-                } else {
-                    (now, 0)
-                };
+                instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
                 let at = step_stamps.next();
                 if instant.1 >= NO_PROGRESS_STEPS {
                     let detail = format!(
@@ -320,27 +296,28 @@ impl Run {
             });
             api.probe(Probe { step, host_event });
         }
-        api.start(false, Box::new(super::executor::Handover::new(cores_tx)), fakes::amd::spawn)
-            .expect("a new session starts")
-            .await
-            .expect("the session started");
+        api.start(
+            false,
+            Box::new(super::executor::Handover::new(cores_tx)),
+            Box::new(fakes::remote_session::hosting),
+            fakes::amd::spawn,
+        )
+        .expect("a new session starts")
+        .await
+        .expect("the session started");
         let cores = cores_rx.await.expect("the probe takes the session's cores");
         // The session started its host on the console's socket, which then carries the microphone.
         let console = console.map(|(_, cli)| cli);
-        let console_mic = console
-            .as_ref()
-            .map(|cli| (registry.new_mic(), cli.clone()));
+        let console_mic = console.as_ref().map(|cli| (registry.new_mic(), cli.clone()));
         // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
         // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
             use lk_agents_abi::voice::amd::{AmdConfigKwargs, TranscriptSource};
             let llm = fakes::FakeLlm::new(registry.clone());
-            let stt = amd
-                .own_stt
-                .then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
-            let activity = api
-                .resolved_options()
-                .map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
+            let stt =
+                amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
+            let activity =
+                api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
             let cfg = AmdConfigKwargs {
                 max_endpointing_delay: Some(
                     lk_agents_voice::amd::classifier::resolve_max_endpointing_delay_for_host(
@@ -358,8 +335,7 @@ impl Run {
                 ivr_detection: amd.ivr_detection,
                 ..AmdConfigKwargs::default()
             };
-            api.host_attach_amd(cfg, llm, None, stt, None)
-                .expect("attach the AMD");
+            api.host_attach_amd(cfg, llm, None, stt, None).expect("attach the AMD");
         }
         let mut run = Run {
             api,
@@ -400,8 +376,7 @@ impl Run {
             setup: setup.clone(),
             record: Recording::default(),
         };
-        run.record
-            .set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
+        run.record.set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
         run.record.set_transcript(TranscriptSetup {
             synchronized: setup.sync_transcription,
             aligned: setup.agent_aligned_transcript.or(setup.aligned_transcript) == Some(true),
@@ -418,14 +393,9 @@ impl Run {
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
             let player = Arc::new(BackgroundAudioPlayer::for_host(SAMPLE_RATE, 1, 2_400, 200));
-            let room = Arc::new(FixedRoom {
-                rtc: run.room.clone(),
-                time: run.time.clone(),
-            });
+            let room = Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone() });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
-            let _ = player
-                .start_for_host(room, fakes::HALF, ambient, true, None)
-                .await;
+            let _ = player.start_for_host(room, fakes::HALF, ambient, true, None).await;
             run.background = Some(player);
         }
         if setup.avatar {
@@ -446,10 +416,7 @@ impl Run {
             run.avatar = Some(worker);
         }
         // The person joins the call the agent just answered; the callee AMD awaits may not have.
-        if setup
-            .amd
-            .map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing)
-        {
+        if setup.amd.map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing) {
             run.join_caller();
         }
         run.collect();
@@ -461,15 +428,8 @@ impl Run {
     /// the agent was there, as the setup says. AMD's callee joins as the setup's answer says: a
     /// SIP call still ringing, and with their audio even when no leg of the session hears it.
     pub(super) fn join_caller(&mut self) {
-        let sip = self
-            .setup
-            .amd
-            .is_some_and(|amd| amd.answer == AmdAnswer::Sip);
-        let kind = if sip {
-            ParticipantKind::Sip
-        } else {
-            ParticipantKind::Standard
-        };
+        let sip = self.setup.amd.is_some_and(|amd| amd.answer == AmdAnswer::Sip);
+        let kind = if sip { ParticipantKind::Sip } else { ParticipantKind::Standard };
         let caller = self.room.add_participant(CALLER, kind);
         if sip {
             caller.set_attribute(lk_agents_abi::voice::amd::SIP_CALL_STATUS_ATTR, "ringing");
@@ -513,17 +473,7 @@ impl Run {
             }
         }
         let nth = self.registry.new_mic();
-        self.mics.insert(
-            nth,
-            (
-                Mic::Room {
-                    track: mic,
-                    burst: (0, 0),
-                    read: None,
-                },
-                0,
-            ),
-        );
+        self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0), read: None }, 0));
         // `RoomOptions(video_input=True)`: their camera, which the case feeds like the host's.
         if self.setup.room_camera {
             let camera = caller.publish_track(
@@ -590,9 +540,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         stt_context_options: HostValue::NotGiven,
         tool_handling: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
-        use_tts_aligned_transcript: setup
-            .aligned_transcript
-            .map_or(Maybe::NotGiven, Maybe::Given),
+        use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
         tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
         min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
         expressive: Default::default(),
@@ -607,11 +555,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
                 retry_interval: secs(c.interval_ms),
                 ..lk_agents_abi::ApiConnectOptions::default()
             };
-            SessionConnOptions {
-                stt: leg(c.stt),
-                llm: leg(c.llm),
-                tts: leg(c.tts),
-            }
+            SessionConnOptions { stt: leg(c.stt), llm: leg(c.llm), tts: leg(c.tts) }
         }),
     }
 }
@@ -625,19 +569,12 @@ pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
 pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
 pub(super) fn instructions(common: &str) -> Instructions {
-    Instructions {
-        common: common.into(),
-        audio: None,
-        text: None,
-    }
+    Instructions { common: common.into(), audio: None, text: None }
 }
 
 /// The tools advertised to the model; each is run by the controlled tool runner.
 pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
-    tools
-        .iter()
-        .map(|name| fakes::tools::tool_spec(name))
-        .collect()
+    tools.iter().map(|name| fakes::tools::tool_spec(name)).collect()
 }
 
 /// A new agent with the same fakes behind it, as `update_agent` and `enter_task` take it. Every
@@ -669,9 +606,7 @@ pub(crate) fn overrides(setup: &Setup, agent: &str) -> Option<NodeSetup> {
     if agent == OPENING_AGENT {
         return Some(on);
     }
-    let bits = agent
-        .bytes()
-        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let bits = agent.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
     let flip = |bit: u32| bits & (1 << bit) != 0;
     Some(NodeSetup {
         llm: on.llm ^ flip(0),
@@ -732,11 +667,8 @@ pub(super) fn frame(
         args.transcription_node = nodes.transcription;
         args.realtime_audio_output_node = nodes.realtime_audio;
         args.stt = Maybe::Given(legs.stt.clone());
-        args.llm = if setup.realtime.is_none() {
-            Maybe::Given(legs.llm.clone())
-        } else {
-            Maybe::NotGiven
-        };
+        args.llm =
+            if setup.realtime.is_none() { Maybe::Given(legs.llm.clone()) } else { Maybe::NotGiven };
         args.tts = Maybe::Given(legs.tts.clone());
     }
     args
@@ -775,10 +707,7 @@ fn plain_frame(
 
 /// The session's recogniser: one that takes keyterms when the setup's detection says so.
 pub(super) fn session_stt(setup: &Setup, registry: &Arc<Registry>, connect: Duration) -> Arc<Stt> {
-    if setup
-        .keyterm_detection
-        .is_some_and(|k| k.stt_takes_keyterms)
-    {
+    if setup.keyterm_detection.is_some_and(|k| k.stt_takes_keyterms) {
         fakes::FakeStt::taking_keyterms(registry.clone(), connect)
     } else {
         fakes::FakeStt::new(registry.clone(), connect)

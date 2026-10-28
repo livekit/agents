@@ -7,7 +7,7 @@ use lk_agents_test_support::recorder::RecorderProbe;
 #[tokio::test(start_paused = true)]
 async fn reattaching_one_physical_output_does_not_duplicate_recorder_playback() {
     let api = unobserved(fake_room("recorder-output-identity").1, None);
-    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed(None)) else {
         panic!("session must be ready");
     };
     let (cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();

@@ -2,7 +2,7 @@
 //! and the TUI, and reaches the agent over one TCP socket carrying length-prefixed
 //! `AgentSessionMessage`s. [`ConsoleIo`] is that socket as the session sees it: the
 //! [`SessionTransport`] and [`ConsoleSink`] the session's remote session host
-//! ([`HostRuntime`](lk_agents_voice::remote_session::driver::HostRuntime)) runs on, and the
+//! ([`HostRuntime`](super::remote_session::driver::HostRuntime)) runs on, and the
 //! session's audio input and output legs. What the legs account for is
 //! [`ConsolePlayback`]'s; only the socket is here.
 
@@ -80,9 +80,7 @@ impl ConsolePort for ConsoleIo {
 
 impl ConsoleIo {
     fn send(&self, message: Message) {
-        let msg = proto::AgentSessionMessage {
-            message: Some(message),
-        };
+        let msg = proto::AgentSessionMessage { message: Some(message) };
         if let Some(tx) = self.outgoing.lock().unwrap().as_ref() {
             let _ = tx.send(frame(&msg.encode_to_vec()));
         }
@@ -222,10 +220,8 @@ impl AudioOutput for ConsoleIo {
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
             let now = lk_agents_abi::unix_now();
-            let segment = self
-                .tracker
-                .current_segment()
-                .ok_or(IoError::PlaybackSegmentUnavailable)?;
+            let segment =
+                self.tracker.current_segment().ok_or(IoError::PlaybackSegmentUnavailable)?;
             let (message, opened) = self.playback.lock().unwrap().capture(f, segment)?;
             if opened {
                 self.tracker.report_started(segment, now);
@@ -236,15 +232,11 @@ impl AudioOutput for ConsoleIo {
     }
 
     fn flush_segment(&self) {
-        self.send(Message::AudioPlaybackFlush(
-            console_io::AudioPlaybackFlush {},
-        ));
+        self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
     }
 
     fn clear_buffer(&self) {
-        self.send(Message::AudioPlaybackClear(
-            console_io::AudioPlaybackClear {},
-        ));
+        self.send(Message::AudioPlaybackClear(console_io::AudioPlaybackClear {}));
         self.finish();
     }
 }
@@ -269,9 +261,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let io = Arc::new(ConsoleIo::new(addr));
-        let transport = io
-            .clone()
-            .as_transport(Arc::new(lk_agents_abi::TokioSpawner::current()));
+        let transport = io.clone().as_transport(Arc::new(lk_agents_abi::TokioSpawner::current()));
         transport.start().await.unwrap();
         let (mut cli, _) = listener.accept().await.unwrap();
 
@@ -281,21 +271,14 @@ mod tests {
             num_channels: 1,
             samples_per_channel: 480,
         };
-        cli.write_all(&message(Message::AudioInput(mic)))
-            .await
-            .unwrap();
+        cli.write_all(&message(Message::AudioInput(mic))).await.unwrap();
         let Some(Message::AudioInput(f)) = transport.recv().await.unwrap().unwrap().message else {
             panic!("not the microphone's frame")
         };
         io.push_input_frame(&f);
-        assert_eq!(
-            io.next_frame().await.unwrap().unwrap().samples_per_channel,
-            480
-        );
+        assert_eq!(io.next_frame().await.unwrap().unwrap().samples_per_channel, 480);
 
-        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480))
-            .await
-            .unwrap();
+        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480)).await.unwrap();
         AudioOutputExt::flush(&*io);
         let mut decoder = FrameDecoder::new();
         let mut kinds = Vec::new();
@@ -304,11 +287,7 @@ mod tests {
             let n = cli.read(&mut chunk).await.unwrap();
             decoder.push(&chunk[..n]);
             while let Some(body) = decoder.next_frame().unwrap() {
-                kinds.push(
-                    proto::AgentSessionMessage::decode(body.as_slice())
-                        .unwrap()
-                        .message,
-                );
+                kinds.push(proto::AgentSessionMessage::decode(body.as_slice()).unwrap().message);
             }
         }
         assert!(matches!(kinds[0], Some(Message::AudioOutput(_))));
@@ -316,9 +295,7 @@ mod tests {
 
         io.playout_finished();
         assert!(
-            tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout())
-                .await
-                .is_err(),
+            tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout()).await.is_err(),
             "an unidentified acknowledgement must not settle the admitted segment"
         );
         io.clear_buffer();
@@ -330,15 +307,11 @@ mod tests {
             "a local clear has no client playback receipt"
         );
 
-        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480))
-            .await
-            .unwrap();
+        io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480)).await.unwrap();
         AudioOutputExt::flush(&*io);
         io.playout_finished();
         assert!(
-            tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout())
-                .await
-                .is_err(),
+            tokio::time::timeout(Duration::from_millis(10), io.wait_for_playout()).await.is_err(),
             "an old unidentified acknowledgement settled the replacement segment"
         );
         io.clear_buffer();

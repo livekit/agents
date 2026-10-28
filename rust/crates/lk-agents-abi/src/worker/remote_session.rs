@@ -200,3 +200,14 @@ pub type SimulationVerdict = (bool, String);
 
 /// `(verdict, None)` or `(None, error)`.
 pub type VerdictOutcome = (Option<SimulationVerdict>, Option<String>);
+
+/// The runtime-owned remote host attached to one live voice session.
+pub trait SessionHosting: Send + Sync {
+    fn forward(&self, event: &crate::voice::events::HostWire);
+    fn forward_error(&self, message: String);
+    fn forward_tools_executed(&self, event: &crate::voice::events::ToolsExecutedEvent);
+    /// Start once; a host already closing cannot reopen its transport.
+    fn start(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+    /// Drain and close once. Repeated or cancelled callers join the same cleanup.
+    fn aclose(&self) -> crate::BoxFuture<'_, ()>;
+}

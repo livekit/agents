@@ -1,14 +1,12 @@
 //! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
 //! one message per stream, read in the order the streams opened, written one stream at a time.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt};
 use prost::Message as _;
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
@@ -22,12 +20,9 @@ struct Inner {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<State>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// The streams the topic delivers; only the receive loop reads.
     incoming: AsyncMutex<Option<Receiver<ByteStream>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// One stream at a time: concurrent writers interleave on the same topic.
     sending: AsyncMutex<()>,
 }
@@ -39,7 +34,6 @@ struct State {
 }
 
 impl RoomTransport {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(room: Arc<dyn RtcRoom>, clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         RoomTransport(Arc::new(Inner {
             room,
@@ -204,11 +198,9 @@ impl SessionTransport for RoomTransport {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `utils.shortuuid("AS_")`.
 fn stream_name() -> String {
     use std::hash::BuildHasher;
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = std::collections::hash_map::RandomState::new()
         .hash_one(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -235,7 +227,6 @@ mod tests {
     // Catches: messages read out of order or lost to a malformed one, a sent message not on the
     // topic as one closed stream, a send on a disconnected room not raised, or a close leaving
     // the topic registered or a receive waiting.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_room_carries_one_message_per_stream() {
         let (rtc, clock) = FakeRtc::with_virtual_clock();

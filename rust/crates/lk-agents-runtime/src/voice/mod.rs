@@ -8,6 +8,7 @@ pub mod console;
 mod effects;
 mod legs;
 mod recorder;
+pub mod remote_session;
 mod storage;
 
 pub use legs::Executor;

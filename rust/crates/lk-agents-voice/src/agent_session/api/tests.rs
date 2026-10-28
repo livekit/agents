@@ -50,7 +50,7 @@ async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_sess
     use lk_agents_abi::llm::realtime as rt;
 
     let api = unobserved(fake_room("realtime-timeout-identity").1, None);
-    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed(None)) else {
         panic!("session must be ready");
     };
     let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();
@@ -95,7 +95,7 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
     let api = unobserved(fake_room("late-realtime-transcript").1, None);
-    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
+    let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed(None)) else {
         panic!("session must be ready");
     };
     let (mut cores, _) = ready.builder.start(&mut NoLegs).await.unwrap();

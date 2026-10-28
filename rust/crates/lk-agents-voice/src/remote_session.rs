@@ -2,11 +2,8 @@ pub use lk_agents_abi::llm::chat_context::protocol::{
     encode_chat_item, encode_epoch_secs, encode_metrics, encode_role, encode_timestamp,
 };
 pub mod console;
-pub mod driver;
-pub mod room;
 
 use lk_agents_abi::ChatItem;
-use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::AgentState;
@@ -18,8 +15,6 @@ use lk_agents_abi::worker::remote_session::{
     FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
 };
 use prost::Message as _;
-use std::sync::Arc;
-use std::time::SystemTime;
 
 /// The option keys a [`SessionState`] row's `options` carries, in the reference's order, and whether each is
 /// a record the host expands first. Only the key set is pinned: values are Python `str()` output,
@@ -366,166 +361,128 @@ pub fn request_name(request: &proto::session_request::Request) -> &'static str {
     }
 }
 
-pub struct SessionHost {
-    port: Arc<dyn SessionPort>,
-    sdk: (String, String),
+/// The result of one remote session operation, before its protocol encoding.
+pub enum SessionReply {
+    Pong,
+    ChatHistory(Vec<ChatItem>),
+    AgentInfo(AgentInfo),
+    RunInput(RunOutcome),
+    SessionState(SessionState),
+    RtcStats(Option<RtcStats>),
+    SessionUsage(Vec<ModelUsage>),
+    FrameworkInfo(String, String),
+    UpdateIo,
+    FinalizeSimulation(VerdictOutcome),
 }
 
-impl SessionHost {
-    pub fn new(port: Arc<dyn SessionPort>) -> Self {
-        let sdk = port.framework_info();
-        SessionHost { port, sdk }
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    /// `_handle_request` (`remote_session.py:715`). `Err` is a host failure. `Ok(None)` for an
-    /// unset or unknown arm: the reference sends no response (the client times out); kept for parity.
-    pub async fn handle_request(
-        &self,
-        req: &proto::SessionRequest,
-    ) -> Result<Option<proto::AgentSessionMessage>, HostError> {
-        use proto::session_request::Request;
-        use proto::session_response::Response;
-
-        let request_id = req.request_id.clone();
-        let Some(request) = req.request.as_ref() else { return Ok(None) };
-        let (error, response) = match request {
-            Request::Ping(_) => (None, Response::Pong(proto::session_response::Pong {})),
-
-            Request::GetChatHistory(_) => (
-                None,
-                Response::GetChatHistory(proto::session_response::GetChatHistoryResponse {
-                    items: self.port.chat_history().await?.iter().map(encode_chat_item).collect(),
+/// Encode an observed operation result with the answer's supplied wall time.
+pub fn encode_session_reply(
+    request_id: String,
+    reply: SessionReply,
+    now: f64,
+) -> proto::AgentSessionMessage {
+    use proto::session_response::Response;
+    let (error, response) = match reply {
+        SessionReply::Pong => (None, Response::Pong(proto::session_response::Pong {})),
+        SessionReply::ChatHistory(items) => (
+            None,
+            Response::GetChatHistory(proto::session_response::GetChatHistoryResponse {
+                items: items.iter().map(encode_chat_item).collect(),
+            }),
+        ),
+        SessionReply::AgentInfo((id, instructions, tools, chat_ctx)) => (
+            None,
+            Response::GetAgentInfo(proto::session_response::GetAgentInfoResponse {
+                id,
+                instructions,
+                tools,
+                chat_ctx: chat_ctx.iter().map(encode_chat_item).collect(),
+            }),
+        ),
+        SessionReply::RunInput((items, error)) => {
+            let items = if error.is_some() { Vec::new() } else { items.unwrap_or_default() };
+            (
+                error,
+                Response::RunInput(proto::session_response::RunInputResponse {
+                    items: items.iter().map(encode_chat_item).collect(),
                 }),
-            ),
-
-            Request::GetAgentInfo(_) => {
-                let (id, instructions, tools, chat_ctx) = self.port.agent_info().await?;
-                (
-                    None,
-                    Response::GetAgentInfo(proto::session_response::GetAgentInfoResponse {
-                        id,
-                        instructions,
-                        tools,
-                        chat_ctx: chat_ctx.iter().map(encode_chat_item).collect(),
-                    }),
-                )
-            }
-
-            Request::RunInput(r) => {
-                // Checked before the interrupt, so an empty request doesn't disturb the agent.
-                let (error, items) = if r.text.is_empty() {
-                    (Some("empty run_input text".to_owned()), Vec::new())
-                } else {
-                    match self.port.run_input(&r.text).await? {
-                        (_, Some(e)) => (Some(e), Vec::new()),
-                        (items, None) => (None, items.unwrap_or_default()),
-                    }
-                };
-                // Both `error` and the empty `run_input` are set, as the reference does.
-                (
-                    error,
-                    Response::RunInput(proto::session_response::RunInputResponse {
-                        items: items.iter().map(encode_chat_item).collect(),
-                    }),
-                )
-            }
-
-            Request::GetSessionState(_) => {
-                let (agent_state, user_state, agent_id, options, started_at) =
-                    self.port.session_state().await?;
-                let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
-                let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
-                // `session._started_at or time.time()`
-                let started_at =
-                    started_at.filter(|t| *t != 0.0).unwrap_or_else(lk_agents_abi::unix_now);
-                (
-                    None,
-                    Response::GetSessionState(proto::session_response::GetSessionStateResponse {
-                        agent_state: encode_agent_state(agent_state) as i32,
-                        user_state: encode_user_state(user_state) as i32,
-                        agent_id,
-                        options: options.into_iter().collect(),
-                        created_at: Some(encode_epoch_secs(started_at)),
-                    }),
-                )
-            }
-
-            Request::GetRtcStats(_) => {
-                let (publisher, subscriber) = self.port.rtc_stats().await?.unwrap_or_default();
-                let structs =
-                    |v: &[serde_json::Value]| v.iter().filter_map(json_to_struct).collect();
-                (
-                    None,
-                    Response::GetRtcStats(proto::session_response::GetRtcStatsResponse {
-                        publisher_stats: structs(&publisher),
-                        subscriber_stats: structs(&subscriber),
-                    }),
-                )
-            }
-
-            Request::GetSessionUsage(_) => (
-                None,
-                Response::GetSessionUsage(proto::session_response::GetSessionUsageResponse {
-                    usage: Some(encode_session_usage(&AgentSessionUsage {
-                        model_usage: self.port.session_usage().await?,
-                    })),
-                    // `time.time()` at answer time, not the session's start.
-                    created_at: Some(encode_timestamp(SystemTime::now())),
-                }),
-            ),
-
-            Request::GetFrameworkInfo(_) => (
-                None,
-                Response::GetFrameworkInfo(proto::session_response::GetFrameworkInfoResponse {
-                    sdk: self.sdk.0.clone(),
-                    sdk_version: self.sdk.1.clone(),
-                }),
-            ),
-
-            Request::UpdateIo(io) => {
-                self.port.update_io(io_update(io)).await?;
-                (None, Response::UpdateIo(proto::session_response::UpdateIoResponse {}))
-            }
-
-            Request::FinalizeSimulation(f) => {
-                let provisional = (f.provisional_success, f.provisional_reason.clone());
-                let (error, verdict) = match self.port.finalize_simulation(provisional).await? {
-                    (_, Some(e)) => (Some(e), None),
-                    (v, None) => (None, v),
-                };
-                (
-                    error,
-                    Response::FinalizeSimulation(proto::session_response::FinalizeSimulationResponse {
-                        user_verdict: verdict.map(|(success, reason)| {
-                            proto::session_response::finalize_simulation_response::SimulationVerdict {
-                                success,
-                                reason,
-                            }
-                        }),
-                    }),
-                )
-            }
-        };
-
-        Ok(Some(proto::AgentSessionMessage {
-            message: Some(proto::agent_session_message::Message::Response(
-                proto::SessionResponse { request_id, error, response: Some(response) },
-            )),
-        }))
-    }
-
-    /// `_handle_request_safe`'s catch arm: the opaque `"internal error"`, never the exception text.
-    pub fn internal_error_response(request_id: &str) -> proto::AgentSessionMessage {
-        proto::AgentSessionMessage {
-            message: Some(proto::agent_session_message::Message::Response(
-                proto::SessionResponse {
-                    request_id: request_id.to_owned(),
-                    error: Some("internal error".to_owned()),
-                    response: None,
-                },
-            )),
+            )
         }
+        SessionReply::SessionState((agent_state, user_state, agent_id, options, started_at)) => {
+            let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
+            let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
+            let started_at = started_at.filter(|t| *t != 0.0).unwrap_or(now);
+            (
+                None,
+                Response::GetSessionState(proto::session_response::GetSessionStateResponse {
+                    agent_state: encode_agent_state(agent_state) as i32,
+                    user_state: encode_user_state(user_state) as i32,
+                    agent_id,
+                    options: options.into_iter().collect(),
+                    created_at: Some(encode_epoch_secs(started_at)),
+                }),
+            )
+        }
+        SessionReply::RtcStats(stats) => {
+            let (publisher, subscriber) = stats.unwrap_or_default();
+            let structs = |v: &[serde_json::Value]| v.iter().filter_map(json_to_struct).collect();
+            (
+                None,
+                Response::GetRtcStats(proto::session_response::GetRtcStatsResponse {
+                    publisher_stats: structs(&publisher),
+                    subscriber_stats: structs(&subscriber),
+                }),
+            )
+        }
+        SessionReply::SessionUsage(model_usage) => (
+            None,
+            Response::GetSessionUsage(proto::session_response::GetSessionUsageResponse {
+                usage: Some(encode_session_usage(&AgentSessionUsage { model_usage })),
+                created_at: Some(encode_epoch_secs(now)),
+            }),
+        ),
+        SessionReply::FrameworkInfo(sdk, sdk_version) => (
+            None,
+            Response::GetFrameworkInfo(proto::session_response::GetFrameworkInfoResponse {
+                sdk,
+                sdk_version,
+            }),
+        ),
+        SessionReply::UpdateIo => {
+            (None, Response::UpdateIo(proto::session_response::UpdateIoResponse {}))
+        }
+        SessionReply::FinalizeSimulation((verdict, error)) => {
+            let verdict = if error.is_some() { None } else { verdict };
+            (
+                error,
+                Response::FinalizeSimulation(proto::session_response::FinalizeSimulationResponse {
+                    user_verdict: verdict.map(|(success, reason)| {
+                        proto::session_response::finalize_simulation_response::SimulationVerdict {
+                            success,
+                            reason,
+                        }
+                    }),
+                }),
+            )
+        }
+    };
+    proto::AgentSessionMessage {
+        message: Some(proto::agent_session_message::Message::Response(proto::SessionResponse {
+            request_id,
+            error,
+            response: Some(response),
+        })),
+    }
+}
+
+/// The opaque response to an operation failure; host exception details stay local.
+pub fn internal_error_response(request_id: &str) -> proto::AgentSessionMessage {
+    proto::AgentSessionMessage {
+        message: Some(proto::agent_session_message::Message::Response(proto::SessionResponse {
+            request_id: request_id.to_owned(),
+            error: Some("internal error".to_owned()),
+            response: None,
+        })),
     }
 }
 
@@ -739,5 +696,4 @@ mod frame_tests {
 }
 
 #[cfg(test)]
-#[path = "remote_session_tests.rs"]
-mod encode_tests;
+mod tests;
