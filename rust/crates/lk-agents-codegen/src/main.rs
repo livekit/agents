@@ -17,8 +17,7 @@ mod tests_napi;
 use std::path::{Path, PathBuf};
 
 /// Codegen inputs in output order, each with the path the napi binding reaches its records by.
-/// All in `lk-agents-abi` (`scripts/check_layout.py` enforces it), plus `lk-agents-storage`'s
-/// schema, whose records have a Python target only.
+/// ABI records and the storage/A2A boundary records with Python targets.
 const SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-abi/src/voice/events.rs", "lk_agents_abi::voice::events"),
     ("rust/crates/lk-agents-abi/src/metrics/base.rs", "lk_agents_abi::metrics::base"),
