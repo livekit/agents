@@ -720,13 +720,6 @@ SELECT id, message_id, json(payload) FROM items WHERE lane = :lane ORDER BY seq
 }
 
 statement! {
-    /// One page of the history: at most `limit` items after skipping `offset`.
-    SelectItemsPage<'a> { lane: &'a str, limit: i64, offset: i64 } => r#"
-SELECT id, message_id, json(payload) FROM items WHERE lane = :lane ORDER BY seq LIMIT :limit OFFSET :offset
-"#
-}
-
-statement! {
     /// The lane's journal after the event `after_id`.
     SelectLaneEvents<'a> { lane: &'a str, after_id: i64 } => r#"
 SELECT id, ts_ms, lane, run_id, type, json(payload) FROM events
@@ -920,7 +913,6 @@ mod tests {
         let one_line = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ");
         for (sql, columns) in [
             (SelectItems::SQL, ItemRow::SELECT),
-            (SelectItemsPage::SQL, ItemRow::SELECT),
             (SelectLaneEvents::SQL, EventRow::SELECT),
             (SelectEvents::SQL, EventRow::SELECT),
             (SelectLane::SQL, LaneRow::SELECT),

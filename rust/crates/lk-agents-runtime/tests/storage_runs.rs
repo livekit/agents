@@ -477,7 +477,25 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
     fx.cleanup(&[&s]).await;
 }
 
+/// I-19: the acquire loads the whole history in the lease's own batch, past any page size.
+async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    for i in 0..600 {
+        run.history.push(message(&format!("i{i}"), ChatRole::User, "hi"));
+    }
+    run.commit(CommitOptions::default()).await.unwrap();
+    let again = lane.open(RunOptions::new("r2", "AST_2")).await.unwrap();
+    assert_eq!(again.history.len(), 600);
+    assert_eq!(again.history.last().map(|i| i.id.as_str()), Some("i599"));
+    drop(again);
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    a_run_loads_its_whole_history_in_its_acquire,
     a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
     an_item_id_of_another_lane_fails_the_commit_without_mutation,
     waiters_take_the_lane_in_the_order_their_rows_were_submitted,

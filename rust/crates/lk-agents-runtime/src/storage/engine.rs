@@ -236,18 +236,6 @@ impl LaneDb {
         Ok(outcome)
     }
 
-    /// The rest of a history whose first page an acquire loaded full. Under the lease nothing
-    /// but this run deletes or reorders it.
-    async fn rest_of_history(&self, items: &mut Vec<ItemRow>) -> Result<(), StorageError> {
-        let mut page = items.len();
-        while page as i64 == db::HISTORY_PAGE {
-            let more = self.db.read(db::history_page(&self.name, items.len() as i64)).await?;
-            page = more.len();
-            items.extend(more);
-        }
-        Ok(())
-    }
-
     /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the
     /// lease attempt.
     pub async fn receive(
@@ -521,8 +509,7 @@ impl Lane {
     pub async fn open(&self, opts: RunOptions) -> Result<Run, StorageError> {
         let (lease, closed, state, items, tasks, submitted, picked_up) = match opts.exclusive {
             true => {
-                let mut acquired = self.acquire(&opts).await?;
-                self.db.rest_of_history(&mut acquired.items).await?;
+                let acquired = self.acquire(&opts).await?;
                 let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
                 if !acquired.already_committed {
                     lease.keep_alive();

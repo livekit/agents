@@ -12,8 +12,6 @@ use crate::run::TaskState;
 use crate::schema::*;
 use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, first_cell};
 
-/// How many history items one read loads.
-pub const HISTORY_PAGE: i64 = 500;
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
 /// The largest state, in bytes.
@@ -236,7 +234,7 @@ pub struct Acquired {
     /// This `run_id` already committed; the caller releases without running.
     pub already_committed: bool,
     pub lane: LaneRow,
-    /// The first [`HISTORY_PAGE`] items; a full page means more follow.
+    /// The whole history, in the same snapshot as the lease, the state and the tasks.
     pub items: Vec<ItemRow>,
     /// The newest task rows, newest first.
     pub tasks: Vec<TaskRow>,
@@ -293,7 +291,7 @@ pub fn acquire(req: &Acquire<'_>, schema: Vec<Statement>) -> Plan<AcquireDecode>
     });
     let committed = b.add(SelectCommittedRun { lane, run_id: req.run_id });
     let pickup = req.pickup.then(|| b.add(PickupTaskHeld { lane, token, task_id: req.task_id }));
-    let items = b.add(SelectItemsPage { lane, limit: HISTORY_PAGE, offset: 0 });
+    let items = b.add(SelectItems { lane });
     let lane_row = b.add(SelectLane { lane });
     let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });
     let fence = Fence {
@@ -802,11 +800,6 @@ pub fn lanes() -> Read<LaneRow> {
 /// The lane's whole history.
 pub fn history(lane: &str) -> Read<ItemRow> {
     Read::new(SelectItems { lane }, ItemRow::from_row)
-}
-
-/// One page of the lane's history: at most `limit` items after skipping `offset`.
-pub fn history_page(lane: &str, offset: i64) -> Read<ItemRow> {
-    Read::new(SelectItemsPage { lane, limit: HISTORY_PAGE, offset }, ItemRow::from_row)
 }
 
 pub fn lane_info(lane: &str) -> Read<LaneRow> {
