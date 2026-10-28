@@ -60,15 +60,8 @@ class ResponsesWebsocket:
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
-        if url.scheme in ("http", "https"):
-            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
-        if url.host != _OPENAI_HOST:
-            # OpenAI's native endpoint takes the model in the response.create
-            # payload; gateways need it on the upgrade URL to route the
-            # connection before the first frame.
-            url = url.update_query(model=model)
-        self._base_url = str(url)
+        self._endpoint = base_url
+        self._base_url = self._resolve_url(base_url, model)
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -78,6 +71,18 @@ class ResponsesWebsocket:
             max_session_duration=max_session_duration,
             connect_timeout=self._timeout,
         )
+
+    @staticmethod
+    def _resolve_url(base_url: str | None, model: str) -> str:
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
+        if url.host != _OPENAI_HOST:
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        return str(url)
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:

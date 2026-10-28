@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -108,39 +107,57 @@ async def _drain(model: ResponsesLLM, **kwargs: Any) -> None:
         await stream.aclose()
 
 
-def _track_close(transport: Any) -> list[bool]:
-    closed: list[bool] = []
+class _FakeSocket:
+    def __init__(self) -> None:
+        self.closed = False
 
-    async def _aclose() -> None:
-        closed.append(True)
-
-    transport.aclose = _aclose
-    return closed
+    async def close(self) -> None:
+        self.closed = True
 
 
-async def test_update_model_rebuilds_ws_transport() -> None:
+async def test_update_model_rebuilds_ws_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     model = _make_ws_llm()
-    old = model._ws
-    assert old is not None
-    closed = _track_close(old)
+    transport = model._ws
+    assert transport is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(transport._pool, "invalidate", lambda: calls.append(True))
 
     model.update_options(model="openai/gpt-4.1-mini")
-    await asyncio.sleep(0)
 
-    assert model._ws is not old
-    assert model._ws is not None
+    assert model._ws is transport
     expected = str(URL("wss://gw.test/v1/responses").update_query(model="openai/gpt-4.1-mini"))
-    assert model._ws._base_url == expected
-    assert closed == [True]
+    assert transport._base_url == expected
+    assert calls == [True]
 
 
-def test_update_model_without_loop_retires_old_ws_transport() -> None:
+async def test_update_model_keeps_in_flight_ws_socket() -> None:
     model = _make_ws_llm()
-    old = model._ws
+    transport = model._ws
+    assert transport is not None
+    sock = _FakeSocket()
+
+    async def _connect(_timeout: float) -> _FakeSocket:
+        return sock
+
+    transport._pool._connect_cb = _connect  # type: ignore[assignment]
+    checked_out = await transport._pool.get(timeout=1.0)
 
     model.update_options(model="openai/gpt-4.1-mini")
 
-    assert model._retired_ws == [old]
+    assert checked_out is sock
+    assert sock.closed is False
+    assert sock in transport._pool._retired
+
+
+async def test_update_same_model_keeps_ws_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _make_ws_llm()
+    assert model._ws is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(model._ws._pool, "invalidate", lambda: calls.append(True))
+
+    model.update_options(model="openai/gpt-4.1")
+
+    assert calls == []
 
 
 async def test_update_model_rest_uses_new_model(monkeypatch: pytest.MonkeyPatch) -> None:
