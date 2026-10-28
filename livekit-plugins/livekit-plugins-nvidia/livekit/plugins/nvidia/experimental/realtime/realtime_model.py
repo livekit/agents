@@ -11,7 +11,7 @@ import contextlib
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Literal
 from urllib.parse import quote, urlencode
@@ -63,10 +63,10 @@ class _ResponseGeneration:
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
 
-    _created_timestamp: float = field(default_factory=time.time)
-    _first_token_timestamp: float | None = None
-    _completed_timestamp: float | None = None
-    _done: bool = False
+    created_timestamp: float = field(default_factory=time.time)
+    first_token_timestamp: float | None = None
+    completed_timestamp: float | None = None
+    done: bool = False
     output_text: str = ""
 
 
@@ -156,7 +156,9 @@ class RealtimeModel(llm.RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(realtime_model=self)
+        sess = RealtimeSession(
+            realtime_model=self, options=self._opts, http_session=self._ensure_http_session
+        )
         self._sessions.add(sess)
         return sess
 
@@ -172,16 +174,24 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     generation lifecycle management, and text token handling.
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        options: _PersonaplexOptions,
+        http_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
-        self._opts = replace(realtime_model._opts)
+        self._get_http_session = http_session
+        self._opts = replace(options)
 
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[bytes]()
 
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_resampler_rate: int | None = None
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE,
             NUM_CHANNELS,
@@ -242,7 +252,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         )
 
     def interrupt(self) -> None:
-        if self._current_generation and not self._current_generation._done:
+        if self._current_generation and not self._current_generation.done:
             self._finalize_generation(interrupted=True)
 
     def commit_audio(self) -> None:
@@ -297,7 +307,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.cancel("Session closed")
 
-        if self._current_generation and not self._current_generation._done:
+        if self._current_generation and not self._current_generation.done:
             self._finalize_generation(interrupted=True)
 
     # -- Internal: connection management --
@@ -309,7 +319,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             old_ch.close()
             self._msg_ch = utils.aio.Chan[bytes]()
 
-            if self._current_generation and not self._current_generation._done:
+            if self._current_generation and not self._current_generation.done:
                 self._finalize_generation(interrupted=True)
 
             if self._pending_generation_fut and not self._pending_generation_fut.done():
@@ -347,7 +357,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
             try:
                 ws_url = self._build_ws_url()
-                http_session = self._realtime_model._ensure_http_session()
+                http_session = self._get_http_session()
 
                 t0 = time.perf_counter()
                 ws_conn = await utils.http_context.ws_connect(
@@ -395,7 +405,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)
 
                 # Clean up any active generation and silence timer
-                if self._current_generation and not self._current_generation._done:
+                if self._current_generation and not self._current_generation.done:
                     self._finalize_generation(interrupted=True)
                 self._cancel_silence_timer()
 
@@ -418,7 +428,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     "error",
                     llm.RealtimeModelError(
                         timestamp=time.time(),
-                        label=self._realtime_model._label,
+                        label=self._realtime_model.label,
                         error=error,
                         recoverable=is_recoverable,
                     ),
@@ -495,7 +505,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 # rather than treating it as a retriable error.
                 if ws_conn.close_code in (1000, None):
                     logger.debug("PersonaPlex server closed connection normally")
-                    if self._current_generation and not self._current_generation._done:
+                    if self._current_generation and not self._current_generation.done:
                         self._finalize_generation(interrupted=False)
                     return
 
@@ -546,14 +556,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             pcm_bytes = pcm_int16.tobytes()
 
             # Ensure generation exists
-            if not self._current_generation or self._current_generation._done:
+            if not self._current_generation or self._current_generation.done:
                 self._start_new_generation()
 
             gen = self._current_generation
             assert gen is not None
 
-            if gen._first_token_timestamp is None and len(pcm_bytes) > 0:
-                gen._first_token_timestamp = time.time()
+            if gen.first_token_timestamp is None and len(pcm_bytes) > 0:
+                gen.first_token_timestamp = time.time()
 
             frame = rtc.AudioFrame(
                 data=pcm_bytes,
@@ -583,7 +593,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 return
 
             # Ensure generation exists
-            if not self._current_generation or self._current_generation._done:
+            if not self._current_generation or self._current_generation.done:
                 self._start_new_generation()
 
             gen = self._current_generation
@@ -599,7 +609,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
     # -- Internal: generation lifecycle --
 
     def _start_new_generation(self) -> None:
-        if self._current_generation and not self._current_generation._done:
+        if self._current_generation and not self._current_generation.done:
             logger.debug("Starting new generation while another is active. Finalizing previous.")
             self._finalize_generation(interrupted=True)
 
@@ -635,12 +645,12 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
         logger.debug(f"Started generation {response_id}")
 
     def _finalize_generation(self, *, interrupted: bool = False) -> None:
-        if not self._current_generation or self._current_generation._done:
+        if not self._current_generation or self._current_generation.done:
             return
 
         gen = self._current_generation
-        gen._completed_timestamp = time.time()
-        gen._done = True
+        gen.completed_timestamp = time.time()
+        gen.done = True
 
         if not gen.text_ch.closed:
             gen.text_ch.close()
@@ -667,14 +677,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             return
 
         gen = self._current_generation
-        if gen._first_token_timestamp is None and not gen.output_text:
+        if gen.first_token_timestamp is None and not gen.output_text:
             self._current_generation = None
             return
 
         current_time = time.time()
-        completed_ts = gen._completed_timestamp or current_time
-        created_ts = gen._created_timestamp
-        first_token_ts = gen._first_token_timestamp
+        completed_ts = gen.completed_timestamp or current_time
+        created_ts = gen.created_timestamp
+        first_token_ts = gen.first_token_timestamp
 
         ttft = first_token_ts - created_ts if first_token_ts else -1
         duration = completed_ts - created_ts
@@ -725,7 +735,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             self._silence_timer_handle = None
 
     def _on_silence_timeout(self) -> None:
-        if self._current_generation and not self._current_generation._done:
+        if self._current_generation and not self._current_generation.done:
             logger.debug("Silence detected, finalizing generation")
             self._finalize_generation(interrupted=False)
 
@@ -733,12 +743,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
+            if frame.sample_rate != self._input_resampler_rate:
                 self._input_resampler = None
 
         if self._input_resampler is None and (
             frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
         ):
+            self._input_resampler_rate = frame.sample_rate
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
                 output_rate=SAMPLE_RATE,

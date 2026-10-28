@@ -4,12 +4,19 @@ import pytest
 from riva.client.proto import riva_asr_pb2 as asr_proto
 
 from livekit.plugins.nvidia import STT
+from livekit.plugins.nvidia.stt import SpeechStream
 
 pytestmark = pytest.mark.unit
 
 
-async def test_word_timestamps_use_the_transcript_seconds_and_offset() -> None:
-    provider = STT(api_key="test", use_ssl=False)
+async def test_word_timestamps_use_the_transcript_seconds_and_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_provider_io(self: SpeechStream) -> None:
+        pass
+
+    monkeypatch.setattr(SpeechStream, "_run", no_provider_io)
+    provider = STT(api_key="test", use_ssl=False, server="127.0.0.1:1")
     stream = provider.stream(language="en-US")
     stream.start_time_offset = 0.25
     alternative = asr_proto.SpeechRecognitionAlternative(
@@ -39,7 +46,7 @@ def test_model_listing_uses_the_riva_protobuf_request() -> None:
             ]
         )
 
-    provider = STT(api_key="test", use_ssl=False)
+    provider = STT(api_key="test", use_ssl=False, server="127.0.0.1:1")
     service = SimpleNamespace(stub=SimpleNamespace(GetRivaSpeechRecognitionConfig=get_config))
     result = provider.log_asr_models(service)
     assert result == {"en-US": [{"model": ["streaming-en"]}]}

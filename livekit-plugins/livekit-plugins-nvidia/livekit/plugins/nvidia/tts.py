@@ -3,6 +3,7 @@ import contextlib
 import os
 import queue
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import riva.client
@@ -113,13 +114,22 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options, opts=self._opts)
+        return SynthesizeStream(
+            tts=self, conn_options=conn_options, opts=self._opts, service=self._ensure_session
+        )
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: TTSOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: TTSOptions,
+        service: Callable[[], riva.client.SpeechSynthesisService],
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._get_service = service
         self._opts = opts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -163,7 +173,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         def _synthesize_worker() -> None:
             error: Exception | None = None
             try:
-                service = self._tts._ensure_session()
+                service = self._get_service()
                 while (token := token_q.get()) is not None:
                     responses = service.synthesize_online(
                         token.token,

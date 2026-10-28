@@ -116,7 +116,9 @@ class STT(stt.STT):
         effective_language = (
             LanguageCode(language) if is_given(language) else self._opts.language_code
         )
-        return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
+        return SpeechStream(
+            stt=self, opts=self._opts, conn_options=conn_options, language=effective_language
+        )
 
     def log_asr_models(
         self, asr_service: riva.client.ASRService
@@ -140,9 +142,11 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: str):
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
-        self._stt: STT = stt
+    def __init__(
+        self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions, language: str
+    ):
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._opts = opts
         self._language = language
 
         self._audio_queue: queue.Queue[bytes | None] = queue.Queue()
@@ -153,10 +157,10 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
 
         self._auth = auth.create_riva_auth(
-            api_key=self._stt.nvidia_api_key,
-            function_id=self._stt._opts.function_id,
-            server=stt._opts.server,
-            use_ssl=stt._opts.use_ssl,
+            api_key=stt.nvidia_api_key,
+            function_id=self._opts.function_id,
+            server=opts.server,
+            use_ssl=opts.use_ssl,
         )
         self._asr_service = riva.client.ASRService(self._auth)
 
@@ -185,18 +189,18 @@ class SpeechStream(stt.SpeechStream):
         recognition_config = riva.client.RecognitionConfig(
             encoding=riva.client.AudioEncoding.LINEAR_PCM,
             language_code=self._language,
-            model=self._stt._opts.model,
+            model=self._opts.model,
             max_alternatives=1,
-            enable_automatic_punctuation=self._stt._opts.punctuate,
-            sample_rate_hertz=self._stt._opts.sample_rate,
+            enable_automatic_punctuation=self._opts.punctuate,
+            sample_rate_hertz=self._opts.sample_rate,
             audio_channel_count=1,
             enable_word_time_offsets=True,
         )
 
-        if self._stt._opts.enable_diarization:
+        if self._opts.enable_diarization:
             diarization_config = asr_proto.SpeakerDiarizationConfig(
                 enable_speaker_diarization=True,
-                max_speaker_count=self._stt._opts.max_speaker_count,
+                max_speaker_count=self._opts.max_speaker_count,
             )
             recognition_config.diarization_config.CopyFrom(diarization_config)
 
@@ -312,7 +316,7 @@ class SpeechStream(stt.SpeechStream):
             start_time = words[0].start_time / 1000.0 + self.start_time_offset
             end_time = words[-1].end_time / 1000.0 + self.start_time_offset
 
-            if self._stt._opts.enable_diarization and is_final:
+            if self._opts.enable_diarization and is_final:
                 speaker_tags = [word.speaker_tag for word in words]
                 if speaker_tags:
                     speaker = Counter(speaker_tags).most_common(1)[0][0]
