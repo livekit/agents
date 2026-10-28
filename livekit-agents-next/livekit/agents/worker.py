@@ -406,8 +406,6 @@ class _ServerHost:
 
     async def _registered(self, info: dict[str, Any]) -> None:
         server = self._server
-        if server._storage is not None and not server._storage.holder:
-            server._storage.holder = info["worker_id"]
         server.emit(
             "worker_registered",
             info["worker_id"],

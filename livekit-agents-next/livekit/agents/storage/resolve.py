@@ -168,8 +168,6 @@ class CallThreadEntrypoint:
     storage: AgentDBStorage
 
     async def __call__(self, ctx: JobContext) -> None:
-        if not self.storage.holder:
-            self.storage.holder = ctx.worker_id
         try:
             metadata = json.loads(ctx.job.metadata or "{}")
         except ValueError:

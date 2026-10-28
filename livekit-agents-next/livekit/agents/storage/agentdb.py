@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import os
+import socket
 import time
 from datetime import timedelta
 from typing import Any
@@ -41,7 +42,8 @@ class AgentDBStorage:
             (float seconds) when omitted, otherwise the Rust default.
         renew_interval: Renewal interval; ``LIVEKIT_AGENTDB_RENEW_INTERVAL`` (float seconds)
             when omitted, otherwise the Rust default.
-        holder: This worker's lease holder id; the worker sets its id once registered.
+        holder: This worker's lease holder id; ``<hostname>-<pid>`` of the process that opens
+            threads when omitted.
     """
 
     def __init__(
@@ -52,7 +54,7 @@ class AgentDBStorage:
         api_secret: str | None = None,
         lease_ttl: timedelta | None = None,
         renew_interval: timedelta | None = None,
-        holder: str = "",
+        holder: str | None = None,
     ) -> None:
         url = url or os.environ.get("LIVEKIT_URL")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
@@ -78,11 +80,16 @@ class AgentDBStorage:
             "lease_ttl": lease_ttl,
             "renew_interval": renew_interval,
         }
-        self.holder = holder
-        """This worker's lease holder id: the worker's id, set once it is registered."""
+        self._holder = holder
+
+    @property
+    def holder(self) -> str:
+        """This process's lease holder id: the explicit one, else ``<hostname>-<pid>``."""
+        return self._holder or f"{socket.gethostname()}-{os.getpid()}"
 
     def __reduce__(self) -> tuple[functools.partial[AgentDBStorage], tuple[()]]:
-        return functools.partial(AgentDBStorage, **self._args, holder=self.holder), ()
+        # a job process computes its own default holder: its pid is not the parent's
+        return functools.partial(AgentDBStorage, **self._args, holder=self._holder), ()
 
     @property
     def url(self) -> str:
