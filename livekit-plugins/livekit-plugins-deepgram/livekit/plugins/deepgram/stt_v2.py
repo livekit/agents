@@ -29,6 +29,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -325,6 +326,17 @@ class SpeechStreamv2(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "deepgram streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._api_key = api_key
@@ -627,7 +639,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     headers={"Authorization": f"Token {self._api_key}"},
                     heartbeat=30.0,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None

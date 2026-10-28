@@ -32,6 +32,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -246,6 +247,7 @@ class STT(stt.STT):
         language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        http_timeout = utils.http_context.client_timeout(conn_options)
         config = self._sanitize_options(language=language)
 
         recognize_config = {
@@ -277,10 +279,7 @@ class STT(stt.STT):
                     "Accept": "application/json",
                     "Content-Type": "audio/wav",
                 },
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 return prerecorded_transcription_to_speech_event(
                     config.language,
@@ -469,6 +468,17 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "deepgram streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         if opts.detect_language or opts.language is None:
             raise ValueError(
                 "language detection is not supported in streaming mode, "
@@ -795,7 +805,7 @@ class SpeechStream(stt.SpeechStream):
                     # exception-driven, never runs. matches stt_v2.
                     heartbeat=30.0,
                 ),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None

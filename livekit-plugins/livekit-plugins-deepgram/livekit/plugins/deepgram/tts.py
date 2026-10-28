@@ -130,7 +130,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Deepgram"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         config: dict = {
             "encoding": self._opts.encoding,
@@ -259,6 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             http_params: dict = {
                 "encoding": self._opts.encoding,
@@ -278,7 +279,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -309,6 +310,12 @@ class SynthesizeStream(tts.SynthesizeStream):
     _CLOSE_MSG: str = json.dumps({"type": "Close"})
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        if conn_options.write_timeout is not None or conn_options.total_timeout is not None:
+            raise APIError(
+                "deepgram streaming requires write_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -385,7 +392,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await input_sent_event.wait()
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await asyncio.wait_for(ws.receive(), self._conn_options.read_timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -414,7 +421,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning("Unknown Deepgram message type", extra={"lk.pii.data": resp})
 
-        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+        async with self._tts._pool.connection(
+            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
+        ) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
