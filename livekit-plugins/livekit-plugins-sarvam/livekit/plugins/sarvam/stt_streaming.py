@@ -162,6 +162,9 @@ class RealtimeSTTOptions:
     def __post_init__(self) -> None:
         if self.model != REALTIME_MODEL:
             raise ValueError(f"model must be {REALTIME_MODEL}")
+        # Batch STT uses the legacy Odia code; realtime requires the BCP-47 code.
+        if self.language.lower() == "od-in":
+            self.language = "or-IN"
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language {self.language} is not supported")
         if self.stream_type not in SUPPORTED_STREAM_TYPES:
