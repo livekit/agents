@@ -1040,3 +1040,25 @@ async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run()
     assert_eq!(reader.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
     fx.cleanup(&[&s, &reader]).await;
 }
+
+/// I-8: the message's `submitted` row is durable before the debounce, not after it.
+#[tokio::test]
+async fn the_submitted_row_is_durable_before_the_debounce() {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let s = fx.thread("worker-a").await;
+    let opts = TurnOptions {
+        policy: PolicySpec::All(Policy::Queue),
+        debounce: DebounceSpec::All(Duration::from_secs(1)),
+        ..TurnOptions::default()
+    };
+    let turn = Turn::new(s.clone(), LANE, Fake::new(Behavior::Echo), clock(), opts);
+    let running = tokio::spawn(async move {
+        turn.run(a2a("hello", "m1", Some("sms"), None), Some("AST_1".into())).await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let row = s.lane(LANE).task("AST_1").await.unwrap().expect("durable before the debounce");
+    assert_eq!(row.status, TaskState::Submitted);
+    let done = running.await.unwrap().unwrap();
+    assert_eq!(done.task.status, TaskState::Completed);
+    fx.cleanup(&[&s]).await;
+}

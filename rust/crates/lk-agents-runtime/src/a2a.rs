@@ -157,10 +157,8 @@ impl Turn {
             Policy::Concurrent => self.concurrent(&call, &msg, &task_id).await,
             Policy::Reject => self.reject(&call, &msg, &task_id).await,
             Policy::Interrupt | Policy::Queue => {
-                if !debounce.is_zero() {
-                    tokio::time::sleep(debounce).await;
-                }
-                self.exclusive(&call, &msg, &task_id, policy == Policy::Interrupt).await
+                let interrupt = policy == Policy::Interrupt;
+                self.exclusive(&call, &msg, &task_id, interrupt, debounce).await
             }
         }
     }
@@ -171,16 +169,24 @@ impl Turn {
         msg: &Message,
         task_id: &str,
         interrupt: bool,
+        debounce: Duration,
     ) -> Result<TurnResult, StorageError> {
-        // the early `submitted` row, the lease and the pickup, one batch: a `tasks/get` before
-        // the commit finds the task, and a holder that dies leaves an orphan
+        // the early `submitted` row is durable before anything waits: before the debounce when
+        // there is one, else in the acquire batch with the lease and the pickup. A `tasks/get`
+        // finds the task at once, and a holder that dies leaves an orphan.
+        let row = submitted_task(msg, task_id);
+        let mut submitted = None;
+        if !debounce.is_zero() {
+            submitted = Some(call.lane.db().submit(&row).await?);
+            tokio::time::sleep(debounce).await;
+        }
         let opened = call
             .lane
             .open(RunOptions {
                 interrupt,
                 channel: Some(msg.channel.clone()),
                 wait_timeout: self.opts.wait_timeout(),
-                submit: Some(submitted_task(msg, task_id)),
+                submit: submitted.is_none().then_some(row),
                 pickup: true,
                 ..RunOptions::new(task_id, task_id)
             })
@@ -208,7 +214,7 @@ impl Turn {
             }
             Err(e) => return Err(e),
         };
-        if run.submitted == Some(false)
+        if submitted.or(run.submitted) == Some(false)
             && let Some(mut existing) = run.tasks.by_message_id(&msg.message_id).await?
         {
             // a retried messageId: the task it created, awaited when a runner still has it, or
@@ -560,14 +566,8 @@ impl Turn {
         if let Some(info) = call.lane.info().await?
             && info.lease_until > now_ms() / 1000
         {
-            let running = call
-                .lane
-                .runs(RUNS_FOR_REJECT)
-                .await?
-                .into_iter()
-                .find(|r| r.interrupted())
-                .and_then(|r| r.task_id);
-            return Err(StorageError::RunRejected { running_task_id: running });
+            let running_task_id = self.running_task(call).await?;
+            return Err(StorageError::RunRejected { running_task_id });
         }
         let result = async {
             let mut run = call
@@ -599,11 +599,19 @@ impl Turn {
         }
         .await;
         match result {
+            // the lane was taken between the check and the open: the run that took it is named
             Err(StorageError::LeaseHeld(_)) => {
-                Err(StorageError::RunRejected { running_task_id: None })
+                let running_task_id = self.running_task(call).await?;
+                Err(StorageError::RunRejected { running_task_id })
             }
             other => other,
         }
+    }
+
+    /// The task of the run holding the lane: the newest run with no `run_ended`.
+    async fn running_task(&self, call: &Call) -> Result<Option<String>, StorageError> {
+        let runs = call.lane.runs(RUNS_FOR_REJECT).await?;
+        Ok(runs.into_iter().find(|r| r.interrupted()).and_then(|r| r.task_id))
     }
 
     /// A dead holder's `working` rows, found under this run's lease: each fails `worker-lost`
