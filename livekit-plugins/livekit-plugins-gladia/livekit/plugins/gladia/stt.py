@@ -466,6 +466,8 @@ class STT(stt.STT):
             # General client errors (connection refused, DNS resolution etc.)
             logger.error(f"Gladia connection error: {e}")
             raise APIConnectionError(f"Gladia connection error: {e}") from e
+        except APIError:
+            raise
         except Exception as e:
             # Catch-all for other unexpected errors
             logger.exception(
