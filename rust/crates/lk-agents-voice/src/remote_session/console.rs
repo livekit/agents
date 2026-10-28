@@ -6,11 +6,12 @@
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackTracker,
+    AudioInput, AudioOutput, AudioOutputCapabilities, IoError, PlaybackFinished, PlaybackTracker,
 };
 use lk_agents_abi::{AudioFrame, Spawner, SpawnerExt};
 use prost::Message as _;
@@ -60,16 +61,16 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> Stream for T {}
 #[derive(Default)]
 struct Playback {
     started: Option<Instant>,
-    pushed: f64,
+    pushed: Duration,
 }
 
 impl Playback {
     #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// Close the segment; `Some(position)` when it held audio.
-    fn take(&mut self, interrupted: bool) -> Option<f64> {
+    fn take(&mut self, interrupted: bool) -> Option<Duration> {
         let started = self.started.take()?;
         let pushed = std::mem::take(&mut self.pushed);
-        Some(if interrupted { started.elapsed().as_secs_f64().min(pushed) } else { pushed })
+        Some(if interrupted { started.elapsed().min(pushed) } else { pushed })
     }
 }
 
@@ -146,7 +147,11 @@ impl ConsoleIo {
     fn finish(&self, interrupted: bool) {
         let position = self.playback.lock().unwrap().take(interrupted);
         if let Some(position) = position {
-            self.tracker.report_finished(position, interrupted, None);
+            self.tracker.playback_finished(PlaybackFinished {
+                playback_position: position,
+                interrupted,
+                synchronized_transcript: None,
+            });
         }
     }
 }
@@ -273,7 +278,7 @@ impl AudioOutput for ConsoleIo {
     async fn capture(&self, f: &AudioFrame) -> Result<(), IoError> {
         let first = {
             let mut playback = self.playback.lock().unwrap();
-            playback.pushed += f.duration();
+            playback.pushed += Duration::from_secs_f64(f.duration());
             let first = playback.started.is_none();
             playback.started.get_or_insert_with(Instant::now);
             first

@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackTracker, Result};
+use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, Ts, unix_secs};
 use lk_agents_rtc::{
@@ -69,6 +69,17 @@ fn register(inner: &Arc<Inner>, method: &'static str) {
 
 // ----------------------------------------------------------------------------- the sink
 
+/// `lk.playback_finished`'s payload, sent by the avatar worker's receiver.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FinishedPayload {
+    #[serde(default)]
+    playback_position: f64,
+    #[serde(default)]
+    interrupted: bool,
+    #[serde(default)]
+    synchronized_transcript: Option<String>,
+}
+
 struct Inner {
     room: Arc<dyn RtcRoom>,
     destination: String,
@@ -86,7 +97,7 @@ struct Inner {
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Option<Arc<Segment>>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pushed: Mutex<f64>,
+    pushed: Mutex<Duration>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(AbortHandle, Ts)>>,
@@ -137,7 +148,9 @@ impl Inner {
                     break;
                 }
                 match events.recv().await {
-                    Some(RoomEvent::TrackPublished { .. } | RoomEvent::ParticipantConnected { .. }) => {}
+                    Some(
+                        RoomEvent::TrackPublished { .. } | RoomEvent::ParticipantConnected { .. },
+                    ) => {}
                     Some(_) => {}
                     None => {
                         self.started.send_replace(Some(Err("the room closed".into())));
@@ -165,7 +178,7 @@ impl Inner {
                 ]),
             };
             *writer = Some(self.room.local().stream_bytes(opts).await?);
-            *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) = 0.0;
+            *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) = Duration::ZERO;
             if !self.wait_playback_start {
                 // approximated: the avatar does not report lk.playback_started
                 self.tracker.report_started(unix_secs(self.clock.wall()));
@@ -174,21 +187,39 @@ impl Inner {
         if let Some(writer) = writer.as_ref() {
             writer.write(&frame.data).await?;
         }
-        *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) += frame.duration();
+        *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) +=
+            Duration::from_secs_f64(frame.duration());
         Ok(())
     }
 
     /// `_handle_playback_finished`.
     fn on_playback_finished(&self, payload: &str) -> String {
         log::info!(target: LOG, caller_identity = self.destination.as_str(); "playback finished event received");
-        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
+        {
             timer.abort();
         }
-        let ev: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let position = ev.get("playback_position").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-        let interrupted = ev.get("interrupted").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        let transcript = ev.get("synchronized_transcript").and_then(serde_json::Value::as_str).map(str::to_owned);
-        self.tracker.report_finished(position, interrupted, transcript);
+        let finished = serde_json::from_str::<FinishedPayload>(payload)
+            .map_err(|e| e.to_string())
+            .and_then(|ev| {
+                let position = Duration::try_from_secs_f64(ev.playback_position)
+                    .map_err(|_| format!("playback_position={}", ev.playback_position))?;
+                Ok(PlaybackFinished {
+                    playback_position: position,
+                    interrupted: ev.interrupted,
+                    synchronized_transcript: ev.synchronized_transcript,
+                })
+            });
+        match finished {
+            Ok(ev) => {
+                self.tracker.playback_finished(ev);
+            }
+            Err(e) => {
+                log::error!(target: LOG, caller_identity = self.destination.as_str(), error = e.as_str();
+                    "invalid playback finished event");
+                return "reject".to_owned();
+            }
+        }
         "ok".to_owned()
     }
 
@@ -200,11 +231,15 @@ impl Inner {
 
     /// `_clear_buffer_task`: ask the avatar to clear, and mark the segment done if it never says
     /// it finished.
-    async fn clear(self: Arc<Self>, pushed: f64) {
+    async fn clear(self: Arc<Self>, pushed: Duration) {
         let rpc = self
             .room
             .local()
-            .perform_rpc(ParticipantIdentity(self.destination.clone()), RPC_CLEAR_BUFFER.to_owned(), String::new())
+            .perform_rpc(
+                ParticipantIdentity(self.destination.clone()),
+                RPC_CLEAR_BUFFER.to_owned(),
+                String::new(),
+            )
             .await;
         let failed = match rpc {
             Ok((0, _)) => None,
@@ -219,7 +254,8 @@ impl Inner {
             }
             None => self.clear_buffer_timeout,
         };
-        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
+        {
             timer.abort();
         }
         let Some(timeout) = timeout else { return };
@@ -230,7 +266,11 @@ impl Inner {
             me.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take();
             log::warn!(target: LOG,
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily");
-            me.tracker.report_finished(pushed, true, None);
+            me.tracker.playback_finished(PlaybackFinished {
+                playback_position: pushed,
+                interrupted: true,
+                synchronized_transcript: None,
+            });
             me.tracker.reset();
         });
         *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some((timer, at));
@@ -277,7 +317,7 @@ impl DataStreamAudioOutput {
             spawner: Arc::clone(&spawner),
             started: watch::channel(None).0,
             segment: Mutex::new(None),
-            pushed: Mutex::new(0.0),
+            pushed: Mutex::new(Duration::ZERO),
             clear_timer: Mutex::new(None),
         });
         let start = spawner.spawn_unboxed(Arc::clone(&inner).start());
@@ -406,8 +446,9 @@ impl AudioOutput for DataStreamAudioOutput {
         if !self.inner.is_started() {
             return;
         }
-        let pushed = std::mem::take(&mut *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()));
-        if pushed == 0.0 {
+        let pushed =
+            std::mem::take(&mut *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()));
+        if pushed.is_zero() {
             return;
         }
         self.inner.spawner.spawn_unboxed(Arc::clone(&self.inner).clear(pushed));
@@ -566,10 +607,13 @@ impl RxInner {
                 attrs.get("sample_rate").and_then(|v| v.parse::<u32>().ok()),
                 attrs.get("num_channels").and_then(|v| v.parse::<u16>().ok()),
             ) else {
-                return Err(ReceiverEnd::BadStream("sample_rate or num_channels not found in byte stream".into()));
+                return Err(ReceiverEnd::BadStream(
+                    "sample_rate or num_channels not found in byte stream".into(),
+                ));
             };
             let samples = (u64::from(rate) * u64::from(self.frame_size_ms)).div_ceil(1000) as u32;
-            let mut bstream = lk_agents_abi::AudioByteStream::new(rate, channels, Some(samples), false);
+            let mut bstream =
+                lk_agents_abi::AudioByteStream::new(rate, channels, Some(samples), false);
             let frame = |f: lk_agents_abi::utils::byte_stream::Frame| {
                 AudioFrame::new(f.data, rate, channels, f.samples_per_channel)
             };
@@ -633,12 +677,18 @@ impl RxInner {
         let Some(mut rx) = self.rpc_rx.lock().unwrap_or_else(|p| p.into_inner()).take() else {
             return Ok(());
         };
-        let remote = self.remote.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_default();
+        let remote =
+            self.remote.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_default();
         while let Some(ev) = rx.recv().await {
             let (method, payload) = match ev {
                 RpcEvent::Finished { playback_position, interrupted } => (
                     RPC_PLAYBACK_FINISHED,
-                    serde_json::json!({"playback_position": playback_position, "interrupted": interrupted, "synchronized_transcript": null}).to_string(),
+                    serde_json::to_string(&FinishedPayload {
+                        playback_position,
+                        interrupted,
+                        synchronized_transcript: None,
+                    })
+                    .expect("a playback report serializes"),
                 ),
                 RpcEvent::Started => (RPC_PLAYBACK_STARTED, String::new()),
             };
@@ -648,7 +698,11 @@ impl RxInner {
                 let reply = self
                     .room
                     .local()
-                    .perform_rpc(ParticipantIdentity(remote.clone()), method.to_owned(), payload.clone())
+                    .perform_rpc(
+                        ParticipantIdentity(remote.clone()),
+                        method.to_owned(),
+                        payload.clone(),
+                    )
                     .await
                     .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
                 let (code, message) = reply;
@@ -706,9 +760,19 @@ impl DataStreamAudioReceiver {
         let on_clear = on_clear_buffer
             .map(|l| Arc::new(move || l.clear_buffer()) as Arc<dyn Fn() + Send + Sync>);
         let frame_size_ms = frame_size_ms.max(1);
-        DataStreamAudioReceiver::new(room, sender_identity, frame_size_ms, rpc_max_retries, on_clear, clock, spawner)
+        DataStreamAudioReceiver::new(
+            room,
+            sender_identity,
+            frame_size_ms,
+            rpc_max_retries,
+            on_clear,
+            clock,
+            spawner,
+        )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `sender_identity` `None` follows the first agent participant; `on_clear` is the
     /// `clear_buffer` event the avatar runner listens to.
     pub fn new(
@@ -754,7 +818,10 @@ impl DataStreamAudioReceiver {
         let mut events = inner.room.events();
         let remote = loop {
             let found = match &inner.sender_identity {
-                Some(id) => inner.room.participant(&ParticipantIdentity(id.clone())).map(|p| p.identity().0.clone()),
+                Some(id) => inner
+                    .room
+                    .participant(&ParticipantIdentity(id.clone()))
+                    .map(|p| p.identity().0.clone()),
                 None => inner
                     .room
                     .remote_participants()
@@ -801,7 +868,10 @@ impl DataStreamAudioReceiver {
             .register_rpc_method(RPC_CLEAR_BUFFER.to_owned(), handler)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
 
-        let mut streams = inner.room.byte_streams(AUDIO_STREAM_TOPIC).map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
+        let mut streams = inner
+            .room
+            .byte_streams(AUDIO_STREAM_TOPIC)
+            .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
         let pump = {
             let inner = Arc::clone(inner);
             async move {
