@@ -159,7 +159,7 @@ impl SessionApi {
         if host_audio_input.is_some() {
             config.audio_input = None;
         }
-        if host_audio_output.is_some() {
+        if host_audio_output.is_some() || room.offline() {
             config.audio_output = None;
         }
         // A host sink's playback reports are stamped on the session's clock.
