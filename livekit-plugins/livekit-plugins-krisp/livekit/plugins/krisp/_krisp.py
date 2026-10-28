@@ -15,22 +15,93 @@
 """License-mode Krisp internals.
 
 This module is private to the plugin. It wraps the public ``krisp_audio``
-wheel and exposes a :class:`_LicenseKrispFrameProcessor` that
+wheel and exposes a :class:`LicenseKrispFrameProcessor` that
 :class:`KrispVivaFilterFrameProcessor` instantiates when the user picks
 :class:`KrispLicenseAuthProvider`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from importlib import import_module
 from threading import Lock
 from types import TracebackType
-from typing import Any, Literal
+from typing import Literal, Protocol, cast
 
 import numpy as np
+from numpy.typing import NDArray
 
 from livekit import rtc
 
 from .log import logger
+
+
+class _SamplingRates(Protocol):
+    Sr8000Hz: object
+    Sr16000Hz: object
+    Sr24000Hz: object
+    Sr32000Hz: object
+    Sr44100Hz: object
+    Sr48000Hz: object
+
+
+class _FrameDurations(Protocol):
+    Fd10ms: object
+    Fd15ms: object
+    Fd20ms: object
+    Fd30ms: object
+    Fd32ms: object
+
+
+class _LogLevels(Protocol):
+    Off: object
+
+
+class _ModelInfo(Protocol):
+    path: str
+
+
+class _SessionConfig(Protocol):
+    inputSampleRate: object
+    inputFrameDuration: object
+    outputSampleRate: object
+    modelInfo: _ModelInfo
+
+
+class _KrispSession(Protocol):
+    def process(
+        self, audio: NDArray[np.int16], noise_suppression_level: int
+    ) -> NDArray[np.int16] | None: ...
+
+
+class _SessionFactory(Protocol):
+    def create(self, config: _SessionConfig) -> _KrispSession: ...
+
+
+class _Version(Protocol):
+    major: int
+    minor: int
+    patch: int
+
+
+class _KrispSDK(Protocol):
+    SamplingRate: _SamplingRates
+    FrameDuration: _FrameDurations
+    LogLevel: _LogLevels
+    NcInt16: _SessionFactory
+
+    def globalInit(
+        self,
+        model_path: str,
+        license_key: str,
+        licensing_error_callback: Callable[[object, str], None],
+        log_callback: Callable[[str, object], None],
+        log_level: object,
+    ) -> None: ...
+    def globalDestroy(self) -> None: ...
+    def getVersion(self) -> _Version: ...
+    def ModelInfo(self) -> _ModelInfo: ...
+    def NcSessionConfig(self) -> _SessionConfig: ...
 
 
 class _KrispLicenseSDKManager:
@@ -42,19 +113,20 @@ class _KrispLicenseSDKManager:
     in cloud-only deployments.
     """
 
-    _module: Any = None
-    _sample_rates: dict[int, Any] | None = None
-    _frame_durations: dict[int, Any] | None = None
+    _module: _KrispSDK | None = None
+    _sample_rates: dict[int, object] | None = None
+    _frame_durations: dict[int, object] | None = None
     _reference_count: int = 0
     _lock = Lock()
 
     @classmethod
-    def acquire(cls, license_key: str) -> Any:
+    def acquire(cls, license_key: str) -> _KrispSDK:
         """Acquire a reference, returning the imported ``krisp_audio`` module."""
         with cls._lock:
             if cls._reference_count == 0:
                 try:
-                    import krisp_audio  # type: ignore[import-not-found]
+                    # The optional native SDK has no stubs; type its consumed API at import.
+                    krisp_audio = cast(_KrispSDK, import_module("krisp_audio"))
                 except ModuleNotFoundError as e:
                     raise RuntimeError(
                         "krisp-audio is not installed. Install Krisp's wheel "
@@ -94,6 +166,7 @@ class _KrispLicenseSDKManager:
                 )
             cls._reference_count += 1
             logger.debug("Krisp SDK (license) reference count: %d", cls._reference_count)
+            assert cls._module is not None
             return cls._module
 
     @classmethod
@@ -116,7 +189,7 @@ class _KrispLicenseSDKManager:
                     cls._frame_durations = None
 
     @classmethod
-    def sample_rate_enum(cls, sample_rate: int) -> Any:
+    def sample_rate_enum(cls, sample_rate: int) -> object:
         assert cls._sample_rates is not None, "SDK not acquired"
         if sample_rate not in cls._sample_rates:
             supported = ", ".join(str(r) for r in sorted(cls._sample_rates))
@@ -126,7 +199,7 @@ class _KrispLicenseSDKManager:
         return cls._sample_rates[sample_rate]
 
     @classmethod
-    def frame_duration_enum(cls, frame_duration_ms: int) -> Any:
+    def frame_duration_enum(cls, frame_duration_ms: int) -> object:
         assert cls._frame_durations is not None, "SDK not acquired"
         if frame_duration_ms not in cls._frame_durations:
             supported = ", ".join(str(d) for d in sorted(cls._frame_durations))
@@ -137,15 +210,15 @@ class _KrispLicenseSDKManager:
         return cls._frame_durations[frame_duration_ms]
 
     @staticmethod
-    def _log_callback(log_message: str, log_level: Any) -> None:
+    def _log_callback(log_message: str, log_level: object) -> None:
         logger.debug(f"[Krisp {log_level}] {log_message}")
 
     @staticmethod
-    def _licensing_error_callback(error: Any, error_message: str) -> None:
+    def _licensing_error_callback(error: object, error_message: str) -> None:
         logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
 
 
-class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
+class LicenseKrispFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     """License-mode FrameProcessor wrapping ``krisp_audio``.
 
     Internal implementation detail — users construct
@@ -164,7 +237,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     ) -> None:
         self._sdk_acquired = False
         self._filtering_enabled = True
-        self._session: Any | None = None
+        self._session: _KrispSession | None = None
         self._noise_suppression_level = noise_suppression_level
         self._sample_rate: int | None = None
         self._chunk_samples: int | None = None
@@ -179,8 +252,8 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         # call emits whatever processed audio is ready (never zero-padded — see
         # ``_process``), so the output frame size floats and real audio is never
         # interrupted by injected silence.
-        self._in_buf: np.ndarray = np.empty(0, dtype=np.int16)
-        self._out_buf: np.ndarray = np.empty(0, dtype=np.int16)
+        self._in_buf: NDArray[np.int16] = np.empty(0, dtype=np.int16)
+        self._out_buf: NDArray[np.int16] = np.empty(0, dtype=np.int16)
 
         try:
             self._module = _KrispLicenseSDKManager.acquire(license_key)
@@ -271,8 +344,10 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
         # Accumulate the incoming samples and process every whole chunk that is
         # now available (the input frame size need not match the chunk size).
-        in_arr = np.frombuffer(frame.data, dtype=np.int16)
-        self._in_buf = np.concatenate((self._in_buf, in_arr))
+        # NumPy leaves buffer and fallback concatenate overloads untyped.
+        in_arr = np.frombuffer(frame.data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
+        # NumPy leaves fallback concatenate overloads untyped.
+        self._in_buf = np.concatenate((self._in_buf, in_arr))  # pyright: ignore[reportUnknownMemberType]
 
         n_chunks = len(self._in_buf) // chunk
         if n_chunks > 0:
@@ -280,7 +355,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             pending = self._in_buf[:consumed]
             self._in_buf = self._in_buf[consumed:].copy()
 
-            processed: list[np.ndarray] = []
+            processed: list[NDArray[np.int16]] = []
             for i in range(n_chunks):
                 chunk_in = pending[i * chunk : (i + 1) * chunk]
                 try:
@@ -293,7 +368,8 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                     chunk_out = chunk_in
                 processed.append(np.asarray(chunk_out, dtype=np.int16))
 
-            self._out_buf = np.concatenate([self._out_buf, *processed])
+            # NumPy leaves fallback concatenate overloads untyped.
+            self._out_buf = np.concatenate([self._out_buf, *processed])  # pyright: ignore[reportUnknownMemberType]
 
         # Emit the processed audio that is ready, keeping any surplus buffered
         # for the next call. We never zero-pad a deficit: doing so injects
@@ -344,10 +420,6 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         logger.debug("Krisp frame processor session closed")
 
     def __del__(self) -> None:
-        # During Python shutdown, the manager module may already be torn down.
-        if _KrispLicenseSDKManager is None:
-            return
-
         if getattr(self, "_sdk_acquired", False):
             try:
                 if getattr(self, "_session", None) is not None:
@@ -358,7 +430,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 # Silently ignore errors during shutdown
                 pass
 
-    def __enter__(self) -> _KrispLicenseFrameProcessor:
+    def __enter__(self) -> LicenseKrispFrameProcessor:
         return self
 
     def __exit__(

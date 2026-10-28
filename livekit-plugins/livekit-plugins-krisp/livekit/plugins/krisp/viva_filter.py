@@ -46,8 +46,8 @@ if not hasattr(rtc, "FrameProcessor"):
         "Please update livekit-rtc: pip install --upgrade 'livekit>=1.0.23'"
     )
 
-_LEGACY_DEPRECATION_SHOWN = False
-_FRAME_PARAMS_DEPRECATION_SHOWN = False
+_legacy_deprecation_shown = False
+_frame_params_deprecation_shown = False
 
 
 class _KrispBackend(Protocol):
@@ -90,7 +90,7 @@ def _resolve_auth_provider(
        environment (the user is responsible for installing ``krisp_audio``).
     4. Otherwise → default ``LiveKitCloudAuthProvider``.
     """
-    global _LEGACY_DEPRECATION_SHOWN
+    global _legacy_deprecation_shown
 
     if auth_provider is not None:
         if model_path is not None:
@@ -102,7 +102,7 @@ def _resolve_auth_provider(
         return auth_provider
 
     if model_path is not None:
-        if not _LEGACY_DEPRECATION_SHOWN:
+        if not _legacy_deprecation_shown:
             warnings.warn(
                 "Passing `model_path` to KrispVivaFilterFrameProcessor is "
                 "deprecated. Use `auth_provider=KrispLicenseAuthProvider("
@@ -110,7 +110,7 @@ def _resolve_auth_provider(
                 DeprecationWarning,
                 stacklevel=3,
             )
-            _LEGACY_DEPRECATION_SHOWN = True
+            _legacy_deprecation_shown = True
         return KrispLicenseAuthProvider(model_path=model_path)
 
     # Auto-select Krisp-direct license auth when both env vars are set;
@@ -154,9 +154,9 @@ def _build_inner(
         return cloud_processor
 
     # KrispLicenseAuthProvider
-    from ._krisp import _KrispLicenseFrameProcessor
+    from ._krisp import LicenseKrispFrameProcessor
 
-    return _KrispLicenseFrameProcessor(
+    return LicenseKrispFrameProcessor(
         license_key=provider.license_key,
         model_path=provider.model_path,
         noise_suppression_level=noise_suppression_level,
@@ -165,7 +165,7 @@ def _build_inner(
     )
 
 
-class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
+class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame], _KrispBackend):
     """FrameProcessor for Krisp noise reduction.
 
     Thin facade over two backend FrameProcessor implementations: the
@@ -237,8 +237,8 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             FileNotFoundError: If the license-mode model file does not exist.
         """
         if frame_duration_ms is not None or sample_rate is not None:
-            global _FRAME_PARAMS_DEPRECATION_SHOWN
-            if not _FRAME_PARAMS_DEPRECATION_SHOWN:
+            global _frame_params_deprecation_shown
+            if not _frame_params_deprecation_shown:
                 warnings.warn(
                     "Passing `sample_rate` / `frame_duration_ms` to "
                     "KrispVivaFilterFrameProcessor is deprecated. The processor "
@@ -247,7 +247,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                     DeprecationWarning,
                     stacklevel=2,
                 )
-                _FRAME_PARAMS_DEPRECATION_SHOWN = True
+                _frame_params_deprecation_shown = True
 
         provider = _resolve_auth_provider(auth_provider, model_path)
         self._inner = _build_inner(

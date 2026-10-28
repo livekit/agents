@@ -14,9 +14,18 @@
 
 from __future__ import annotations
 
-import blockguard as _cext
+from importlib import import_module
+from typing import Protocol, cast
 
 from .version import __version__
+
+
+class _Watchdog(Protocol):
+    def install(self, threshold_ms: float, poll_ms: float) -> None: ...
+    def uninstall(self) -> None: ...
+
+
+_cext = cast(_Watchdog, import_module("blockguard"))
 
 
 def install(threshold_ms: float = 5000, poll_ms: float = 500) -> None:

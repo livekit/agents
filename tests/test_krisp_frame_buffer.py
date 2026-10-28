@@ -1,7 +1,7 @@
 """Regression tests for the Krisp license-mode frame buffering.
 
 These exercise the adaptive frame-size buffering in
-``_KrispLicenseFrameProcessor._process`` in isolation, with the Krisp SDK
+``LicenseKrispFrameProcessor._process`` in isolation, with the Krisp SDK
 replaced by an identity "session". The property under test: the processor must
 never inject silence *between* real audio. Doing so produces audible gaps
 (a "cutting in and out" artifact) once frames are concatenated downstream, and
@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.plugins.krisp._krisp import _KrispLicenseFrameProcessor
+from livekit.plugins.krisp._krisp import LicenseKrispFrameProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -38,9 +38,9 @@ class _IdentitySession:
         return np.asarray(chunk_in, dtype=np.int16)
 
 
-def _make_processor(sample_rate: int, chunk_samples: int) -> _KrispLicenseFrameProcessor:
+def _make_processor(sample_rate: int, chunk_samples: int) -> LicenseKrispFrameProcessor:
     # Build the object without going through __init__ so we don't touch the SDK.
-    proc = object.__new__(_KrispLicenseFrameProcessor)
+    proc = object.__new__(LicenseKrispFrameProcessor)
     proc._filtering_enabled = True
     proc._warned_channels = False
     proc._noise_suppression_level = 100
@@ -54,7 +54,7 @@ def _make_processor(sample_rate: int, chunk_samples: int) -> _KrispLicenseFrameP
 
 
 def _feed(
-    proc: _KrispLicenseFrameProcessor,
+    proc: LicenseKrispFrameProcessor,
     sample_rate: int,
     frame_sizes: list[int],
 ) -> tuple[np.ndarray, np.ndarray]:
