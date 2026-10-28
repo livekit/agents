@@ -58,64 +58,32 @@ pub const VOICE: Boundary = Boundary {
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
         "worker, IPC and job processes (lk-agents-worker's own tests, decision 70)",
-        "agent-db storage and the A2A door's transport (I-27 backend contracts; DST K-3, K-4)",
-    ],
-};
-
-/// The storage campaign (`tests/storage_survey.rs`, `storage` module).
-pub const STORAGE: Boundary = Boundary {
-    cores: &["storage core (lk_agents_storage::db plans and decodings, run_commit, merge_write, \
-         Renewal, LanePoll, the commit Resolution), stepped by simulated workers one plan at a time"],
-    fakes: &[
-        "storage::db: the thread database as a real SQLite in memory (rusqlite, test tooling) \
-         whose unixepoch() is the simulated clock",
-        "the AgentDB faults: commit acknowledgment lost before or after it applied, unreachable \
-         windows, paused owners whose lease lapses, workers lost mid-run, client cancels",
-    ],
-    transitional: &[
-        "storage::worker mirrors the runtime engine's and the A2A turn's step order by hand \
-         until the lane/turn orchestration is a core machine (I-1)",
-    ],
-    outside: &[
-        "lk_agents_runtime::storage engine, SqliteStorage files and the AgentDB wsdb client \
-         (I-27 backend contract suite, conformance with injected faults)",
-        "the A2A turn driver and the host's handler (runtime a2a_turns suite)",
+        "agent-db storage and the A2A door's transport (I-27 backend contracts; the A2A DST fakes the storage port)",
     ],
 };
 
 /// The A2A campaign (`tests/a2a_survey.rs`, `a2a` module).
 pub const A2A: Boundary = Boundary {
-    cores: &[
-        "A2A core (lk_agents_core::a2a: resolve_policy, resolve_debounce, answer_pending, \
-         checkpoint_stop, settle, result_for) under every inbox policy (interrupt, queue, \
-         batch, concurrent, reject), stepped by simulated door requests one decision at a time",
-        "storage core (lk_agents_storage::db plans and decodings: acquire with submit and pickup, \
-         receive, inbox, release_if_drained, submit, set_waiter, checkpoint, pickup, cancel, \
-         commit fenced, keeping the lease past a drained row or appending without one, \
-         resolve_commit, lane_info, lane_events, list_tasks; run_commit, merge_write, Renewal, \
-         LanePoll)",
-    ],
+    cores: &["A2A task machine (lk_agents_core::a2a::task::TaskMachine: deduplication, arrival \
+         policy, claim, drain, commit, every typed storage failure) under every inbox policy, \
+         one operation at a time"],
     fakes: &[
-        "storage::db: the thread database as a real SQLite in memory on the simulated clock",
-        "a2a::door's handler: drawn work time, checkpoints, text/raise/question endings, a yield \
-         seen at once or only at the next await",
-        "the clients: out-of-order arrivals on the a2a, delegation and sms channels under door \
-         options mixing the policies on one lane, resends after a lost or failed answer and at \
-         once, continuations of the pending question (stale ones the door refuses), cancels, \
-         ListTasks paging with a page token tried under other filters",
-        "the AgentDB faults: lost commit acknowledgments, unreachable windows, paused and lost \
-         workers",
+        "a2a::port: one lane in memory with the storage contract's semantics, injecting \
+         Unavailable, Uncertain before and after the commit applied, Rejected, LeaseLost, \
+         VersionConflict, NotFound, a refused statement and a cancelled handler",
+        "the clients: out-of-order arrivals on three channels under door options mixing the \
+         policies, resends at once and after a failed answer or a dead worker, client cancels",
     ],
     transitional: &[
-        "a2a::door and a2a::batch mirror lk_agents_runtime::a2a::Turn (exclusive, batch with \
-         its drain and await_task, concurrent, reject), the door's follow-up check and the \
-         storage engine's run by hand until the arrival policy and task transitions are a core \
-         machine (I-1, I-8)",
+        "the turn is one Ran completion: the port stages the batch completed without the \
+         outcome decisions (answer_pending, settle, interrupt yields), which only core unit \
+         tests and the runtime suites exercise",
     ],
     outside: &[
-        "SubscribeToTask and resubscribe from a cursor (current Task first, then the frames \
-         after the offset): runtime door and response streams, no core decision (K-30, I-27)",
-        "the door's HTTP/JSON-RPC transport and the host's handler (runtime a2a_turns suite)",
+        "the runtime door's execution of the operations and the handler's turn (runtime \
+         a2a_turns and a2a_door suites); settle and answer_pending (core unit tests)",
+        "lk-agents-storage's backends (real SQLite and a fake AgentDB server, its own suites)",
+        "SubscribeToTask and resubscribe from a cursor: runtime door and response streams",
     ],
 };
 

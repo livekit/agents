@@ -7,8 +7,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use livekit_protocol::agent::chat_context::ChatItem;
-use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use crate::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
     ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery,
@@ -23,6 +21,8 @@ use crate::schema::{
 };
 use crate::sql::Statement;
 use crate::{Fence, StorageError, TaskWrite};
+use livekit_protocol::agent::chat_context::ChatItem;
+use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
@@ -567,35 +567,39 @@ impl Lane {
     }
 
     async fn open_with_holder(&self, opts: RunOptions, holder: &str) -> Result<Run, StorageError> {
-        let (lease, closed, state, items, tasks, submitted, picked_up, context_scopes) =
-            match opts.exclusive {
-                true => {
-                    let acquired = self.acquire(&opts, holder).await?;
-                    let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
-                    if !acquired.already_committed {
-                        lease.keep_alive();
-                    }
-                    let a = *acquired;
-                    let tasks = Tasks::loaded(self.db.clone(), a.tasks);
-                    (
-                        Some(lease),
-                        a.already_committed,
-                        a.lane.state,
-                        a.items,
-                        tasks,
-                        a.submitted,
-                        a.picked_up,
-                        a.context_scopes,
-                    )
+        let (lease, closed, state, items, tasks, submitted, picked_up, context_scopes) = match opts
+            .exclusive
+        {
+            true => {
+                let acquired = self.acquire(&opts, holder).await?;
+                let lease = Lease::new(self.db.db.clone(), acquired.fence.clone());
+                if !acquired.already_committed {
+                    lease.keep_alive();
                 }
-                false => {
-                    // without a lease, the claim is conditional: only a `submitted` row is taken
-                    let picked_up = opts.pickup
-                        && self.db.pickup(&opts.task_id).await? == Some(TaskState::Submitted);
-                    let items = self.db.history().await?;
-                    (None, false, None, items, Tasks::new(self.db.clone()), None, picked_up, Vec::new())
-                }
-            };
+                let a = *acquired;
+                let tasks = Tasks::loaded(self.db.clone(), a.tasks);
+                (
+                    Some(lease),
+                    a.already_committed,
+                    a.lane.state,
+                    a.items,
+                    tasks,
+                    a.submitted,
+                    a.picked_up,
+                    a.context_scopes,
+                )
+            }
+            false => {
+                // without a lease nothing is claimed: the run goes only while its row is still
+                // `submitted` (a client did not cancel it), and the row stays so, never an
+                // orphan for a lease holder to fail
+                let picked_up = opts.pickup
+                    && self.db.task(&opts.task_id).await?.map(|r| r.status)
+                        == Some(TaskState::Submitted);
+                let items = self.db.history().await?;
+                (None, false, None, items, Tasks::new(self.db.clone()), None, picked_up, Vec::new())
+            }
+        };
         Ok(Run {
             db: self.db.clone(),
             lease,

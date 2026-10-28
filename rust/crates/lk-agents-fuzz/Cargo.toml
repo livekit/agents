@@ -33,9 +33,5 @@ prost.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 fastrand = "2"
-# The storage simulation: the storage core's plans run on a real SQLite in memory whose
-# `unixepoch()` is the simulation's clock.
-lk-agents-storage = { path = "../lk-agents-storage" }
-rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
 livekit-protocol.workspace = true
 a2a.workspace = true

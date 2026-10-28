@@ -218,3 +218,62 @@ fn stale_operation_completion_cannot_admit_replacement_work() {
     );
     assert!(matches!(step(&mut m, Completion::Task(None)), Operation::Submit(_)));
 }
+
+/// A2A_SEED=1337: a batch receipt whose every request gave up on a transient read failure while
+/// watching was never drained.
+#[test]
+fn a_watcher_keeps_watching_through_a_transient_read_failure() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Observe;
+    m.pending = Some(1);
+    let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));
+    assert!(effects.is_empty(), "{effects:?}");
+    let at_ = m.wake_at().expect("polls again");
+    assert!(matches!(operation(m.handle(Event::Wake, at_)), Operation::ReadTask(_)));
+}
+
+/// The runtime door's known finding (answer_is_an_outcome/received_message_is_drained, Inbox): a
+/// drain whose lane another holder took is not answered `Rejected` and does not give up its
+/// pending receipt; it waits and drains it once the lane frees.
+#[test]
+fn a_refused_drain_waits_and_drains_later() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Inbox;
+    m.pending = Some(1);
+    let row = InboxRow {
+        id: 1,
+        lane: "lane".into(),
+        task_id: "receipt".into(),
+        message_id: "m".into(),
+        message: m.message.to_a2a(),
+        received_at: 0,
+    };
+    assert!(matches!(step(&mut m, Completion::Inbox(vec![row.clone()])), Operation::Open { .. }));
+    let refused = at(&mut m, Duration::ZERO, Err(StorageError::Rejected { running_task_id: None }));
+    assert!(refused.is_empty(), "never answered Rejected: {refused:?}");
+    let wake = m.wake_at().expect("waits");
+    assert!(matches!(operation(m.handle(Event::Wake, wake)), Operation::ReadTask(_)));
+    assert!(matches!(
+        step(&mut m, Completion::Task(Some(row_of(TaskState::Submitted)))),
+        Operation::ReadInbox
+    ));
+    assert!(matches!(step(&mut m, Completion::Inbox(vec![row])), Operation::Open { .. }));
+}
+
+/// The runtime door's known finding (message_executes_once, Concurrent): a concurrent message
+/// whose task a client canceled before its turn does not run.
+#[test]
+fn a_concurrent_message_canceled_before_its_turn_does_not_run() {
+    let mut m = machine(Policy::Concurrent);
+    m.phase = Phase::Open;
+    m.pending = Some(1);
+    assert!(matches!(
+        step(&mut m, Completion::Opened { closed: false, picked_up: false }),
+        Operation::CloseRun
+    ));
+    assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
+}
+
+fn row_of(status: TaskState) -> TaskRow {
+    row(status)
+}

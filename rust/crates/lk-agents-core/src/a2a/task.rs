@@ -388,18 +388,24 @@ impl TaskMachine {
         Operation::ReadInbox
     }
 
-    /// Waits for the task. A `batch` receipt is never abandoned: the inbox drains it. Any other
-    /// task still `submitted` once the lane could have taken it is a dead waiter's (`stale`).
-    fn poll(&mut self, now: Duration) {
+    /// Waits for the task. A `batch` receipt is never abandoned: the inbox drains it. A
+    /// `concurrent` task has no lane to tell a live run from a dead one: once the wait ran out the
+    /// request answers the task as it stands. Any other task still unanswered once the lane could
+    /// have taken it is a dead waiter's (`stale`).
+    fn poll(&mut self, now: Duration) -> Option<Operation> {
         let poll = self.poll.get_or_insert_with(|| LanePoll::new(now, self.wait_timeout));
         let (at, stale) = match poll.next(now) {
             Some(at) => (at, false),
             None => {
                 *poll = LanePoll::new(now, self.wait_timeout);
+                if self.policy == Policy::Concurrent {
+                    return Some(self.answer_task(None));
+                }
                 (now + Duration::from_secs(1), self.policy != Policy::Batch)
             }
         };
         self.phase = Phase::Poll { at, stale };
+        None
     }
 
     /// Takes the lane without waiting, to fail what a dead holder left: its `working` rows, and
@@ -587,8 +593,7 @@ impl TaskMachine {
                     // the row's holder may have died: whoever takes the lane fails it
                     self.recovery_open(false)
                 } else {
-                    self.poll(now);
-                    return Ok(None);
+                    return Ok(self.poll(now));
                 }
             }
             (Phase::Inbox, Completion::Inbox(rows)) if rows.is_empty() => {
@@ -596,8 +601,7 @@ impl TaskMachine {
                     self.phase = Phase::Release;
                     Operation::ReleaseDrained
                 } else {
-                    self.poll(now);
-                    return Ok(None);
+                    return Ok(self.poll(now));
                 }
             }
             (Phase::Inbox, Completion::Inbox(rows)) => {
@@ -738,9 +742,12 @@ impl TaskMachine {
                 self.phase = Phase::Answer { reason: Some(REASON_LEASE_TIMEOUT) };
                 Operation::FailTask { task_id: self.task_id.clone(), reason: REASON_LEASE_TIMEOUT }
             }
+            (Phase::Observe | Phase::Inbox, StorageError::Unavailable(_)) => {
+                // a durable task is watched through a transient failure, not given up on
+                return Ok(self.poll(now));
+            }
             (Phase::DrainOpen | Phase::RecoveryOpen { .. }, StorageError::Rejected { .. }) => {
-                self.poll(now);
-                return Ok(None);
+                return Ok(self.poll(now));
             }
             (Phase::Run | Phase::DrainRun, _) => {
                 let unavailable =
@@ -762,6 +769,17 @@ impl TaskMachine {
                 // the answer's row is unreadable: the task as this worker left it
                 let answer = Answer::row(self.answering(), None, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
+            }
+            (Phase::DrainCommit, StorageError::Uncertain(_)) => {
+                self.phase = Phase::Resolve;
+                Operation::ResolveLater { task_id: self.task_id.clone() }
+            }
+            (Phase::DrainCommit, _) => {
+                self.phase = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
+                Operation::FailTask {
+                    task_id: self.task_id.clone(),
+                    reason: REASON_STORAGE_UNAVAILABLE,
+                }
             }
             (Phase::Commit, StorageError::Uncertain(_)) => {
                 // a lost acknowledgment is not a failure: the task stays as it is while the

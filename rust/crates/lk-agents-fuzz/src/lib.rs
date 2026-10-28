@@ -39,5 +39,4 @@ pub mod record;
 pub mod rules;
 pub mod sched;
 pub mod search;
-pub mod storage;
 pub mod text_session;

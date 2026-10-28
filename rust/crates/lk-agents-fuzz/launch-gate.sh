@@ -24,11 +24,10 @@ unset VOICE_FULL_WINDOW
 gate_seeds=${VOICE_GATE_SEEDS:-32768}
 survey_seeds=${VOICE_SURVEY_SEEDS:-1024}
 soak_seeds=${VOICE_SOAK_SEEDS:-8}
-storage_seeds=${STORAGE_SEEDS:-4096}
 a2a_seeds=${A2A_SEEDS:-2048}
 text_session_seeds=${TEXT_SESSION_SEEDS:-4096}
 for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
-    "VOICE_SOAK_SEEDS=$soak_seeds" "STORAGE_SEEDS=$storage_seeds" "A2A_SEEDS=$a2a_seeds" \
+    "VOICE_SOAK_SEEDS=$soak_seeds" "A2A_SEEDS=$a2a_seeds" \
     "TEXT_SESSION_SEEDS=$text_session_seeds"; do
     [[ ${pair#*=} =~ ^[1-9][0-9]*$ ]] || fail "$pair: a campaign needs a positive number of seeds"
 done
@@ -46,7 +45,7 @@ compiled=(
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
 )
 outside=(
-    "lk-agents-storage: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's storage survey"
+    "lk-agents-storage: ci.yml storage-tests (cargo test, real SQLite and a fake AgentDB); the A2A survey fakes its port"
 )
 
 if [[ ${1:-} == --skip-architecture ]]; then
@@ -141,8 +140,6 @@ campaign "campaign, $gate_seeds more seeds" survey survey \
     VOICE_FIRST_SEED="$survey_seeds" VOICE_SEEDS="$gate_seeds" ${full_window:+VOICE_FULL_WINDOW=1}
 campaign "soak, $soak_seeds calls" soak nothing_grows_with_the_conversation \
     VOICE_SOAK_SEEDS="$soak_seeds"
-campaign "storage survey, $storage_seeds seeds" storage_survey survey \
-    STORAGE_SEEDS="$storage_seeds"
 campaign "A2A survey (every inbox policy), $a2a_seeds seeds" a2a_survey survey \
     A2A_SEEDS="$a2a_seeds"
 campaign "TextSession survey, $text_session_seeds seeds" text_session_survey survey \

@@ -640,7 +640,7 @@ async def test_a_submitted_row_exists_while_the_turn_runs(
     """Plan 3.3.4: the ``submitted`` row is written before the lease is tried, so ``tasks/get``
     finds the task before the commit; the lease holder picks it up (``working``, one attempt,
     plan 3.3.2), and the commit moves that same row to its terminal state. ``concurrent`` holds
-    no lease and claims the row only while it is still ``submitted``."""
+    no lease and leaves the row ``submitted``."""
     a, b = thread_storages
     sid = await new_session(a, LANE)
     entered = asyncio.Event()
@@ -658,7 +658,10 @@ async def test_a_submitted_row_exists_while_the_turn_runs(
     # another worker, before the commit: the row is there, with the message
     during = await task_of(b, sid, LANE, "AST_early")
     assert during is not None
-    assert during.status == "working"
+    if policy == "concurrent":
+        assert during.status == "submitted"
+    else:
+        assert during.status == "working"
     assert during.message_id == "m1" and during.data.history == [a2a("hello", "m1")]
     assert during.name is None and during.internal is None
     assert during.seq == 1

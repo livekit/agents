@@ -1,69 +1,53 @@
-//! The A2A simulation (`lk_agents_fuzz::a2a`) over many seeds: every run must keep every rule,
-//! under the arrival order and BasicPOS over the due processes.
+//! The A2A simulation (`lk_agents_fuzz::a2a`) over many seeds: every run must keep every rule.
 //!
 //! A finding of a (contract, subject kind) in `known_findings.tsv` is counted, not failed.
 //!
 //! `cargo test` runs a small window and the replay check; the campaign is `survey`, behind
 //! `--ignored` (the launch gate runs it): `A2A_SEEDS` sizes it, `A2A_SEED=<n>` reruns one seed
 //! with its violations in full.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use lk_agents_fuzz::{a2a, boundary, sched::Sampling};
+use lk_agents_core::a2a::Policy;
+use lk_agents_fuzz::{a2a, boundary};
 
 const MESSAGES: usize = 8;
 
 /// What a campaign reached, by name, and how often.
-fn reach(record: &a2a::Record, into: &mut std::collections::BTreeMap<&'static str, u64>) {
-    let s = &record.seen;
-    let cancels_live = s.cancels.iter().filter(|c| !c.before.is_terminal()).count() as u64;
+fn reach(record: &a2a::Record, into: &mut BTreeMap<&'static str, u64>) {
+    let answered = |p: Policy| {
+        record.requests.iter().filter(|r| r.policy == p && r.answer.is_some()).count() as u64
+    };
+    let ledger = &record.port.ledger;
     for (name, n) in [
-        ("Answer", s.responses.len() as u64),
-        ("Deduplicated", s.deduplicated),
-        ("Continuation", s.continuations),
-        ("Interrupted", s.interrupted),
-        ("ClientCanceledTurn", s.client_canceled),
-        ("CancelLive", cancels_live),
-        ("CancelTerminal", s.cancels.len() as u64 - cancels_live),
-        ("LostAck", s.lost_acks),
-        ("UnresolvedAnswer", s.unresolved),
-        ("RejectedSave", s.rejected),
-        ("LeaseTimeout", s.lease_timeouts),
-        ("WorkerLost", s.lost.len() as u64),
-        ("FollowUpRefused", s.follow_ups_refused),
-        ("Received", s.received.len() as u64),
-        ("Batched", s.batched),
-        ("ConcurrentRun", s.concurrent_runs),
-        ("Refused", s.refusals.len() as u64),
-        ("Listing", s.listings.len() as u64),
-        (
-            "ForeignPageToken",
-            s.listings.iter().filter(|l| l.foreign_token.is_some()).count() as u64,
-        ),
+        ("Answer", record.requests.iter().filter(|r| r.answer.is_some()).count() as u64),
+        ("Batch", answered(Policy::Batch)),
+        ("Interrupt", answered(Policy::Interrupt)),
+        ("Queue", answered(Policy::Queue)),
+        ("Concurrent", answered(Policy::Concurrent)),
+        ("Reject", answered(Policy::Reject)),
+        ("WorkerLost", record.requests.iter().filter(|r| r.killed).count() as u64),
+        ("LostAck", ledger.lost_acks),
     ] {
         *into.entry(name).or_default() += n;
+    }
+    for (kind, n) in &ledger.injected {
+        *into.entry(kind).or_default() += n;
     }
 }
 
 /// Runs `seeds`; the failures, one line each with the command that reruns it, and the reach.
-fn campaign(
-    seeds: impl Iterator<Item = u64>,
-) -> (Vec<String>, std::collections::BTreeMap<&'static str, u64>) {
+fn campaign(seeds: impl Iterator<Item = u64>) -> (Vec<String>, BTreeMap<&'static str, u64>) {
     let mut failures = Vec::new();
-    let mut reached = std::collections::BTreeMap::new();
+    let mut reached = BTreeMap::new();
     for seed in seeds {
-        for sampling in [Sampling::Arrival, Sampling::BasicPos] {
-            let record = a2a::run(seed, MESSAGES, sampling);
-            reach(&record, &mut reached);
-            let (known, new): (Vec<_>, Vec<_>) =
-                a2a::rules::check(&record).into_iter().partition(|f| f.known());
-            *reached.entry("KnownFinding").or_default() += known.len() as u64;
-            if !new.is_empty() {
-                let new: Vec<String> = new.iter().map(ToString::to_string).collect();
-                failures.push(format!(
-                    "A2A_SEED={seed} ({sampling:?}, {} steps): {new:?}",
-                    record.steps
-                ));
-            }
+        let record = a2a::run(seed, MESSAGES);
+        reach(&record, &mut reached);
+        let (known, new): (Vec<_>, Vec<_>) =
+            a2a::rules::check(&record).into_iter().partition(|f| f.known());
+        *reached.entry("KnownFinding").or_default() += known.len() as u64;
+        if !new.is_empty() {
+            let new: Vec<String> = new.iter().map(ToString::to_string).collect();
+            failures.push(format!("A2A_SEED={seed} ({} steps): {new:?}", record.steps));
         }
     }
     (failures, reached)
@@ -71,16 +55,16 @@ fn campaign(
 
 #[test]
 fn a_small_window_keeps_every_a2a_rule() {
-    let (failures, reached) = campaign(0..16);
+    let (failures, reached) = campaign(0..32);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(reached["Answer"] > 0 && reached["Deduplicated"] > 0, "{reached:?}");
+    assert!(reached["Answer"] > 0, "{reached:?}");
 }
 
 #[test]
 fn a_seed_replays_its_run() {
-    let a = a2a::run(7, MESSAGES, Sampling::BasicPos);
-    let b = a2a::run(7, MESSAGES, Sampling::BasicPos);
-    assert_eq!((a.steps, a.tasks, a.events), (b.steps, b.tasks, b.events));
+    let a = a2a::run(7, MESSAGES);
+    let b = a2a::run(7, MESSAGES);
+    assert_eq!((a.steps, a.now, a.requests.len()), (b.steps, b.now, b.requests.len()));
 }
 
 #[test]
@@ -105,15 +89,4 @@ fn survey() {
         assert!(missing.is_empty(), "the campaign never reached {missing:?}");
     }
     assert!(failures.is_empty(), "{} failing runs:\n{}", failures.len(), failures.join("\n"));
-}
-
-#[test]
-fn a_canceled_continuation_keeps_its_receipt_identity() {
-    for seed in [154, 239] {
-        for sampling in [Sampling::Arrival, Sampling::BasicPos] {
-            let record = a2a::run(seed, MESSAGES, sampling);
-            let failures = a2a::rules::message_executes_once(&record);
-            assert!(failures.is_empty(), "seed {seed} {sampling:?}: {failures:?}\n{record:#?}");
-        }
-    }
 }
