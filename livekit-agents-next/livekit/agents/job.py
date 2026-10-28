@@ -18,13 +18,12 @@ import asyncio
 import contextvars
 import datetime
 import functools
-import json
 import logging
 import multiprocessing as mp
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -36,15 +35,17 @@ from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
 from . import _core
+from ._generated.telemetry import SessionReportSnapshot
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
-from .telemetry._export import call_bounded, policy
+from .telemetry._export import attribute_bytes, call_bounded, policy
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
     _cloud_log_handler,
     _discard_cloud_tracer,
     _prepare_cloud_tracer,
+    _serialize_session_options,
     _setup_cloud_tracer,
     _shutdown_telemetry,
     capture_content_enabled,
@@ -294,42 +295,102 @@ class JobContext:
             except Exception:
                 logger.exception("failed to finish the session recording")
 
+        session = self._report_session(session)
+        loop = asyncio.get_running_loop()
+        preparation_deadline = loop.time() + policy().upload_timeout_seconds
+
+        def remaining() -> float:
+            duration = preparation_deadline - loop.time()
+            if duration <= 0:
+                raise TimeoutError("session report preparation deadline exceeded")
+            return duration
+
         def prepare_report() -> SessionReport:
-            flush_turn_metrics(session.history)
-            report = self.make_session_report(session)
+            from .llm import ChatContext
 
-            from .voice.remote_session import ConsoleCall
-
-            if ConsoleCall.record:
-                directory = Path(
-                    "console-recordings",
-                    f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
-                )
-                try:
-                    directory.mkdir(parents=True, exist_ok=True)
-                    destination = _core._core_TelemetryPolicy(
-                        True, report._capture_content, self._redaction_enabled
-                    )
-                    snapshot = {
-                        key: value
-                        for key, value in report.to_dict().items()
-                        if destination.attribute_action("session_report", key, True)[0]
-                    }
-                    (directory / "session_report.json").write_text(json.dumps(snapshot, indent=2))
-                except Exception:
-                    logger.exception("failed to save session report")
-            return report
+            expired = session._event_retention.expire(time.monotonic_ns())
+            for _ in range(expired):
+                session._event_snapshots.popleft()
+            # The framework only reads admitted immutable snapshots. Native projection detaches
+            # each event on its bounded callback; application report reads keep deep-copy semantics.
+            return self._build_session_report(
+                session,
+                ChatContext(items=list(session.history.items)),
+                list(session._event_snapshots),
+            )
 
         try:
             report = await call_bounded(
                 f"session-report:{self.job.id}:{id(session):x}",
                 prepare_report,
                 policy().report_retained_bytes,
-                policy().upload_timeout_seconds,
+                remaining(),
             )
         except Exception:
             logger.exception("failed to prepare the session report")
             return
+
+        from .llm import ChatContext
+        from .voice.remote_session import ConsoleCall
+
+        try:
+            for message in report.chat_history.messages():
+                await call_bounded(
+                    f"report-metrics/{id(report):x}",
+                    functools.partial(flush_turn_metrics, ChatContext(items=[message])),
+                    policy().max_record_bytes,
+                    remaining(),
+                )
+                await asyncio.sleep(0)
+        except Exception:
+            logger.exception("failed to record session metrics")
+
+        if ConsoleCall.record and loop.time() < preparation_deadline:
+            worker = _core._core_TelemetryWorker()
+            key = f"console-report/{id(report):x}"
+            reserved = worker.reserve(key, policy().report_retained_bytes)
+            try:
+                if not reserved:
+                    raise RuntimeError("console report preparation exceeds native admission")
+                projection = _core._core_SessionReportProjection(
+                    report._capture_content, report._recording_options, self._redaction_enabled
+                )
+                deadline = preparation_deadline
+                builder = await call_bounded(key, _core._core_PreparedTranscript, 0, remaining())
+                if projection.transcript:
+                    from .telemetry.traces import _append_transcript_item
+
+                    builder.check_input(len(report.chat_history.items), 0)
+                    for item in report.chat_history.items:
+                        await call_bounded(
+                            key,
+                            functools.partial(
+                                _append_transcript_item,
+                                builder,
+                                item,
+                                len(report.chat_history.items),
+                            ),
+                            policy().max_record_bytes,
+                            remaining(),
+                        )
+                        await asyncio.sleep(0)
+                snapshot = await report._snapshot(
+                    projection,
+                    deadline=deadline,
+                    event_sink=builder.append_event,
+                )
+                path = Path(
+                    "console-recordings",
+                    f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
+                    "session_report.json",
+                )
+                async with asyncio.timeout_at(deadline):
+                    await builder.finish_report(snapshot, str(path))
+            except Exception:
+                logger.exception("failed to save session report")
+            finally:
+                if reserved:
+                    worker.release(key)
 
         has_evals = self._tagger.has_evals()
         obs_url = self._run.observability_url
@@ -409,16 +470,21 @@ class JobContext:
         """
         return self._tagger
 
-    def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
-
+    def _report_session(self, session: VoiceSession | None) -> VoiceSession:
         session = session or self._primary_agent_session
-
-        if not session:
+        if session is None:
             raise RuntimeError("Cannot prepare report, no VoiceSession was found")
-
         if not session._event_retention.allows_read(self.job.id):
             raise PermissionError("A session report is available only to its owning job")
+        return session
 
+    def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
+        session = self._report_session(session)
+        return self._build_session_report(session, session.history.copy(), session._recorded_events)
+
+    def _build_session_report(
+        self, session: VoiceSession, history: ChatContext, events: list[AgentEvent]
+    ) -> SessionReport:
         recording_started_at = session._recorder.started_at if session._recorder else None
         sr = SessionReport(
             job_id=self.job.id,
@@ -426,14 +492,12 @@ class JobContext:
             room=self.job.room.name,
             options={**session.options, "recording_options": session._recording_options},
             started_at=session._started_at,
-            events=session._recorded_events,
-            chat_history=session.history.copy(),
+            events=events,
+            chat_history=history,
             model_usage=session.usage.model_usage,
             audio_recording_path=session._recording_path,
             audio_recording_started_at=recording_started_at,
-            _capture_content=session._event_retention.accepts(
-                "conversation_item_added", session._recording_options["redaction"]
-            ),
+            _capture_content=session._event_retention.capture_content,
         )
         if recording_started_at is not None:
             sr.duration = sr.timestamp - recording_started_at
@@ -993,6 +1057,100 @@ class SessionReport:
     _capture_content: bool = field(
         default_factory=capture_content_enabled, repr=False, kw_only=True
     )
+
+    _recording_options: _core.RecordingOptions = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # This legacy report input is decoded once; destinations use typed recording options.
+        self._recording_options = (
+            _core.RecordingOptions(**self.options.get("recording_options", {}))
+            if self.options is not None
+            else _core.RecordingOptions()
+        )
+
+    async def _snapshot(
+        self,
+        projection: _core._core_SessionReportProjection,
+        *,
+        deadline: float | None = None,
+        event_sink: Callable[[object], None] | None = None,
+    ) -> SessionReportSnapshot:
+        loop = asyncio.get_running_loop()
+        deadline = (
+            deadline if deadline is not None else loop.time() + policy().upload_timeout_seconds
+        )
+
+        def remaining() -> float:
+            assert deadline is not None
+            duration = deadline - loop.time()
+            if duration <= 0:
+                raise TimeoutError("session report preparation deadline exceeded")
+            return duration
+
+        projection.check_events(len(self.events), 0, 0)
+        key = f"report-snapshot/{id(self):x}"
+
+        def metadata() -> SessionReportSnapshot:
+            if (
+                attribute_bytes(
+                    (self.job_id, self.room_id, self.room, self.sdk_version, self.model_usage)
+                )
+                > policy().max_record_bytes
+            ):
+                raise ValueError("session report summary exceeds the native input budget")
+            return projection.project(
+                SessionReportSnapshot(
+                    job_id=self.job_id,
+                    room_id=self.room_id,
+                    room=self.room,
+                    events=[],
+                    audio_recording_path=(
+                        str(self.audio_recording_path.absolute())
+                        if self.audio_recording_path
+                        else None
+                    ),
+                    audio_recording_started_at=self.audio_recording_started_at,
+                    options=(
+                        _serialize_session_options(self.options)
+                        if projection.content and self.options is not None
+                        else None
+                    ),
+                    chat_history=None,
+                    timestamp=self.timestamp,
+                    usage=[usage.model_dump() for usage in self.model_usage]
+                    if self.model_usage
+                    else None,
+                    sdk_version=self.sdk_version,
+                )
+            )
+
+        snapshot = await call_bounded(key, metadata, policy().max_record_bytes, remaining())
+        events: list[object] = []
+        omitted = 0
+        retained_bytes = 0
+
+        def append_event(event: AgentEvent) -> None:
+            nonlocal retained_bytes, omitted
+            charge = attribute_bytes(event)
+            retained_bytes += charge
+            projection.check_events(len(self.events), retained_bytes, charge)
+            projected = projection.project_event(event.model_dump(mode="json"))
+            if projected is None:
+                omitted += 1
+            elif event_sink is not None:
+                event_sink(projected)
+            else:
+                events.append(projected)
+
+        for event in self.events:
+            await call_bounded(
+                key,
+                functools.partial(append_event, event),
+                policy().max_record_bytes,
+                remaining(),
+            )
+            await asyncio.sleep(0)
+        return replace(snapshot, events=events, omitted_events=omitted)
 
     def to_dict(self) -> dict:
         events_dict = [event.model_dump() for event in self.events]

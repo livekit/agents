@@ -26,9 +26,9 @@
   "interfaces": {
     "asyncio": {
       "heartbeat_ms": 1,
-      "loop_lag_p999_fraction_of_cadence": 0.2,
+      "loop_lag_p999_exclusive_fraction_of_cadence": 0.2,
       "loop_lag_max_exclusive_fraction_of_cadence": 0.5,
-      "derivation": "Reserve 80% of each frame for downstream work at the tail; never consume half a frame in scheduling alone. 10ms gives 2ms p99.9 / <5ms max; 20ms gives 4ms / <10ms."
+      "derivation": "Reserve 80% of each frame for downstream work at the tail; never consume half a frame in scheduling alone. 10ms gives <2ms p99.9 / <5ms max; 20ms gives <4ms / <10ms."
     },
     "synchronous_native_call": {
       "thread_cpu_max_fraction_of_cadence": 0.1,
@@ -148,7 +148,7 @@
           }
         ],
         "frame_cadence_ms": 10,
-        "loop_lag_p999_gate_us": 2000,
+        "loop_lag_p999_exclusive_gate_us": 2000,
         "loop_lag_max_exclusive_gate_us": 5000,
         "frame_cadence_qualified": false,
         "result": "Delivery and reservation release passed. Frame-cadence gates remain unqualified on the shared macOS host."
@@ -212,11 +212,6 @@
         "asyncio callback wall/thread CPU by coroutine or callback name",
         "same-thread GC overlap and host load",
         "complete transcript and SDK item counts with observable admission refusals"
-      ],
-      "checks": [
-        "test_report_qualification_refuses_an_unqualified_idle_baseline",
-        "test_completed_capture_releases_report_samples_before_the_next_workload",
-        "test_loop_monitor_retains_a_blocking_callback_stall"
       ]
     }
   },

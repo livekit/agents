@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
+#     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/records.rs
 #     rust/crates/lk-agents-abi/src/telemetry/loop_monitor.rs
 #     rust/crates/lk-agents-abi/src/telemetry/work.rs
@@ -19,6 +20,24 @@ TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope"
 
 
 TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity", "disabled"]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class SessionReportSnapshot:
+    """The serialized SDK snapshot. Native projection keeps its schema stable when content is denied."""
+
+    job_id: str
+    room_id: str
+    room: str
+    events: list[object]
+    omitted_events: int = 0
+    audio_recording_path: str | None
+    audio_recording_started_at: float | None
+    options: object | None
+    chat_history: object | None
+    timestamp: float
+    usage: object | None
+    sdk_version: str
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

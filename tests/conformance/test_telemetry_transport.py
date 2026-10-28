@@ -12,7 +12,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents import JobContext, ipc
-from livekit.agents._generated.telemetry_transport import TraceCarrier
 from livekit.agents.ipc import JobExecutor
 from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.agents.telemetry._context import tracer
@@ -37,9 +36,7 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
     sdk = trace.get_tracer("customer-ipc", tracer_provider=provider)
     monkeypatch.setattr(tracer, "_tracer", sdk)
     if wire_parent != "active":
-        monkeypatch.setattr(
-            ipc, "capture_trace_carrier", lambda: TraceCarrier(traceparent=wire_parent)
-        )
+        monkeypatch.setattr(ipc, "capture_traceparent", lambda: wire_parent)
 
     async def entrypoint(ctx: JobContext) -> None:
         with sdk.start_as_current_span("customer") as span:

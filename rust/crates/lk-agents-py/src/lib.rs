@@ -64,6 +64,7 @@ impl generated::Implementations for Selected {
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_inference::creds::Credentials;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
+    type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;
     type EventRetention = lk_agents_runtime::telemetry::observation::EventRetention;
     type PreparedTranscript = lk_agents_runtime::telemetry::upload::TranscriptBuilder;

@@ -81,8 +81,12 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     from .fake_llm import FakeLLM
 
     set_capture_content(True)
-    owner = SimpleNamespace(job=job_protocol.Job(id="owner"), room=object())
-    other = SimpleNamespace(job=job_protocol.Job(id="other"), room=object())
+    owner = object.__new__(JobContext)
+    owner._info = SimpleNamespace(job=job_protocol.Job(id="owner"))
+    owner._room = object()
+    other = object.__new__(JobContext)
+    other._info = SimpleNamespace(job=job_protocol.Job(id="other"))
+    other._room = object()
     monkeypatch.setattr(agent_session, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
@@ -128,6 +132,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
 
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     await session.start(Agent(instructions="desk"))
+    session.history.add_message(role="user", content="recorded message")
     for _ in range(1100):
         session.emit(
             "agent_state_changed",
@@ -140,32 +145,20 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
     entered, release = threading.Event(), threading.Event()
     loop_thread = threading.get_ident()
     threads: list[int] = []
-    make_report = JobContext.make_session_report
+    make_report = JobContext._build_session_report
     flush_metrics = job_module.flush_turn_metrics
-    write_text = Path.write_text
 
-    def prepare(self, current=None):
+    def prepare(self, current, history, events):
         threads.append(threading.get_ident())
         entered.set()
         release.wait(2)
-        return make_report(self, current)
+        return make_report(self, current, history, events)
 
     def flush(history):
         threads.append(threading.get_ident())
         flush_metrics(history)
 
-    def write_report(
-        path: Path,
-        data: str,
-        encoding=None,
-        errors=None,
-        newline=None,
-    ) -> int:
-        threads.append(threading.get_ident())
-        return write_text(path, data, encoding=encoding, errors=errors, newline=newline)
-
-    monkeypatch.setattr(Path, "write_text", write_report)
-    monkeypatch.setattr(JobContext, "make_session_report", prepare)
+    monkeypatch.setattr(JobContext, "_build_session_report", prepare)
     monkeypatch.setattr(job_module, "flush_turn_metrics", flush)
     monkeypatch.setattr(ConsoleCall, "record", True)
     monkeypatch.chdir(tmp_path)
@@ -184,10 +177,12 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         async with asyncio.timeout(3):
             await cleanup
         await session.aclose()
-    assert len(threads) == 3
+    assert len(threads) == 2
     assert all(thread != loop_thread for thread in threads)
     [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
-    assert '"job_id": "report-worker"' in artifact.read_text()
+    import json
+
+    assert json.loads(artifact.read_text())["job_id"] == "report-worker"
 
 
 async def test_bounded_host_callbacks_keep_late_ownership_and_propagate_the_original_error() -> (
@@ -240,6 +235,7 @@ async def test_bounded_host_callbacks_keep_late_ownership_and_propagate_the_orig
     ("creation_consent", "later_consent", "project_redaction", "content_present"),
     [(False, True, False, False), (True, False, False, True), (True, True, True, False)],
 )
+@pytest.mark.parametrize("requested_formats", [False, True])
 async def test_console_report_cannot_bypass_creation_consent_or_project_redaction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -247,11 +243,22 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     later_consent: bool,
     project_redaction: bool,
     content_present: bool,
+    requested_formats: bool,
 ) -> None:
     import json
+    from collections.abc import Sequence
     from types import SimpleNamespace
 
+    from opentelemetry.sdk._logs import ReadableLogRecord
+    from opentelemetry.sdk._logs.export import LogRecordExportResult
+    from scripts.bench.reports import _CountingExporter, capture_reports
+
+    from livekit.agents import _core
     from livekit.agents.job import JobContext
+    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
+    from livekit.agents.telemetry import traces
+    from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
+    from livekit.agents.voice.events import SessionUsageUpdatedEvent
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
 
@@ -259,6 +266,21 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     session = VoiceSession(turn_handling={"turn_detection": None})
     session.history.add_message(role="user", content="private console conversation")
     session._recording_path = tmp_path / "private-customer-audio.ogg"
+    session.emit(
+        "agent_state_changed",
+        AgentStateChangedEvent(old_state="listening", new_state="thinking"),
+    )
+    session.emit(
+        "session_usage_updated",
+        SessionUsageUpdatedEvent(
+            usage=AgentSessionUsage(
+                model_usage=[LLMModelUsage(provider="provider", model="model", input_tokens=7)]
+            )
+        ),
+    )
+    session._recording_options["logs"] = True
+    session._recording_options["transcript"] = requested_formats
+    session._recording_options["audio"] = requested_formats
     set_capture_content(later_consent)
     owner = object.__new__(JobContext)
     owner._info = SimpleNamespace(job=job_protocol.Job(id="console-policy"))
@@ -274,10 +296,51 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
     snapshot = json.loads(artifact.read_text())
     assert snapshot["job_id"] == "console-policy"
-    assert ("private console conversation" in artifact.read_text()) is content_present
-    assert ("private-customer-audio.ogg" in artifact.read_text()) is content_present
-    assert ("options" in snapshot) is content_present
+    assert ("private console conversation" in artifact.read_text()) is (
+        content_present and requested_formats
+    )
+    audio_present = requested_formats and not project_redaction
+    assert ("private-customer-audio.ogg" in artifact.read_text()) is audio_present
+    assert snapshot["events"][0]["type"] == "agent_state_changed"
+    assert snapshot["events"][0]["new_state"] == "thinking"
+    assert (snapshot["options"] is not None) is content_present
+    assert (snapshot["audio_recording_path"] is not None) is audio_present
+    if not (content_present and requested_formats):
+        assert snapshot["chat_history"] == {"items": []}
+    if not audio_present:
+        assert snapshot["audio_recording_started_at"] is None
+    assert snapshot["events"][1]["type"] == "session_usage_updated"
+    assert snapshot["events"][1]["usage"]["model_usage"][0]["input_tokens"] == 7
     assert session.history.items[0].text_content == "private console conversation"
+
+    records: list[ReadableLogRecord] = []
+    export = _CountingExporter.export
+
+    def collect(
+        exporter: _CountingExporter, batch: Sequence[ReadableLogRecord]
+    ) -> LogRecordExportResult:
+        records.extend(batch)
+        return export(exporter, batch)
+
+    with capture_reports(), monkeypatch.context() as patches:
+        patches.setattr(_CountingExporter, "export", collect)
+        await traces._upload_session_report(
+            agent_name="report-agent",
+            observability_url="https://unused.invalid",
+            report=owner.make_session_report(),
+            tagger=_core.Tagger(),
+            http_session=SimpleNamespace(),
+            metadata={ATTRIBUTE_REDACTION_ENABLED: project_redaction},
+        )
+    cloud_events = [
+        json.loads(record.log_record.attributes["session.event"])
+        for record in records
+        if record.log_record.body == "session event"
+    ]
+    assert cloud_events == snapshot["events"]
+    [summary] = [record for record in records if record.log_record.body == "session report"]
+    cloud_options = json.loads(json.dumps(summary.log_record.attributes["session.options"]))
+    assert cloud_options == snapshot["options"]
 
 
 @pytest.mark.parametrize("creation_consent", [False, True])
@@ -295,7 +358,8 @@ async def test_report_upload_keeps_creation_consent(creation_consent: bool, sour
     session = VoiceSession(turn_handling={"turn_detection": None})
     session.history.add_message(role="user", content="private before consent changed")
     session._recording_options["transcript"] = True
-    owner = SimpleNamespace(job=job_protocol.Job(id="report-job"))
+    owner = object.__new__(JobContext)
+    owner._info = SimpleNamespace(job=job_protocol.Job(id="report-job"))
     if source == "explicit":
         report = SessionReport(
             job_id="report-job",
@@ -316,3 +380,43 @@ async def test_report_upload_keeps_creation_consent(creation_consent: bool, sour
     assert bool(capture.items) is creation_consent
     if creation_consent:
         assert "private before consent changed" in capture.uploads["report-job"]
+
+
+def test_safe_usage_events_reach_reports_without_conversation_capture() -> None:
+    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
+    from livekit.agents.voice.events import SessionUsageUpdatedEvent
+
+    set_capture_content(False)
+    session = VoiceSession(turn_handling={"turn_detection": None})
+    event = SessionUsageUpdatedEvent(
+        usage=AgentSessionUsage(
+            model_usage=[LLMModelUsage(provider="provider", model="model", input_tokens=7)]
+        )
+    )
+    session.emit("session_usage_updated", event)
+    oversized = event.model_copy(deep=True)
+    oversized.usage.__dict__["hidden_cache"] = b"x" * (2 * 1024 * 1024)
+    session.emit("session_usage_updated", oversized)
+    assert session._recorded_events == [event]
+
+
+async def test_explicit_report_options_do_not_implicitly_enable_recording() -> None:
+    from scripts.bench.reports import capture_reports, prepare
+
+    from livekit.agents import llm
+    from livekit.agents.job import SessionReport
+
+    set_capture_content(True)
+    report = SessionReport(
+        job_id="report-job",
+        room_id="room",
+        room="room",
+        options={"custom": "value"},
+        events=[],
+        chat_history=llm.ChatContext.empty(),
+    )
+    assert report.to_dict()["options"] == {"custom": "value"}
+    with capture_reports() as capture:
+        await prepare(report)
+    assert capture.uploads == {}
+    assert capture.items == {}

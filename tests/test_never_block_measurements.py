@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import gc
+import json
 import sys
 import time
 from pathlib import Path
@@ -53,6 +55,31 @@ def test_profiler_counts_visible_payload_materialization_and_restores_itself() -
     assert profiler.copy_calls == 1
     assert profiler.copy_bytes == 11
     assert sys.getprofile() is None
+
+
+@pytest.mark.no_concurrent
+def test_recording_timing_observations_does_not_trigger_collection() -> None:
+    capture = reports.ReportCapture()
+    monitor = LoopLag()
+    collections: list[int] = []
+
+    def observe(phase: str, info: dict[str, int]) -> None:
+        if phase == "start":
+            collections.append(info["generation"])
+
+    gc.collect()
+    gc.callbacks.append(observe)
+    try:
+        for index in range(5000):
+            capture.sdk_slices.append(reports.SdkSlice(index, 1, index + 1, 1, "append_batch"))
+            monitor.observations.append((index, index + 1))
+    finally:
+        gc.callbacks.remove(observe)
+
+    assert not collections, "recording timings must not induce pauses in the measured workload"
+    assert len(capture.sdk_slices) == len(monitor.observations) == 5000
+    assert max(sample.cpu_ns for sample in capture.sdk_slices) == 5000
+    assert max(lag for _, lag in monitor.observations) == 5000
 
 
 def test_native_sampling_preserves_worker_identity_and_inclusive_counts() -> None:
@@ -118,10 +145,62 @@ async def test_report_qualification_refuses_an_unqualified_idle_baseline(
     assert await reports.main(args) == 1
 
 
+@pytest.mark.asyncio
+async def test_invalid_report_limits_preserve_capture_without_starting_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = json.loads(Path(reports.__file__).with_name("budgets.json").read_text())
+    manifest["interfaces"]["session_report"]["limits"]["loop_lag_max_ms_exclusive"] = 50
+    (tmp_path / "budgets.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(reports, "__file__", str(tmp_path / "reports.py"))
+    output = tmp_path / "capture.json"
+    output.write_text("previous valid capture")
+    started = False
+
+    async def work(*args: object) -> dict[str, object]:
+        nonlocal started
+        started = True
+        return {
+            "workload_complete": True,
+            "baseline_budget_pass": True,
+            "measured_budget_pass": True,
+        }
+
+    monkeypatch.setattr(reports, "run", work)
+    args = argparse.Namespace(output=output, sessions=[1], items=10_000, check=True)
+    with pytest.raises(ValueError, match="loop_lag_max_ms_exclusive"):
+        await reports.main(args)
+    assert not started
+    assert output.read_text() == "previous valid capture"
+
+
 def test_exceeded_frame_budgets_fail_even_when_average_work_is_fast() -> None:
+    budget = reports.load_budget()
     healthy = distribution([100_000] * 1000)
     stalled = distribution([100_000] * 1000 + [10_000_000])
     assert cadence_budget_pass(healthy, 10, healthy)
     assert not cadence_budget_pass(stalled, 10, healthy)
     assert not cadence_budget_pass(distribution([2_000_000] * 1000), 10)
     assert not cadence_budget_pass(healthy, 10, distribution([2_000_000]))
+    assert budget.scheduling_pass(healthy)
+    assert not budget.scheduling_pass(stalled)
+    assert not budget.scheduling_pass(distribution([2_000_000] * 1000))
+    assert budget.cpu_pass(healthy)
+    assert not budget.cpu_pass(stalled)
+
+
+def test_report_qualification_uses_declared_limits_and_sample_count(tmp_path: Path) -> None:
+    manifest = json.loads(Path(reports.__file__).with_name("budgets.json").read_text())
+    report = manifest["interfaces"]["session_report"]
+    report["workload"]["minimum_observations_per_distribution"] = 2000
+    report["limits"]["loop_lag_p999_ms_exclusive"] = 0.25
+    report["limits"]["callback_thread_cpu_max_ms"] = 0.4
+    path = tmp_path / "budgets.json"
+    path.write_text(json.dumps(manifest))
+    budget = reports.load_budget(path)
+
+    assert budget.scheduling_pass(distribution([100_000] * 2000))
+    assert not budget.scheduling_pass(distribution([300_000] * 2000))
+    assert not budget.scheduling_pass(distribution([100_000] * 1999))
+    assert not budget.cpu_pass(distribution([500_000] * 2000))
+    assert not budget.cpu_pass(distribution([100_000] * 1999))

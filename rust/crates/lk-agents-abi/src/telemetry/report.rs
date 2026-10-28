@@ -59,6 +59,7 @@ fn hr_seconds(seconds: f64) -> HrTime {
 /// `redaction = False` never disables project-level redaction; it only declines to ask for it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
 #[binding(emit)]
+#[host(host_type = "livekit.agents._core.RecordingOptions", handwritten(extract))]
 pub struct RecordingOptions {
     pub audio: bool,
     pub traces: bool,
@@ -205,6 +206,8 @@ fn chat_item_is_error(item: &ChatItem) -> bool {
     matches!(item, ChatItem::FunctionCallOutput(o) if o.is_error)
 }
 
+pub mod projection;
+use projection::SessionReportProjection as _;
 mod records;
 pub use records::LogRecordWire;
 
@@ -228,6 +231,18 @@ pub fn session_chat_record(
     let mut record = chat_item_record(&item, projected);
     attribute_report_record(&mut record, &identity.0, &identity.1, &identity.2, true);
     report_value_fits(&record.attributes).then(|| record.into())
+}
+
+fn session_event_record(
+    projection: &projection::ReportProjection,
+    event: Value,
+    timestamp: f64,
+) -> Option<LogRecord> {
+    let event = projection.project_event(event)?;
+    let key = projection::ReportProjection::event_attribute(&event)?;
+    let event = serde_json::to_string(&event).ok()?;
+    let attributes = Value::Object(Map::from_iter([(key.to_owned(), Value::String(event))]));
+    Some(record(LoggerName::ChatHistory, "session event", hr_seconds(timestamp), attributes, false))
 }
 
 fn chat_item_record(item: &ChatItem, projected: Value) -> LogRecord {
@@ -260,9 +275,10 @@ pub fn session_records(
         return Vec::new();
     }
     let mut out = Vec::new();
-    let mut omitted = 0usize;
+    let mut omitted = report.omitted_events;
     let opts = report.recording_options;
-    let capture_content = super::policy::content_allowed(capture_content, opts.redaction);
+    let projection = projection::ReportProjection::new(capture_content, &opts, false);
+    let capture_content = projection.content();
 
     if opts.recording_enabled() {
         // An `or` chain: a `started_at` of exactly 0.0 falls through to `timestamp`.
@@ -319,7 +335,20 @@ pub fn session_records(
         ));
     }
 
-    if opts.transcript && capture_content {
+    let event_limit = if opts.recording_enabled() {
+        super::policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1)
+    } else {
+        0
+    };
+    omitted += report.events.len().saturating_sub(event_limit);
+    for event in report.events.iter().take(event_limit) {
+        match session_event_record(&projection, event.clone(), report.timestamp) {
+            Some(event) => out.push(event),
+            None => omitted += 1,
+        }
+    }
+
+    if projection.transcript() {
         for item in report
             .chat_history
             .iter()

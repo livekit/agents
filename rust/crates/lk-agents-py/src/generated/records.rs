@@ -1911,6 +1911,49 @@ pub mod telemetry {
             Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
+    static SESSION_REPORT_SNAPSHOT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn session_report_snapshot_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot> {
+        let py = obj.py();
+            if !obj.is_instance(SESSION_REPORT_SNAPSHOT.import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?)? {
+                return Err(super::not_a(obj, "SessionReportSnapshot"));
+            }
+            Ok(::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot {
+                job_id: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "job_id", |v| v.extract::<::std::string::String>())?,
+                room_id: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "room_id", |v| v.extract::<::std::string::String>())?,
+                room: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "room", |v| v.extract::<::std::string::String>())?,
+                events: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "events", |v| v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; ::lk_agents_abi::python::value_from_py(item, "SessionReportSnapshot.events") }).collect::<PyResult<Vec<_>>>())?,
+                omitted_events: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "omitted_events", |v| ::lk_agents_abi::python::number_from_py::<usize>(v, "SessionReportSnapshot.omitted_events"))?,
+                audio_recording_path: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "audio_recording_path", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+                audio_recording_started_at: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "audio_recording_started_at", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportSnapshot.audio_recording_started_at")).map(Some) })?,
+                options: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "options", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.options")).map(Some) })?,
+                chat_history: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "chat_history", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.chat_history")).map(Some) })?,
+                timestamp: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportSnapshot.timestamp"))?,
+                usage: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "usage", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.usage")).map(Some) })?,
+                sdk_version: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "sdk_version", |v| v.extract::<::std::string::String>())?,
+            })
+    }
+
+    pub fn session_report_snapshot_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot { job_id, room_id, room, events, omitted_events, audio_recording_path, audio_recording_started_at, options, chat_history, timestamp, usage, sdk_version } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("job_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(job_id, py)?)?;
+            kwargs.set_item("room_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(room_id, py)?)?;
+            kwargs.set_item("room", ::pyo3::IntoPyObjectExt::into_bound_py_any(room, py)?)?;
+            kwargs.set_item("events", ::pyo3::types::PyList::new(py, events.into_iter().map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
+            kwargs.set_item("omitted_events", ::pyo3::IntoPyObjectExt::into_bound_py_any(omitted_events, py)?)?;
+            kwargs.set_item("audio_recording_path", match audio_recording_path { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("audio_recording_started_at", match audio_recording_started_at { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("options", match options { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+            kwargs.set_item("chat_history", match chat_history { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+            kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+            kwargs.set_item("sdk_version", ::pyo3::IntoPyObjectExt::into_bound_py_any(sdk_version, py)?)?;
+            SESSION_REPORT_SNAPSHOT.import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?.call((), Some(&kwargs))
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/records.rs.
 
     pub fn log_record_wire_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::LogRecordWire) -> PyResult<Bound<'py, PyAny>> {
@@ -1969,20 +2012,6 @@ pub mod telemetry {
             kwargs.set_item("monotonic_ns", ::pyo3::IntoPyObjectExt::into_bound_py_any(monotonic_ns, py)?)?;
             kwargs.set_item("outcome", crate::generated::records::telemetry::telemetry_work_outcome_to_py(py, outcome)?)?;
             TELEMETRY_WORK_OBSERVATION.import(py, "livekit.agents._generated.telemetry", "TelemetryWorkObservation")?.call((), Some(&kwargs))
-    }
-}
-
-pub mod telemetry_transport {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/transport.rs.
-
-    pub fn trace_carrier_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::transport::TraceCarrier> {
-        obj.extract::<::lk_agents_abi::telemetry::transport::TraceCarrier>()
-    }
-
-    pub fn trace_carrier_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::transport::TraceCarrier) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
     }
 }
 

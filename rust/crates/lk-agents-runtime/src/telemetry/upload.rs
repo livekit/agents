@@ -1,13 +1,14 @@
 //! Bounded recording uploads: small transcript bodies and streamed recording files, using the
 //! process telemetry admission budget. Cancelling an upload drops its async transport and file.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::telemetry::report::UploadGate;
+use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{
     PreparedTranscript, RecordingUpload, SessionReportUpload, UploadError,
 };
@@ -65,14 +66,16 @@ impl SessionReportUpload for SessionReportUploader {
         capture_content: bool,
         redaction_enabled: bool,
     ) -> (bool, bool) {
-        (
-            transcript_requested
-                && lk_agents_abi::telemetry::policy::content_allowed(
-                    capture_content,
-                    redaction_enabled,
-                ),
-            !redaction_enabled && audio_requested,
-        )
+        let projection = lk_agents_abi::telemetry::report::projection::ReportProjection::new(
+            capture_content,
+            &lk_agents_abi::telemetry::report::RecordingOptions {
+                transcript: transcript_requested,
+                audio: audio_requested,
+                ..Default::default()
+            },
+            redaction_enabled,
+        );
+        (projection.transcript(), projection.audio())
     }
 
     async fn upload(
@@ -300,21 +303,26 @@ const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
 /// Retains only bounded JSON, rather than a second copy of every native chat item.
 pub struct TranscriptBuilder {
     state: Mutex<TranscriptState>,
-    _permit: super::work::WorkPermit,
+    _permit: Arc<super::work::WorkPermit>,
 }
 
 struct TranscriptState {
     bytes: Vec<u8>,
     items: usize,
     input_items: usize,
+    events: Vec<serde_json::Value>,
+    event_bytes: usize,
     failure: Option<String>,
     finished: bool,
 }
 
+#[async_trait::async_trait]
 impl PreparedTranscript for TranscriptBuilder {
     fn new() -> Result<Self, UploadError> {
-        let permit = super::work::try_admit_upload(TRANSCRIPT_BYTES)
-            .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
+        let permit = super::work::try_admit_upload(
+            TRANSCRIPT_BYTES + lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES,
+        )
+        .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
         let mut bytes = Vec::with_capacity(TRANSCRIPT_BYTES);
         bytes.extend_from_slice(b"{\"items\":[");
         Ok(Self {
@@ -322,10 +330,12 @@ impl PreparedTranscript for TranscriptBuilder {
                 bytes,
                 items: 0,
                 input_items: 0,
+                events: Vec::new(),
+                event_bytes: 0,
                 failure: None,
                 finished: false,
             }),
-            _permit: permit,
+            _permit: Arc::new(permit),
         })
     }
 
@@ -384,6 +394,92 @@ impl PreparedTranscript for TranscriptBuilder {
         }
         String::from_utf8(state.bytes.clone()).map_err(upload_error)
     }
+
+    fn append_event(&self, event: serde_json::Value) -> Result<(), UploadError> {
+        use lk_agents_abi::telemetry::policy;
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(failure) = &state.failure {
+            return Err(UploadError(failure.clone()));
+        }
+        if state.finished {
+            return Err(UploadError("session transcript is already finished".into()));
+        }
+        let mut encoded =
+            BoundedWriter { bytes: Vec::new(), limit: policy::REPORT_EVENT_RECORD_BYTES };
+        if let Err(error) = serde_json::to_writer(&mut encoded, &event) {
+            state.failure = Some(error.to_string());
+            return Err(upload_error(error));
+        }
+        if state.events.len() >= policy::REPORT_EVENT_ITEMS
+            || encoded.bytes.len() > policy::REPORT_EVENT_BYTES.saturating_sub(state.event_bytes)
+        {
+            let failure = "session report events exceed the native input budget";
+            state.failure = Some(failure.into());
+            return Err(UploadError(failure.into()));
+        }
+        state.event_bytes += encoded.bytes.len();
+        state.events.push(event);
+        Ok(())
+    }
+
+    async fn finish_report(
+        &self,
+        mut report: lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
+        path: String,
+    ) -> Result<(), UploadError> {
+        let output_permit =
+            super::work::try_admit_upload(lk_agents_abi::telemetry::policy::REPORT_RETAINED_BYTES)
+                .ok_or_else(|| {
+                    UploadError("console report preparation capacity exhausted".into())
+                })?;
+        let workers = crate::process::workers().map_err(upload_error)?;
+        let permit = workers
+            .try_admit(crate::media_workers::MediaWorkerClass::Formatting)
+            .map_err(upload_error)?;
+        let (bytes, events) = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(failure) = &state.failure {
+                return Err(UploadError(failure.clone()));
+            }
+            if !state.finished {
+                state.bytes.extend_from_slice(b"]}");
+                state.finished = true;
+            }
+            (std::mem::take(&mut state.bytes), std::mem::take(&mut state.events))
+        };
+        let input_permit = self._permit.clone();
+        workers
+            .spawn_admitted(permit, move || {
+                let _retained = (input_permit, output_permit);
+                report.events = events;
+                // Keep the existing bounded transcript bytes; a second parsed history would retain
+                // one allocation per JSON node during serialization.
+                let history = serde_json::value::RawValue::from_string(
+                    String::from_utf8(bytes).map_err(upload_error)?,
+                )
+                .map_err(upload_error)?;
+                report.chat_history = None;
+                #[derive(serde::Serialize)]
+                struct ConsoleReport<'a> {
+                    #[serde(flatten)]
+                    report: lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
+                    chat_history: &'a serde_json::value::RawValue,
+                }
+                let mut encoded = BoundedWriter { bytes: Vec::new(), limit: 4 * 1024 * 1024 };
+                serde_json::to_writer(
+                    &mut encoded,
+                    &ConsoleReport { report, chat_history: &history },
+                )
+                .map_err(upload_error)?;
+                let path = std::path::Path::new(&path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(upload_error)?;
+                }
+                std::fs::write(path, &encoded.bytes).map_err(upload_error)
+            })
+            .await
+            .map_err(upload_error)?
+    }
 }
 
 fn transcript_options() -> lk_agents_abi::ToDictOptions {
@@ -430,7 +526,7 @@ impl std::io::Write for BoundedWriter {
         if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::FileTooLarge,
-                "session transcript item exceeds the 64 KiB input limit",
+                format!("session recording exceeds its {} KiB serialized limit", self.limit / 1024),
             ));
         }
         self.bytes.extend_from_slice(bytes);

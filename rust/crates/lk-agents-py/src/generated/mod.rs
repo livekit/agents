@@ -54,6 +54,7 @@ pub trait Implementations: 'static {
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
+    type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
     type EventRetention: ::lk_agents_abi::telemetry::observation::EventRetention;
@@ -107,6 +108,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::_core_ContextActivation>()?;
     m.add_class::<storage::_core_VoiceStore>()?;
     m.add_class::<telemetry::_core_TelemetryPolicy>()?;
+    m.add_class::<telemetry::_core_SessionReportProjection>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;
     m.add_class::<telemetry::_core_EventRetention>()?;

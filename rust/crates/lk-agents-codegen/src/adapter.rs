@@ -451,6 +451,16 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         return Ok((ty.rust(), "{}".into()));
     }
     Ok(match ty {
+        Ty::Optional(inner) => {
+            let (item_ty, item) = output(at, decls, c, inner)?;
+            (
+                format!("::std::option::Option<{item_ty}>"),
+                format!(
+                    "{{}}.map(|value| Ok::<_, ::pyo3::PyErr>({})).transpose()?",
+                    item.replace("{}", "value"),
+                ),
+            )
+        }
         Ty::Unit => ("()".into(), "{}".into()),
         Ty::This if c.form == Form::MutableClass => (c.name.clone(), format!("{}({{}})", c.name)),
         Ty::This => (c.name.clone(), format!("{}(::std::sync::Arc::new({{}}))", c.name)),

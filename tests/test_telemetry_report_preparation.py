@@ -95,3 +95,16 @@ async def test_report_uploader_initializes_its_native_client_off_the_session_loo
 
     assert len(constructor_threads) == 1
     assert constructor_threads[0] != loop_thread
+
+
+def test_report_input_rejects_a_single_event_object_instead_of_silently_losing_it() -> None:
+    from livekit.agents import _core
+
+    with pytest.raises(TypeError, match="events"):
+        _core.session_records(
+            _core.UploadGate(),
+            {"events": {"type": "agent_state_changed", "new_state": "thinking"}},
+            _core.Tagger(),
+            lambda item: None,
+            capture_content=False,
+        )

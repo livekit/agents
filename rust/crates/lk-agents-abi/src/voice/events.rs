@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use lk_agents_host_derive::Host;
+use serde::{Deserialize, Serialize};
 
 use crate::voice::amd::AmdPrediction;
 use crate::voice::room_io::{
@@ -18,9 +19,10 @@ const _: () = ();
 // --- the two state vocabularies ------------------------------------------------------------------
 
 /// Whether the user is speaking, listening, or has gone away.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, Serialize, Deserialize)]
 #[python(literal, name = "UserState")]
 #[host(wire(msg = format!("unknown user state {s:?}")))]
+#[serde(rename_all = "snake_case")]
 pub enum UserState {
     #[host(rename = "speaking")]
     Speaking,
@@ -31,9 +33,10 @@ pub enum UserState {
 }
 
 /// The agent's lifecycle label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Host, Serialize, Deserialize)]
 #[python(literal, name = "AgentState")]
 #[host(wire(msg = format!("unknown agent state {s:?}")))]
+#[serde(rename_all = "snake_case")]
 pub enum AgentState {
     #[host(rename = "initializing")]
     Initializing,
@@ -49,7 +52,7 @@ pub enum AgentState {
 
 // --- the session events --------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Host)]
+#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
 #[python(pydantic, name = "UserStateChangedEvent", tag = "type", tag_value = "user_state_changed")]
 // Also read back from the remote session's `kind`-keyed dict (`remote_session.py:_send_wire`).
 #[binding(emit, extract, from_items, read_tag = "kind")]
@@ -63,7 +66,7 @@ pub struct UserStateChanged {
     pub created_at: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Host)]
+#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     name = "AgentStateChangedEvent",
@@ -107,7 +110,7 @@ pub struct UserInputTranscribed {
     pub created_at: f64,
 }
 
-#[derive(Host)]
+#[derive(Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     name = "UserTranscriptionTimeoutEvent",
@@ -227,7 +230,7 @@ pub struct FunctionToolsExecuted {
     pub handoff_required: bool,
 }
 
-#[derive(Host)]
+#[derive(Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     name = "SessionUsageUpdatedEvent",
@@ -236,7 +239,7 @@ pub struct FunctionToolsExecuted {
 )]
 pub struct SessionUsageUpdated {
     #[python(ty = "AgentSessionUsage", import = "..metrics:AgentSessionUsage")]
-    pub usage: (),
+    pub usage: crate::metrics::usage::AgentSessionUsage,
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }

@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from livekit.agents._core import RecordingOptions
+
 from .._core import ChatItem
-from .telemetry import TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
+from .telemetry import LogRecordWire, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
 
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
@@ -79,6 +81,31 @@ class _core_TelemetryPolicy:
     ) -> int:
         """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
 
+class _core_SessionReportProjection:
+    def __init__(
+        self,
+        capture_content: bool,
+        options: RecordingOptions,
+        project_redaction: bool,
+    ) -> None: ...
+    @property
+    def content(self) -> bool: ...
+    @property
+    def transcript(self) -> bool: ...
+    @property
+    def audio(self) -> bool: ...
+    def check_events(self, items: int, retained_bytes: int, event_bytes: int) -> None:
+        """Admission precedes host SDK serialization and native JSON extraction."""
+    def project(self, report: SessionReportSnapshot) -> SessionReportSnapshot: ...
+    def project_event(self, event: object) -> object | None: ...
+    def event_record(
+        self,
+        event: object,
+        identity: tuple[str, str, str],
+        timestamp: float,
+        disabled: bool,
+    ) -> LogRecordWire | None: ...
+
 class LoopMonitor:
     """A loop's watchdog: runtime owns thresholds, timing, admission and cleanup, while the host
     supplies asyncio scheduling, stack samples and OpenTelemetry emission.
@@ -113,6 +140,9 @@ class _core_EventRetention:
         """Bind report access to the first job that starts the session. Ownership cannot transfer."""
     def allows_read(self, job_id: str) -> bool:
         """Sessions started outside a job retain their existing application-owned access contract."""
+    @property
+    def capture_content(self) -> bool:
+        """Immutable consent captured when this session's report retention was created."""
     def accepts(self, kind: str, redaction: bool) -> bool:
         """Reject content without creation-time consent, unknown schemas and live-object events."""
     def admit(self, retained_bytes: int, now_ns: int) -> tuple[int, bool]:
@@ -170,6 +200,10 @@ class _core_PreparedTranscript:
         """
     def append(self, item: ChatItem) -> None: ...
     def finish(self) -> str: ...
+    def append_event(self, event: object) -> None:
+        """Append one already projected event to the same bounded recording preparation."""
+    async def finish_report(self, report: SessionReportSnapshot, path: str) -> None:
+        """Serialize and write a console report without converting its history back into host objects."""
 
 class _core_TelemetryWorker:
     """Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling."""

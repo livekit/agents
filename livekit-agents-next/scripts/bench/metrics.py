@@ -8,6 +8,7 @@ import sys
 import time
 from array import array
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from types import FrameType
 from typing import Literal
@@ -99,6 +100,26 @@ def distribution(values: list[int]) -> Distribution:
     )
 
 
+class LagObservations:
+    """Deadline observations stay numeric so the probe cannot induce cyclic GC pauses."""
+
+    def __init__(self) -> None:
+        self._values = array("Q")
+
+    def append(self, sample: tuple[int, int]) -> None:
+        self._values.extend(sample)
+
+    def clear(self) -> None:
+        del self._values[:]
+
+    def __len__(self) -> int:
+        return len(self._values) // 2
+
+    def __iter__(self) -> Iterator[tuple[int, int]]:
+        for at in range(0, len(self._values), 2):
+            yield self._values[at], self._values[at + 1]
+
+
 class LoopLag:
     """Absolute deadlines preserve long stalls; overdue ticks aren't silently discarded."""
 
@@ -107,7 +128,7 @@ class LoopLag:
             raise ValueError("period must be finite and positive")
         self.period = period_ms / 1000
         self.samples: list[int] = []
-        self.observations: list[tuple[int, int]] = []
+        self.observations = LagObservations()
         self.ready = asyncio.Event()
 
     async def run(self) -> None:

@@ -76,9 +76,9 @@ impl ObservationBuffer {
 
 /// Session report snapshots expire after one hour. These budgets apply before the host copies
 /// an event, independently of SDK exporter retention.
-const EVENT_ITEMS: usize = 1024;
-const EVENT_BYTES: usize = 1024 * 1024;
-const EVENT_RECORD_BYTES: usize = 64 * 1024;
+const EVENT_ITEMS: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_ITEMS;
+const EVENT_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES;
+const EVENT_RECORD_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_RECORD_BYTES;
 const EVENT_RETENTION_NS: u64 = 3600 * 1_000_000_000;
 
 #[derive(Default)]
@@ -97,6 +97,7 @@ impl RetainedEvents {
         // Admission time, rather than the event's wall timestamp, orders the expiry queue.
         self.now_ns = self.now_ns.max(now_ns);
         let mut expired = 0;
+        let mut released_bytes = 0;
         while self
             .entries
             .front()
@@ -104,9 +105,10 @@ impl RetainedEvents {
         {
             let (_, bytes) = self.entries.pop_front().expect("front exists");
             self.bytes -= bytes;
-            self.budget.release(bytes);
+            released_bytes += bytes;
             expired += 1;
         }
+        self.budget.release(expired, released_bytes);
         self.expired = self.expired.saturating_add(expired as u64);
         expired
     }
@@ -124,6 +126,12 @@ impl RetainedEvents {
         self.entries.push_back((self.now_ns, bytes));
         self.bytes += bytes;
         (expired, true)
+    }
+}
+
+impl Drop for RetainedEvents {
+    fn drop(&mut self) {
+        self.budget.release(self.entries.len(), self.bytes);
     }
 }
 
@@ -150,22 +158,16 @@ impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
             .is_none_or(|owner| owner == &job_id)
     }
 
+    fn capture_content(&self) -> bool {
+        self.capture_content
+    }
+
     fn accepts(&self, kind: String, redaction: bool) -> bool {
-        match kind.as_str() {
-            "user_state_changed"
-            | "agent_state_changed"
-            | "user_transcription_timeout"
-            | "session_usage_updated" => true,
-            "user_input_transcribed"
-            | "conversation_item_added"
-            | "function_tools_executed"
-            | "tool_execution_updated"
-            | "agent_false_interruption"
-            | "error"
-            | "close" => self.capture_content && !redaction,
-            // SpeechCreated holds a live SpeechHandle; overlapping speech carries numpy arrays.
-            _ => false,
-        }
+        lk_agents_abi::telemetry::report::projection::event_allowed(
+            &kind,
+            self.capture_content,
+            redaction,
+        )
     }
 
     fn admit(&self, retained_bytes: usize, now_ns: u64) -> (usize, bool) {
@@ -231,38 +233,60 @@ mod tests {
     #[test]
     fn session_event_stores_share_capacity_until_expiry_or_drop() {
         use lk_agents_abi::telemetry::observation::EventRetention as _;
-        // Sixty-four sessions may each retain their full byte budget; the next session cannot
-        // bypass the process ceiling, even though its local store is empty.
-        let work = super::super::work::Work::start(0);
-        let store = || EventRetention {
-            capture_content: false,
-            retained: Mutex::new(RetainedEvents {
-                budget: super::super::work::EventBudget::new(work.clone()),
-                ..Default::default()
-            }),
-        };
-        let mut stores: Vec<_> = (0..64).map(|_| store()).collect();
-        for store in &stores {
-            for _ in 0..16 {
-                assert_eq!(store.admit(EVENT_RECORD_BYTES, 1), (0, true));
-            }
+
+        #[derive(serde::Deserialize)]
+        struct SessionEvents {
+            worker_items: usize,
+            worker_bytes: usize,
+            items: usize,
+            bytes: usize,
+            record_bytes: usize,
+            retention_seconds: u64,
         }
+        #[derive(serde::Deserialize)]
+        struct Budgets {
+            session_events: SessionEvents,
+        }
+        let limits = serde_json::from_str::<Budgets>(include_str!("budgets.json"))
+            .expect("native telemetry budget manifest")
+            .session_events;
+        let work = super::super::work::Work::start(0);
+        let store = || {
+            let mut retained = RetainedEvents::default();
+            retained.budget = super::super::work::EventBudget::new(work.clone());
+            EventRetention { capture_content: false, retained: Mutex::new(retained) }
+        };
+        let records_per_store = limits.bytes / limits.record_bytes;
+        let mut stores: Vec<_> = (0..limits.worker_bytes / limits.bytes).map(|_| store()).collect();
+        // Concurrent sessions consume the manifest's full byte ceiling before any is released.
+        std::thread::scope(|scope| {
+            for session in &stores {
+                scope.spawn(move || {
+                    for _ in 0..records_per_store {
+                        assert_eq!(session.admit(limits.record_bytes, 1), (0, true));
+                    }
+                });
+            }
+        });
         let overflow = store();
-        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, false));
-        assert_eq!(stores[0].expire(EVENT_RETENTION_NS + 1), 16);
-        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        assert_eq!(overflow.admit(limits.record_bytes, 1), (0, false));
+        assert_eq!(
+            stores[0].expire(limits.retention_seconds * 1_000_000_000 + 1),
+            records_per_store
+        );
+        assert_eq!(overflow.admit(limits.record_bytes, 1), (0, true));
         drop(stores.pop());
-        for _ in 0..15 {
-            assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        for _ in 1..records_per_store {
+            assert_eq!(overflow.admit(limits.record_bytes, 1), (0, true));
         }
         assert_eq!(overflow.admit(1, 1), (0, false), "session ceiling still applies");
         drop(stores);
         drop(overflow);
 
-        // Tiny events can exhaust item capacity before byte capacity.
-        let stores: Vec<_> = (0..64).map(|_| store()).collect();
+        // Tiny events exhaust the manifest's item ceiling before its byte ceiling.
+        let stores: Vec<_> = (0..limits.worker_items / limits.items).map(|_| store()).collect();
         for session in &stores {
-            for _ in 0..EVENT_ITEMS {
+            for _ in 0..limits.items {
                 assert_eq!(session.admit(1, 1), (0, true));
             }
         }

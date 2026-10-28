@@ -31,7 +31,9 @@ Session-report events retain at most 1,024 snapshots/1 MiB, with 64 KiB per even
 and one-hour expiry on access. Session creation captures content consent; project
 redaction narrows it. Events containing live objects are omitted from reports.
 A report for a session started in a job is readable only by that job.
-Console report JSON and Cloud uploads use the captured consent and destination redaction.
+Console report JSON and Cloud uploads share native projection and destination redaction.
+Safe state/usage events remain available; withheld history/options keep explicit empty fields.
+Audio requires its explicit recording option; project redaction excludes raw audio and transcript.
 Explicit `SessionReport` objects capture the current content setting when constructed.
 Job-end report creation, metric folding and console writes run on bounded native workers.
 `JobContext.make_session_report()` returns a synchronous detached snapshot.

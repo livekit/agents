@@ -129,35 +129,3 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::telemetry::loop_monitor::LoopMo
         LOOP_MONITOR_EMISSION.import(py, "livekit.agents._generated.telemetry", "LoopMonitorEmission")?.call((), Some(&kwargs))
     }
 }
-
-// Declared in rust/crates/lk-agents-abi/src/telemetry/transport.rs.
-static TRACE_CARRIER: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-    ::pyo3::sync::PyOnceLock::new();
-
-impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::telemetry::transport::TraceCarrier {
-    type Error = PyErr;
-
-    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let obj = &*obj;
-        let py = obj.py();
-        if !obj.is_instance(TRACE_CARRIER.import(py, "livekit.agents._generated.telemetry_transport", "TraceCarrier")?)? {
-            return Err(super::not_a(obj, "TraceCarrier"));
-        }
-        Ok(Self {
-            traceparent: ::lk_agents_abi::python::attr_with(obj, "TraceCarrier", "traceparent", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
-        })
-    }
-}
-
-impl<'py> IntoPyObject<'py> for ::lk_agents_abi::telemetry::transport::TraceCarrier {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Self { traceparent } = self;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("traceparent", match traceparent { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-        TRACE_CARRIER.import(py, "livekit.agents._generated.telemetry_transport", "TraceCarrier")?.call((), Some(&kwargs))
-    }
-}

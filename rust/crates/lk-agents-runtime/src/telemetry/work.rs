@@ -2,6 +2,7 @@
 //! even when flush times out. No SDK or user callback executes under the admission lock.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -14,8 +15,8 @@ const WORKERS: usize = 4;
 const JOBS: usize = 64;
 const BYTES: usize = 8 * 1024 * 1024;
 const MONITORS: usize = 32;
-const EVENT_ITEMS: usize = 64 * 1024;
-const EVENT_BYTES: usize = 64 * 1024 * 1024;
+const PROCESS_EVENT_ITEMS: usize = 64 * 1024;
+const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
 
 static PROCESS_WORK: OnceLock<Arc<Work>> = OnceLock::new();
 
@@ -40,9 +41,6 @@ struct State {
     reserved_bytes: usize,
     conflicts: u64,
     next_upload: u64,
-    event_items: usize,
-    event_bytes: usize,
-    event_drops: u64,
     dropped: u64,
     failed: u64,
     completed: u64,
@@ -53,6 +51,7 @@ pub(super) struct Work {
     pid: u32,
     started_at: Instant,
     sdk_started: OnceLock<()>,
+    events: EventQuota,
     state: Mutex<State>,
     metrics: Mutex<super::metrics::MetricSeries>,
     changed: Condvar,
@@ -88,6 +87,7 @@ impl Work {
             pid: std::process::id(),
             started_at: Instant::now(),
             sdk_started: OnceLock::new(),
+            events: EventQuota::default(),
             state: Mutex::new(State {
                 queue: VecDeque::new(),
                 sdk_available: false,
@@ -100,9 +100,6 @@ impl Work {
                 reserved_bytes: 0,
                 conflicts: 0,
                 next_upload: 0,
-                event_items: 0,
-                event_bytes: 0,
-                event_drops: 0,
                 dropped: 0,
                 failed: 0,
                 completed: 0,
@@ -339,14 +336,52 @@ pub fn record_incomplete_cleanup() {
 /// All session stores share the process telemetry admission owner.
 pub(super) struct EventBudget {
     work: Option<Arc<Work>>,
-    items: usize,
-    bytes: usize,
+}
+
+#[derive(Default)]
+struct EventQuota {
+    items: AtomicUsize,
+    bytes: AtomicUsize,
+    dropped: AtomicU64,
+}
+
+impl EventQuota {
+    // Quotas publish no payload; in-flight reservations may conservatively refuse optional data.
+    fn admit(&self, bytes: usize) -> bool {
+        if self
+            .items
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |items| {
+                (items < PROCESS_EVENT_ITEMS).then_some(items + 1)
+            })
+            .is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        if self
+            .bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
+                retained.checked_add(bytes).filter(|total| *total <= PROCESS_EVENT_BYTES)
+            })
+            .is_err()
+        {
+            self.items.fetch_sub(1, Ordering::Relaxed);
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    fn release(&self, items: usize, bytes: usize) {
+        self.bytes.fetch_sub(bytes, Ordering::Relaxed);
+        self.items.fetch_sub(items, Ordering::Relaxed);
+    }
 }
 
 impl EventBudget {
     #[cfg(test)]
     pub(super) fn new(work: Arc<Work>) -> Self {
-        Self { work: Some(work), items: 0, bytes: 0 }
+        Self { work: Some(work) }
     }
 
     pub(super) fn admit(&mut self, bytes: usize) -> bool {
@@ -354,42 +389,21 @@ impl EventBudget {
         if work.pid != std::process::id() {
             return false;
         }
-        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
-        if state.event_items >= EVENT_ITEMS || bytes > EVENT_BYTES.saturating_sub(state.event_bytes)
-        {
-            state.event_drops = state.event_drops.saturating_add(1);
-            return false;
-        }
-        state.event_items += 1;
-        state.event_bytes += bytes;
-        self.items += 1;
-        self.bytes += bytes;
-        true
+        work.events.admit(bytes)
     }
 
-    pub(super) fn release(&mut self, bytes: usize) {
-        let work = self.work.as_ref().expect("retained events own their budget");
-        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.event_items -= 1;
-        state.event_bytes -= bytes;
-        self.items -= 1;
-        self.bytes -= bytes;
+    pub(super) fn release(&mut self, items: usize, bytes: usize) {
+        if items == 0 {
+            return;
+        }
+        self.work.as_ref().expect("retained events own their budget").events.release(items, bytes);
     }
 }
 
 impl Default for EventBudget {
     fn default() -> Self {
         // Configuration may be created during forkserver preload, before a process owns events.
-        Self { work: None, items: 0, bytes: 0 }
-    }
-}
-
-impl Drop for EventBudget {
-    fn drop(&mut self) {
-        let Some(work) = &self.work else { return };
-        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
-        state.event_items -= self.items;
-        state.event_bytes -= self.bytes;
+        Self { work: None }
     }
 }
 
@@ -519,9 +533,9 @@ impl TelemetryWorker for SdkWorker {
         let state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
         [
             ("dropped", state.dropped),
-            ("session_event_items", state.event_items as u64),
-            ("session_event_bytes", state.event_bytes as u64),
-            ("session_event_drops", state.event_drops),
+            ("session_event_items", process_work().events.items.load(Ordering::Relaxed) as u64),
+            ("session_event_bytes", process_work().events.bytes.load(Ordering::Relaxed) as u64),
+            ("session_event_drops", process_work().events.dropped.load(Ordering::Relaxed)),
             ("observation_drops", state.observation_drops),
             ("failed", state.failed),
             ("completed", state.completed),

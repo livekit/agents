@@ -62,6 +62,7 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
 /// append it from admitted SDK work; no whole-history extraction crosses a binding call.
 #[crate::host(class(name = "_core_PreparedTranscript"))]
+#[async_trait::async_trait]
 pub trait PreparedTranscript: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new() -> Result<Self, UploadError>;
@@ -84,4 +85,16 @@ pub trait PreparedTranscript: Send + Sync + Sized + 'static {
 
     #[host(call)]
     fn finish(&self) -> Result<String, UploadError>;
+
+    /// Append one already projected event to the same bounded recording preparation.
+    #[host(call)]
+    fn append_event(&self, event: serde_json::Value) -> Result<(), UploadError>;
+
+    /// Serialize and write a console report without converting its history back into host objects.
+    #[host(await)]
+    async fn finish_report(
+        &self,
+        report: super::report::projection::SessionReportSnapshot,
+        path: String,
+    ) -> Result<(), UploadError>;
 }

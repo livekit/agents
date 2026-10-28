@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
 from copy import copy
-from dataclasses import replace
+from dataclasses import fields, is_dataclass, replace
 from functools import cache
 from typing import TypeVar, cast
 
@@ -84,6 +84,18 @@ def attribute_bytes(value: object, *, depth: int = 0) -> int:
             (len(mapping), mapping.items())
             for mapping in (value.__dict__, value.__pydantic_extra__, value.__pydantic_private__)
             if mapping is not None
+        )
+    elif is_dataclass(value) and not isinstance(value, type):
+        record_fields = fields(value)
+        storage = getattr(value, "__dict__", {})
+        if not isinstance(storage, Mapping):
+            return native.value_bytes("unsupported", 0, depth, [])
+        if len(record_fields) > native.max_collection or len(storage) > native.max_collection:
+            return native.value_bytes("mapping", max(len(record_fields), len(storage)), depth, [])
+        slots = tuple(field for field in record_fields if field.name not in storage)
+        mappings = (
+            (len(storage), storage.items()),
+            (len(slots), ((field.name, getattr(value, field.name)) for field in slots)),
         )
     elif isinstance(value, Mapping):
         mappings = ((len(value), value.items()),)

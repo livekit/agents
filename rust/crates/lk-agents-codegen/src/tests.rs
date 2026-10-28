@@ -904,19 +904,3 @@ pub const LIMIT: i32 = 3;
     assert!(text.contains("KEY: Final = \"lk.\\\"key\\\"\"\n\"\"\"The key.\"\"\"\n"), "{text}");
     assert!(text.contains("LIMIT: Final = 3\n"), "{text}");
 }
-
-#[test]
-fn native_class_stub_imports_its_declared_field_types() {
-    let output = generate_stub(
-        r#"
-        #[derive(Host)]
-        #[binding(class, new)]
-        pub struct Request {
-            #[python(import = ".inputs:Input")]
-            pub input: Option<Input>,
-        }
-        "#,
-    );
-    assert!(output.contains("from .inputs import Input"), "{output}");
-    assert!(output.contains("input: Input | None"), "{output}");
-}

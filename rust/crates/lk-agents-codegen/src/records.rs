@@ -101,7 +101,6 @@ pub const IN_PLACE: &[&str] = &[
     "::lk_agents_abi::llm::tool_executor::ToolOutcome",
     "::lk_agents_abi::llm::tool_executor::ToolReport",
     "::lk_agents_abi::telemetry::loop_monitor::LoopMonitorEmission",
-    "::lk_agents_abi::telemetry::transport::TraceCarrier",
     "::lk_agents_abi::worker::endpoint::EndpointRequest",
     "::lk_agents_abi::worker::ipc::ProcessCompletion",
     "::lk_agents_abi::worker::worker::RegisteredInfo",

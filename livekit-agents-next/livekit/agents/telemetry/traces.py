@@ -93,7 +93,7 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
     describe = getattr(obj, "describe_options", None)
     if not callable(describe):
         return name
-    options = _serialize_option_value(describe(), depth=depth + 1)
+    options, _ = _serialize_option_value(describe(), depth=depth + 1)
     if not isinstance(options, Mapping):
         raise TypeError("describe_options() must return a mapping")
     parts = [
@@ -104,51 +104,81 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
     return f"{name}({', '.join(parts)})"
 
 
-def _serialize_option_value(value: Any, *, depth: int = 0) -> Any:
+def _serialize_option_value(value: Any, *, depth: int = 0) -> tuple[Any, int]:
     from ._export import attribute_bytes, policy
 
     native = policy()
 
-    def checked(result: Any) -> Any:
-        if attribute_bytes(result, depth=depth) > native.max_record_bytes:
+    def checked(charge: int) -> int:
+        if charge > native.max_record_bytes:
             raise ValueError("session report options exceed the native input budget")
-        return result
+        return charge
 
     if value is None or isinstance(value, _OPTION_PRIMITIVES):
-        return checked(value)
+        return value, checked(attribute_bytes(value, depth=depth))
     if isinstance(value, Mapping):
-        if native.value_bytes("mapping", len(value), depth, []) > native.max_record_bytes:
-            raise ValueError("session report options exceed the native input budget")
+        charge = checked(native.value_bytes("mapping", len(value), depth, []))
+        children = 0
         result: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("session report option keys must be strings")
-            checked(key)
             if key not in _SESSION_OPTION_OMITTED_KEYS:
-                result[_SESSION_OPTION_KEY_ALIASES.get(key, key)] = _serialize_option_value(
-                    item, depth=depth + 1
-                )
-                checked(result)
-        return result
+                name = _SESSION_OPTION_KEY_ALIASES.get(key, key)
+                key_charge = checked(attribute_bytes(name, depth=depth + 1))
+                serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
+                children += key_charge + item_charge
+                charge = checked(native.value_bytes("mapping", len(value), depth, [children]))
+                result[name] = serialized
+        return result, charge
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
-        if native.value_bytes("sequence", len(value), depth, []) > native.max_record_bytes:
-            raise ValueError("session report options exceed the native input budget")
+        charge = checked(native.value_bytes("sequence", len(value), depth, []))
+        children = 0
         items: list[Any] = []
         for item in value:
-            items.append(_serialize_option_value(item, depth=depth + 1))
-            checked(items)
-        return sorted(items, key=str) if isinstance(value, Set) else items
-    return checked(_describe_option_object(value, depth=depth))
+            serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
+            children += item_charge
+            charge = checked(native.value_bytes("sequence", len(value), depth, [children]))
+            items.append(serialized)
+        return (sorted(items, key=str) if isinstance(value, Set) else items), charge
+    serialized = _describe_option_object(value, depth=depth)
+    return serialized, checked(attribute_bytes(serialized, depth=depth))
 
 
 def _serialize_session_options(options: dict[str, Any]) -> dict[str, Any]:
-    serialized = _serialize_option_value(options)
+    serialized, _ = _serialize_option_value(options)
     assert isinstance(serialized, dict)
     return serialized
 
 
 def _chat_item_span_attribute(item: ChatItem) -> dict[str, Any]:
     return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
+
+
+def _append_transcript_item(
+    builder: _core._core_PreparedTranscript, item: ChatItem, item_count: int
+) -> _core.ChatItem:
+    from .._core_view import to_core_item
+    from ..llm.chat_context import AudioContent, ImageContent
+    from ._export import attribute_bytes, policy
+
+    include_image, include_audio = builder.content_policy()
+    fields = item.__dict__
+    content = None
+    if item.type == "message":
+        builder.check_input(item_count, policy().value_bytes("sequence", len(item.content), 0, []))
+        content = [
+            part
+            for part in item.content
+            if isinstance(part, str)
+            or (include_image and isinstance(part, ImageContent))
+            or (include_audio and isinstance(part, AudioContent))
+        ]
+        fields = {**fields, "content": content}
+    builder.check_input(item_count, attribute_bytes(fields))
+    native_item = to_core_item(item, content=content)
+    builder.append(native_item)
+    return native_item
 
 
 async def _upload_session_report(
@@ -161,11 +191,13 @@ async def _upload_session_report(
     metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
     """Project host objects on admitted SDK work; the native runtime uploads the recording."""
-    from .._core_view import from_core_item, to_core_item
+    from .._core_view import from_core_item
     from ._export import attribute_bytes, call_bounded, policy
 
     if attribute_bytes(metadata) > policy().max_record_bytes:
         raise ValueError("session report metadata exceeds the native input budget")
+    if attribute_bytes(agent_name) > policy().max_record_bytes:
+        raise ValueError("session report summary exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
     credentials = (os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", ""))
@@ -178,18 +210,11 @@ async def _upload_session_report(
         credential_bytes,
         policy().upload_timeout_seconds,
     )
-    report_options = report.options
-    options = (
-        _core.RecordingOptions(**report_options["recording_options"])
-        if report_options is not None
-        else _core.RecordingOptions()
-    )
+    options = report._recording_options
     capture_content = report._capture_content
     redacted = options.redaction or telemetry_utils.redaction_enabled(metadata)
-    transcript_allowed, audio_allowed = uploader.content_policy(
-        options.transcript, options.audio, capture_content, redacted
-    )
-    report_content_allowed, _ = uploader.content_policy(True, False, capture_content, redacted)
+    projection = _core._core_SessionReportProjection(capture_content, options, redacted)
+    transcript_allowed, audio_allowed = projection.transcript, projection.audio
     prepared: list[str] = []
 
     builder: _core._core_PreparedTranscript | None = None
@@ -209,9 +234,9 @@ async def _upload_session_report(
             otel_logger = loggers[record.logger] = provider.get_logger(
                 name=record.logger,
                 attributes={
-                    "room_id": report.room_id,
-                    "job_id": report.job_id,
-                    "room": report.room,
+                    "room_id": snapshot.room_id,
+                    "job_id": snapshot.job_id,
+                    "room": snapshot.room,
                     **metadata,
                 },
             )
@@ -226,20 +251,6 @@ async def _upload_session_report(
 
     def start() -> None:
         nonlocal builder, batch_size
-        if (
-            attribute_bytes(
-                (
-                    report.job_id,
-                    report.room_id,
-                    report.room,
-                    agent_name,
-                    report.sdk_version,
-                    report.model_usage,
-                )
-            )
-            > policy().max_record_bytes
-        ):
-            raise ValueError("session report summary exceeds the native input budget")
         if transcript_allowed:
             builder = _core._core_PreparedTranscript()
             builder.check_input(len(report.chat_history.items), 0)
@@ -248,19 +259,17 @@ async def _upload_session_report(
             destination.upload_gate,
             {
                 "agent_name": agent_name,
-                "job_id": report.job_id,
-                "room_id": report.room_id,
-                "room": report.room,
-                "sdk_version": report.sdk_version,
+                "job_id": snapshot.job_id,
+                "room_id": snapshot.room_id,
+                "room": snapshot.room,
+                "sdk_version": snapshot.sdk_version,
                 "started_at": report.started_at,
-                "timestamp": report.timestamp,
-                "options": (
-                    _serialize_session_options(report_options)
-                    if report_content_allowed and report_options is not None
-                    else {}
-                ),
+                "timestamp": snapshot.timestamp,
+                "options": snapshot.options,
+                "events": [],
+                "omitted_events": snapshot.omitted_events,
                 "recording_options": recording_options,
-                "model_usage": [u.model_dump() for u in report.model_usage or []],
+                "model_usage": snapshot.usage or [],
                 "chat_history": [],
             },
             tagger,
@@ -270,37 +279,29 @@ async def _upload_session_report(
         for record in records:
             emit(record)
 
+    def emit_event(event: object) -> None:
+        record = projection.event_record(
+            event,
+            (snapshot.job_id, snapshot.room_id, snapshot.room),
+            snapshot.timestamp,
+            destination.upload_gate.disabled,
+        )
+        if record is None:
+            worker.record_drop("dropped", 1)
+        else:
+            emit(record)
+
     def append_batch(items: Sequence[ChatItem]) -> None:
         assert builder is not None
-        from ..llm.chat_context import AudioContent, ImageContent
-
-        include_image, include_audio = builder.content_policy()
         for item in items:
-            fields = item.__dict__
-            content = None
-            if item.type == "message":
-                builder.check_input(
-                    len(report.chat_history.items),
-                    policy().value_bytes("sequence", len(item.content), 0, []),
-                )
-                content = [
-                    part
-                    for part in item.content
-                    if isinstance(part, str)
-                    or (include_image and isinstance(part, ImageContent))
-                    or (include_audio and isinstance(part, AudioContent))
-                ]
-                fields = {**fields, "content": content}
-            builder.check_input(len(report.chat_history.items), attribute_bytes(fields))
-            native_item = to_core_item(item, content=content)
-            builder.append(native_item)
+            native_item = _append_transcript_item(builder, item, len(report.chat_history.items))
             record = _core._core_session_chat_record(
                 destination.upload_gate,
                 recording_options,
                 native_item,
                 _chat_item_span_attribute(item),
                 capture_content,
-                (report.job_id, report.room_id, report.room),
+                (snapshot.job_id, snapshot.room_id, snapshot.room),
             )
             if record is not None:
                 emit(record)
@@ -324,7 +325,11 @@ async def _upload_session_report(
         )
 
     try:
+        snapshot = await report._snapshot(projection, deadline=deadline)
         await run_preparation(start)
+        for event in snapshot.events:
+            await run_preparation(partial(emit_event, event))
+            await asyncio.sleep(0)
         if transcript_allowed:
             for index in range(0, len(report.chat_history.items), batch_size):
                 items = report.chat_history.items[index : index + batch_size]

@@ -282,7 +282,7 @@ impl _core_A2AResponse {
         ::lk_agents_abi::python::future_into_py(py, async move {
             let out = <_core_A2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::next(&this, )
                 .await.map_err(|e: ::lk_agents_abi::a2a::door::DoorError| <::lk_agents_abi::a2a::door::DoorError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(match out { None => py.None().into_bound(py), Some(x) => crate::generated::records::a2a_door::door_frame_to_py(py, x)? }, py))
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::a2a_door::door_frame_to_py(py, value)?)).transpose()?, py))
         })
     }
 

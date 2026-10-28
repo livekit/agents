@@ -2,6 +2,7 @@
 //! are session-long sums, hence `u64`.
 
 use lk_agents_host_derive::Host;
+use serde::{Deserialize, Serialize};
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "usage", path = "livekit.agents.metrics"))]
@@ -9,16 +10,12 @@ const _: () = ();
 
 // `_BaseModelUsage`. Python-only: a zero-eliding `__repr__`, and the base the gate records.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "_BaseModelUsage",
-    repr = "model_usage_repr"
-)]
+#[python(pydantic, name = "_BaseModelUsage", repr = "model_usage_repr")]
 pub struct BaseModelUsage {}
 
 // `usage.py:27`. LLM and realtime-model usage both fold in here.
 /// Usage summary for LLM models.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     zero_defaults,
@@ -30,6 +27,7 @@ pub struct BaseModelUsage {}
 // Both directions; the read side is all-`default` (a missing counter is zero), as the reference's
 // `.get(k, 0)` reads were.
 #[binding(emit, extract, from_items, default)]
+#[serde(default)]
 pub struct LlmModelUsage {
     /// The provider name (e.g., 'openai', 'anthropic').
     pub provider: String,
@@ -72,7 +70,7 @@ impl LlmModelUsage {
 
 // `usage.py:65`.
 /// Usage summary for TTS models.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     zero_defaults,
@@ -82,6 +80,7 @@ impl LlmModelUsage {
     tag_const = TYPE
 )]
 #[binding(emit, extract, from_items, default)]
+#[serde(default)]
 pub struct TtsModelUsage {
     /// The provider name (e.g., 'elevenlabs', 'cartesia').
     pub provider: String,
@@ -103,7 +102,7 @@ impl TtsModelUsage {
 
 // `usage.py:83`.
 /// Usage summary for STT models.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     zero_defaults,
@@ -113,6 +112,7 @@ impl TtsModelUsage {
     tag_const = TYPE
 )]
 #[binding(emit, extract, from_items, default)]
+#[serde(default)]
 pub struct SttModelUsage {
     /// The provider name (e.g., 'deepgram', 'assemblyai').
     pub provider: String,
@@ -134,7 +134,7 @@ impl SttModelUsage {
 
 // `usage.py:100`. One counter only: the interruption model is billed per request.
 /// Usage summary for interruption detection models.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     name = "InterruptionModelUsage",
@@ -143,6 +143,7 @@ impl SttModelUsage {
     tag_const = TYPE
 )]
 #[binding(emit, extract, from_items, default)]
+#[serde(default)]
 pub struct InterruptionModelUsage {
     /// The provider name (e.g., 'livekit').
     pub provider: String,
@@ -159,7 +160,7 @@ impl InterruptionModelUsage {
 
 // `usage.py:112`.
 /// Usage summary for end-of-turn detection models.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Host, Serialize, Deserialize)]
 #[python(
     pydantic,
     name = "EOTModelUsage",
@@ -168,6 +169,7 @@ impl InterruptionModelUsage {
     tag_const = TYPE
 )]
 #[binding(emit, extract, from_items, default)]
+#[serde(default)]
 pub struct EotModelUsage {
     /// The provider name (e.g., 'livekit').
     pub provider: String,
@@ -184,14 +186,20 @@ impl EotModelUsage {
 
 // `usage.py:124`'s `ModelUsage`: a plain PEP-604 union, not a discriminated one.
 /// Union type for all model usage types.
-#[derive(Debug, Clone, PartialEq, Host)]
+#[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
 #[python(union, name = "ModelUsage")]
 #[binding(emit, extract, from_items)]
+#[serde(tag = "type")]
 pub enum ModelUsage {
+    #[serde(rename = "llm_usage")]
     Llm(LlmModelUsage),
+    #[serde(rename = "tts_usage")]
     Tts(TtsModelUsage),
+    #[serde(rename = "stt_usage")]
     Stt(SttModelUsage),
+    #[serde(rename = "interruption_usage")]
     Interruption(InterruptionModelUsage),
+    #[serde(rename = "eot_usage")]
     Eot(EotModelUsage),
 }
 
@@ -208,11 +216,9 @@ impl ModelUsage {
 }
 
 // `usage.py:129`. A `@dataclass` in the reference, not a pydantic model: it has no `model_dump`.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    dataclass,
-    name = "AgentSessionUsage"
-)]
+#[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
+#[python(dataclass, name = "AgentSessionUsage")]
+#[serde(default)]
 pub struct AgentSessionUsage {
     pub model_usage: Vec<ModelUsage>,
 }
@@ -227,7 +233,10 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage {
         if obj.is_none() {
             return Ok(AgentSessionUsage::default());
         }
-        let model_usage = obj.try_iter()?.map(|item| item?.extract::<ModelUsage>()).collect::<pyo3::PyResult<_>>()?;
+        let model_usage = obj
+            .try_iter()?
+            .map(|item| item?.extract::<ModelUsage>())
+            .collect::<pyo3::PyResult<_>>()?;
         Ok(AgentSessionUsage { model_usage })
     }
 }

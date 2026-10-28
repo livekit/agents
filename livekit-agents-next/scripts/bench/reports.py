@@ -10,12 +10,14 @@ import json
 import os
 import threading
 import time
+from array import array
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import patch
 
 from opentelemetry.sdk._logs import LoggerProvider, ReadableLogRecord
@@ -24,11 +26,71 @@ from opentelemetry.sdk._logs.export import (
     LogRecordExportResult,
     SimpleLogRecordProcessor,
 )
-from scripts.bench.metrics import CallbackSlices, LoopLag, cadence_budget_pass, distribution
+from pydantic import AliasPath, BaseModel, ConfigDict, Field
+from scripts.bench.metrics import (
+    CallbackSlices,
+    Distribution,
+    LoopLag,
+    cadence_budget_pass,
+    distribution,
+)
 
 from livekit.agents import _core, llm
 from livekit.agents.job import SessionReport
 from livekit.agents.telemetry import _destination, _export, _providers, traces
+
+_BUDGET_CONFIG = ConfigDict(strict=True, frozen=True, allow_inf_nan=False)
+
+
+class ReportWorkload(BaseModel):
+    model_config = _BUDGET_CONFIG
+
+    sessions: list[Literal[1, 8, 32, 64]] = Field(min_length=1)
+    history_items: Literal[10, 1_000, 10_000]
+    minimum_observations_per_distribution: int = Field(ge=1_000)
+    heartbeat_ms: float = Field(gt=0, le=1)
+    control_cadence_ms: Literal[10]
+
+
+class ReportLimits(BaseModel):
+    model_config = _BUDGET_CONFIG
+
+    loop_lag_p999_ms_exclusive: float = Field(gt=0, le=2)
+    loop_lag_max_ms_exclusive: float = Field(gt=0, le=5)
+    callback_thread_cpu_p999_ms: float = Field(gt=0, le=1)
+    callback_thread_cpu_max_ms: float = Field(gt=0, le=2)
+
+
+class ReportBudget(BaseModel):
+    model_config = _BUDGET_CONFIG
+
+    workload: ReportWorkload = Field(
+        validation_alias=AliasPath("interfaces", "session_report", "workload")
+    )
+    limits: ReportLimits = Field(
+        validation_alias=AliasPath("interfaces", "session_report", "limits")
+    )
+
+    def scheduling_pass(self, samples: Distribution) -> bool:
+        return (
+            samples.count >= self.workload.minimum_observations_per_distribution
+            and cadence_budget_pass(samples, self.workload.control_cadence_ms)
+            and samples.p999_ms < self.limits.loop_lag_p999_ms_exclusive
+            and samples.max_ms < self.limits.loop_lag_max_ms_exclusive
+        )
+
+    def cpu_pass(self, samples: Distribution) -> bool:
+        return (
+            samples.count >= self.workload.minimum_observations_per_distribution
+            and samples.p999_ms <= self.limits.callback_thread_cpu_p999_ms
+            and samples.max_ms <= self.limits.callback_thread_cpu_max_ms
+        )
+
+
+def load_budget(path: Path | None = None) -> ReportBudget:
+    return ReportBudget.model_validate_json(
+        (path or Path(__file__).with_name("budgets.json")).read_bytes()
+    )
 
 
 @dataclass(frozen=True)
@@ -38,6 +100,38 @@ class SdkSlice:
     cpu_ns: int
     thread_id: int
     stage: str
+
+
+class SdkSamples:
+    """Retain numeric measurements without adding one GC-tracked object per callback."""
+
+    def __init__(self) -> None:
+        self._values = array("Q")
+        self._stages: list[str] = []
+        self._stage_ids: dict[str, int] = {}
+
+    def append(self, sample: SdkSlice) -> None:
+        stage = self._stage_ids.get(sample.stage)
+        if stage is None:
+            stage = len(self._stages)
+            self._stage_ids[sample.stage] = stage
+            self._stages.append(sample.stage)
+        self._values.extend(
+            (sample.started_ns, sample.wall_ns, sample.cpu_ns, sample.thread_id, stage)
+        )
+
+    def __len__(self) -> int:
+        return len(self._values) // 5
+
+    def __iter__(self) -> Iterator[SdkSlice]:
+        for at in range(0, len(self._values), 5):
+            yield SdkSlice(
+                self._values[at],
+                self._values[at + 1],
+                self._values[at + 2],
+                self._values[at + 3],
+                self._stages[self._values[at + 4]],
+            )
 
 
 @dataclass(frozen=True)
@@ -54,7 +148,7 @@ class GcPause:
 class ReportCapture:
     uploads: dict[str, str] = field(default_factory=dict)
     items: Counter[str] = field(default_factory=Counter)
-    sdk_slices: list[SdkSlice] = field(default_factory=list)
+    sdk_slices: SdkSamples = field(default_factory=SdkSamples)
     gc_pauses: list[GcPause] = field(default_factory=list)
     before_diagnostics: dict[str, int] = field(default_factory=dict)
     after_diagnostics: dict[str, int] = field(default_factory=dict)
@@ -250,17 +344,18 @@ async def prepare(report: SessionReport) -> None:
     )
 
 
-async def run(count: int, item_count: int) -> dict[str, object]:
+async def run(count: int, item_count: int, budget: ReportBudget | None = None) -> dict[str, object]:
+    budget = budget or load_budget()
     items = [llm.ChatMessage(role="user", content=["hello"], id=str(i)) for i in range(item_count)]
     reports = [make_report(items, f"report-{i}") for i in range(count)]
-    monitor = LoopLag()
+    monitor = LoopLag(period_ms=budget.workload.heartbeat_ms)
     pulse = asyncio.create_task(monitor.run())
     try:
         with capture_reports() as capture, CallbackSlices() as callbacks:
             await monitor.ready.wait()
             idle_started = time.monotonic_ns()
             idle_cpu_started = time.thread_time_ns()
-            while len(monitor.samples) < 1_000:
+            while len(monitor.samples) < budget.workload.minimum_observations_per_distribution:
                 await asyncio.sleep(0.01)
             baseline = distribution(monitor.samples)
             baseline_wall = time.monotonic_ns() - idle_started
@@ -275,7 +370,7 @@ async def run(count: int, item_count: int) -> dict[str, object]:
             )
             workload_finished = time.monotonic_ns()
             elapsed = time.monotonic() - started
-            while len(monitor.samples) < 1_000:
+            while len(monitor.samples) < budget.workload.minimum_observations_per_distribution:
                 await asyncio.sleep(0.01)
         lag = distribution(monitor.samples)
         cpu = distribution([item.cpu_ns for item in capture.sdk_slices])
@@ -302,10 +397,7 @@ async def run(count: int, item_count: int) -> dict[str, object]:
             if item.started_ns <= observed
             and item.started_ns + item.wall_ns >= observed - worst_lag
         ]
-        cpu_pass = all(
-            samples.count >= 1_000 and samples.p999_ms <= 1 and samples.max_ms <= 2
-            for samples in (cpu, loop_cpu)
-        )
+        cpu_pass = all(budget.cpu_pass(samples) for samples in (cpu, loop_cpu))
         largest_cpu = sorted(capture.sdk_slices, key=lambda sample: sample.cpu_ns, reverse=True)[
             :10
         ]
@@ -354,8 +446,8 @@ async def run(count: int, item_count: int) -> dict[str, object]:
                 for stage in {sample.stage for sample in capture.sdk_slices}
             },
             "workload_complete": complete,
-            "baseline_budget_pass": cadence_budget_pass(baseline, 10),
-            "measured_budget_pass": complete and cadence_budget_pass(lag, 10) and cpu_pass,
+            "baseline_budget_pass": budget.scheduling_pass(baseline),
+            "measured_budget_pass": complete and budget.scheduling_pass(lag) and cpu_pass,
         }
     finally:
         pulse.cancel()
@@ -364,7 +456,8 @@ async def run(count: int, item_count: int) -> dict[str, object]:
 
 
 async def main(args: argparse.Namespace) -> int:
-    cases = [await run(count, args.items) for count in args.sessions]
+    budget = load_budget()
+    cases = [await run(count, args.items, budget) for count in args.sessions]
     result = {"cases": cases}
     if not all(case["workload_complete"] for case in cases):
         raise RuntimeError("report workload produced no complete report")
@@ -376,11 +469,18 @@ async def main(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
+    budget = load_budget()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--sessions", nargs="+", type=int, choices=(1, 8, 32, 64), default=[1, 8, 32, 64]
+        "--sessions",
+        nargs="+",
+        type=int,
+        choices=budget.workload.sessions,
+        default=budget.workload.sessions,
     )
-    parser.add_argument("--items", type=int, choices=(10, 1_000, 10_000), default=10_000)
+    parser.add_argument(
+        "--items", type=int, choices=(10, 1_000, 10_000), default=budget.workload.history_items
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     raise SystemExit(asyncio.run(main(parser.parse_args())))

@@ -26,6 +26,13 @@ pub struct TraceParent {
 }
 
 impl TraceParent {
+    pub fn format(trace_id: u128, span_id: u64, sampled: bool) -> Option<String> {
+        if trace_id == 0 || span_id == 0 {
+            return None;
+        }
+        Some(format!("00-{trace_id:032x}-{span_id:016x}-{:02x}", u8::from(sampled)))
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
         if bytes.len() != 55 || &bytes[..3] != b"00-" || bytes[35] != b'-' || bytes[52] != b'-' {
@@ -157,7 +164,19 @@ mod tests {
     #[test]
     fn trace_parent_refuses_malformed_oversized_and_zero_identifiers() {
         let valid = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
-        assert!(TraceParent::parse(valid).unwrap().sampled);
+        let parent = TraceParent::parse(valid).unwrap();
+        assert!(parent.sampled);
+        assert_eq!(
+            TraceParent::format(
+                u128::from_be_bytes(parent.trace_id),
+                u64::from_be_bytes(parent.span_id),
+                parent.sampled,
+            )
+            .as_deref(),
+            Some(valid),
+        );
+        assert!(TraceParent::format(0, 1, true).is_none());
+        assert!(TraceParent::format(1, 0, false).is_none());
         for invalid in [
             "",
             "00-00000000000000000000000000000000-0123456789abcdef-01",
@@ -184,6 +203,10 @@ pub trait EventRetention: Send + Sync + Sized + 'static {
     /// Sessions started outside a job retain their existing application-owned access contract.
     #[host(call)]
     fn allows_read(&self, job_id: String) -> bool;
+
+    /// Immutable consent captured when this session's report retention was created.
+    #[host(getter)]
+    fn capture_content(&self) -> bool;
 
     /// Reject content without creation-time consent, unknown schemas and live-object events.
     #[host(call)]

@@ -50,7 +50,7 @@ from ..job import (
 )
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
-from ..telemetry._transport import use_trace_carrier
+from ..telemetry._transport import use_traceparent
 from ..utils import aio, http_context, log_exceptions
 from .launch import load_preload_modules
 
@@ -179,7 +179,7 @@ class _JobProc:
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
     async def _core_start_job(self, fields: _core.StartJobFields) -> _core.JobRun:
-        with use_trace_carrier(fields.trace):
+        with use_traceparent(fields.traceparent):
             return self._start_job(
                 RunningJobInfo(
                     accept_arguments=JobAcceptArguments(
