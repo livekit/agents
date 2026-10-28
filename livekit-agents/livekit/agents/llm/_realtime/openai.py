@@ -1031,6 +1031,8 @@ class RealtimeSession(
 
                     self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
+                    # one event per loop turn, so a long replay does not block other tasks
+                    await asyncio.sleep(0)
             except Exception as e:
                 self._remote_chat_ctx = old_chat_ctx  # restore the old chat context
                 raise APIConnectionError(
@@ -1168,6 +1170,9 @@ class RealtimeSession(
                         logger.debug(">>>", extra={"lk.pii.event": msg})
                 except Exception:
                     logger.exception("failed to send event")
+
+                # one event per loop turn, so a long queue does not block other tasks
+                await asyncio.sleep(0)
 
             closing = True
             await ws_conn.close()
