@@ -51,6 +51,21 @@ def test_model_api_compatibility(
 
 
 @pytest.mark.parametrize(
+    ("vertexai", "expected"),
+    [
+        (False, "gemini-3.8-live"),
+        (True, "gemini-live-2.5-flash-native-audio"),
+    ],
+)
+def test_default_model_follows_the_api(vertexai: bool, expected: str) -> None:
+    """The Gemini API default must not be a preview model that Google retires."""
+    model = RealtimeModel(
+        vertexai=vertexai, api_key="fake-key", project="test-project", location="us-central1"
+    )
+    assert model.model == expected
+
+
+@pytest.mark.parametrize(
     ("model", "vertexai"),
     [
         ("gemini-3.8-live-extended-thinking", True),
@@ -623,6 +638,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     It is sent anyway, since unblocking the turn matters more, and every one is reported.
     """
     async with _make_connected_session(monkeypatch) as session:
+        session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
         session._handle_tool_calls(
             types.LiveServerToolCall(
