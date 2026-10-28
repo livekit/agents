@@ -130,13 +130,9 @@ class RunContext(Generic[Context_T]):
 
     @property
     def thread(self) -> Thread:
-        """The durable thread this run belongs to, the one its ``a2a_session`` handler gets.
-
-        Raises:
-            RuntimeError: when the run belongs to no thread.
-        """
+        """The conversation's thread; kept in memory when no storage is configured."""
         if self._run is not None:
-            thread = self._run.hooks.thread if self._run.hooks is not None else None
+            thread = self._run.thread
         else:
             thread = self._call().thread
         if thread is None:

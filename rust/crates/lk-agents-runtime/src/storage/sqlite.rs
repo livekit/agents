@@ -18,7 +18,7 @@ use lk_agents_storage::StorageError;
 use lk_agents_storage::db;
 use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
 use lk_agents_storage::sqlite::{batch, query, sqlite_error};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use super::engine::{LeaseTiming, SchemaCell, Thread, ThreadDb};
 use super::streams::{LocalStreams, ResponseStreams};
@@ -123,7 +123,9 @@ impl SqliteConnection for FileConnection {
 
 fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection, StorageError> {
     use rusqlite::OpenFlags;
-    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        | OpenFlags::SQLITE_OPEN_URI;
     if create {
         flags |= OpenFlags::SQLITE_OPEN_CREATE;
     }
@@ -161,10 +163,14 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
 const THREAD_COLUMNS: &str =
     "thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at";
 
-/// Threads in one local directory: an explicit, absolute path, never a home-directory or Cloud
-/// fallback.
+enum Databases {
+    Directory(PathBuf),
+    Memory { namespace: String, keepers: Mutex<HashMap<String, FileConnection>> },
+}
+
+/// SQLite threads, either in an explicit local directory or owned entirely in memory.
 pub struct SqliteStorage {
-    directory: PathBuf,
+    databases: Databases,
     registry: FileConnection,
     streams: Arc<LocalStreams>,
     lease: LeaseTiming,
@@ -186,15 +192,35 @@ impl SqliteStorage {
         let registry = FileConnection::open(directory.join("registry.sqlite"), true).await?;
         registry.batch(vec![Statement::raw(REGISTRY_SCHEMA)]).await?;
         let streams = Arc::new(LocalStreams::open(directory.join("streams.sqlite")).await?);
-        Ok(Self { directory, registry, streams, lease })
+        Ok(Self { databases: Databases::Directory(directory), registry, streams, lease })
     }
 
-    pub fn directory(&self) -> &Path {
-        &self.directory
+    /// Uses the same thread engine and statements without creating any files.
+    pub async fn in_memory(lease: LeaseTiming) -> Result<Self, StorageError> {
+        let registry = FileConnection::open(":memory:".into(), true).await?;
+        registry.batch(vec![Statement::raw(REGISTRY_SCHEMA)]).await?;
+        let streams = Arc::new(LocalStreams::open(":memory:".into()).await?);
+        Ok(Self {
+            databases: Databases::Memory {
+                namespace: shortuuid("memory_"),
+                keepers: Mutex::new(HashMap::new()),
+            },
+            registry,
+            streams,
+            lease,
+        })
     }
 
     fn file(&self, thread_id: &str) -> Result<PathBuf, StorageError> {
-        Ok(self.directory.join("threads").join(format!("{}.sqlite", valid_thread_id(thread_id)?)))
+        let id = valid_thread_id(thread_id)?;
+        Ok(match &self.databases {
+            Databases::Directory(directory) => {
+                directory.join("threads").join(format!("{id}.sqlite"))
+            }
+            Databases::Memory { namespace, .. } => {
+                format!("file:{namespace}_{id}?mode=memory&cache=shared").into()
+            }
+        })
     }
 
     /// The registry row of a live thread; an expired one is deleted on the way.
@@ -260,9 +286,14 @@ impl Storage for SqliteStorage {
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
         let thread_id = shortuuid("AT_");
         let file = FileConnection::open(self.file(&thread_id)?, true).await?;
-        let created = file.batch(db::bootstrap()).await;
-        file.close().await;
-        created?;
+        file.batch(db::bootstrap()).await?;
+        match &self.databases {
+            Databases::Directory(_) => file.close().await,
+            Databases::Memory { keepers, .. } => {
+                // A keeper keeps the shared memory database alive between ordinary handles.
+                keepers.lock().await.insert(thread_id.clone(), file);
+            }
+        }
         let now = unix_now();
         let idle_ttl = ttl_secs(request.idle_ttl.as_ref());
         let attributes: HashMap<&String, &String> =
@@ -370,6 +401,13 @@ impl Storage for SqliteStorage {
             params: vec![thread_id.into()],
         };
         self.registry.batch(vec![delete]).await?;
+        if let Databases::Memory { keepers, .. } = &self.databases {
+            let keeper = keepers.lock().await.remove(thread_id);
+            if let Some(keeper) = keeper {
+                keeper.close().await;
+            }
+            return Ok(());
+        }
         for suffix in ["", "-wal", "-shm"] {
             let mut path = file.clone().into_os_string();
             path.push(suffix);
@@ -398,6 +436,12 @@ impl Storage for SqliteStorage {
     async fn close(&self) {
         self.registry.close().await;
         self.streams.shutdown().await;
+        if let Databases::Memory { keepers, .. } = &self.databases {
+            let connections = std::mem::take(&mut *keepers.lock().await);
+            for connection in connections.into_values() {
+                connection.close().await;
+            }
+        }
     }
 }
 

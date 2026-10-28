@@ -27,6 +27,7 @@ use super::{Storage, Thread};
 
 /// What the lazily opened backend is built from.
 enum Config {
+    Memory { lease: LeaseTiming },
     Local { directory: PathBuf, lease: LeaseTiming },
     Cloud(AgentDbStorage),
 }
@@ -69,9 +70,12 @@ impl HostStorage {
         self.backend
             .get_or_try_init(|| async {
                 Ok(match &self.config {
+                    Config::Memory { lease } => {
+                        Backend::Local(Arc::new(SqliteStorage::in_memory(*lease).await?))
+                    }
                     Config::Local { directory, lease } => {
                         let storage = SqliteStorage::open(directory, *lease).await?;
-                        log::info!("local thread storage in {}", storage.directory().display());
+                        log::info!("local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
                     Config::Cloud(storage) => Backend::Cloud(Arc::new(storage.clone())),
@@ -218,6 +222,7 @@ impl HostStorageClass for HostStorage {
             seconds(renew_interval, default.renew_interval, "renew_interval")?,
         )?;
         let config = match (directory, url, api_key, api_secret) {
+            (None, None, None, None) => Config::Memory { lease },
             (Some(directory), None, None, None) => {
                 let directory = std::path::absolute(&directory)
                     .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
@@ -240,6 +245,7 @@ impl HostStorageClass for HostStorage {
 
     fn location(&self) -> String {
         match &self.config {
+            Config::Memory { .. } => ":memory:".into(),
             Config::Local { directory, .. } => directory.display().to_string(),
             Config::Cloud(storage) => storage.options().url.clone(),
         }

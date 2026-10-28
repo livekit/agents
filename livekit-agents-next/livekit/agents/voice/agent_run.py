@@ -126,6 +126,8 @@ class _TextRun(Generic[Context_T]):
         self.usage = usage
         """Usage so far: the caller's accumulator, which this run's usage is added to."""
         self.hooks = hooks
+        self.thread = hooks.thread if hooks is not None else None
+        self._store: ContextStore | None = None
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
@@ -150,13 +152,26 @@ class _TextRun(Generic[Context_T]):
 
     @property
     def store(self) -> ContextStore:
-        if self.hooks is None or self.hooks.store is None:
+        store = self.hooks.store if self.hooks is not None else None
+        store = store or self._store
+        if store is None:
             raise RuntimeError("this run has no managed context store")
-        return (
-            self.hooks.store._for_scope(self.context_scope)
-            if self.context_scope is not None
-            else self.hooks.store
-        )
+        return store._for_scope(self.context_scope) if self.context_scope is not None else store
+
+    async def prepare_thread(self) -> None:
+        from ..storage.backends import Storage
+        from ..storage.context_store import ContextStore
+        from ..storage.resolve import Thread
+
+        if self.thread is None:
+            storage = Storage({}, None)
+            info = await storage.threads.create_thread()
+            self.thread = Thread(storage, info.thread_id, agent_name=self.agent.name)
+        if (self.hooks is None or self.hooks.store is None) and self._store is None:
+            activation = await self.thread.storage._core._core_context_store(
+                self.thread.id, self.agent.name
+            )
+            self._store = ContextStore(activation=activation)
 
     async def acquire_toolsets(self) -> None:
         """Sets up the agent's toolsets for this run (tools.md "Toolsets"); a failure releases
@@ -173,7 +188,11 @@ class _TextRun(Generic[Context_T]):
     async def release_toolsets(self) -> None:
         """Releases this run's toolsets once it settled, completed, failed or cancelled."""
         toolsets, self._toolsets = self._toolsets, []
-        await asyncio.gather(*(t._release() for t in toolsets))
+        try:
+            await asyncio.gather(*(t._release() for t in toolsets))
+        finally:
+            if self._store is not None:
+                self._store.close()
 
 
 async def start_run(
@@ -202,6 +221,7 @@ async def start_run(
         hooks=hooks,
         conn_options=conn_options,
     )
+    await run.prepare_thread()
     await run.acquire_toolsets()
     try:
         run.tools = ToolContext(agent.tools)
