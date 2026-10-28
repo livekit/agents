@@ -58,6 +58,14 @@ fn derive_host(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream
     Ok(out)
 }
 
+/// `#[derive(Table)]`: a column declaration, `#[table("name", remote = path)]`, for a row record
+/// defined in another crate (see [`table`]).
+#[proc_macro_derive(Table, attributes(table))]
+pub fn table_derive(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    table::table(&input).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
 /// `#[derive(Vocabulary)]` -- the search space's completeness check (lk-agents-voice/TEST_STRATEGY.md §5).
 ///
 /// For `enum Foo { A, B(..), C { .. } }` it generates, next to the enum:

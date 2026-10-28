@@ -284,7 +284,6 @@
   "allow:rust/crates/lk-agents-media/src/stream_buffer.rs:mod tests/fn a_read_on_an_empty_open_buffer_waits_for_the_writer:clippy::disallowed_methods:allow:always:1",
   "allow:rust/crates/lk-agents-media/src/stream_buffer.rs:struct StreamBuffer/field inner:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-media/src/stream_buffer.rs:use std :: sync :: { Condvar , Mutex }:clippy::disallowed_types:allow:always:1",
-  "allow:rust/crates/lk-agents-storage/src/lib.rs::clippy::disallowed_macros:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/agent_activity/options.rs:impl  HostOptions/fn new:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/agent_activity/options.rs:struct HostOptions/field state:clippy::disallowed_types:allow:always:1",
   "allow:rust/crates/lk-agents-voice/src/agent_activity/realtime.rs:impl  Driver/fn start_realtime_speech:clippy::disallowed_methods:allow:always:1",

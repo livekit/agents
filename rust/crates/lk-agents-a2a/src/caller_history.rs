@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use lk_agents_abi::llm::chat_context::{
     ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role,
 };
-use lk_agents_storage::run::KIND_KEY;
+use lk_agents_abi::a2a::metadata::KIND_KEY;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -218,7 +218,7 @@ impl CallerHistory {
     pub fn to_part(&self) -> Result<a2a::Part, HistoryError> {
         let mut part = a2a::Part::data(self.to_value()?);
         part.metadata =
-            Some([(lk_agents_storage::run::KIND_KEY.to_owned(), "chat_ctx".into())].into());
+            Some([(lk_agents_abi::a2a::metadata::KIND_KEY.to_owned(), "chat_ctx".into())].into());
         Ok(part)
     }
 

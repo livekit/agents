@@ -1381,7 +1381,6 @@ dependencies = [
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-host-derive",
- "lk-agents-storage",
  "log",
  "pyo3",
  "serde",
@@ -1393,6 +1392,7 @@ dependencies = [
 name = "lk-agents-abi"
 version = "0.1.0"
 dependencies = [
+ "a2a-lf",
  "async-trait",
  "base64 0.22.1",
  "bytes",

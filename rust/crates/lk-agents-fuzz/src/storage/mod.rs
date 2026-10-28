@@ -25,6 +25,7 @@ use std::time::Duration;
 use std::convert::Infallible;
 
 use fastrand::Rng;
+use lk_agents_storage::sql::Table;
 use lk_agents_storage::db as plans;
 use lk_agents_storage::run::{TaskRow, TaskState};
 use lk_agents_storage::schema::ItemRow;

@@ -11,8 +11,8 @@ the workspace Rust flags.
   Forbidden executor, transport, host and SDK families include Tokio, futures,
   PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
   RTC follows core policy until its records, proxies and fakes move to their owners.
-  The async I/O crates (inference, worker, net) are outside the purity bans and the
-  Clippy policy; their workspace edges are checked.
+  The async I/O crates (inference, worker, net, storage) are outside the purity bans
+  and the Clippy policy; their workspace edges are checked.
 - A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's
   directory compiled by another crate would escape that core's dependency and Clippy policy, so
   every core-directory file is either compiled by its own crate (and linted with it) or an

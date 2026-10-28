@@ -11,7 +11,8 @@ use a2a::{
     AgentCard, Artifact, CancelTaskRequest, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Message,
     Part, PartContent, SendMessageRequest, StreamResponse, SubscribeToTaskRequest,
 };
-use lk_agents_storage::run::{EXTENSION_URI, MERGED_INTO_KEY, REASON_KEY, TaskState};
+use lk_agents_abi::a2a::metadata::{EXTENSION_URI, MERGED_INTO_KEY, REASON_KEY};
+use lk_agents_abi::storage::TaskState;
 use serde::Serialize;
 use serde_json::{Map, Value};
 

@@ -2,7 +2,7 @@
 //! once here, before the runtime accepts handler output.
 
 use lk_agents_abi::a2a::turn as host;
-use lk_agents_storage::StorageError;
+use lk_agents_abi::storage::StorageError;
 
 use crate::{HandlerOutput, HostEvent, Message, PendingCall, TurnContext, TurnResult};
 

@@ -11,7 +11,7 @@ use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use crate::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced,
-    ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
+    ItemPage, Plan, Read, Receive, Resolution, TaskPage, TaskQuery,
 };
 use crate::lease::{LanePoll, lease_secs};
 use crate::run::{
@@ -22,7 +22,7 @@ use crate::schema::{
     EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskRow,
 };
 use crate::sql::Statement;
-use crate::{Fence, StorageError};
+use crate::{Fence, StorageError, TaskWrite};
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;

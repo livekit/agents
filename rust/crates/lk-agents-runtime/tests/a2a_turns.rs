@@ -17,7 +17,8 @@ use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::{RunOptions, Thread, shortuuid};
-use lk_agents_storage::db::{Receive, TaskWrite};
+use lk_agents_storage::db::{Receive};
+use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{
     INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState,
 };
@@ -589,9 +590,9 @@ async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
     assert_eq!(text_of(&items[4].payload), "both answered");
     assert_eq!(host_b.calls()[0].history.len(), 3, "B loaded what A committed");
     let runs = a.lane(LANE).runs(10).await.unwrap();
-    let mut outcomes: Vec<_> = runs.iter().filter_map(|r| r.outcome).map(|o| o.as_str()).collect();
-    outcomes.sort();
-    assert_eq!(outcomes, vec!["canceled", "completed"]);
+    let outcomes: Vec<_> = runs.iter().filter_map(|r| r.outcome).collect();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.contains(&RunOutcome::Canceled) && outcomes.contains(&RunOutcome::Completed));
     fx.cleanup(&[&a, &b]).await;
 }
 

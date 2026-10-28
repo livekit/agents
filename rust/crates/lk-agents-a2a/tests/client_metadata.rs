@@ -2,7 +2,7 @@
 
 use lk_agents_a2a::client::{message_from_wire, message_to_wire};
 use lk_agents_abi::a2a::client::{MessageInput, MessageMetadata};
-use lk_agents_storage::run::EXTENSION_URI;
+use lk_agents_abi::a2a::metadata::EXTENSION_URI;
 use serde_json::json;
 
 #[test]

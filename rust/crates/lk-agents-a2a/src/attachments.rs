@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use lk_agents_storage::StorageError;
+use lk_agents_abi::storage::StorageError;
 
 /// Check declared part shapes before the upstream protobuf-JSON adapter can discard fields.
 /// In particular, that adapter chooses the first content field when several are supplied.

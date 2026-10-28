@@ -6,7 +6,8 @@ pub mod retained;
 
 use a2a::{Message, Part, Role};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use lk_agents_storage::run::{KIND_KEY, TaskState};
+use lk_agents_abi::a2a::metadata::KIND_KEY;
+use lk_agents_abi::storage::TaskState;
 use serde::{Deserialize, Serialize};
 
 use crate::caller_history::CallerHistory;

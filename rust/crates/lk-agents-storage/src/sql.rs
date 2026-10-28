@@ -192,6 +192,16 @@ impl<'a> Cells<'a> {
 }
 
 /// A column's Rust type, read from its cell; the error is what was expected.
+/// A record read from one table's rows: `#[table]` (lk-agents-host-derive) implements it.
+pub trait Table: Sized {
+    /// The columns, in declaration order.
+    const COLUMNS: &'static [&'static str];
+    /// The column list a read selects: `json(col)` for a JSONB column.
+    const SELECT: &'static str;
+    /// The record of a row read with [`Self::SELECT`].
+    fn from_row(row: &Row) -> Result<Self, StorageError>;
+}
+
 pub trait FromCell: Sized {
     fn from_cell(cell: &SqlValue) -> Result<Self, String>;
 }

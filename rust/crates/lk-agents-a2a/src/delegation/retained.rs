@@ -80,7 +80,7 @@ pub fn call_extra(
 pub fn update_from_host(
     update: lk_agents_abi::a2a::client::TaskUpdate,
 ) -> Result<crate::client::TaskUpdate, DelegationError> {
-    use lk_agents_storage::run::TaskState;
+    use lk_agents_abi::storage::TaskState;
     let state = TaskState::parse(&update.state).ok_or(DelegationError::InvalidState)?;
     let follow_task = match update.metadata.get("livekit/mergedInto") {
         None => None,
@@ -106,7 +106,7 @@ pub fn update_from_host(
 mod tests {
     use super::*;
     use crate::client::TaskUpdate;
-    use lk_agents_storage::run::TaskState;
+    use lk_agents_abi::storage::TaskState;
     use std::time::UNIX_EPOCH;
 
     fn identity(conversation: &str) -> InteractionId {

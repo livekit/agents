@@ -16,10 +16,9 @@ use lk_agents_a2a::{
     batch_to_chat_message, channel_of, checkpoint_stop, failed_message, python_reason,
     resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,
 };
-use lk_agents_storage::db::{
-    self, Acquire, AcquireOutcome, Acquired, Commit, Decode, EventWrite, Fenced, Plan, Read,
-    TaskWrite,
-};
+use lk_agents_storage::sql::Table;
+use lk_agents_storage::db::{self, Acquire, AcquireOutcome, Acquired, Commit, Decode, EventWrite, Fenced, Plan, Read};
+use lk_agents_storage::TaskWrite;
 use lk_agents_storage::lease::{LanePoll, Renewal, Renewed, lease_secs};
 use lk_agents_storage::run::{
     ItemRow, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE,

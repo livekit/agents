@@ -1,10 +1,15 @@
 //! `#[table("name")]` on a `#[derive(Host)]` record: the record is a row of that table of
 //! livekit/protocol `livekit/agent/thread_schema_v1.sql`, one field per column, named as the column.
 //!
-//! The record gets `COLUMNS`, `SELECT` (the column list a read uses, `json(col)` for a JSONB
-//! column) and `from_row`. Each field is checked against the DDL when the crate compiles: a column
-//! of the table, nullable exactly when the field is an `Option`, JSONB exactly when the field is
-//! read as JSON (a `serde_json::Value`, or a typed field marked `#[table(json)]`).
+//! The record implements the calling crate's `sql::Table`: `COLUMNS`, `SELECT` (the column list a
+//! read uses, `json(col)` for a JSONB column) and `from_row`. Each field is checked against the DDL
+//! when the crate compiles: a column of the table, nullable exactly when the field is an `Option`,
+//! JSONB exactly when the field is read as JSON (a `serde_json::Value`, or a typed field marked
+//! `#[table(json)]`).
+//!
+//! `#[table("tasks", remote = path::TaskRow)]` declares the columns of a record defined in another
+//! crate (`#[derive(Table)]` on a column declaration whose fields mirror it): the impl is for
+//! `path::TaskRow`, built field by field, so a field the two disagree on fails to compile.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -14,7 +19,19 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let Some(attr) = input.attrs.iter().find(|a| a.path().is_ident("table")) else {
         return Ok(TokenStream::new());
     };
-    let table = attr.parse_args::<syn::LitStr>()?.value();
+    let (table, remote) = attr.parse_args_with(|input: syn::parse::ParseStream| {
+        let table = input.parse::<syn::LitStr>()?.value();
+        let mut remote = None;
+        if input.parse::<Option<syn::Token![,]>>()?.is_some() {
+            let key = input.parse::<syn::Ident>()?;
+            if key != "remote" {
+                return Err(syn::Error::new_spanned(key, "expected `remote = path`"));
+            }
+            input.parse::<syn::Token![=]>()?;
+            remote = Some(input.parse::<syn::Path>()?);
+        }
+        Ok((table, remote))
+    })?;
     let syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(fields), .. }) = &input.data
     else {
         return Err(syn::Error::new_spanned(
@@ -34,6 +51,10 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         quote! { #field: cells.get(#i)? }
     });
     let ident = &input.ident;
+    let target = match &remote {
+        Some(path) => quote! { #path },
+        None => quote! { #ident },
+    };
     let checks = columns.iter().map(|c| {
         let (name, json, nullable) = (&c.name, c.json, c.nullable);
         let message = format!(
@@ -51,16 +72,13 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #(#checks)*
 
-        impl #ident {
-            /// The columns, in declaration order.
-            pub const COLUMNS: &'static [&'static str] = &[#(#column_names),*];
-            /// The column list a read selects: `json(col)` for a JSONB column.
-            pub const SELECT: &'static str = #select;
+        impl crate::sql::Table for #target {
+            const COLUMNS: &'static [&'static str] = &[#(#column_names),*];
+            const SELECT: &'static str = #select;
 
-            /// The record of a row read with [`Self::SELECT`].
-            pub fn from_row(row: &crate::sql::Row) -> Result<Self, crate::StorageError> {
+            fn from_row(row: &crate::sql::Row) -> Result<Self, crate::StorageError> {
                 let cells = crate::sql::Cells::new(row, Self::COLUMNS)?;
-                Ok(Self { #(#reads),* })
+                Ok(#target { #(#reads),* })
             }
         }
     })
@@ -148,6 +166,20 @@ mod tests {
         );
         assert!(out.contains("is_column (crate :: schema :: THREAD_SCHEMA , \"tasks\" , \"task_id\" , false , false)"), "{out}");
         assert!(out.contains("\"tasks\" , \"ask\" , true , true"), "{out}");
+    }
+
+    #[test]
+    fn a_remote_record_is_built_by_its_path() {
+        let out = render(
+            r#"
+            #[table("tasks", remote = abi::TaskRow)]
+            struct TaskRowColumns {
+                task_id: String,
+            }
+            "#,
+        );
+        assert!(out.contains("impl crate :: sql :: Table for abi :: TaskRow"), "{out}");
+        assert!(out.contains("Ok (abi :: TaskRow { task_id"), "{out}");
     }
 
     #[test]

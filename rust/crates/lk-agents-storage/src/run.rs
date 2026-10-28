@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::StorageError;
-use crate::db::{Commit, EventWrite, TaskWrite};
+use crate::TaskWrite;
+use crate::db::{Commit, EventWrite};
 use crate::schema::{Ask, EventRow, RunEnded, RunEvent, RunStarted, TaskInternal};
 pub use crate::schema::{ItemRow, LaneRow, TaskRow};
 use livekit_protocol::agent::chat_context::ChatItem;
@@ -17,6 +18,11 @@ use livekit_protocol::agent::chat_context::ChatItem;
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 
+pub use lk_agents_abi::storage::thread::{
+    REASON_INVALID_ARGUMENTS, REASON_LEASE_TIMEOUT, REASON_REJECTED, REASON_STORAGE_UNAVAILABLE,
+    REASON_THREAD_NOT_FOUND, REASON_TIMEOUT, REASON_UNKNOWN_CLASS, REASON_WORKER_LOST, RunOutcome,
+    SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
+};
 pub use lk_agents_abi::storage::{RunUsage, TaskState};
 
 /// Everything a run commits, as staged by its owner.
@@ -123,39 +129,8 @@ pub use lk_agents_abi::a2a::metadata::{
     MERGED_INTO_KEY, REASON_KEY,
 };
 
-/// The `failed` and `rejected` reasons.
-pub const REASON_WORKER_LOST: &str = "worker-lost";
-pub const REASON_LEASE_TIMEOUT: &str = "lease-timeout";
-pub const REASON_REJECTED: &str = "rejected";
-pub const REASON_THREAD_NOT_FOUND: &str = "thread-not-found";
-pub const REASON_STORAGE_UNAVAILABLE: &str = "storage-unavailable";
-pub const REASON_TIMEOUT: &str = "timeout";
-pub const REASON_UNKNOWN_CLASS: &str = "unknown-class";
-pub const REASON_INVALID_ARGUMENTS: &str = "invalid-arguments";
-
-/// The channel of the append-only run that writes a task's `submitted` row before the lease.
-pub const SUBMIT_CHANNEL: &str = "submit";
-
-/// What `run_ended` records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
-#[serde(rename_all = "kebab-case")]
-#[python(literal, module = "storage_run")]
-pub enum RunOutcome {
-    #[host(rename = "completed")]
-    Completed,
-    #[host(rename = "input-required")]
-    InputRequired,
-    #[host(rename = "failed")]
-    Failed,
-    #[host(rename = "canceled")]
-    Canceled,
-    #[host(rename = "rejected")]
-    Rejected,
-}
-
 /// One run as the journal tells it: `run_started` and, when it ended, `run_ended`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
     pub run_id: String,
     pub lane: String,
@@ -213,128 +188,6 @@ impl RunSummary {
 pub const LOOKUP_LIMIT: i64 = 500;
 /// How many `input-required` rows `pending_ask` scans.
 pub const PENDING_ASK_LIMIT: i64 = 50;
-
-/// What a write changes; everything left `None` keeps the existing row's value.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TaskPatch {
-    pub message_id: Option<String>,
-    /// An optional application task label, the `name` column.
-    pub name: Option<String>,
-    /// Merged over the row's `data.metadata`; an empty map changes nothing.
-    pub metadata: Option<Map<String, Value>>,
-    pub ask: Option<Ask>,
-    pub streams: Option<Vec<lk_agents_abi::storage::StreamInfo>>,
-    pub status_message: Option<a2a::Message>,
-    pub history: Option<Vec<a2a::Message>>,
-    pub artifacts: Option<Vec<a2a::Artifact>>,
-}
-
-/// The pending transition a task waits on.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct WaitOptions {
-    /// For a conversation tool's `InputRequired`, the pending call's tool.
-    pub tool: Option<String>,
-    /// For a conversation tool's `InputRequired`, the pending call.
-    pub call_id: Option<String>,
-    /// The tool the answer is handed to, when the `InputRequired` named one.
-    pub answer_tool: Option<String>,
-    /// The tool's parameter schema, added to the status message as a data part.
-    pub schema: Option<Value>,
-}
-
-/// `input-required`'s patch: the question is the status message (`message_id`), `ask` the
-/// pending transition, the tool's schema a data part when given.
-pub fn wait_patch(
-    task_id: &str,
-    question: &str,
-    opts: WaitOptions,
-    message_id: String,
-) -> TaskPatch {
-    let ask = Ask {
-        question: question.to_owned(),
-        tool: opts.tool,
-        call_id: opts.call_id,
-        answer_tool: opts.answer_tool,
-    };
-    let mut parts = vec![a2a::Part::text(question)];
-    if let Some(schema) = opts.schema {
-        parts.push(a2a::Part::data(schema));
-    }
-    TaskPatch {
-        ask: Some(ask),
-        status_message: Some(agent_message(parts, task_id, message_id)),
-        ..TaskPatch::default()
-    }
-}
-
-/// A task write: `patch` over `base`, `data` and `internal` rebuilt from both. A terminal base is
-/// immutable.
-pub fn merge_write(
-    task_id: &str,
-    base: Option<&TaskWrite>,
-    status: TaskState,
-    patch: TaskPatch,
-) -> Result<TaskWrite, StorageError> {
-    if let Some(b) = base
-        && b.status.is_terminal()
-    {
-        return Err(StorageError::Invalid(format!(
-            "task {task_id} is {}: terminal rows are immutable",
-            b.status.as_str()
-        )));
-    }
-    let mut data = base.map(|b| b.data.clone()).unwrap_or_default();
-    if let Some(metadata) = patch.metadata {
-        data.metadata.extend(metadata);
-    }
-    if let Some(history) = patch.history {
-        data.history = history;
-    }
-    if let Some(artifacts) = patch.artifacts {
-        data.artifacts = Some(artifacts);
-    }
-    if let Some(message) = patch.status_message {
-        data.status_message = Some(message);
-    }
-
-    let ask = if patch.ask.is_none() && (status.is_terminal() || status == TaskState::Working) {
-        // a terminal or running row holds no pending question
-        None
-    } else {
-        patch.ask.or_else(|| {
-            base.and_then(|b| b.internal.as_ref().and_then(|internal| internal.ask.clone()))
-        })
-    };
-
-    Ok(TaskWrite {
-        task_id: task_id.to_owned(),
-        status,
-        message_id: patch.message_id.or_else(|| base.and_then(|b| b.message_id.clone())),
-        name: patch.name.or_else(|| base.and_then(|b| b.name.clone())),
-        data,
-        internal: {
-            let mut streams = base
-                .and_then(|b| b.internal.as_ref())
-                .map(|i| i.streams.clone())
-                .unwrap_or_default();
-            for stream in patch.streams.unwrap_or_default() {
-                if !streams.iter().any(|existing| existing.stream_id == stream.stream_id) {
-                    streams.push(stream);
-                }
-            }
-            (ask.is_some() || !streams.is_empty()).then_some(TaskInternal { ask, streams })
-        },
-    })
-}
-
-/// An agent message `message_id` of `task_id`.
-pub fn agent_message(parts: Vec<a2a::Part>, task_id: &str, message_id: String) -> a2a::Message {
-    a2a::Message {
-        message_id,
-        task_id: Some(task_id.to_owned()),
-        ..a2a::Message::new(a2a::Role::Agent, parts)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -414,79 +267,5 @@ mod tests {
         assert!(runs[1].interrupted());
     }
 
-    fn message(id: &str) -> a2a::Message {
-        a2a::Message { message_id: id.into(), ..a2a::Message::new(a2a::Role::User, vec![]) }
-    }
 
-    #[test]
-    fn a_later_write_keeps_the_row_and_clears_the_ask_when_terminal_or_working() {
-        let base = merge_write(
-            "AST_1",
-            None,
-            TaskState::InputRequired,
-            TaskPatch {
-                message_id: Some("m1".into()),
-                ask: Some(Ask { question: "when?".into(), ..Ask::default() }),
-                history: Some(vec![message("m1")]),
-                ..TaskPatch::default()
-            },
-        )
-        .unwrap();
-        let ask = |w: &TaskWrite| w.internal.as_ref().and_then(|internal| internal.ask.clone());
-        assert_eq!(ask(&base).map(|a| a.question), Some("when?".into()));
-        let msg = merge_write(
-            "AST_1",
-            Some(&base),
-            TaskState::InputRequired,
-            TaskPatch { history: Some(vec![message("m2"), message("m3")]), ..TaskPatch::default() },
-        )
-        .unwrap();
-        assert_eq!(ask(&msg), ask(&base), "input-required keeps the pending transition");
-        assert_eq!(msg.message_id.as_deref(), Some("m1"));
-        let done = merge_write(
-            "AST_1",
-            Some(&base),
-            TaskState::Completed,
-            TaskPatch { artifacts: Some(vec![]), ..TaskPatch::default() },
-        )
-        .unwrap();
-        assert_eq!(ask(&done), None);
-        assert_eq!(done.data.artifacts, Some(vec![]));
-        assert_eq!(done.data.history, vec![message("m1")]);
-        let working =
-            merge_write("AST_1", Some(&base), TaskState::Working, TaskPatch::default()).unwrap();
-        assert_eq!(ask(&working), None);
-        let again = merge_write("AST_1", Some(&done), TaskState::Working, TaskPatch::default());
-        assert!(matches!(again, Err(StorageError::Invalid(m)) if m.contains("is completed")));
-    }
-
-    #[test]
-    fn metadata_merges_over_the_stored_metadata() {
-        let base = merge_write(
-            "AST_1",
-            None,
-            TaskState::Submitted,
-            TaskPatch {
-                name: Some("T".into()),
-                metadata: Some(json!({"a": 1, "b": 1}).as_object().cloned().unwrap()),
-                ..TaskPatch::default()
-            },
-        )
-        .unwrap();
-        let next = merge_write(
-            "AST_1",
-            Some(&base),
-            TaskState::Canceled,
-            TaskPatch {
-                metadata: Some(json!({"b": 2, "c": 3}).as_object().cloned().unwrap()),
-                ..TaskPatch::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(&next.data.metadata).unwrap(),
-            json!({"a": 1, "b": 2, "c": 3})
-        );
-        assert_eq!(next.name.as_deref(), Some("T"));
-    }
 }

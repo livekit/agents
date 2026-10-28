@@ -3,6 +3,7 @@
 //! draws. Sometimes it presents a page token under other filters first, which must be refused.
 
 use fastrand::Rng;
+use lk_agents_storage::sql::Table;
 use lk_agents_storage::db::{self as plans, Decode, TaskQuery};
 use lk_agents_storage::run::{TaskRow, TaskState};
 

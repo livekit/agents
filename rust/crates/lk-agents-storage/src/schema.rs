@@ -3,121 +3,59 @@ use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 /// The thread database's tables, as livekit-protocol defines them (version 1). Every `#[table]`
 /// record below is checked against them when the crate compiles.
 pub use livekit_protocol::agent::{THREAD_SCHEMA_V1 as THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
-use lk_agents_host_derive::Host;
+use lk_agents_host_derive::{Host, Table};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::run::{RunOutcome, TaskState};
 use crate::sql::SqlValue;
-use crate::sql::{FromCell, json_cell, statement};
+use crate::sql::{FromCell, Table, json_cell, statement};
 
-/// One history item of a lane.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[table("items")]
-pub struct ItemRow {
-    pub id: String,
-    /// The A2A `messageId` of the message this item came from, the idempotency key.
-    #[serde(default)]
-    pub message_id: Option<String>,
-    /// The `ChatContext.ChatItem`, as protobuf JSON.
-    #[table(json)]
-    pub payload: ChatItem,
-}
-
-impl ItemRow {
-    pub fn new(kind: chat_item::Item) -> Self {
-        let id = match &kind {
-            chat_item::Item::Message(m) => &m.id,
-            chat_item::Item::FunctionCall(f) => &f.id,
-            chat_item::Item::FunctionCallOutput(f) => &f.id,
-            chat_item::Item::AgentHandoff(h) => &h.id,
-            chat_item::Item::AgentConfigUpdate(c) => &c.id,
-        }
-        .clone();
-        Self { id, message_id: None, payload: ChatItem { item: Some(kind) } }
-    }
-
-    pub fn kind(&self) -> Option<&chat_item::Item> {
-        self.payload.item.as_ref()
-    }
-
-    pub fn kind_mut(&mut self) -> Option<&mut chat_item::Item> {
-        self.payload.item.as_mut()
-    }
-
-    /// Unix seconds; `0` when unset.
-    pub fn created_at(&self) -> f64 {
-        let t = match self.kind() {
-            Some(chat_item::Item::Message(m)) => m.created_at.as_ref(),
-            Some(chat_item::Item::FunctionCall(f)) => f.created_at.as_ref(),
-            Some(chat_item::Item::FunctionCallOutput(f)) => f.created_at.as_ref(),
-            Some(chat_item::Item::AgentHandoff(h)) => h.created_at.as_ref(),
-            Some(chat_item::Item::AgentConfigUpdate(c)) => c.created_at.as_ref(),
-            None => None,
-        };
-        t.map_or(0.0, |t| t.seconds as f64 + f64::from(t.nanos) / 1e9)
-    }
-
-    /// Instructions are rendered per run, never stored, and `agent_config_update` is a
-    /// runtime note to the model, not a chat item of the extension.
-    pub(crate) fn stored(&self) -> bool {
-        match self.kind() {
-            Some(chat_item::Item::AgentConfigUpdate(_)) | None => false,
-            Some(chat_item::Item::Message(m)) => {
-                !matches!(m.role(), ChatRole::System | ChatRole::Developer)
-            }
-            _ => true,
-        }
-    }
-}
-
-/// One A2A task of a lane. The A2A `Task` is
-/// `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
-/// plus the fields of `data`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[table("tasks")]
-pub struct TaskRow {
-    pub task_id: String,
-    pub lane: String,
-    /// Submission order; the lane runs its runnable tasks in it.
-    pub seq: i64,
-    /// An optional application task label.
-    pub name: Option<String>,
-    pub message_id: Option<String>,
-    pub status: TaskState,
-    /// Unix milliseconds.
-    pub updated_at: i64,
-    /// The A2A `Task` fields: `history`, `artifacts`, `metadata`.
-    #[table(json)]
-    pub data: TaskData,
-    /// The pending question and ordered durable response streams used to resume this task.
-    #[table(json)]
-    pub internal: Option<TaskInternal>,
-}
-
-impl TaskRow {
-    pub fn terminal(&self) -> bool {
-        self.status.is_terminal()
-    }
-}
-
-/// The `data` column: the A2A `Task` fields a row keeps, as v1 protobuf JSON; an absent field is
-/// left out.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-
-pub struct TaskData {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub history: Vec<a2a::Message>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub artifacts: Option<Vec<a2a::Artifact>>,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub metadata: Map<String, Value>,
-    /// `Task.status.message`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_message: Option<a2a::Message>,
-}
-
+pub use lk_agents_abi::storage::thread::{InboxRow, ItemRow, TaskData, TaskRow};
 pub use lk_agents_abi::storage::{Ask, TaskInternal};
+
+/// The `items` columns of [`ItemRow`].
+#[derive(Table)]
+#[table("items", remote = ItemRow)]
+#[expect(dead_code, reason = "a column declaration")]
+struct ItemColumns {
+    id: String,
+    message_id: Option<String>,
+    #[table(json)]
+    payload: ChatItem,
+}
+
+/// The `tasks` columns of [`TaskRow`].
+#[derive(Table)]
+#[table("tasks", remote = TaskRow)]
+#[expect(dead_code, reason = "a column declaration")]
+struct TaskColumns {
+    task_id: String,
+    lane: String,
+    seq: i64,
+    name: Option<String>,
+    message_id: Option<String>,
+    status: TaskState,
+    updated_at: i64,
+    #[table(json)]
+    data: TaskData,
+    #[table(json)]
+    internal: Option<TaskInternal>,
+}
+
+/// The `inbox` columns of [`InboxRow`].
+#[derive(Table)]
+#[table("inbox", remote = InboxRow)]
+#[expect(dead_code, reason = "a column declaration")]
+struct InboxColumns {
+    id: i64,
+    lane: String,
+    task_id: String,
+    message_id: String,
+    #[table(json)]
+    message: a2a::Message,
+    received_at: i64,
+}
 
 /// One lane: a registered agent's state, lease and inbox cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
@@ -193,20 +131,6 @@ pub struct RunEnded {
     pub outcome: RunOutcome,
     #[serde(default)]
     pub reason: Option<String>,
-}
-
-/// One message received while the lane was running, under the `inbox` policy.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[table("inbox")]
-pub struct InboxRow {
-    pub id: i64,
-    pub lane: String,
-    /// The task created for the message; also its answer stream.
-    pub task_id: String,
-    pub message_id: String,
-    #[table(json)]
-    pub message: a2a::Message,
-    pub received_at: i64,
 }
 
 json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);

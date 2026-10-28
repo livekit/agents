@@ -10,7 +10,8 @@ use a2a::{
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use lk_agents_storage::run::{REASON_KEY, TaskState};
+use lk_agents_abi::a2a::metadata::REASON_KEY;
+use lk_agents_abi::storage::TaskState;
 
 /// Wire versions are separate from the accepted historical method aliases.
 const VERSIONS: [&str; 1] = ["1.0"];

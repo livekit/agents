@@ -7,13 +7,13 @@ mod tests;
 use std::time::Duration;
 
 use lk_agents_abi::storage::StreamInfo;
-use lk_agents_storage::StorageError;
-use lk_agents_storage::db::TaskWrite;
-use lk_agents_storage::lease::LanePoll;
-use lk_agents_storage::run::{
-    REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, TaskRow, TaskState,
-};
-use lk_agents_storage::schema::{InboxRow, TaskData, TaskInternal};
+use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::thread::TaskWrite;
+use lk_agents_abi::storage::thread::LanePoll;
+use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::{REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, TaskRow};
+use lk_agents_abi::storage::TaskInternal;
+use lk_agents_abi::storage::thread::{InboxRow, TaskData};
 
 use crate::{Message, Policy, TurnOptions, TurnResult, resolve_debounce, resolve_policy};
 
@@ -524,7 +524,7 @@ impl TaskMachine {
                         self.phase = Phase::DrainOrphan;
                         return Ok(Some(Operation::FailOrphan {
                             task_id: row.task_id.clone(),
-                            reason: lk_agents_storage::run::REASON_WORKER_LOST,
+                            reason: lk_agents_abi::storage::thread::REASON_WORKER_LOST,
                         }));
                     }
                     Some(_) => {

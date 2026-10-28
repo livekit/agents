@@ -40,6 +40,7 @@ use fastrand::Rng;
 use lk_agents_a2a::{
     DELEGATION_CHANNEL, DebounceSpec, Policy, PolicySpec, channel_of, resolve_policy,
 };
+use lk_agents_storage::sql::Table;
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{self as plans, Decode};
 use lk_agents_storage::run::{CHANNEL_KEY, REASON_WORKER_LOST, TaskRow, TaskState};

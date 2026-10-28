@@ -3,6 +3,7 @@
 
 pub mod context;
 mod rows;
+pub mod thread;
 pub mod voice;
 
 use serde_json::{Map, Value};

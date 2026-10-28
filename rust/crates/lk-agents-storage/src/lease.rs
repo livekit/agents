@@ -14,6 +14,8 @@ use crate::db::{self, EventWrite};
 use crate::engine::ThreadDb;
 use crate::{Fence, StorageError};
 
+pub use lk_agents_abi::storage::thread::LanePoll;
+
 /// A lease an acquire or a receive took: the lane at `version` under `token`. Cloned by the run
 /// and its checkpoint; [`Lease::keep_alive`] extends it while the run works.
 #[derive(Clone)]
@@ -185,30 +187,6 @@ impl Renewal {
             }
             Err(e) => Renewed::Lost(format!("lease renewal failed: {e}")),
         }
-    }
-}
-
-/// Waiting for a lane another holder has: a pause from 100 ms, doubling up to 1 s, until a
-/// deadline.
-#[derive(Debug, Clone)]
-pub struct LanePoll {
-    deadline: Duration,
-    pause: Duration,
-}
-
-impl LanePoll {
-    pub fn new(now: Duration, timeout: Duration) -> Self {
-        Self { deadline: now + timeout, pause: Duration::from_millis(100) }
-    }
-
-    /// When to try again after a miss at `now`; `None` once the deadline passed.
-    pub fn next(&mut self, now: Duration) -> Option<Duration> {
-        if now >= self.deadline {
-            return None;
-        }
-        let at = now + self.pause;
-        self.pause = (self.pause * 2).min(Duration::from_secs(1));
-        Some(at)
     }
 }
 

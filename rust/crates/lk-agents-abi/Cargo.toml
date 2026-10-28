@@ -18,6 +18,8 @@ doctest = false
 
 [dependencies]
 livekit-protocol.workspace = true
+# The A2A messages and artifacts the typed task records keep (`storage::thread`).
+a2a.workspace = true
 pbjson-types.workspace = true
 fancy-regex = "0.19.0"
 rand = "0.9"

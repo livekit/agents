@@ -362,7 +362,7 @@ impl PyRun {
         reason: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let outcome = RunOutcome::from_wire(outcome)
+        let outcome = RunOutcome::parse(outcome)
             .ok_or_else(|| PyValueError::new_err(format!("unknown outcome {outcome}")))?;
         let run = self.run.clone();
         crate::host::future_into_py(py, async move {

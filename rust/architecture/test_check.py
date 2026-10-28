@@ -118,9 +118,14 @@ class DependencyContracts(unittest.TestCase):
                         "lk-agents-inference": ["lk-agents-abi", "lk-agents-net", "tokio"],
                         "lk-agents-worker": ["lk-agents-abi", "lk-agents-net", "reqwest"],
                         "lk-agents-net": ["lk-agents-abi", "tokio"],
-                        "lk-agents-runtime": ["lk-agents-inference", "lk-agents-worker"],
+                        "lk-agents-storage": ["lk-agents-abi", "lk-agents-net", "rusqlite"],
+                        "lk-agents-runtime": [
+                            "lk-agents-inference",
+                            "lk-agents-worker",
+                            "lk-agents-storage",
+                        ],
                         "lk-agents-core": ["lk-agents-abi", "livekit-protocol"],
-                        "lk-agents-a2a": ["lk-agents-storage"],
+                        "lk-agents-a2a": ["lk-agents-abi"],
                         "lk-agents-fuzz": ["lk-agents-voice", "lk-agents-abi"],
                     }
                 )

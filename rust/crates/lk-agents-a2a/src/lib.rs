@@ -32,9 +32,11 @@ use livekit_protocol::agent::ChatMessage;
 use livekit_protocol::agent::ChatRole;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use lk_agents_storage::StorageError;
-use lk_agents_storage::run::{ItemRow, KIND_KEY, RunUsage, TaskRow};
-use lk_agents_storage::timestamp;
+use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::a2a::metadata::KIND_KEY;
+use lk_agents_abi::storage::RunUsage;
+use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
+use lk_agents_abi::storage::thread::timestamp;
 
 pub use outcome::*;
 pub use policy::*;
@@ -288,7 +290,8 @@ pub struct TurnResult {
 mod tests {
     use super::*;
     use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
-    use lk_agents_storage::run::{MERGED_INTO_KEY, REASON_KEY, TaskState};
+    use lk_agents_abi::a2a::metadata::{MERGED_INTO_KEY, REASON_KEY};
+use lk_agents_abi::storage::TaskState;
     use serde_json::json;
     use std::time::Duration;
 

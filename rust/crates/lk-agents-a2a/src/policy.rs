@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use lk_agents_storage::run::{CHANNEL_KEY, KIND_KEY};
+use lk_agents_abi::a2a::metadata::{CHANNEL_KEY, KIND_KEY};
 
 use crate::Policy;
 

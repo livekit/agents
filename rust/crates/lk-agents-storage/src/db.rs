@@ -7,10 +7,10 @@ use lk_agents_abi::storage::context::{ContextScope, ContextScopeWrite};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::StorageError;
+use crate::{StorageError, TaskWrite};
 use crate::run::TaskState;
 use crate::schema::*;
-use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, first_cell};
+use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
 
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
@@ -56,49 +56,6 @@ impl EventWrite {
     pub fn run_ended(ts_ms: i64, p: &RunEnded) -> Self {
         let payload = serde_json::to_value(p).unwrap_or_default();
         Self { ts_ms, r#type: RUN_ENDED_EVENT.into(), payload }
-    }
-}
-
-/// One task row a write upserts: every column but `lane`, `seq` and `updated_at`, which the
-/// statement fills.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TaskWrite {
-    pub task_id: String,
-    pub status: TaskState,
-    pub message_id: Option<String>,
-    /// An optional application task label.
-    pub name: Option<String>,
-    pub data: TaskData,
-    pub internal: Option<TaskInternal>,
-}
-
-impl TaskWrite {
-    /// The row as stored, `seq` and `updated_at` unknown until written.
-    pub fn row(&self, lane: &str) -> TaskRow {
-        TaskRow {
-            task_id: self.task_id.clone(),
-            lane: lane.to_owned(),
-            seq: 0,
-            name: self.name.clone(),
-            message_id: self.message_id.clone(),
-            status: self.status,
-            updated_at: 0,
-            data: self.data.clone(),
-            internal: self.internal.clone(),
-        }
-    }
-}
-
-impl From<TaskRow> for TaskWrite {
-    fn from(r: TaskRow) -> Self {
-        Self {
-            task_id: r.task_id,
-            status: r.status,
-            message_id: r.message_id,
-            name: r.name,
-            data: r.data,
-            internal: r.internal,
-        }
     }
 }
 

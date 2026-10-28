@@ -13,7 +13,6 @@ license.workspace = true
 doctest = false
 
 [dependencies]
-lk-agents-storage = { path = "../lk-agents-storage" }
 # `#[host(proxy)]` on `TurnHost` and the stream halves it returns: the host's handler is driven like
 # any other host object the core calls.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }

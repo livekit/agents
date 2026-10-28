@@ -3,7 +3,7 @@
 use lk_agents_abi::a2a::client::{
     AgentClientError, Message, MessageInput, MessageMetadata, MessagePart,
 };
-use lk_agents_storage::run::EXTENSION_URI;
+use lk_agents_abi::a2a::metadata::EXTENSION_URI;
 use serde_json::{Map, Value};
 
 pub fn message_to_wire(

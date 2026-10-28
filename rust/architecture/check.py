@@ -15,7 +15,7 @@ import tomllib
 
 CORES = {
     f"lk-agents-{name}"
-    for name in ("core", "voice", "storage", "a2a", "media", "rtc")
+    for name in ("core", "voice", "a2a", "media", "rtc")
 }
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
@@ -23,8 +23,9 @@ UNRESTRICTED = (
     "rust/crates/lk-agents-media/src/workers.rs",
     "rust/crates/lk-agents-media/src/workers/",
 )
-# Async I/O crates (decisions 69, 77): exempt from the purity bans; their edges are still checked.
-ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net"}
+# Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
+# checked.
+ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net", "lk-agents-storage"}
 BANNED = {
     "async-trait",
     "async-std",
@@ -93,9 +94,12 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
             "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"},
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
-            "lk-agents-a2a": {"lk-agents-abi", "lk-agents-storage"},
-            # The realtime and duplex fakes still run inference's realtime machine (decision 70).
-            "lk-agents-fuzz": PURE - {"lk-agents-rtc"} | {"lk-agents-inference", "lk-agents-net"},
+            "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
+            "lk-agents-a2a": {"lk-agents-abi"},
+            # The realtime and duplex fakes still run inference's realtime machine (decision 70);
+            # the storage simulation still runs storage's statements on SQLite.
+            "lk-agents-fuzz": PURE - {"lk-agents-rtc"}
+            | {"lk-agents-inference", "lk-agents-net", "lk-agents-storage"},
             "lk-agents-runtime": PURE - {"lk-agents-rtc"} | ASYNC,
             "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
         }.get(name, {"lk-agents-abi"})
