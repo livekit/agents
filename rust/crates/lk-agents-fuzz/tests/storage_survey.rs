@@ -1,26 +1,15 @@
 //! The storage simulation (`lk_agents_fuzz::storage`) over many seeds: every run must keep every
-//! invariant, under the arrival order and a seeded sampling of the due processes.
+//! invariant, under the arrival order and BasicPOS over the due processes.
 //!
 //! `cargo test` runs a small window and the replay check; the campaign is `survey`, behind
 //! `--ignored` (the launch gate runs it): `STORAGE_SEEDS` sizes it, `STORAGE_SEED=<n>` reruns one
 //! seed with its violations in full.
 use std::collections::BTreeSet;
 
-use lk_agents_fuzz::{boundary, storage};
+use lk_agents_fuzz::{boundary, sched::Sampling, storage};
 
 const WORKERS: usize = 3;
 const MESSAGES: usize = 8;
-
-/// The order the processes became due: the lowest id among the due ones.
-fn arrival(due: &[u64]) -> u64 {
-    due[0]
-}
-
-/// A seeded uniform choice among the due processes.
-fn sampled(seed: u64) -> impl FnMut(&[u64]) -> u64 {
-    let mut rng = fastrand::Rng::with_seed(seed ^ 0x5eed);
-    move |due| due[rng.usize(0..due.len())]
-}
 
 /// Runs `seeds`; the failures, one line each with the command that reruns it, and what was
 /// reached.
@@ -28,16 +17,14 @@ fn campaign(seeds: impl Iterator<Item = u64>) -> (Vec<String>, [usize; 3]) {
     let mut failures = Vec::new();
     let mut reached = [0usize; 3];
     for seed in seeds {
-        for (policy, outcome) in [
-            ("arrival", storage::run(seed, WORKERS, MESSAGES, arrival)),
-            ("sampled", storage::run(seed, WORKERS, MESSAGES, sampled(seed))),
-        ] {
+        for sampling in [Sampling::Arrival, Sampling::BasicPos] {
+            let outcome = storage::run(seed, WORKERS, MESSAGES, sampling);
             reached[0] += outcome.committed;
             reached[1] += outcome.resolved as usize;
             reached[2] += outcome.rejected;
             if !outcome.violations.is_empty() {
                 failures.push(format!(
-                    "STORAGE_SEED={seed} ({policy}, {} steps): {:?}",
+                    "STORAGE_SEED={seed} ({sampling:?}, {} steps): {:?}",
                     outcome.steps, outcome.violations
                 ));
             }
@@ -55,8 +42,8 @@ fn a_small_window_keeps_every_storage_invariant() {
 
 #[test]
 fn a_seed_replays_its_run() {
-    let a = storage::run(7, WORKERS, MESSAGES, sampled(7));
-    let b = storage::run(7, WORKERS, MESSAGES, sampled(7));
+    let a = storage::run(7, WORKERS, MESSAGES, Sampling::BasicPos);
+    let b = storage::run(7, WORKERS, MESSAGES, Sampling::BasicPos);
     assert_eq!((a.steps, a.violations), (b.steps, b.violations));
 }
 

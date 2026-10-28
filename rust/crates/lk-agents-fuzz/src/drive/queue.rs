@@ -3,16 +3,13 @@
 //!
 //! In production the queue is a channel and the order is arrival order. Here the case collects
 //! what reached the channel and picks what runs next, so an interleaving the channel would only
-//! produce under load is one a seed can choose. Each source keeps its own order: a reordering no
-//! single sender could produce is never delivered. A due wake goes before anything pending, as
-//! the production loop's biased `select!` takes it first. The microphone's frames are a source of
-//! their own: the frames that reached the run since its last step are one batch, delivered as one
-//! step in their order, racing the events under POS and ahead of them in arrival order (the
-//! production loop takes frames before its queue).
-//!
-//! The scheduler knows the sources and nothing of what a step reads or writes: BasicPOS draws
-//! every pending step a priority and runs the highest, with no footprints and no race-based
-//! reassignment (owner decisions 21 and 28). Its tests are the small programs at the bottom.
+//! produce under load is one a seed can choose. The choice is the shared scheduler's
+//! ([`crate::sched`]): each source keeps its own order, and BasicPOS samples the rest. A due wake
+//! goes before anything pending, as the production loop's biased `select!` takes it first. The
+//! microphone's frames are a source of their own: the frames that reached the run since its last
+//! step are one batch, delivered as one step in their order, racing the events under POS and
+//! ahead of them in arrival order (the production loop takes frames before its queue). The
+//! driver's ready tasks are a process of the scheduler, and so is each bridged task.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -25,6 +22,8 @@ use fastrand::Rng;
 use lk_agents_abi::{AudioFrame, BoxFuture, resources::ResourceId};
 use lk_agents_voice::agent_session::{Event, Input};
 
+use crate::sched::{Sampling, Sched, Step};
+
 /// How the next step is chosen, drawn per seed and carried by the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Policy {
@@ -32,11 +31,8 @@ pub enum Policy {
     /// when the queue is empty.
     #[default]
     Arrival,
-    /// Basic partial-order sampling (Yuan, Yang and Gu, CAV 2018, Algorithm 2), as gosim
-    /// implements it (livekit/gosim#28). The processes are each event source and the pool of
-    /// tasks the driver spawned. Every event draws an independent priority; the enabled step with
-    /// the highest priority runs: a source's oldest pending event, or one task turn, after which
-    /// the pool draws a new priority.
+    /// Basic partial-order sampling ([`Sampling::BasicPos`]). The processes are each event source
+    /// and the pool of tasks the driver spawned, which takes one turn when chosen.
     BasicPos,
     /// BasicPOS with the task bridge ([`Gate`]): every task the run's spawner spawns is a process
     /// of its own, with its own priority, rather than one turn the pool shares, so the order of
@@ -64,14 +60,21 @@ impl Policy {
             _ => Policy::TaskBridge,
         }
     }
+
+    fn sampling(self) -> Sampling {
+        match self {
+            Policy::Arrival => Sampling::Arrival,
+            Policy::BasicPos | Policy::TaskBridge => Sampling::BasicPos,
+        }
+    }
 }
 
 /// The policy's own random stream off the schedule seed: the bytes `policy`.
 const POLICY_STREAM: u64 = 0x0070_6f6c_6963_79;
 
-/// gosim's starvation bound: a step that held one priority for this many dispatches draws a new
-/// one, so a source that keeps winning cannot hold another back forever.
-const STARVE: u64 = 10_000;
+/// The pool of the driver's ready tasks, as a process of the scheduler (bridged tasks count from
+/// one).
+const POOL: u64 = u64::MAX;
 
 /// What runs next.
 pub enum Next {
@@ -86,23 +89,8 @@ pub enum Next {
     Task(u64),
 }
 
-#[derive(Clone, Copy)]
-enum Pick {
-    Event(usize),
-    Task(u64),
-    Pool,
-}
-
 pub struct Queue {
-    policy: Policy,
-    rng: Rng,
-    pending: Vec<Queued>,
-    arrivals: u64,
-    dispatches: u64,
-    /// The task pool's priority.
-    tasks: Priority,
-    /// The bridged tasks' priorities.
-    procs: BTreeMap<u64, Priority>,
+    sched: Sched<Source, Item>,
     /// What was dispatched, in order, folded: two runs that dispatched the same steps in the same
     /// order agree on it.
     order: u64,
@@ -187,19 +175,6 @@ fn label(event: &Event) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Priority {
-    value: u64,
-    drawn_at: u64,
-}
-
-struct Queued {
-    source: Source,
-    arrival: u64,
-    priority: Priority,
-    item: Item,
-}
-
 enum Item {
     Event(Event),
     Frames(Vec<AudioFrame>),
@@ -217,6 +192,12 @@ enum Source {
     Event(Discriminant<Event>),
     /// The microphone's frames channel.
     Frames,
+}
+
+impl crate::sched::Source for Source {
+    fn polled_first(&self) -> bool {
+        *self == Source::Frames
+    }
 }
 
 impl Source {
@@ -240,44 +221,28 @@ impl Source {
 
 impl Queue {
     pub fn new(schedule: u64, policy: Policy) -> Self {
-        let mut rng = Rng::with_seed(schedule ^ POLICY_STREAM.rotate_left(32));
-        let tasks = Priority { value: rng.u64(..), drawn_at: 0 };
+        let rng = Rng::with_seed(schedule ^ POLICY_STREAM.rotate_left(32));
         Queue {
-            policy,
-            rng,
-            pending: Vec::new(),
-            arrivals: 0,
-            dispatches: 0,
-            tasks,
-            procs: BTreeMap::new(),
+            sched: Sched::new(policy.sampling(), rng, &[POOL]),
             order: ORDER_SEED,
             trail: CURRENT.with_borrow(Arc::clone),
         }
     }
 
     pub fn push(&mut self, event: Event) {
-        let arrival = self.arrivals;
-        self.arrivals += 1;
-        let priority = self.draw();
-        let source = Source::of(&event);
-        self.trail.lock().unwrap().pending.insert(arrival, label(&event));
-        self.pending.push(Queued { source, arrival, priority, item: Item::Event(event) });
+        let kind = label(&event);
+        let arrival = self.sched.push(Source::of(&event), Item::Event(event));
+        self.trail.lock().unwrap().pending.insert(arrival, kind);
     }
 
     /// A microphone frame: it joins the pending batch, or starts one.
     pub fn push_frame(&mut self, frame: AudioFrame) {
-        if let Some(Queued { item: Item::Frames(batch), .. }) =
-            self.pending.iter_mut().find(|q| q.source == Source::Frames)
-        {
+        if let Some(Item::Frames(batch)) = self.sched.pending_mut(&Source::Frames) {
             batch.push(frame);
             return;
         }
-        let arrival = self.arrivals;
-        self.arrivals += 1;
-        let priority = self.draw();
+        let arrival = self.sched.push(Source::Frames, Item::Frames(vec![frame]));
         self.trail.lock().unwrap().pending.insert(arrival, "Frames");
-        let item = Item::Frames(vec![frame]);
-        self.pending.push(Queued { source: Source::Frames, arrival, priority, item });
     }
 
     /// The next step: the wake when `wake_due`, else an event, a bridged task's turn (`ready`,
@@ -288,96 +253,40 @@ impl Queue {
             self.note(None, "Wake");
             return Some(Next::Wake);
         }
-        self.dispatches += 1;
-        let heads: Vec<usize> = (0..self.pending.len())
-            .filter(|&i| {
-                let q = &self.pending[i];
-                !self.pending.iter().any(|o| o.source == q.source && o.arrival < q.arrival)
-            })
-            .collect();
-        for &id in ready {
-            if !self.procs.contains_key(&id) {
-                let priority = self.draw();
-                self.procs.insert(id, priority);
-            }
-        }
-        let pick = match self.policy {
-            Policy::Arrival => heads
-                .iter()
-                .copied()
-                .min_by_key(|&i| {
-                    (self.pending[i].source != Source::Frames, self.pending[i].arrival)
-                })
-                .map(Pick::Event)
-                .or(tasks_ready.then_some(Pick::Pool)),
-            Policy::BasicPos | Policy::TaskBridge => {
-                for &i in &heads {
-                    if self.starved(self.pending[i].priority) {
-                        self.pending[i].priority = self.draw();
+        let processes: Vec<u64> = tasks_ready.then_some(POOL).into_iter().chain(ready.iter().copied()).collect();
+        match self.sched.next(&processes)? {
+            Step::Item { arrival, item } => {
+                self.fold(1, arrival);
+                Some(match item {
+                    Item::Event(event) => {
+                        self.note(Some(arrival), label(&event));
+                        Next::Event(event)
                     }
-                }
-                if tasks_ready && self.starved(self.tasks) {
-                    self.tasks = self.draw();
-                }
-                for &id in ready {
-                    if self.starved(self.procs[&id]) {
-                        let priority = self.draw();
-                        self.procs.insert(id, priority);
+                    Item::Frames(frames) => {
+                        self.note(Some(arrival), "Frames");
+                        Next::Frames(frames)
                     }
-                }
-                let event = heads.iter().copied().max_by_key(|&i| self.pending[i].priority.value);
-                let mut best = event.map(|i| (self.pending[i].priority.value, Pick::Event(i)));
-                for &id in ready {
-                    let value = self.procs[&id].value;
-                    if best.is_none_or(|(b, _)| value > b) {
-                        best = Some((value, Pick::Task(id)));
-                    }
-                }
-                if tasks_ready && best.is_none_or(|(b, _)| self.tasks.value >= b) {
-                    best = Some((self.tasks.value, Pick::Pool));
-                }
-                best.map(|(_, pick)| pick)
-            }
-        };
-        match pick? {
-            Pick::Event(i) => {
-                let queued = self.pending.remove(i);
-                self.fold(1, queued.arrival);
-                let kind = match &queued.item {
-                    Item::Event(event) => label(event),
-                    Item::Frames(_) => "Frames",
-                };
-                self.note(Some(queued.arrival), kind);
-                Some(match queued.item {
-                    Item::Event(event) => Next::Event(event),
-                    Item::Frames(frames) => Next::Frames(frames),
                 })
             }
-            Pick::Task(id) => {
-                // Its next step is a new event: a new priority, as a goroutine's in gosim.
-                let priority = self.draw();
-                self.procs.insert(id, priority);
-                self.fold(2, id);
-                self.note(None, "Task");
-                Some(Next::Task(id))
-            }
-            Pick::Pool => {
-                // The pool took its step: like a goroutine in gosim, it draws its next priority.
-                self.tasks = self.draw();
+            Step::Process(POOL) => {
                 self.fold(3, 0);
                 self.note(None, "Tasks");
                 Some(Next::Tasks)
+            }
+            Step::Process(id) => {
+                self.fold(2, id);
+                self.note(None, "Task");
+                Some(Next::Task(id))
             }
         }
     }
 
     /// Everything still pending, in arrival order: the frames, and the events.
     pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<Event>) {
-        self.pending.sort_by_key(|q| q.arrival);
         self.trail.lock().unwrap().pending.clear();
         let (mut frames, mut events) = (Vec::new(), Vec::new());
-        for queued in self.pending.drain(..) {
-            match queued.item {
+        for item in self.sched.drain() {
+            match item {
                 Item::Event(event) => events.push(event),
                 Item::Frames(batch) => frames.extend(batch),
             }
@@ -397,7 +306,7 @@ impl Queue {
 
     /// Whether nothing is pending.
     pub fn idle(&self) -> bool {
-        self.pending.is_empty()
+        self.sched.idle()
     }
 
     fn note(&self, arrival: Option<u64>, kind: &'static str) {
@@ -408,7 +317,7 @@ impl Queue {
         if trail.last.len() == TRAIL {
             trail.last.pop_front();
         }
-        trail.last.push_back((self.dispatches, kind));
+        trail.last.push_back((self.sched.dispatches(), kind));
     }
 
     /// FNV-1a over the dispatch's kind and identity (an event's arrival, a task's id).
@@ -416,14 +325,6 @@ impl Queue {
         for byte in std::iter::once(tag).chain(id.to_le_bytes()) {
             self.order = (self.order ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
         }
-    }
-
-    fn draw(&mut self) -> Priority {
-        Priority { value: self.rng.u64(..), drawn_at: self.dispatches }
-    }
-
-    fn starved(&self, priority: Priority) -> bool {
-        self.dispatches - priority.drawn_at >= STARVE
     }
 }
 
@@ -663,45 +564,6 @@ mod tests {
         out
     }
 
-    /// The legal orders of `two_by_two`: each source's events in its own order.
-    fn legal(order: &[String]) -> bool {
-        let position = |n: &str| order.iter().position(|o| o == n).unwrap();
-        position("a1") < position("a2") && position("b1") < position("b2")
-    }
-
-    #[test]
-    fn each_source_keeps_its_order() {
-        for policy in Policy::ALL {
-            for seed in 0..512 {
-                let mut queue = Queue::new(seed, policy);
-                two_by_two(&mut queue);
-                let order = deliver_all(&mut queue, 0);
-                assert_eq!(order.len(), 4, "{policy:?} seed {seed}: {order:?}");
-                assert!(legal(&order), "{policy:?} seed {seed} reordered a source: {order:?}");
-            }
-        }
-    }
-
-    /// POS reaches every legal interleaving of two independent sources; arrival order only the
-    /// one the channel produces.
-    #[test]
-    fn independent_orders_are_all_reached() {
-        let reached = |policy| -> BTreeSet<Vec<String>> {
-            (0..512)
-                .map(|seed| {
-                    let mut queue = Queue::new(seed, policy);
-                    two_by_two(&mut queue);
-                    deliver_all(&mut queue, 0)
-                })
-                .collect()
-        };
-        // a1 a2 b1 b2, a1 b1 a2 b2, a1 b1 b2 a2, b1 a1 a2 b2, b1 a1 b2 a2, b1 b2 a1 a2
-        assert_eq!(reached(Policy::BasicPos).len(), 6);
-        assert_eq!(reached(Policy::TaskBridge).len(), 6);
-        let arrival = reached(Policy::Arrival);
-        assert_eq!(arrival.into_iter().collect::<Vec<_>>(), [["a1", "b1", "a2", "b2"]]);
-    }
-
     /// A due wake runs before anything pending, under every policy.
     #[test]
     fn due_wake_goes_first() {
@@ -713,41 +575,6 @@ mod tests {
                 assert_eq!(first.as_deref(), Some("wake"), "{policy:?} seed {seed}");
                 let then = queue.next(false, false, &[]).map(|n| name(&n)).unwrap();
                 assert!(then == "a1" || then == "b1", "{policy:?} seed {seed}: {then}");
-            }
-        }
-    }
-
-    /// A ready task's turn races the pending events: under POS it runs before, between and after
-    /// them across seeds; under arrival order only once the queue is empty.
-    #[test]
-    fn task_turns_race_pending_events() {
-        let positions = |policy| -> BTreeSet<usize> {
-            (0..512)
-                .map(|seed| {
-                    let mut queue = Queue::new(seed, policy);
-                    two_by_two(&mut queue);
-                    let order = deliver_all(&mut queue, 1);
-                    assert!(legal(&order), "{policy:?} seed {seed}: {order:?}");
-                    order.iter().position(|o| o == "pool").unwrap()
-                })
-                .collect()
-        };
-        assert_eq!(positions(Policy::BasicPos), BTreeSet::from([0, 1, 2, 3, 4]));
-        assert_eq!(positions(Policy::Arrival), BTreeSet::from([4]));
-    }
-
-    /// Only a task that is ready gets a turn: one cancelled before it, or done, is never picked.
-    #[test]
-    fn only_ready_tasks_get_turns() {
-        for seed in 0..256 {
-            let mut queue = Queue::new(seed, Policy::TaskBridge);
-            queue.push(event(Origin::Host, "a1"));
-            // Both ready; then task 1 is cancelled, and only task 2 stays ready.
-            let mut taken = vec![name(&queue.next(false, false, &[1, 2]).unwrap())];
-            while !taken.contains(&"a1".to_owned()) {
-                let next = name(&queue.next(false, false, &[2]).unwrap());
-                assert_ne!(next, "task1", "seed {seed}: a cancelled task got a turn");
-                taken.push(next);
             }
         }
     }
@@ -792,17 +619,6 @@ mod tests {
             }
         }
         assert_eq!(positions, BTreeSet::from([0, 1, 2]), "POS never raced frames with events");
-    }
-
-    /// Both orders of two bridged tasks are reached: the bridge samples the order of tasks too.
-    #[test]
-    fn bridged_tasks_are_ordered_by_the_seed() {
-        let firsts: BTreeSet<String> = (0..128)
-            .map(|seed| {
-                name(&Queue::new(seed, Policy::TaskBridge).next(false, false, &[1, 2]).unwrap())
-            })
-            .collect();
-        assert_eq!(firsts, BTreeSet::from(["task1".to_owned(), "task2".to_owned()]));
     }
 
     /// A seed's dispatch sequence replays exactly, and its folded order says so; another seed's

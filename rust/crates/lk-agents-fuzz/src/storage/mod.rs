@@ -4,9 +4,9 @@
 //! after it applied, windows with the database unreachable, a paused owner whose lease lapses
 //! while another worker takes the lane, workers lost mid-run, and clients canceling tasks.
 //!
-//! The scheduler is the caller's: each step, it picks one of the processes that are due (the
-//! workers and the canceling client). A seed draws the setup and the faults; the same seed and
-//! the same picks replay the same run.
+//! The workers and the canceling client are processes of the shared scheduler ([`crate::sched`]):
+//! each step it picks one of those that are due, in arrival order (the lowest id) or by BasicPOS.
+//! A seed draws the setup, the faults and the sampled order; the same seed replays the same run.
 //!
 //! The invariants, checked over the whole run and the database it left:
 //! * a stale owner never commits: every commit returned a version of its own, one per bump;
@@ -22,12 +22,15 @@ pub mod worker;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use std::convert::Infallible;
+
 use fastrand::Rng;
 use lk_agents_storage::db as plans;
 use lk_agents_storage::run::{TaskRow, TaskState};
 use lk_agents_storage::schema::ItemRow;
 use serde_json::Map;
 
+use crate::sched::{Sampling, Sched, Step};
 use db::{Clock, SimDb};
 use worker::{Worker, task_id};
 
@@ -72,15 +75,15 @@ pub struct Outcome {
     pub rejected: usize,
 }
 
-/// One seeded run with `workers` workers serving `messages` messages; `pick` chooses which due
-/// process steps next (ids `0..workers` are workers, `workers` the canceling client).
-pub fn run(
-    seed: u64,
-    workers: usize,
-    messages: usize,
-    mut pick: impl FnMut(&[u64]) -> u64,
-) -> Outcome {
+/// The scheduler's own random stream off the seed: the bytes `sched`.
+const SCHED_STREAM: u64 = 0x7363_6865_64;
+
+/// One seeded run with `workers` workers serving `messages` messages, the due processes (ids
+/// `0..workers` are workers, `workers` the canceling client) stepped in the `sampling` order.
+pub fn run(seed: u64, workers: usize, messages: usize, sampling: Sampling) -> Outcome {
     let mut rng = Rng::with_seed(seed);
+    let mut sched: Sched<Infallible, Infallible> =
+        Sched::new(sampling, Rng::with_seed(seed ^ SCHED_STREAM), &[]);
     let timing = Timing {
         lease_ttl: Duration::from_secs(rng.u64(2..6)),
         renew_interval: Duration::from_millis(rng.u64(500..1500)),
@@ -115,7 +118,7 @@ pub fn run(
             continue;
         }
         steps += 1;
-        let p = pick(&due);
+        let Some(Step::Process(p)) = sched.next(&due) else { unreachable!("a due process") };
         if p == canceling {
             let task = task_id(rng.usize(0..messages));
             let cancel = plans::cancel(LANE, &task, &Map::new());

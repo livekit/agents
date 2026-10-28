@@ -36,5 +36,6 @@ pub mod fakes;
 pub mod input;
 pub mod record;
 pub mod rules;
+pub mod sched;
 pub mod search;
 pub mod storage;
