@@ -363,8 +363,9 @@ pub fn approval_granted(items: &[ChatItem], call: &FunctionCall) -> bool {
 /// Whether `call` runs on an answered read-back ([`approval_granted`]), decided as the model makes
 /// it, off the session's approval record: one answer grants one repeat, also to a call made before
 /// the granted one is committed.
-pub(crate) fn grant(record: &mut Vec<ChatItem>, call: &FunctionCall) -> bool {
-    if !approval_granted(record, call) {
+pub(crate) fn grant(shared: &crate::agent_session::SessionShared, call: &FunctionCall) -> bool {
+    let mut record = shared.approvals.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !approval_granted(&record, call) {
         return false;
     }
     let mut marked = call.clone();
@@ -388,7 +389,7 @@ pub(crate) fn mark_granted(record: &[ChatItem], item: &mut ChatItem) {
     }
 }
 
-/// The session's approval record (`VoiceSession::approvals`): every agent's calls marked
+/// The session's approval record (`SessionShared::approvals`): every agent's calls marked
 /// `lk.approval`, in order, with their outputs as last committed. What [`grant`] reads, in place of
 /// the whole history.
 pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
