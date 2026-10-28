@@ -469,7 +469,7 @@ class STT(stt.STT):
         """
 
         for stream in self._streams:
-            stream.finalize()
+            stream._finalize()
 
     async def get_speaker_ids(
         self,
@@ -484,7 +484,7 @@ class STT(stt.STT):
             list[SpeakerIdentifier]: List of speakers in the session.
         """
 
-        results = [await stream.get_speaker_ids() for stream in self._streams]
+        results = [await stream._get_speaker_ids() for stream in self._streams]
         if len(results) == 1:
             return results[0]
         return results
@@ -561,13 +561,13 @@ class SpeechStream(stt.RecognizeStream):
         info = self._client.session_info
         return info.session_id
 
-    def finalize(self) -> None:
+    def _finalize(self) -> None:
         """End the current turn when external endpointing controls this stream."""
         if self._client is not None and self._client.is_connected:
             if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
                 self._client.finalize()
 
-    async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
+    async def _get_speaker_ids(self) -> list[SpeakerIdentifier]:
         """Request the current session's speaker identifiers."""
         if self._client is None or not self._client.is_connected:
             logger.warning(f"Not connected in stream {self._id}")
