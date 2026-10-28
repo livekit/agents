@@ -252,6 +252,9 @@ impl RunRefusal {
 pub enum RunOutcome {
     /// Nothing the run owned is live. `final_output` is what accepted output got, if anything.
     Completed { final_output: Option<lk_agents_abi::HostRef> },
+    /// The run ends on a question for the person (`InputRequired`); `answer_tool` takes the
+    /// answer.
+    InputRequired { question: String, verbatim: bool, answer_tool: Option<String> },
     /// The run raises: the last speech failed, or a tool completed its task with an exception.
     Failed(RunFailure),
     /// The session closed under the run: `RuntimeError("session closed")`
@@ -263,6 +266,7 @@ impl RunOutcome {
     pub fn as_str(&self) -> &'static str {
         match self {
             RunOutcome::Completed { .. } => "completed",
+            RunOutcome::InputRequired { .. } => "input_required",
             RunOutcome::Failed(_) => "failed",
             RunOutcome::Closed => "closed",
         }

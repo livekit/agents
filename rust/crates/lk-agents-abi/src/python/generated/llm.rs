@@ -158,36 +158,6 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::llm::tool_executor::ToolOutcome
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
-
-impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Approval {
-    type Error = PyErr;
-
-    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let obj = &*obj;
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "asked" => Ok(Self::Asked),
-            "granted" => Ok(Self::Granted),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!("Approval: {other:?} is not one of 'asked', 'granted'"))),
-        }
-    }
-}
-
-impl<'py> IntoPyObject<'py> for ::lk_agents_abi::llm::tool_executor::Approval {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let value = match self {
-            Self::Asked => "asked",
-            Self::Granted => "granted",
-        };
-        Ok(::pyo3::types::PyString::new(py, value).into_any())
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
 static TOOL_REPORT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
 
@@ -202,7 +172,6 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Too
         }
         Ok(Self {
             outcome: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "outcome", |v| v.extract::<::lk_agents_abi::llm::tool_executor::ToolOutcome>().map_err(::std::convert::Into::<PyErr>::into))?,
-            approval: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "approval", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::llm::tool_executor::Approval>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             transition: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "transition", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
         })
     }

@@ -9,7 +9,7 @@ import json
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -287,6 +287,11 @@ class VoiceRunResult(Generic[Run_T]):
     def _item_added(self, item: llm.ChatItem) -> None:
         if self._done_fut.done():
             return
+        # an item told again changed in place (a call approval marked)
+        for i, known in enumerate(self._recorded_items):
+            if known.item.id == item.id and known.type == item.type:
+                self._recorded_items[i] = replace(known, item=item)
+                return
 
         event: RunEvent | None = None
         if item.type == "message":

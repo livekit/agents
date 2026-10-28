@@ -4,7 +4,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use lk_agents_abi::{FunctionCall, errors::HostError, llm::tool_executor::Approval};
+use lk_agents_abi::agent::{
+    ArgumentIdentity, FunctionToolInfo, PreparedArguments, ReadBack, ReadBackAnswer,
+    ToolArgumentError,
+};
+use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
+use lk_agents_abi::{FunctionCall, ToolSpec, errors::HostError};
 use lk_agents_voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{HostToolRunner, ToolOutcome, ToolReport};
 use tokio::sync::oneshot;
@@ -18,8 +23,28 @@ use crate::{
 /// The tool the runs declare with `needs_approval=True`.
 pub const APPROVAL_TOOL: &str = "transfer";
 
+/// A fixture tool as the model sees it.
+pub fn tool_spec(name: &str) -> ToolSpec {
+    ToolSpec {
+        name: name.to_owned(),
+        provider_tool: None,
+        description: format!("fixture tool {name}"),
+        // The shapes `ToolArgs` draws: a string first, which an `InputRequired(tool=)` hands the
+        // person's answer to.
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"label": {"type": "string"}, "seconds": {"type": "integer"}},
+        }),
+        flags: Default::default(),
+    }
+}
+
 pub struct FakeTools {
     registry: Arc<Registry>,
+    /// Prepared calls' speeches by prepared id, until the body takes them; what a dropped
+    /// preparation releases.
+    prepared: Arc<Mutex<BTreeMap<u64, Arc<SpeechHandle>>>>,
+    refs: Arc<dyn lk_agents_abi::RefRegistry>,
     /// The bodies that answered `Detached` and run on, by call id: what a cancel ends.
     detached: Mutex<BTreeMap<String, Slot>>,
     /// The calls the driver cancelled: their task is cancelled, so a body still running cannot
@@ -29,7 +54,16 @@ pub struct FakeTools {
 
 impl FakeTools {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeTools { registry, detached: Mutex::default(), cancelled: Mutex::default() })
+        let prepared = Arc::new(Mutex::default());
+        let refs: Arc<dyn lk_agents_abi::RefRegistry> =
+            Arc::new(PreparedRefs(Arc::clone(&prepared)));
+        Arc::new(FakeTools {
+            registry,
+            prepared,
+            refs,
+            detached: Mutex::default(),
+            cancelled: Mutex::default(),
+        })
     }
 }
 
@@ -48,6 +82,15 @@ impl lk_agents_abi::RefRegistry for NoRefs {
     fn release(&self, _id: u64) {}
 }
 
+/// Prepared arguments no body ran with (a read-back, a refused duplicate) release their speech.
+struct PreparedRefs(Arc<Mutex<BTreeMap<u64, Arc<SpeechHandle>>>>);
+
+impl lk_agents_abi::RefRegistry for PreparedRefs {
+    fn release(&self, id: u64) {
+        self.0.lock().unwrap().remove(&id);
+    }
+}
+
 /// What the case tells a running body to do: answer, or first wait for the agent to go idle --
 /// `ctx.wait_for_idle()` -- and answer once it has.
 pub enum Body {
@@ -58,44 +101,71 @@ pub enum Body {
 }
 
 impl HostToolRunner for FakeTools {
+    /// Every fixture tool; [`APPROVAL_TOOL`] requires approval with the default read-back.
+    fn describe(
+        &self,
+        name: &str,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<FunctionToolInfo>, HostError>> {
+        let info = FunctionToolInfo {
+            spec: tool_spec(name),
+            raw_schema: false,
+            needs_approval: (name == APPROVAL_TOOL).then_some(ReadBack::Default),
+            on_duplicate: DuplicateMode::Allow,
+            duplicate_scope: DuplicateScope::Name,
+        };
+        Box::pin(async move { Ok(Some(info)) })
+    }
+
+    /// Binds nothing: the parsed arguments are the identity approval binds to, and the prepared
+    /// call keeps its speech for the body.
+    fn prepare(
+        &self,
+        _call: &FunctionCall,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        speech: &lk_agents_abi::CoreObject,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
+    {
+        let handle = Arc::clone(&speech.0)
+            .downcast::<SpeechHandle>()
+            .ok()
+            .filter(|h| h.created().is_some())
+            .expect("a tool runs in a created speech");
+        let mut prepared = self.prepared.lock().unwrap();
+        let id = prepared.keys().next_back().map_or(0, |n| n + 1);
+        prepared.insert(id, handle);
+        let args = PreparedArguments {
+            prepared: lk_agents_abi::HostRef::new(id, &self.refs),
+            identity: ArgumentIdentity::Json(serde_json::Value::Object(arguments)),
+        };
+        Box::pin(async move { Ok(Ok(args)) })
+    }
+
+    /// The runs' approval tool reads back with the framework's default: never asked here.
+    fn read_back(
+        &self,
+        _prepared: &lk_agents_abi::HostRef,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<ReadBackAnswer, HostError>> {
+        Box::pin(async { Err(HostError::new("the fixture tools have no read-back function")) })
+    }
+
     fn run(
         &self,
+        prepared: &lk_agents_abi::HostRef,
         call: &FunctionCall,
-        speech: &lk_agents_abi::CoreObject,
-        granted: bool,
         _task: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<ToolReport, HostError>> {
+        let handle = self
+            .prepared
+            .lock()
+            .unwrap()
+            .remove(&prepared.id())
+            .expect("a body runs on prepared arguments");
         let call = call.clone();
-        let speech = speech.clone();
         Box::pin(async move {
-            let handle = Arc::clone(&speech.0)
-                .downcast::<SpeechHandle>()
-                .ok()
-                .filter(|h| h.created().is_some())
-                .expect("a tool runs in a created speech");
-            // `needs_approval=True`: not granted, the call is its read-back, and the body never runs.
-            if call.name == APPROVAL_TOOL && !granted {
-                // The runner saw the call: one body opened and ended at once.
-                let detail = Detail::Tool {
-                    call_id: call.call_id.clone(),
-                    name: call.name.clone(),
-                    speech: handle.id().0,
-                };
-                let (sender, _) = oneshot::channel();
-                let slot = self.registry.register(Kind::Tool, detail, Control::Tool(sender));
-                self.registry.mark_closed(slot);
-                let question =
-                    format!("Please confirm: {} ({}). Yes or no?", call.name, call.arguments);
-                let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
-                return Ok(ToolReport {
-                    outcome,
-                    approval: Some(Approval::Asked),
-                    transition: None,
-                });
-            }
             let mut outcome = self.answer(&call, &handle).await;
             // A question asked as written names its own tool to take the answer
-            // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does not.
+            // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does
+            // not.
             if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
                 *tool = Some(call.name.clone());
             }
@@ -106,7 +176,7 @@ impl HostToolRunner for FakeTools {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
-            Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition })
+            Ok(ToolReport { outcome, transition })
         })
     }
 

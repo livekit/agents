@@ -975,7 +975,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             error = wire["speech_handle"].exception()
         if wire["outcome"] == "closed":
             error = RuntimeError("the session closed before the run settled")
-        run._settle(output=wire["final_output"], error=error)
+        output = wire["final_output"]
+        if (asked := wire["question"]) is not None:
+            output = llm.InputRequired(asked["question"], verbatim=asked["verbatim"])
+        run._settle(output=output, error=error)
 
     def _on_tool_update(self, wire: dict[str, Any]) -> None:
         self.emit(

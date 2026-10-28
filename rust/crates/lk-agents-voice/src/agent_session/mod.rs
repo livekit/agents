@@ -84,7 +84,6 @@ pub(crate) struct VoiceSession {
     pub(crate) amd_skips_replies: bool,
     /// The session's OTel span tree.
     pub(crate) trace: crate::telemetry::SessionTrace,
-    pub(crate) approvals: Vec<lk_agents_abi::ChatItem>,
     pub(crate) storage: storage::StorageTurns,
 }
 
@@ -156,7 +155,6 @@ impl VoiceSession {
             expressive: Default::default(),
             amd_skips_replies: false,
             trace: Default::default(),
-            approvals: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
         }
     }

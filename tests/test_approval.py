@@ -1,12 +1,12 @@
-"""Approval through ``agent.run()`` on the core (tools.md "Approval", decision 15): a
-``needs_approval`` call asks its read-back, only a repeat of the same validated call after the
-person's answer runs the body, and each answer is consumed once."""
+"""Approval on the core (tools.md "Approval", decision 15), through ``agent.run()`` and on a
+call: a ``needs_approval`` call asks its read-back, only a repeat of the same validated call after
+the person's answer runs the body, and each answer is consumed once."""
 
 from __future__ import annotations
 
 import pytest
 
-from livekit.agents import Agent, InputRequired, RunContext
+from livekit.agents import Agent, InputRequired, RunContext, VoiceSession
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -113,3 +113,45 @@ async def test_a_read_back_function_takes_the_tools_parameters_or_asks_first() -
     asked = await desk.run("jo@example.com", message_history=missing.all_messages())
     assert asked.status == "input_required"
     assert asked.question == "Book monday to jo@example.com?"
+
+
+async def test_on_a_call_the_repeat_is_approved_by_its_validated_arguments_once() -> None:
+    ran: list[str] = []
+    llm = FakeLLM(
+        fake_responses=[
+            respond("cancel monday", "", cancel_call("c1")),
+            # the repeat spells the default: the validated identity is the same call
+            respond("yes", "", cancel_call("c2", '{"date": "monday", "notify": true}')),
+            respond("canceled", "Done, it is canceled."),
+            respond("cancel monday again", "", cancel_call("c3")),
+        ]
+    )
+    desk = Agent(instructions="desk", llm=llm)
+
+    @desk.tool(needs_approval=True)
+    async def cancel(ctx: RunContext, date: str, notify: bool = True) -> str:
+        """Cancel the appointment on a date.
+
+        Args:
+            date: the day
+            notify: tell the clinic
+        """
+        ran.append(date)
+        return "canceled"
+
+    async with VoiceSession() as session:
+        await session.start(desk)
+        asked = await session.run(user_input="cancel monday")
+        assert isinstance(asked.output, InputRequired)
+        assert asked.output.question.startswith("Please confirm: Cancel the appointment on a date")
+        assert ran == []
+
+        granted = await session.run(user_input="yes")
+        assert ran == ["monday"]
+        assert granted.output == "Done, it is canceled."
+        repeat = next(i for i in granted.new_messages() if i.type == "function_call")
+        assert repeat.extra[APPROVAL_KEY] == "granted"
+
+        again = await session.run(user_input="cancel monday again")
+        assert isinstance(again.output, InputRequired), "an identical later call asks again"
+        assert ran == ["monday"]

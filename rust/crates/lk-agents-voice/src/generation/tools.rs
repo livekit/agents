@@ -4,7 +4,7 @@ use crate::agent_session::SessionShared;
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::{GenEvent, ReplyContext};
 use crate::speech_handle::SpeechHandle;
-use crate::tool_executor::{StepDecision, ToolEnd, ToolExecution, ToolOutcome, answer};
+use crate::tool_executor::{CallId, StepDecision, ToolExecution, ToolGo, ToolOutcome, answer};
 use lk_agents_abi::FunctionCall;
 use std::sync::Arc;
 
@@ -57,131 +57,207 @@ impl ToolStep {
         {
             call.arguments = arguments;
         }
-        // Only advertised calls reach the speech; an invented tool is answered with an error.
+        // Only offered calls reach the speech; the shared tool machine answers an invented one.
         let advertised = ctx.request.tools.iter().any(|t| t.name == call.name);
         let names = vec![call.name.clone()];
         shared.trace(crate::trace::ToolStep::Calls { speech: handle.id(), names });
-        // Authorized: starts now; otherwise once the step is. `tool_choice="none"` calls are
-        // started and dropped; unadvertised calls and calls with no runner are answered, not
-        // run. `Err`: answered with an error naming the runnable ones, never dropped, or the next
-        // request makes it again.
-        let forbidden = ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden);
-        let work = match (forbidden, advertised, ctx.providers.toolset.runner.clone()) {
-            (true, ..) => None,
-            (false, false, _) => {
-                Some(Err(ctx.request.tools.iter().map(|t| t.name.clone()).collect()))
-            }
-            (false, true, None) => Some(Err(Vec::new())),
-            (false, true, Some(runner)) => Some(Ok(runner)),
-        };
-        // Hosted calls enter the loop's running set; driver-answered ones never run.
-        let runner = match &work {
-            Some(Ok(runner)) => Some(Arc::clone(runner)),
-            Some(Err(_)) | None => None,
-        };
         let (speech, step) = (handle.id(), handle.num_steps());
-        let Some(work) = work else {
-            // Dropped unrun: told to the speech and the loop as the model made it.
+        // `tool_choice="none"` calls are started and dropped: told to the speech and the loop as
+        // the model made them.
+        if ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden) {
             if advertised {
                 handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
             }
             if handle.scheduled() {
                 let call = Box::new(call.clone());
-                let grant = None;
-                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
+                let (runner, go) = (None, None);
+                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, go });
             }
             self.calls.push(Dispatched { call, rx: None });
             return;
-        };
+        }
+        // Offered calls with a runner are hosted: the loop's running set has them.
+        let runner = ctx.providers.toolset.runner.clone().filter(|_| advertised);
         // `_tool_execution_started_cb`: the call is stamped with its start (history is ordered by
-        // `created_at`, and it was made before the step was authorized), then told.
+        // `created_at`, and it was made before the step was authorized), then told; the shared
+        // tool machine answers with the call's first move.
         let start =
             move |shared: &SessionShared, handle: &SpeechHandle, call: &mut FunctionCall| {
                 call.created_at = shared.time.wall();
                 if advertised {
                     handle.item_added(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
                 }
-                let call = Box::new(call.clone());
-                // A hosted call's approval is the loop's to decide, from the record as the start
-                // reaches it: the body waits for the answer.
-                if runner.is_none() {
-                    let grant = None;
-                    shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
-                    return None;
-                }
-                let (grant, granted) = shared.open_call(crate::agent_session::Answer::approval);
-                let started =
-                    GenEvent::ToolCallStarted { speech, step, call, runner, grant: Some(grant.id) };
-                shared.report_awaited(started, grant);
-                Some(granted)
+                let (go, moved) = shared.open_call(crate::agent_session::Answer::tool_go);
+                let started = GenEvent::ToolCallStarted {
+                    speech,
+                    step,
+                    call: Box::new(call.clone()),
+                    runner: runner.clone(),
+                    go: Some(go.id),
+                };
+                shared.report_awaited(started, go);
+                (moved, runner)
             };
         let mut one = call.clone();
-        let (deferred, granted) = if handle.step_authorized(step) {
-            let granted = start(shared, handle, &mut one);
-            (None, granted)
+        let (deferred, started) = if handle.step_authorized(step) {
+            (None, Some(start(shared, handle, &mut one)))
         } else {
             (Some(start), None)
         };
-        let rx = {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let handle = Arc::clone(handle);
-            let host_speech = handle.object();
-            let spawner = Arc::clone(&shared.spawner);
-            let shared = Arc::clone(shared);
-            // Deferred starts are reported in the model's order.
-            let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-            let previous = self.last_deferred_start.replace(started_rx);
-            let task_owner = Arc::clone(&handle);
-            let task = ctx.task;
-            let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
-                // A start already reported runs, as the reference's executor starts the body
-                // right after `tool_execution_started_cb`, interrupted or not.
-                let mut granted = granted;
-                if let Some(start) = deferred {
-                    // Authorization first: a discarded preemptive generation, or a speech
-                    // interrupted while queued, drops the call unrun.
-                    let authorized = tokio::select! {
-                        biased;
-                        () = handle.wait_for_interrupted() => false,
-                        () = handle.wait_for_step_authorized(step) => true,
-                    };
-                    if !authorized {
-                        let _ = tx.send(None);
-                        return;
-                    }
-                    if let Some(previous) = previous {
-                        let _ = previous.await;
-                    }
-                    granted = start(&shared, &handle, &mut one);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = Arc::clone(handle);
+        let host_speech = handle.object();
+        let spawner = Arc::clone(&shared.spawner);
+        let shared = Arc::clone(shared);
+        // Deferred starts are reported in the model's order.
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let previous = self.last_deferred_start.replace(started_rx);
+        let task_owner = Arc::clone(&handle);
+        let task = ctx.task;
+        let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
+            // A start already reported runs, as the reference's executor starts the body
+            // right after `tool_execution_started_cb`, interrupted or not.
+            let mut started = started;
+            if let Some(start) = deferred {
+                // Authorization first: a discarded preemptive generation, or a speech
+                // interrupted while queued, drops the call unrun.
+                let authorized = tokio::select! {
+                    biased;
+                    () = handle.wait_for_interrupted() => false,
+                    () = handle.wait_for_step_authorized(step) => true,
+                };
+                if !authorized {
+                    let _ = tx.send(None);
+                    return;
                 }
-                let _ = started_tx.send(());
-                // The host classifies, the driver decides (`answer`).
-                let report = match work {
+                if let Some(previous) = previous {
+                    let _ = previous.await;
+                }
+                started = Some(start(&shared, &handle, &mut one));
+            }
+            let _ = started_tx.send(());
+            let Some((first, runner)) = started else { return };
+            let call =
+                HostedCall { shared: &shared, speech, step, runner, host_speech: &host_speech };
+            let (execution, id, outcome) = call.run(first, one, &handle, task).await;
+            // Recorded as it arrives; the step answers the calls in the model's order.
+            let message = execution.ended_message();
+            let (call_id, end) = (execution.call.call_id.clone(), execution.end);
+            let call = id;
+            let ended =
+                GenEvent::ToolCallEnded { speech, step, call, call_id, end, message, outcome };
+            shared.report(ended);
+            let _ = tx.send(Some(execution));
+        });
+        task_owner.add_task(abort);
+        self.calls.push(Dispatched { call, rx: Some(rx) });
+    }
+}
+
+/// One call's host work, each move decided by the shared tool machine in the loop.
+struct HostedCall<'a> {
+    shared: &'a Arc<SessionShared>,
+    speech: crate::agent_activity::scheduling::SpeechId,
+    step: u32,
+    runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
+    host_speech: &'a lk_agents_abi::CoreObject,
+}
+
+impl HostedCall<'_> {
+    /// Prepares, reads back or runs the call as told, until it is answered: the execution, the
+    /// call's machine id once it has one, and the outcome the machine records.
+    async fn run(
+        &self,
+        first: crate::agent_session::api::Awaited<ToolGo>,
+        mut one: FunctionCall,
+        handle: &SpeechHandle,
+        task: bool,
+    ) -> (ToolExecution, Option<CallId>, ToolOutcome) {
+        let wall = || self.shared.time.wall();
+        let mut id = None;
+        let mut prepared = None;
+        let mut go = first.await;
+        loop {
+            match go {
+                // A loop gone answers nothing: the call never ran.
+                Err(_) | Ok(ToolGo::Gone) => {
+                    let outcome = ToolOutcome::Cancelled;
+                    return (answer(&one, outcome.clone().into(), wall()), id, outcome);
+                }
+                Ok(ToolGo::Describe { call }) => {
+                    id = Some(call);
+                    let tool = match &self.runner {
+                        Some(runner) => runner.describe(&one.name).await.ok().flatten(),
+                        None => None,
+                    };
+                    let tool = tool.map(Box::new);
+                    let (speech, step) = (self.speech, self.step);
+                    go = self
+                        .ask(|go| GenEvent::ToolDescribed { speech, step, call, tool, go })
+                        .await;
+                }
+                Ok(ToolGo::Prepare { call, arguments }) => {
+                    let identity = match &self.runner {
+                        Some(runner) => {
+                            match runner.prepare(&one, arguments, self.host_speech).await {
+                                Ok(Ok(args)) => {
+                                    prepared = Some(args.prepared);
+                                    Ok(args.identity)
+                                }
+                                Ok(Err(refused)) => Err(refused.message),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                        None => Err(format!("no runner for tool `{}`", one.name)),
+                    };
+                    let (speech, step) = (self.speech, self.step);
+                    go = self
+                        .ask(|go| GenEvent::ToolPrepared { speech, step, call, identity, go })
+                        .await;
+                }
+                Ok(ToolGo::ReadBack { call }) => {
+                    let answer = match (&self.runner, prepared.take()) {
+                        (Some(runner), Some(args)) => {
+                            runner.read_back(&args).await.map_err(|e| e.to_string())
+                        }
+                        _ => Err("no prepared arguments".to_owned()),
+                    };
+                    let (speech, step) = (self.speech, self.step);
+                    go = self
+                        .ask(|go| GenEvent::ReadBackRendered { speech, step, call, answer, go })
+                        .await;
+                }
+                Ok(ToolGo::Execute { item }) => {
+                    one = *item;
+                    let (Some(runner), Some(args)) = (&self.runner, prepared.take()) else {
+                        let outcome = ToolOutcome::Internal;
+                        return (answer(&one, outcome.clone().into(), wall()), id, outcome);
+                    };
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
-                    Ok(runner) => {
-                        handle.tool_blocking(&one.call_id, &one.name);
-                        // Decided as the body starts: a call dropped unrun spends no answer.
-                        let granted = match granted {
-                            Some(rx) => rx.await.unwrap_or(false),
-                            None => false,
-                        };
-                        let report = runner.answer(&one, &host_speech, granted, task).await;
-                        handle.tool_returned(&one.call_id);
-                        report
-                    }
-                    // Never run: answered in the reference executor's words so the model corrects.
-                    Err(available) => ToolOutcome::ToolError(
-                        crate::tool_executor::unknown_tool_message(&one.name, &available),
-                    )
-                    .into(),
-                };
-                let _ = tx.send(Some(answer(&one, report, shared.time.wall())));
-            });
-            task_owner.add_task(abort);
-            Some(rx)
-        };
-        self.calls.push(Dispatched { call, rx });
+                    handle.tool_blocking(&one.call_id, &one.name);
+                    let report = runner.answer(&args, &one, task).await;
+                    handle.tool_returned(&one.call_id);
+                    let outcome = report.outcome.clone();
+                    return (answer(&one, report, wall()), id, outcome);
+                }
+                Ok(ToolGo::Settled { item, outcome, retry }) => {
+                    let mut execution = answer(&item, outcome.clone().into(), wall());
+                    execution.retry = retry;
+                    return (execution, id, outcome);
+                }
+            }
+        }
+    }
+
+    /// Reports the event built for the answer's request id, and awaits the call's next move.
+    async fn ask(
+        &self,
+        event: impl FnOnce(crate::agent_session::RequestId) -> GenEvent,
+    ) -> Result<ToolGo, crate::agent_session::api::Unanswered> {
+        let (call, next) = self.shared.open_call(crate::agent_session::Answer::tool_go);
+        self.shared.report_awaited(event(call.id), call);
+        next.await
     }
 }
 
@@ -255,20 +331,19 @@ pub(crate) async fn run_tools(
             Err(_) => {
                 let missing =
                     ToolOutcome::ToolError(crate::tool_executor::MISSING_TOOL_OUTPUT.into());
-                answer(&d.call, missing.into(), shared.time.wall())
+                let execution = answer(&d.call, missing.clone().into(), shared.time.wall());
+                shared.report(GenEvent::ToolCallEnded {
+                    speech: handle.id(),
+                    step: handle.num_steps(),
+                    call: None,
+                    call_id: d.call.call_id.clone(),
+                    end: execution.end,
+                    message: execution.ended_message(),
+                    outcome: missing,
+                });
+                execution
             }
         };
-        // The lifecycle event's text: nothing for a silent return, handoff or cancellation.
-        let message = match execution.end {
-            ToolEnd::Done => {
-                (!execution.output.output.is_empty()).then(|| execution.output.output.clone())
-            }
-            ToolEnd::Error => Some(execution.output.output.clone()),
-            ToolEnd::Detached => execution.raw_update.clone(),
-            ToolEnd::Cancelled => None,
-        };
-        let (call_id, end) = (d.call.call_id.clone(), execution.end);
-        shared.report(GenEvent::ToolCallEnded { speech: handle.id(), call_id, end, message });
         executions.push(execution);
     }
     if executions.is_empty() {

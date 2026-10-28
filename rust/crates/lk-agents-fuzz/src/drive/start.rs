@@ -550,21 +550,7 @@ pub(super) fn instructions(common: &str) -> Instructions {
 
 /// The tools advertised to the model; each is run by the controlled tool runner.
 pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
-    tools
-        .iter()
-        .map(|name| lk_agents_abi::ToolSpec {
-            provider_tool: None,
-            name: name.clone(),
-            description: format!("fixture tool {name}"),
-            // The shapes `ToolArgs` draws: a string first, which an `InputRequired(tool=)`
-            // hands the person's answer to.
-            json_schema: serde_json::json!({
-                "type": "object",
-                "properties": {"label": {"type": "string"}, "seconds": {"type": "integer"}},
-            }),
-            flags: Default::default(),
-        })
-        .collect()
+    tools.iter().map(|name| fakes::tools::tool_spec(name)).collect()
 }
 
 /// A new agent with the same fakes behind it, as `update_agent` and `enter_task` take it. Every

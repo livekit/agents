@@ -336,6 +336,11 @@ pub enum ToolStep {
         name: String,
         hosted: bool,
     },
+    /// The shared tool machine admitted a hosted call: its body runs, with these approval marks.
+    CallAdmitted {
+        speech: SpeechId,
+        call_id: String,
+    },
     CallEnded {
         speech: SpeechId,
         call_id: String,
@@ -913,6 +918,7 @@ impl Step {
             Step::Tool(step) => match step {
                 ToolStep::Calls { speech, .. }
                 | ToolStep::CallStarted { speech, .. }
+                | ToolStep::CallAdmitted { speech, .. }
                 | ToolStep::CallEnded { speech, .. }
                 | ToolStep::StepStarted { speech, .. }
                 | ToolStep::Finished { speech, .. }

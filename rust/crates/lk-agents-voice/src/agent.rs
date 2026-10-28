@@ -356,7 +356,7 @@ impl SessionChatCtx {
     }
 
     /// Every item of every agent, in record order.
-    pub fn items(&self) -> impl Iterator<Item = &ChatItem> {
+    pub fn items(&self) -> impl Iterator<Item = &ChatItem> + Clone {
         self.items.iter().map(|c| &c.item)
     }
 

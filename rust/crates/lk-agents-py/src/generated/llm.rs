@@ -926,17 +926,93 @@ impl HostToolRunnerProxy {
 }
 
 impl ::lk_agents_abi::llm::tool_executor::HostToolRunner for HostToolRunnerProxy {
-    fn run(&self, call: &::lk_agents_abi::FunctionCall, speech: &::lk_agents_abi::CoreObject, granted: bool, task: bool) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError>> {
+    fn describe(&self, name: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::agent::FunctionToolInfo>, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let name_arg = name.to_owned();
+        let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(name_arg, py)?];
+                Ok((host.bind(py).getattr("_core_describe")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::agent_run::function_tool_info_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn prepare(&self, call: &::lk_agents_abi::FunctionCall, arguments: ::serde_json::Map<::std::string::String, ::serde_json::Value>, speech: &::lk_agents_abi::CoreObject) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::result::Result<::lk_agents_abi::agent::PreparedArguments, ::lk_agents_abi::agent::ToolArgumentError>, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let call_arg = ::std::clone::Clone::clone(call);
+        let arguments_arg = arguments;
         let speech_arg = ::std::clone::Clone::clone(speech);
-        let granted_arg = granted;
+        let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?];
+                Ok((host.bind(py).getattr("_core_prepare")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    if e.is_instance(py, &py.import("livekit.agents.voice.agent_host").and_then(|m| m.getattr("ToolArgumentError")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?) {
+                        return Ok(Err(<::lk_agents_abi::agent::ToolArgumentError as ::std::convert::From<String>>::from(e.value(py).to_string())));
+                    }
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (crate::generated::records::agent_run::prepared_arguments_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(Ok(out))
+        })
+        })
+    }
+
+    fn read_back(&self, prepared: &::lk_agents_abi::HostRef) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::agent::ReadBackAnswer, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let prepared_arg = ::std::clone::Clone::clone(prepared);
+        let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                Ok((host.bind(py).getattr("_core_read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (crate::generated::records::agent_run::read_back_answer_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+        })
+    }
+
+    fn run(&self, prepared: &::lk_agents_abi::HostRef, call: &::lk_agents_abi::FunctionCall, task: bool) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError>> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let prepared_arg = ::std::clone::Clone::clone(prepared);
+        let call_arg = ::std::clone::Clone::clone(call);
         let task_arg = task;
         let context = ::std::clone::Clone::clone(&self.context);
         ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(granted_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(call_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(task_arg, py)?];
                 Ok((host.bind(py).getattr("_core_run")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await;
         ::pyo3::Python::attach(|py| {

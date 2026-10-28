@@ -297,7 +297,6 @@ from ._generated._core_classes import (
     tts_markup_provider_key as tts_markup_provider_key,
     tts_normalize_fallback_str as tts_normalize_fallback_str,
     tts_parse_model_string as tts_parse_model_string,
-    unknown_tool_message as unknown_tool_message,
     validate_card_number as validate_card_number,
     validate_synthesis as validate_synthesis,
     video_queue_frames as video_queue_frames,

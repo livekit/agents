@@ -882,22 +882,51 @@ pub enum GenEvent {
         step: u32,
         error: Option<crate::trace::FailureClass>,
     },
-    /// Hosted on `runner`, or answered by the driver itself (an unadvertised name).
+    /// Hosted on `runner`, or answered without running (a name the request did not offer).
+    /// Awaited (`go`) with the call's first move, unless the call is dropped unrun.
     ToolCallStarted {
         speech: SpeechId,
         step: u32,
         call: Box<lk_agents_abi::FunctionCall>,
         runner: Option<Arc<dyn crate::tool_executor::HostToolRunner>>,
-        /// A hosted call's approval, decided by the loop as it hears the start: the body waits
-        /// for it (`needs_approval`).
-        grant: Option<crate::agent_session::RequestId>,
+        go: Option<crate::agent_session::RequestId>,
     },
-    /// `None` when there is nothing to say.
+    /// The runner described the call's tool; `None` for a name the request did not offer or the
+    /// runner does not have. Awaited with the call's next move.
+    ToolDescribed {
+        speech: SpeechId,
+        step: u32,
+        call: crate::tool_executor::CallId,
+        tool: Option<Box<crate::tool_executor::FunctionToolInfo>>,
+        go: crate::agent_session::RequestId,
+    },
+    /// The host bound and validated the call's arguments, or refused them (the model's
+    /// feedback). Awaited with the call's next move.
+    ToolPrepared {
+        speech: SpeechId,
+        step: u32,
+        call: crate::tool_executor::CallId,
+        identity: Result<lk_agents_abi::agent::ArgumentIdentity, String>,
+        go: crate::agent_session::RequestId,
+    },
+    /// The tool's read-back function answered. Awaited with the call's settlement.
+    ReadBackRendered {
+        speech: SpeechId,
+        step: u32,
+        call: crate::tool_executor::CallId,
+        answer: Result<lk_agents_abi::agent::ReadBackAnswer, String>,
+        go: crate::agent_session::RequestId,
+    },
+    /// As the call's answer arrives; `message` is `None` when there is nothing to say. `call`:
+    /// the shared machine's id, once the call was prepared.
     ToolCallEnded {
         speech: SpeechId,
+        step: u32,
+        call: Option<crate::tool_executor::CallId>,
         call_id: String,
         end: crate::tool_executor::ToolEnd,
         message: Option<String>,
+        outcome: crate::tool_executor::ToolOutcome,
     },
     /// `recoverable` when the budget retries it. Then the close policy.
     ProviderFailed {

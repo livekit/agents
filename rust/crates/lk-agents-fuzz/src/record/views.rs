@@ -890,6 +890,18 @@ impl<'a> InternalView<'a> {
             .collect()
     }
 
+    /// Every call the shared tool machine admitted to run its body.
+    pub fn tool_calls_admitted(&self) -> Vec<(Observed, &'a str)> {
+        self.0
+            .journal
+            .iter()
+            .filter_map(|(at, step)| match step {
+                Step::Tool(ToolStep::CallAdmitted { call_id, .. }) => Some((*at, call_id.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The stretches in which the gate fed the STT leg silence instead of the room.
     pub fn stt_gate_closed(&self) -> Vec<Window> {
         let mut windows = Vec::new();

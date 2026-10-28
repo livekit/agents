@@ -1,6 +1,7 @@
 //! A tool declared with `needs_approval=True` runs exactly when the model repeats, with the same
-//! arguments, the call whose read-back the person has answered, and only once per answer. Any
-//! other call of it asks its read-back. The calls carry the marks (`lk.approval`: `asked`,
+//! arguments, the call whose read-back the person has answered, in the reply to that answer, and
+//! only once per answer. Any other call of it asks its read-back: an answer the person moved on
+//! from (spoke again) grants nothing. The calls carry the marks (`lk.approval`: `asked`,
 //! `granted`) the next call reads.
 //!
 //! Read off what the host was told: each call as announced, each output as last announced before
@@ -28,8 +29,8 @@ pub struct ApprovalRunsOnTheAnswer;
 impl Rule for ApprovalRunsOnTheAnswer {
     const CONTRACT: Contract = Contract {
         id: "approval_runs_on_the_answer",
-        guarantee: "A tool that requires approval runs on the repeat of a call whose read-back the person answered, once per answer, and asks its read-back otherwise.",
-        examples: &[asked_then_granted],
+        guarantee: "A tool that requires approval runs on the repeat of a call whose read-back the person answered, before they speak again, once per answer, and asks its read-back otherwise.",
+        examples: &[asked_then_granted, answered_then_moved_on_asks_again],
         counterexamples: &[asked_again_after_the_answer, granted_unasked],
         probe: None,
     };
@@ -48,6 +49,9 @@ impl Rule for ApprovalRunsOnTheAnswer {
         let mut calls: Vec<(usize, FunctionCall)> = Vec::new();
         let mut started: BTreeMap<String, usize> = BTreeMap::new();
         let mut outputs: Vec<(usize, &FunctionCallOutput)> = Vec::new();
+        // The person's messages: the one after an answer is the answering one, and the next ends
+        // what that answer can grant.
+        let mut said: Vec<usize> = Vec::new();
         for (n, (_, step)) in journal.iter().enumerate() {
             match step {
                 Step::Emitted(SessionEvent::ConversationItemAdded { item, .. }) => match &**item {
@@ -55,6 +59,7 @@ impl Rule for ApprovalRunsOnTheAnswer {
                         calls.push((n, c.clone()))
                     }
                     ChatItem::FunctionCallOutput(o) => outputs.push((n, o)),
+                    ChatItem::Message(m) if m.role == lk_agents_abi::Role::User => said.push(n),
                     _ => {}
                 },
                 Step::Emitted(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
@@ -85,12 +90,17 @@ impl Rule for ApprovalRunsOnTheAnswer {
             let same = |c: &FunctionCall| {
                 c.call_id != call.call_id && key(&c.arguments) == key(&call.arguments)
             };
-            // The tool's latest read-back put to the person before this body started, whatever
-            // its arguments: an answer is to the question asked last.
+            // The tool's latest read-back before this call, whatever its arguments: an answer is
+            // to the question asked last. A read-back counts from its call's start, as the tool
+            // machine decides a step's calls in the model's order: an earlier call of the same
+            // step that asked is the latest question even before its output is committed.
             let latest = calls
                 .iter()
                 .filter(|(_, c)| c.call_id != call.call_id && mark(c).as_deref() == Some("asked"))
-                .filter_map(|(_, c)| asked_at(&c.call_id).filter(|n| *n < start).map(|n| (n, c)))
+                .filter(|(_, c)| asked_at(&c.call_id).is_some())
+                .filter_map(|(_, c)| {
+                    started.get(&c.call_id).filter(|n| **n < start).map(|n| (*n, c))
+                })
                 .max_by_key(|(n, _)| *n);
             let Some((_, readback)) = latest else {
                 check.expect_with(Subject::Session, m != "granted", || {
@@ -98,8 +108,11 @@ impl Rule for ApprovalRunsOnTheAnswer {
                 });
                 continue;
             };
-            let answer = answered_at(&readback.call_id)
-                .filter(|n| *n < start && key(&readback.arguments) == key(&call.arguments));
+            let moved_on =
+                |a: usize| said.iter().filter(|n| **n > a).nth(1).is_some_and(|n| *n < start);
+            let answer = answered_at(&readback.call_id).filter(|n| {
+                *n < start && !moved_on(*n) && key(&readback.arguments) == key(&call.arguments)
+            });
             // Another repeat whose body started after the answer, before this one, may have spent
             // it; a cut repeat's grant is not on the record, so it counts too.
             let spent = answer.is_some_and(|a| {
@@ -197,6 +210,32 @@ fn asked_again_after_the_answer() -> Recording {
 }
 
 /// Run before the person answered.
+/// The person answered, then said something else: the repeat asks again.
+fn answered_then_moved_on_asks_again() -> Recording {
+    asked()
+        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(said("actually, wait"))
+        .journal(started("c2"))
+        .journal(call("c2", "asked"))
+        .done()
+}
+
+fn said(text: &str) -> Step {
+    Step::Emitted(SessionEvent::ConversationItemAdded {
+        item: Box::new(ChatItem::Message(lk_agents_abi::ChatMessage::new(
+            format!("msg_{text}"),
+            lk_agents_abi::Role::User,
+            Vec::new(),
+            std::time::SystemTime::UNIX_EPOCH,
+        ))),
+        agent: "agent".into(),
+        source: lk_agents_voice::agent::Source::UserTyped,
+        visibility: lk_agents_voice::agent::Visibility::Both,
+        run: None,
+    })
+}
+
 fn granted_unasked() -> Recording {
     asked().journal(started("c2")).journal(call("c2", "granted")).done()
 }

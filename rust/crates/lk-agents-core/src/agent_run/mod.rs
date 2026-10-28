@@ -1,5 +1,5 @@
 //! `AgentRun`: one agent invocation as a synchronous machine (rust-core "Agent execution"). It
-//! composes a model-step child ([`model_step`]), the tool/approval child ([`tool_calls`]) and the
+//! composes a model-step child ([`model_step`]), the tool/approval child ([`crate::tool_calls`]) and the
 //! output acceptance kept here, and decides when to request another step, ask the person, or
 //! settle. Direct runs, TextSession and VoiceSession drive it with `handle(event, now)` and
 //! `wake_at()`; the runtime executes its effects and returns their outcomes as events.
@@ -7,14 +7,14 @@
 //! - `mod.rs`: the invocation's events, effects and step decisions.
 //! - [`result`]: the settled result, stream events and correlation ids.
 //! - [`model_step`]: one model request.
-//! - [`tool_calls`]: one step's calls, from arguments to recorded outcomes.
+//!
+//! One step's calls are [`crate::tool_calls`]'s, the machine VoiceSession composes too.
 
 mod checkpoint;
 pub mod execution;
 mod model_step;
 pub mod result;
 mod text_session;
-mod tool_calls;
 
 pub use text_session::DelegationCheckpoint;
 
@@ -34,6 +34,7 @@ use serde_json::{Map, Value};
 
 use crate::agent::{self, AgentError, first_string_parameter};
 use crate::request::{RequestSnapshot, plan_request};
+use crate::tool_calls::{self, FinalCandidate, Recorded, ToolCalls};
 use crate::tool_outcome;
 use lk_agents_abi::agent::run::{
     Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
@@ -42,7 +43,6 @@ use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use model_step::{ModelStep, Purpose};
 pub use result::{CallId, CheckpointId, RenderId, RequestId};
-use tool_calls::{FinalCandidate, Recorded, ToolCalls};
 
 /// The feedback a rejected text output gives the model.
 const RETRY_PROMPT: &str = "Validation failed, fix the output and try again: ";
@@ -220,6 +220,30 @@ pub enum Effect {
     Finished(Result<RunResult, RunError>),
 }
 
+impl From<tool_calls::Effect> for Effect {
+    fn from(effect: tool_calls::Effect) -> Self {
+        match effect {
+            tool_calls::Effect::Prepare { call, arguments, function_call } => {
+                Effect::ToolPrepare { call, arguments, function_call }
+            }
+            tool_calls::Effect::ReadBack { call, tool, prepared } => {
+                Effect::ReadBackRender { call, tool, prepared }
+            }
+            tool_calls::Effect::Execute { call, prepared, function_call } => {
+                Effect::ToolExecute { call, prepared, function_call }
+            }
+            tool_calls::Effect::Cancel { call } => Effect::ToolCancel { call },
+            tool_calls::Effect::ReleaseArguments { prepared } => {
+                Effect::ToolArgumentsRelease { prepared }
+            }
+            tool_calls::Effect::Emit(event) => Effect::Emit(event),
+            tool_calls::Effect::ArgumentsRepaired { call_id, error, repaired } => {
+                Effect::ArgumentsRepaired { call_id, error, repaired }
+            }
+        }
+    }
+}
+
 /// A question the invocation ends on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Ask {
@@ -382,8 +406,8 @@ impl AgentRun {
                         call,
                         prepared,
                         identity,
-                        &self.agent,
-                        &self.history,
+                        &self.agent.tools,
+                        self.history.iter(),
                         &mut fx,
                     ),
                     _ => false,
@@ -395,13 +419,25 @@ impl AgentRun {
             }
             Event::ToolPrepareFailed { call, error } => {
                 if let Phase::Acting(a) = &mut self.phase {
-                    a.calls.prepare_failed(call, error, &self.agent, &self.history, &mut fx);
+                    a.calls.prepare_failed(
+                        call,
+                        error,
+                        &self.agent.tools,
+                        self.history.iter(),
+                        &mut fx,
+                    );
                 }
                 self.step_settled(now, &mut fx);
             }
             Event::ReadBackRendered { call, result } => {
                 if let Phase::Acting(a) = &mut self.phase {
-                    a.calls.read_back(call, result, &self.agent, &self.history, &mut fx);
+                    a.calls.read_back(
+                        call,
+                        result,
+                        &self.agent.tools,
+                        self.history.iter(),
+                        &mut fx,
+                    );
                 }
                 self.step_settled(now, &mut fx);
             }

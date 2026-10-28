@@ -836,15 +836,20 @@ impl Driver {
                     self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
                 }
             }
-            GenEvent::ToolCallStarted { speech, step, call, runner, grant } => {
-                if let Some(grant) = grant {
-                    let granted = crate::tool_executor::grant(&mut self.session.approvals, &call);
-                    out.answer(Some(grant), Answer::Approval(granted));
-                }
-                self.on_tool_started(now, speech, step, *call, runner, out);
+            GenEvent::ToolCallStarted { speech, step, call, runner, go } => {
+                self.on_tool_started(now, (speech, step), *call, runner, go, out);
             }
-            GenEvent::ToolCallEnded { speech, call_id, end, message } => {
-                self.on_tool_ended(now, speech, call_id, end, message, out);
+            GenEvent::ToolDescribed { speech, step, call, tool, go } => {
+                self.on_tool_described((speech, step), call, tool.map(|t| *t), go, out);
+            }
+            GenEvent::ToolPrepared { speech, step, call, identity, go } => {
+                self.on_tool_prepared(speech, step, call, identity, go, out);
+            }
+            GenEvent::ReadBackRendered { speech, step, call, answer, go } => {
+                self.on_read_back(speech, step, call, answer, go, out);
+            }
+            GenEvent::ToolCallEnded { speech, step, call, call_id, end, message, outcome } => {
+                self.on_tool_ended(now, (speech, step, call), call_id, end, message, outcome, out);
             }
         }
     }

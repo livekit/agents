@@ -140,7 +140,8 @@ pub enum Answer {
     /// The speech of a [`SpeechCall`] is created.
     Speech,
     ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
-    Approval(bool),
+    /// A tool call's next move.
+    ToolGo(crate::tool_executor::ToolGo),
     Interrupt(Result<(), InterruptRefusal>),
 
     Commit(Result<String, CommitSuperseded>),
@@ -168,7 +169,7 @@ macro_rules! answer_picks {
 
 answer_picks! {
     reply_plan: ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
-    approval: Approval(bool),
+    tool_go: ToolGo(crate::tool_executor::ToolGo),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
     idle: Idle(Result<(), IdleRefused>),

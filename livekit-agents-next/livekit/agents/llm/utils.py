@@ -537,7 +537,7 @@ def tool_report(output: Any, exception: BaseException | None = None) -> ToolRepo
         asked = ToolOutcomeInputRequired(
             question=output.question, verbatim=output.verbatim, tool=tool
         )
-        return ToolReport(outcome=asked, transition=output)
+        return ToolReport(outcome=asked)
     if isinstance(output, Working):
         return ToolReport(outcome=ToolOutcomeWorking(message=output.message))
     if output is None:

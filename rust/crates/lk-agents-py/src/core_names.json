@@ -330,7 +330,6 @@
     "tts_node",
     "tts_normalize_fallback_str",
     "tts_parse_model_string",
-    "unknown_tool_message",
     "validate_card_number",
     "validate_synthesis",
     "video_queue_frames",

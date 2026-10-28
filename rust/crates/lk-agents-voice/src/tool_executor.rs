@@ -18,13 +18,6 @@ pub const REPLY_AT_TAIL: &str = "New results arrived from background tool calls 
 /// The reference's `REPLY_INSTRUCTIONS_MAYBE_COVERED`.
 pub const REPLY_MAYBE_COVERED: &str = "New results arrived from background tool calls (call_ids: {call_ids}).\nYou may have already mentioned them in your most recent replies.\nIf you already told the user everything in these results, reply with an empty response (no text at all).\nOtherwise, summarize only what you have not said yet, with a natural transition.\nNever repeat information you have already told the user.";
 
-/// The answer to a call no runnable tool has (`generation._execute_tools_task`), in the reference's
-/// words so the model corrects itself.
-#[lk_agents_abi::host(export)]
-pub fn unknown_tool_message(name: &str, available: &[String]) -> String {
-    format!("Unknown function: {name} - available tools: {}", available.join(", "))
-}
-
 pub const MISSING_TOOL_OUTPUT: &str = "the tool executor did not report a result";
 
 /// `_RunningTasks` and the deferred reply (`AgentActivity`'s background tool calls), the open
@@ -42,6 +35,45 @@ pub(crate) struct Tools {
     pub(crate) pending_input: Option<Ask>,
     /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
     pub(crate) claim: Option<Claim>,
+    /// Each tool step's calls on the shared machine, until the step's tools are committed.
+    pub(crate) steps: BTreeMap<(SpeechId, u32), StepCalls>,
+    /// The pending call the person's latest message answered: the only read-back a step started
+    /// since can consume.
+    pub(crate) approval_answers: std::collections::BTreeSet<String>,
+    /// Mints the steps' [`CallId`]s.
+    pub(crate) next_call: u64,
+}
+
+/// One step's calls as `lk_agents_core::tool_calls` decides them, and the call tasks waiting
+/// for their next move.
+#[derive(Debug)]
+pub(crate) struct StepCalls {
+    pub(crate) calls: lk_agents_core::tool_calls::ToolCalls,
+    /// The tools the step's calls name, as their runners described them.
+    pub(crate) tools: Vec<FunctionToolInfo>,
+    /// Started calls not yet on the machine, in the model's order; each joins once it and every
+    /// earlier one is described (`Some`).
+    pub(crate) describing: Vec<(CallId, FunctionCall, Option<Option<FunctionToolInfo>>)>,
+    pub(crate) waiting: BTreeMap<CallId, crate::agent_session::RequestId>,
+}
+
+pub use lk_agents_core::agent_run::CallId;
+
+/// The next move of a call's task, decided by the shared tool machine.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolGo {
+    /// Ask the runner for the tool's description: what the machine decides with.
+    Describe { call: CallId },
+    /// Bind and validate these arguments (the framework's parse, with the schema's defaults).
+    Prepare { call: CallId, arguments: serde_json::Map<String, serde_json::Value> },
+    /// Render the read-back of the prepared arguments.
+    ReadBack { call: CallId },
+    /// Run the body; `item` carries the call's approval marks.
+    Execute { item: Box<FunctionCall> },
+    /// Settled without its body: `item` as recorded, and whether it spends a retry.
+    Settled { item: Box<FunctionCall>, outcome: ToolOutcome, retry: bool },
+    /// The step's calls are over: the call does not run.
+    Gone,
 }
 
 /// The tool an `InputRequired(tool=)` claimed the person's next turn for; once `after` (the speech
@@ -321,102 +353,6 @@ pub(crate) fn answered_text(
     lk_agents_core::approval::answered_text(&name, text)
 }
 
-/// `approval_granted`: whether `call` repeats the latest read-back of its tool, with the same
-/// arguments, after the person answered it, and no earlier repeat used that answer. A reading of
-/// the record by the calls' [`APPROVAL_KEY`] marks: a call that asked something else, such as a
-/// missing detail, is neither a read-back nor a run.
-pub fn approval_granted(items: &[ChatItem], call: &FunctionCall) -> bool {
-    let answered = |call_id: &str| {
-        items.iter().any(|i| match i {
-            ChatItem::FunctionCallOutput(o) => {
-                o.call_id == call_id
-                    && !o.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
-            }
-            _ => false,
-        })
-    };
-    let key = canonical_arguments(&call.arguments);
-    // The arguments of the latest answered, unused read-back.
-    let mut asked: Option<String> = None;
-    for item in items {
-        let ChatItem::FunctionCall(c) = item else { continue };
-        if c.name != call.name {
-            continue;
-        }
-        if c.call_id == call.call_id {
-            break;
-        }
-        match c.extra.get(APPROVAL_KEY).and_then(|v| v.as_str()) {
-            Some("granted") if asked.as_deref() == Some(&canonical_arguments(&c.arguments)) => {
-                asked = None;
-            }
-            Some("asked") => {
-                asked = answered(&c.call_id).then(|| canonical_arguments(&c.arguments));
-            }
-            _ => {}
-        }
-    }
-    asked == Some(key)
-}
-
-/// Whether `call` runs on an answered read-back ([`approval_granted`]), decided as the model makes
-/// it, off the session's approval record: one answer grants one repeat, also to a call made before
-/// the granted one is committed.
-pub(crate) fn grant(record: &mut Vec<ChatItem>, call: &FunctionCall) -> bool {
-    if !approval_granted(record, call) {
-        return false;
-    }
-    let mut marked = call.clone();
-    let mark = serde_json::Value::String(Approval::Granted.as_str().to_owned());
-    marked.extra.insert(APPROVAL_KEY.to_owned(), mark);
-    record.push(ChatItem::FunctionCall(marked));
-    true
-}
-
-/// A call is committed with the grant it ran under, however it ended (a cut one included), as
-/// `approval_scope` marks it: that answer is spent.
-pub(crate) fn mark_granted(record: &[ChatItem], item: &mut ChatItem) {
-    let ChatItem::FunctionCall(call) = item else { return };
-    if call.extra.contains_key(APPROVAL_KEY) {
-        return;
-    }
-    let granted = record.iter().any(|i| matches!(i, ChatItem::FunctionCall(g) if g.id == call.id));
-    if granted {
-        let mark = serde_json::Value::String(Approval::Granted.as_str().to_owned());
-        call.extra.insert(APPROVAL_KEY.to_owned(), mark);
-    }
-}
-
-/// The session's approval record (`VoiceSession::approvals`): every agent's calls marked
-/// `lk.approval`, in order, with their outputs as last committed. What [`grant`] reads, in place of
-/// the whole history.
-pub(crate) fn note_approval(record: &mut Vec<ChatItem>, item: &ChatItem) {
-    let tracked = match item {
-        ChatItem::FunctionCall(c) => c.extra.contains_key(APPROVAL_KEY),
-        ChatItem::FunctionCallOutput(o) => record.iter().any(|i| match i {
-            ChatItem::FunctionCall(c) => c.call_id == o.call_id,
-            _ => false,
-        }),
-        _ => false,
-    };
-    if !tracked {
-        return;
-    }
-    match record.iter_mut().find(|i| i.id() == item.id()) {
-        Some(known) => *known = item.clone(),
-        None => record.push(item.clone()),
-    }
-}
-
-/// Arguments compared as JSON with sorted keys; a string that is not JSON compares as written.
-fn canonical_arguments(arguments: &str) -> String {
-    let arguments = if arguments.is_empty() { "{}" } else { arguments };
-    match serde_json::from_str::<serde_json::Value>(arguments) {
-        Ok(v) => lk_agents_core::approval::canonical_json(&v),
-        Err(_) => arguments.to_owned(),
-    }
-}
-
 /// `{call_ids}` as Python's `str.format` spells a list: `['a', 'b']`.
 fn python_list(ids: &[String]) -> String {
     let quoted: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
@@ -453,7 +389,7 @@ pub(crate) fn pair_for(
     execution
 }
 
-pub use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome, ToolReport};
+pub use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
 
 /// `make_function_call_output`'s answer for a classified outcome, `(output, is_error,
 /// reply_required)`: the table a call reads too.
@@ -474,8 +410,20 @@ pub struct ToolExecution {
     pub raw_update: Option<String>,
     /// What the person gets because of this call, once its output is committed.
     pub delivery: Option<Delivery>,
-    /// `ModelRetry`: spends the tool's retry budget.
+    /// Invalid or unknown arguments, or `ModelRetry`: spends the tool's retry budget.
     pub retry: bool,
+}
+
+impl ToolExecution {
+    /// The lifecycle event's text: nothing for a silent return, handoff or cancellation.
+    pub(crate) fn ended_message(&self) -> Option<String> {
+        match self.end {
+            ToolEnd::Done => (!self.output.output.is_empty()).then(|| self.output.output.clone()),
+            ToolEnd::Error => Some(self.output.output.clone()),
+            ToolEnd::Detached => self.raw_update.clone(),
+            ToolEnd::Cancelled => None,
+        }
+    }
 }
 
 /// What reaches the person because of a call's outcome (the reference's verbatim `say()` and
@@ -500,8 +448,6 @@ pub struct Ask {
     pub verbatim: bool,
     /// `InputRequired(tool=)`: the tool the answer goes to.
     pub tool: Option<String>,
-    /// The `InputRequired` object, the output of a run ending on the asking speech.
-    pub transition: Option<lk_agents_abi::HostRef>,
 }
 
 /// How a tool's run ended (`ToolCallEnded{status}`), plus `Detached`, which is not an end.
@@ -561,12 +507,13 @@ impl std::fmt::Debug for Toolset {
     }
 }
 
+pub use lk_agents_abi::agent::FunctionToolInfo;
 pub use lk_agents_abi::llm::tool_executor::HostToolRunner;
 
 /// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
 /// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
-    let ToolReport { outcome, approval, transition } = report;
+    let ToolReport { outcome, transition } = report;
     let shape =
         lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     let mut output = FunctionCallOutput::new(
@@ -579,10 +526,6 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     output.name = call.name.clone();
     output.reply_required = shape.reply_required;
     let mut call = call.clone();
-    if let Some(approval) = approval {
-        let mark = serde_json::Value::String(approval.as_str().to_owned());
-        call.extra.insert(APPROVAL_KEY.to_owned(), mark);
-    }
     let end = ToolEnd::of(&outcome);
     let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
     // A completion the host validated for a VoiceTask asks for no reply: the parent gets the floor.
@@ -607,7 +550,6 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             question,
             verbatim,
             tool,
-            transition,
         })),
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),

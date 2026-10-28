@@ -39,6 +39,8 @@ pub enum RunOutput {
     Error(HostRef),
     /// The speech's reply ended on a framework outcome (a tool spent its retries).
     Failed(RunError),
+    /// A tool asked the person (`InputRequired`).
+    Ask { question: String, verbatim: bool, answer_tool: Option<String> },
 }
 
 /// One thing a run owns while it is live. The run settles when none is left.
@@ -160,6 +162,9 @@ impl Runs {
             (false, Some(RunOutput::Error(e))) => RunOutcome::Failed(RunFailure::Output(e)),
             (false, Some(RunOutput::Failed(e))) => RunOutcome::Failed(RunFailure::Run(e)),
             (false, Some(RunOutput::Value(v))) => RunOutcome::Completed { final_output: Some(v) },
+            (false, Some(RunOutput::Ask { question, verbatim, answer_tool })) => {
+                RunOutcome::InputRequired { question, verbatim, answer_tool }
+            }
             (false, None) => {
                 // Only the no-output case retries, and only with a speech to read.
                 if r.expects_output && speech.is_some() && r.retries_left > 0 {

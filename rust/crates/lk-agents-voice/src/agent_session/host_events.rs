@@ -260,14 +260,25 @@ impl SessionEvent {
                     RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
                     RunOutcome::Failed(RunFailure::Output(err)) => (None, Some(err.clone()), None),
                     RunOutcome::Failed(RunFailure::Run(err)) => (None, None, Some(err.clone())),
-                    RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => {
-                        (None, None, None)
+                    RunOutcome::InputRequired { .. }
+                    | RunOutcome::Failed(RunFailure::Speech)
+                    | RunOutcome::Closed => (None, None, None),
+                };
+                let question = match outcome {
+                    RunOutcome::InputRequired { question, verbatim, answer_tool } => {
+                        Some(w::RunQuestion {
+                            question: question.clone(),
+                            verbatim: *verbatim,
+                            answer_tool: answer_tool.clone(),
+                        })
                     }
+                    _ => None,
                 };
                 HostWire::RunSettled(w::RunSettledWire {
                     run: run.host.clone(),
                     outcome: outcome.as_str().to_owned(),
                     final_output,
+                    question,
                     error,
                     run_error,
                     speech_handle: speech.as_ref().map(crate::speech_handle::SpeechHandle::object),

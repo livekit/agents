@@ -1,5 +1,7 @@
-"""The session's tool runner: the core decides which call runs and what its outcome means; this
-runs the Python function and classifies what it returned or raised (``llm.utils.tool_report``)."""
+"""The session's tool runner: the core's shared tool machine decides which call runs and what its
+outcome means; this binds and validates a call's arguments (``agent_host.prepare_arguments``, the
+same as a run's), renders read-backs, runs the Python function and classifies what it returned or
+raised (``llm.utils.tool_report``)."""
 
 from __future__ import annotations
 
@@ -7,15 +9,15 @@ import asyncio
 import dataclasses
 import inspect
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, get_type_hints
+from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from .. import _core
+from .._generated.agent_run import FunctionToolInfo, PreparedArguments, ReadBackAnswer
 from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 from .._generated.tool_report import (
-    Approval,
     ToolOutcomeCancelled,
     ToolOutcomeCompleted,
     ToolOutcomeInternal,
@@ -26,10 +28,12 @@ from .._generated.tool_report import (
     ToolReport,
 )
 from ..llm import ToolContext
-from ..llm.tool_context import FunctionTool, InputRequired, ModelRetry, Tool, Toolset
-from ..llm.utils import is_context_type, prepare_function_arguments, tool_report
+from ..llm.tool_context import FunctionTool, ModelRetry, RawFunctionTool, Tool, Toolset
+from ..llm.utils import tool_report
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
+from .agent_host import ToolArgumentError, _Prepared, prepare_arguments, render_read_back
+from .agent_run import tool_infos
 from .events import RunContext
 from .run_result import _tool_body
 from .speech_handle import SpeechHandle
@@ -83,48 +87,52 @@ class ToolRunner:
         self._tools = tools
         self._running: dict[str, asyncio.Task[Any]] = {}
 
-    async def _core_run(
-        self, call: dict[str, Any], speech: _core.SpeechHandle, granted: bool, task: bool
-    ) -> ToolReport:
+    def _tool(self, name: str) -> FunctionTool[..., Any] | RawFunctionTool[..., Any] | None:
+        # a session tool added since this frame was installed (IVR's DTMF tool) is the session's
+        return ToolContext(self._tools).get_function_tool(name) or ToolContext(
+            self._session._tools
+        ).get_function_tool(name)
+
+    async def _core_describe(self, name: str) -> FunctionToolInfo | None:
+        tool = self._tool(name)
+        return None if tool is None else tool_infos(ToolContext([tool]))[0]
+
+    async def _core_prepare(
+        self, call: dict[str, Any], arguments: dict[str, Any], speech: _core.SpeechHandle
+    ) -> PreparedArguments:
         from .._core_view import from_core_item
 
         fnc_call = from_core_item(call)
         assert fnc_call.type == "function_call"
-        # a session tool added since this frame was installed (IVR's DTMF tool) is the session's
-        tools = ToolContext(self._tools)
-        tool = tools.get_function_tool(fnc_call.name) or ToolContext(
-            self._session._tools
-        ).get_function_tool(fnc_call.name)
+        tool = self._tool(fnc_call.name)
         if tool is None:
-            names = list(tools.function_tools)
-            message = _core.unknown_tool_message(fnc_call.name, names)
-            return ToolReport(outcome=ToolOutcomeToolError(message=message))
-
+            raise ToolArgumentError(f"unknown tool `{fnc_call.name}`")
         handle = SpeechHandle._of(speech)
         ctx = RunContext(function_call=fnc_call, session=self._session, speech_handle=handle)
-        try:
-            args, kwargs = prepare_function_arguments(
-                fnc=tool, json_arguments=fnc_call.arguments, call_ctx=ctx, fnc_call=fnc_call
-            )
-        except Exception as e:
-            return _outcome(fnc_call, None, e)
+        return prepare_arguments(tool, arguments, ctx)
 
+    async def _core_read_back(self, prepared: _Prepared) -> ReadBackAnswer:
+        return await render_read_back(prepared)
+
+    async def _core_run(self, prepared: _Prepared, call: dict[str, Any], task: bool) -> ToolReport:
+        from .._core_view import from_core_item
+
+        fnc_call = from_core_item(call)
+        assert fnc_call.type == "function_call"
+        # the call as the core admitted it: its approval marks included
+        ctx = prepared.ctx
+        ctx._function_call = fnc_call
         binding = _VoiceBinding(self._session, self._agent, origin=f"tool:{fnc_call.call_id}")
-        # a tool that requires approval runs only on the core's grant, else asks its read-back
-        approval: list[Approval] = []  # the call's mark once decided
-        gated = isinstance(tool, FunctionTool) and tool.info.needs_approval
-        if gated and granted:
-            approval.append("granted")
         token = _BindingContextVar.set(binding)
         try:
-            work = (
-                _read_back(tool, args, kwargs, approval)  # type: ignore[arg-type]
-                if gated and not granted
-                else _call(
-                    _tool_body(self._agent, fnc_call.name, tool, self._session), args, kwargs
-                )
+            body = asyncio.create_task(
+                _call(
+                    _tool_body(self._agent, fnc_call.name, prepared.tool, self._session),
+                    prepared.args,
+                    prepared.kwargs,
+                ),
+                name=f"tool_{fnc_call.name}",
             )
-            body = asyncio.create_task(work, name=f"tool_{fnc_call.name}")
         finally:
             _BindingContextVar.reset(token)
         self._running[fnc_call.call_id] = body
@@ -132,7 +140,7 @@ class ToolRunner:
         first_update = ctx._first_update
         await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if body.done():
-            report = _ended(fnc_call, body, approval)
+            report = _ended(fnc_call, body)
             # in a VoiceTask's speech a `Completed` ends the task, once validated; from an
             # ordinary tool it is the call's output, with a reply
             if task and isinstance(report.outcome, ToolOutcomeCompleted):
@@ -141,7 +149,7 @@ class ToolRunner:
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
-            self._session._core.tool_update(fnc_call.call_id, _ended(fnc_call, task, approval))
+            self._session._core.tool_update(fnc_call.call_id, _ended(fnc_call, task))
 
         body.add_done_callback(_final)
         message, raw = first_update.result()
@@ -170,49 +178,12 @@ async def _call(body: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[st
     return await out if inspect.isawaitable(out) else out
 
 
-async def _read_back(
-    tool: FunctionTool, args: tuple[Any, ...], kwargs: dict[str, Any], approval: list[str]
-) -> InputRequired:
-    """The read-back of a call the person has not approved, asked as written. Transitional: the
-    voice path moves onto the core's approval gate with E-3 (the text path's is the core's)."""
-    if tool.info.read_back is not None:
-        question = tool.info.read_back(*args, **kwargs)
-        if inspect.isawaitable(question):
-            question = await question
-        if isinstance(question, InputRequired):
-            return question  # something is missing before there is anything to approve
-        approval.append("asked")
-        return InputRequired(str(question), verbatim=True)
-    approval.append("asked")
-    sig = inspect.signature(tool)
-    hints = get_type_hints(tool, include_extras=True)
-    bound = sig.bind_partial(*args, **kwargs)
-    shown = ", ".join(
-        f"{k}={v!r}"
-        for k, v in bound.arguments.items()
-        if k not in ("self", "cls")
-        and not is_context_type(hints.get(k, object), allow_subclasses=True)
-    )
-    description = tool.info.description or tool.info.name
-    plain = description.strip().split(". ", 1)[0].splitlines()[0].rstrip(".") or "this"
-    return InputRequired(
-        f"Please confirm: {plain} ({shown}). Yes or no?"
-        if shown
-        else f"Please confirm: {plain}. Yes or no?",
-        verbatim=True,
-    )
-
-
-def _ended(fnc_call: FunctionCall, task: asyncio.Task[Any], approval: list[Approval]) -> ToolReport:
+def _ended(fnc_call: FunctionCall, task: asyncio.Task[Any]) -> ToolReport:
     if task.cancelled():
-        report = ToolReport(outcome=ToolOutcomeCancelled())
-    elif (exc := task.exception()) is not None:
-        report = _outcome(fnc_call, None, exc)
-    else:
-        report = _outcome(fnc_call, task.result(), None)
-    if approval:
-        report = dataclasses.replace(report, approval=approval[0])
-    return report
+        return ToolReport(outcome=ToolOutcomeCancelled())
+    if (exc := task.exception()) is not None:
+        return _outcome(fnc_call, None, exc)
+    return _outcome(fnc_call, task.result(), None)
 
 
 def _outcome(fnc_call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:

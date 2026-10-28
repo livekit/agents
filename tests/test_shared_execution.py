@@ -292,6 +292,27 @@ async def test_a_tool_that_keeps_asking_for_a_retry_exhausts_its_retries(run: En
     assert len(model.requests) == 2
 
 
+async def test_arguments_that_never_validate_exhaust_the_tools_retries(run: Entrypoint) -> None:
+    ran: list[int] = []
+    model = Script(*[call("book", {"nights": 0}, f"c{i}") for i in range(4)])
+    agent = Agent(name="desk", instructions="Help", llm=model)
+
+    @agent.tool
+    async def book(ctx: RunContext, nights: Annotated[int, Field(ge=1)]) -> str:
+        """Book a room.
+
+        Args:
+            nights: How many nights.
+        """
+        ran.append(nights)
+        return "booked"
+
+    with pytest.raises(UnexpectedModelBehavior, match="book"):
+        await run(agent, "Book")
+    assert ran == []
+    assert len(model.requests) == 2
+
+
 async def test_the_next_turn_sees_the_previous_exchange(run: Entrypoint) -> None:
     model = Script(Reply("Hi Ada."), Reply("Your name is Ada."))
     agent = Agent(name="desk", instructions="Help", llm=model)

@@ -166,8 +166,8 @@ pub enum ToolOutcome {
     Working(Option<String>),
 }
 
-/// How a call of a tool that requires approval went (`approval_scope`): it asked for approval
-/// with its read-back, or ran on the person's answer. Marked on the call for the next to read.
+/// How a call of a tool that requires approval went: it asked for approval with its read-back,
+/// or ran on the person's answer. Marked on the call for the next to read.
 #[crate::host(record(module = "tool_report", extract, emit))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,42 +176,73 @@ pub enum Approval {
     Granted,
 }
 
-/// The host's report of one run: its outcome, and how its approval went.
+/// The host's report of one run: its outcome.
 #[crate::host(record(module = "tool_report", extract))]
 #[derive(Debug, Clone)]
 pub struct ToolReport {
     pub outcome: ToolOutcome,
-    #[host(default = None)]
-    pub approval: Option<Approval>,
-    /// The `InputRequired` itself, the output of a run that ends on this call's speech; for a
-    /// `Completed` from a VoiceTask's tool, the value the host validated, which ends the task.
+    /// For a `Completed` from a VoiceTask's tool, the value the host validated, which ends the
+    /// task.
     #[host(default = None)]
     pub transition: Option<crate::HostRef>,
 }
 
 impl From<ToolOutcome> for ToolReport {
     fn from(outcome: ToolOutcome) -> Self {
-        ToolReport { outcome, approval: None, transition: None }
+        ToolReport { outcome, transition: None }
     }
 }
 
-/// `voice/tool_executor.py`'s `ToolRunner`, the only port on the generation path: runs one call
-/// and classifies what the body returned or raised. A report, not a decision; `lk-agents-voice`'s
-/// `tool_executor::answer` owns the output.
+/// `voice/tool_executor.py`'s `ToolRunner`: the host work of a call on a call's speech. It binds
+/// and validates arguments, renders read-backs, runs bodies and classifies what they returned or
+/// raised. Reports, not decisions: `lk_agents_core::tool_calls` decides what runs and
+/// `lk-agents-voice`'s `tool_executor::answer` owns the output.
 #[crate::host(proxy(host = "livekit.agents.voice.tool_executor.ToolRunner"))]
 pub trait HostToolRunner: Send + Sync {
-    /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
-    /// whose `host` is the host's own object once it made one. `granted`: the call repeats a
-    /// read-back the person answered (`approval_granted`), so a tool that requires approval runs.
-    /// `task`: the speech is a `VoiceTask` agent's, so a `Completed` the body returns is
-    /// validated against the agent's `output_type` and reported with its value, which ends the
-    /// task.
+    /// The tool `name` as the model and the shared tool machine see it; `None` when this runner
+    /// has no function tool by that name.
+    #[host(await, name = "_core_describe")]
+    fn describe(
+        &self,
+        name: &str,
+    ) -> crate::BoxFuture<
+        '_,
+        Result<Option<crate::agent::FunctionToolInfo>, crate::errors::HostError>,
+    >;
+
+    /// Binds the call's arguments, as the framework parsed them with the schema's defaults, to
+    /// the tool's signature and validates them. `speech` is the call's speech as the host's
+    /// `SpeechHandle` sees it (`_core.SpeechHandle`), whose `host` is the host's own object once
+    /// it made one.
+    #[host(await, name = "_core_prepare")]
+    fn prepare(
+        &self,
+        call: &crate::FunctionCall,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        speech: &crate::CoreObject,
+    ) -> crate::BoxFuture<
+        '_,
+        Result<
+            Result<crate::agent::PreparedArguments, crate::agent::ToolArgumentError>,
+            crate::errors::HostError,
+        >,
+    >;
+
+    /// The tool's read-back function on the prepared arguments.
+    #[host(await, name = "_core_read_back")]
+    fn read_back(
+        &self,
+        prepared: &crate::HostRef,
+    ) -> crate::BoxFuture<'_, Result<crate::agent::ReadBackAnswer, crate::errors::HostError>>;
+
+    /// Runs the body on the prepared arguments; `call` carries its approval marks. `task`: the
+    /// speech is a `VoiceTask` agent's, so a `Completed` the body returns is validated against
+    /// the agent's `output_type` and reported with its value, which ends the task.
     #[host(await, name = "_core_run")]
     fn run(
         &self,
+        prepared: &crate::HostRef,
         call: &crate::FunctionCall,
-        speech: &crate::CoreObject,
-        granted: bool,
         task: bool,
     ) -> crate::BoxFuture<'_, Result<ToolReport, crate::errors::HostError>>;
 
@@ -229,12 +260,11 @@ impl dyn HostToolRunner {
     /// output, asking for a reply, whatever value the host handed with it.
     pub async fn answer(
         &self,
+        prepared: &crate::HostRef,
         call: &crate::FunctionCall,
-        speech: &crate::CoreObject,
-        granted: bool,
         task: bool,
     ) -> ToolReport {
-        let mut report = self.run(call, speech, granted, task).await.unwrap_or_else(|e| {
+        let mut report = self.run(prepared, call, task).await.unwrap_or_else(|e| {
             log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
                 "the tool executor failed outside the tool's own error handling: {e}");
             ToolOutcome::Internal.into()

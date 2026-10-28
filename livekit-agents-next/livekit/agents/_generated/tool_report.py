@@ -126,18 +126,17 @@ only classifies; the outcome table in `lk-agents-core` decides what it means.
 
 
 Approval: TypeAlias = Literal["asked", "granted"]
-"""How a call of a tool that requires approval went (`approval_scope`): it asked for approval
-with its read-back, or ran on the person's answer. Marked on the call for the next to read.
+"""How a call of a tool that requires approval went: it asked for approval with its read-back,
+or ran on the person's answer. Marked on the call for the next to read.
 """
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ToolReport:
-    """The host's report of one run: its outcome, and how its approval went."""
+    """The host's report of one run: its outcome."""
 
     outcome: ToolOutcome
-    approval: Approval | None = None
     transition: object | None = None
-    """The `InputRequired` itself, the output of a run that ends on this call's speech; for a
-    `Completed` from a VoiceTask's tool, the value the host validated, which ends the task.
+    """For a `Completed` from a VoiceTask's tool, the value the host validated, which ends the
+    task.
     """

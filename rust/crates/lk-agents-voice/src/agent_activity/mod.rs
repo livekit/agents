@@ -581,8 +581,6 @@ impl Driver {
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
-        let mut item = item;
-        crate::tool_executor::mark_granted(&self.session.approvals, &mut item);
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
         self.perform_commit(commit, out);
     }
@@ -594,7 +592,6 @@ impl Driver {
         let (source, visibility, agent) =
             (entry.source.clone(), entry.visibility, entry.agent.clone());
         let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
-        crate::tool_executor::note_approval(&mut self.session.approvals, &entry.item);
         if entry.visibility.history() {
             let run = self.run_of_item(&entry.source);
             out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
@@ -610,7 +607,6 @@ impl Driver {
 
     /// The speech is told, the host learns of a new item, the activity is republished.
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
-        crate::tool_executor::note_approval(&mut self.session.approvals, &entry.item);
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));

@@ -74,7 +74,7 @@ if TYPE_CHECKING:
     from .agent import Agent
     from .agent_run import _TextRun
 
-__all__ = ["AgentHost", "ToolArgumentError"]
+__all__ = ["AgentHost", "ToolArgumentError", "prepare_arguments", "render_read_back"]
 
 
 class ToolArgumentError(Exception):
@@ -85,10 +85,57 @@ class ToolArgumentError(Exception):
 class _Prepared:
     """A call's validated arguments, held by the runtime between preparation and the body."""
 
-    tool: FunctionTool[..., Awaitable[Any]] | RawFunctionTool[..., Awaitable[Any]]
+    tool: FunctionTool[..., Any] | RawFunctionTool[..., Any]
     ctx: RunContext[Any]
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
+
+
+def prepare_arguments(
+    tool: FunctionTool[..., Any] | RawFunctionTool[..., Any],
+    arguments: dict[str, Any],
+    ctx: RunContext[Any],
+) -> PreparedArguments:
+    """Binds a call's arguments (the framework's parse, with the schema's defaults) to the tool's
+    signature and validates them, for a run and on a call alike: the prepared call and the
+    identity approval binds to (the validated arguments as JSON, decision 15). Raises
+    ``ToolArgumentError`` with the model's feedback."""
+    from .agent_tool import _LocalAgentTool
+
+    name = ctx.function_call.name
+    try:
+        fields = (
+            tool.validate(arguments)
+            if isinstance(tool, _LocalAgentTool)
+            else validated_arguments(tool, arguments)
+        )
+    except (ValidationError, ValueError, TypeError) as e:
+        raise ToolArgumentError(f"Error parsing arguments for `{name}`: {e}") from e
+    args, kwargs = (
+        ((), fields)
+        if isinstance(tool, _LocalAgentTool)
+        else bind_function_arguments(tool, fields, ctx)
+    )
+    identified = {k: v for k, v in fields.items() if k != CONFIRM_DUPLICATE_PARAM}
+    identity: ArgumentIdentity
+    try:
+        identity = ArgumentIdentityJson(value=to_jsonable_python(identified))
+    except PydanticSerializationError:
+        # no JSON for these arguments: a fresh fingerprint matches no earlier read-back, so the
+        # call can never be approved by mistake
+        identity = ArgumentIdentityFingerprint(value=uuid.uuid4().hex)
+    return PreparedArguments(prepared=_Prepared(tool, ctx, args, kwargs), identity=identity)
+
+
+async def render_read_back(prepared: _Prepared) -> ReadBackAnswer:
+    """The tool's read-back function on the prepared arguments."""
+    assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
+    question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
+    if inspect.isawaitable(question):
+        question = await question
+    if isinstance(question, InputRequired):
+        return ReadBackAnswerInputRequired(question=question.question, verbatim=question.verbatim)
+    return ReadBackAnswerQuestion(question=str(question))
 
 
 class AgentHost:
@@ -118,52 +165,19 @@ class AgentHost:
     async def prepare_tool(
         self, invocation: Invocation, arguments: dict[str, Any]
     ) -> PreparedArguments:
-        """Binds and validates the call's arguments in the call's scope; the prepared call and
-        the identity approval binds to (the validated arguments as JSON, decision 15)."""
+        """Binds and validates the call's arguments in the call's scope (``prepare_arguments``)."""
         async with self._operation(invocation):
             run = _current_run()
             call = _function_call(invocation)
             tool = run.tools.get_function_tool(call.name)
             if tool is None:
                 raise ToolArgumentError(f"unknown tool `{call.name}`")
-            ctx = RunContext[Any](function_call=call, run=run)
-            from .agent_tool import _LocalAgentTool
-
-            try:
-                fields = (
-                    tool.validate(arguments)
-                    if isinstance(tool, _LocalAgentTool)
-                    else validated_arguments(tool, arguments)
-                )
-            except (ValidationError, ValueError, TypeError) as e:
-                raise ToolArgumentError(f"Error parsing arguments for `{call.name}`: {e}") from e
-            args, kwargs = (
-                ((), fields)
-                if isinstance(tool, _LocalAgentTool)
-                else bind_function_arguments(tool, fields, ctx)
-            )
-            identified = {k: v for k, v in fields.items() if k != CONFIRM_DUPLICATE_PARAM}
-            identity: ArgumentIdentity
-            try:
-                identity = ArgumentIdentityJson(value=to_jsonable_python(identified))
-            except PydanticSerializationError:
-                # no JSON for these arguments: a fresh fingerprint matches no earlier read-back,
-                # so the call can never be approved by mistake
-                identity = ArgumentIdentityFingerprint(value=uuid.uuid4().hex)
-            return PreparedArguments(prepared=_Prepared(tool, ctx, args, kwargs), identity=identity)
+            return prepare_arguments(tool, arguments, RunContext[Any](function_call=call, run=run))
 
     async def read_back(self, invocation: Invocation, prepared: _Prepared) -> ReadBackAnswer:
         """The tool's read-back function on the call's arguments."""
         async with self._operation(invocation):
-            assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
-            question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
-            if inspect.isawaitable(question):
-                question = await question
-            if isinstance(question, InputRequired):
-                return ReadBackAnswerInputRequired(
-                    question=question.question, verbatim=question.verbatim
-                )
-            return ReadBackAnswerQuestion(question=str(question))
+            return await render_read_back(prepared)
 
     async def run_tool(
         self, invocation: Invocation, prepared: _Prepared
@@ -217,7 +231,9 @@ class AgentHost:
                 logger.exception("the output validation failed")
                 return ValidatedOutputFailed(error=f"{type(e).__name__}: {e}")
             try:
-                serialized: SerializedOutput | None = SerializedOutput(value=to_jsonable_python(value))
+                serialized: SerializedOutput | None = SerializedOutput(
+                    value=to_jsonable_python(value)
+                )
             except PydanticSerializationError:
                 serialized = None
             return ValidatedOutputAccepted(text=None, value=value, serialized=serialized)

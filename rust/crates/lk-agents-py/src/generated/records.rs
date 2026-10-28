@@ -405,7 +405,7 @@ pub mod agent_run {
             kwargs.set_item("application_context", match application_context { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             kwargs.set_item("function_call", match function_call { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => crate::generated::records::tool_report::approval_to_py(py, x)? })?;
             INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.call((), Some(&kwargs))
     }
 
@@ -2537,11 +2537,20 @@ pub mod tool_report {
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
 
     pub fn approval_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::tool_executor::Approval> {
-        obj.extract::<::lk_agents_abi::llm::tool_executor::Approval>()
+            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+            match &*value {
+                "asked" => Ok(::lk_agents_abi::llm::tool_executor::Approval::Asked),
+                "granted" => Ok(::lk_agents_abi::llm::tool_executor::Approval::Granted),
+                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("Approval: {other:?} is not one of 'asked', 'granted'"))),
+            }
     }
 
     pub fn approval_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::llm::tool_executor::Approval) -> PyResult<Bound<'py, PyAny>> {
-        ::pyo3::IntoPyObjectExt::into_bound_py_any(value, py)
+            let value = match value {
+                ::lk_agents_abi::llm::tool_executor::Approval::Asked => "asked",
+                ::lk_agents_abi::llm::tool_executor::Approval::Granted => "granted",
+            };
+            Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.

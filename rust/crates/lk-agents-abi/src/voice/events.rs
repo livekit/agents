@@ -753,16 +753,28 @@ pub struct RunRefusedWire {
 pub struct RunSettledWire {
     /// The host's object for the run (its `RunResult`).
     pub run: Option<crate::HostRef>,
-    /// `RunOutcome::as_str`: `"completed"`, `"failed"` or `"closed"`.
+    /// `RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`.
     pub outcome: String,
     /// The interned object a tool handed `AgentTask.complete()`, resolved; `None` otherwise.
     pub final_output: Option<crate::HostRef>,
+    /// What an `"input_required"` run asks the person.
+    pub question: Option<RunQuestion>,
     /// The exception a tool completed with, resolved; `None` otherwise.
     pub error: Option<crate::HostRef>,
     /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
     pub run_error: Option<crate::agent::run::RunError>,
     /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
     pub speech_handle: Option<crate::CoreObject>,
+}
+
+/// The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
+/// answer goes to `answer_tool` when one is named.
+#[derive(Debug, Clone, Host)]
+#[binding(emit)]
+pub struct RunQuestion {
+    pub question: String,
+    pub verbatim: bool,
+    pub answer_tool: Option<String>,
 }
 
 /// `speech_done`'s payload.

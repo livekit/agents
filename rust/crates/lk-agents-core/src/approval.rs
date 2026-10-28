@@ -77,8 +77,8 @@ pub fn canonical_json(value: &Value) -> String {
 /// by this invocation, and no earlier repeat consumed that answer. `items` are the calls decided
 /// before this one, in model order, with their outputs; `answered` identifies the pending calls
 /// this invocation answered when it started.
-pub fn granted(
-    items: &[ChatItem],
+pub fn granted<'a>(
+    items: impl IntoIterator<Item = &'a ChatItem>,
     answered: &BTreeSet<String>,
     tool: &str,
     identity: &str,

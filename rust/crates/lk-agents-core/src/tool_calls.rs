@@ -1,8 +1,9 @@
 //! The tool calls of one model step (rust-core "Shared tool execution"): parse and canonicalise
 //! the model's arguments, have the host prepare them, bind approval to the validated identity,
 //! admit duplicates per the tool's policy, run the body, and record each outcome as it arrives.
-//! Results are assembled in model order by the parent; waiting on one call never holds back
-//! another's lifecycle.
+//! Results are assembled in model order by the coordinator; waiting on one call never holds back
+//! another's lifecycle. `AgentRun` and VoiceSession compose the same machine: the coordinator
+//! executes its [`Effect`]s and returns the outcomes.
 
 use std::collections::BTreeSet;
 
@@ -13,14 +14,51 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::{Map, Value};
 
-use super::Effect;
-use super::result::CallId;
 use crate::agent::{self, FINAL_RESULT_TOOL, WRAPPED_RESULT_KEY};
+use crate::agent_run::CallId;
 use crate::approval;
 use crate::tool_outcome;
 use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
-use lk_agents_abi::agent::{AgentDefinition, OutputSpec, ReadBack};
+use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, ReadBack};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
+
+/// Host work for the coordinator. Every outcome-bearing effect is answered for its call.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    /// Bind and validate the arguments (framework-parsed, defaults applied) in the call's scope.
+    Prepare {
+        call: CallId,
+        arguments: Map<String, Value>,
+        function_call: FunctionCall,
+    },
+    /// Run the tool's read-back function on the prepared arguments.
+    ReadBack {
+        call: CallId,
+        tool: String,
+        prepared: ResourceId,
+    },
+    /// Run the body with the prepared arguments; `function_call` carries its approval marks.
+    Execute {
+        call: CallId,
+        prepared: ResourceId,
+        function_call: FunctionCall,
+    },
+    /// Cancel whatever host work the call has in flight.
+    Cancel {
+        call: CallId,
+    },
+    /// Prepared arguments no body will run with.
+    ReleaseArguments {
+        prepared: ResourceId,
+    },
+    Emit(StreamEvent),
+    /// Diagnostic: malformed model arguments were repaired.
+    ArgumentsRepaired {
+        call_id: String,
+        error: String,
+        repaired: Value,
+    },
+}
 
 /// The parameter the model sets to re-assert a call of an `on_duplicate="confirm"` tool.
 use lk_agents_abi::llm::provider_format::tools::CONFIRM_DUPLICATE_PARAM;
@@ -43,8 +81,10 @@ fn duplicate_text(tool: &str, running: &[&FunctionCall], confirm: bool) -> Strin
 }
 
 #[derive(Debug)]
-pub(super) struct ToolCalls {
+pub struct ToolCalls {
     calls: Vec<Call>,
+    /// The pending calls the invocation's incoming message answered: only these read-backs can
+    /// grant a repeat.
     approval_answers: BTreeSet<String>,
 }
 
@@ -82,100 +122,123 @@ enum Phase {
 }
 
 /// A call's recorded end.
-#[derive(Debug, Clone)]
-pub(super) struct Settled {
-    pub(super) outcome: ToolOutcome,
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settled {
+    pub outcome: ToolOutcome,
     /// Feedback that counts against the tool's retry budget: invalid or unknown arguments,
     /// `ModelRetry`.
-    pub(super) retry: bool,
+    pub retry: bool,
 }
 
 /// What [`ToolCalls::begin`] leaves to the parent.
-pub(super) struct FinalCandidate {
-    pub(super) call: CallId,
-    pub(super) value: Result<Value, String>,
+pub(crate) struct FinalCandidate {
+    pub(crate) call: CallId,
+    pub(crate) value: Result<Value, String>,
 }
 
 /// One settled call, in model order.
-pub(super) struct Recorded {
-    pub(super) id: CallId,
-    pub(super) item: FunctionCall,
-    pub(super) settled: Settled,
+pub struct Recorded {
+    pub id: CallId,
+    /// The call as recorded: its approval marks included.
+    pub item: FunctionCall,
+    pub settled: Settled,
 }
 
 impl ToolCalls {
-    /// Starts every call of a step. A call that cannot run settles at once; a `final_result`
-    /// call is returned as a candidate for the parent's output acceptance.
-    pub(super) fn begin(
+    /// Starts every call of an `AgentRun` step. A call that cannot run settles at once; a
+    /// `final_result` call is returned as a candidate for the parent's output acceptance.
+    pub(crate) fn begin<E: From<Effect>>(
         calls: Vec<(CallId, FunctionCall)>,
         agent: &AgentDefinition,
         approval_answers: &BTreeSet<String>,
-        fx: &mut Vec<Effect>,
+        fx: &mut Vec<E>,
     ) -> (ToolCalls, Vec<FinalCandidate>) {
-        let mut this = ToolCalls {
-            calls: Vec::with_capacity(calls.len()),
-            approval_answers: approval_answers.clone(),
-        };
+        let mut this = ToolCalls::new(approval_answers.clone());
         let mut finals = Vec::new();
         for (id, item) in calls {
-            let phase = if item.name == FINAL_RESULT_TOOL
+            if item.name == FINAL_RESULT_TOOL
                 && matches!(agent.output, OutputSpec::Structured { .. })
             {
                 finals
                     .push(FinalCandidate { call: id, value: final_value(agent, &item.arguments) });
-                Phase::Validating
+                this.calls.push(Call {
+                    id,
+                    item,
+                    phase: Phase::Validating,
+                    cancellation_requested: false,
+                });
             } else {
-                start(id, &item, agent, fx)
-            };
-            this.calls.push(Call { id, item, phase, cancellation_requested: false });
+                this.add(id, item, &agent.tools, fx);
+            }
         }
         (this, finals)
     }
 
-    pub(super) fn prepared(
+    /// A step whose calls may consume the read-backs answered by `approval_answers`.
+    pub fn new(approval_answers: BTreeSet<String>) -> Self {
+        ToolCalls { calls: Vec::new(), approval_answers }
+    }
+
+    /// Starts one call as the model makes it, against the tools its request offered: an unknown
+    /// tool or arguments that are not a JSON object settle at once as feedback.
+    pub fn add<E: From<Effect>>(
+        &mut self,
+        id: CallId,
+        item: FunctionCall,
+        tools: &[FunctionToolInfo],
+        fx: &mut Vec<E>,
+    ) {
+        let phase = start(id, &item, tools, fx);
+        self.calls.push(Call { id, item, phase, cancellation_requested: false });
+    }
+
+    /// The host prepared the call's arguments; `history` is what approval reads, the calls
+    /// decided before this step with their outputs. `false` when the call was not preparing.
+    pub fn prepared<'h, E: From<Effect>>(
         &mut self,
         id: CallId,
         prepared: ResourceId,
         identity: ArgumentIdentity,
-        agent: &AgentDefinition,
-        history: &[ChatItem],
-        fx: &mut Vec<Effect>,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        fx: &mut Vec<E>,
     ) -> bool {
         let Some(call) = self.call_mut(id) else { return false };
         let Phase::Preparing { confirmed } = call.phase else { return false };
         call.phase = Phase::Admitting { prepared, identity, confirmed };
-        self.admit(agent, history, fx);
+        self.admit(tools, history, fx);
         true
     }
 
-    pub(super) fn prepare_failed(
+    /// Binding or validation failed: the error is the model's feedback and counts as a retry.
+    pub fn prepare_failed<'h, E: From<Effect>>(
         &mut self,
         id: CallId,
         error: String,
-        agent: &AgentDefinition,
-        history: &[ChatItem],
-        fx: &mut Vec<Effect>,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
         if !matches!(call.phase, Phase::Preparing { .. }) {
             return;
         }
         settle(call, ToolOutcome::ToolError(error), true, fx);
-        self.admit(agent, history, fx);
+        self.admit(tools, history, fx);
     }
 
-    pub(super) fn read_back(
+    pub fn read_back<'h, E: From<Effect>>(
         &mut self,
         id: CallId,
         answer: Result<ReadBackAnswer, String>,
-        agent: &AgentDefinition,
-        history: &[ChatItem],
-        fx: &mut Vec<Effect>,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
         let Phase::ReadingBack { prepared, ref identity } = call.phase else { return };
         let canonical = approval::canonical(identity);
-        fx.push(Effect::ToolArgumentsRelease { prepared });
+        fx.push(Effect::ReleaseArguments { prepared }.into());
         let outcome = match answer {
             Ok(ReadBackAnswer::Question(question)) => {
                 approval::set_mark(&mut call.item, Approval::Asked, &canonical);
@@ -188,32 +251,36 @@ impl ToolCalls {
             Err(_) => ToolOutcome::Internal,
         };
         settle(call, outcome, false, fx);
-        self.admit(agent, history, fx);
+        self.admit(tools, history, fx);
     }
 
-    pub(super) fn progress(&mut self, id: CallId, message: String, fx: &mut Vec<Effect>) {
+    pub fn progress<E: From<Effect>>(&mut self, id: CallId, message: String, fx: &mut Vec<E>) {
         if let Some(call) = self.call_mut(id).filter(|c| matches!(c.phase, Phase::Running { .. })) {
-            fx.push(Effect::Emit(StreamEvent::Progress {
-                call_id: call.item.call_id.clone(),
-                tool_name: call.item.name.clone(),
-                message,
-            }));
+            fx.push(
+                Effect::Emit(StreamEvent::Progress {
+                    call_id: call.item.call_id.clone(),
+                    tool_name: call.item.name.clone(),
+                    message,
+                })
+                .into(),
+            );
         }
     }
 
-    pub(super) fn update_extra(&mut self, id: CallId, extra: Map<String, Value>) {
+    pub fn update_extra(&mut self, id: CallId, extra: Map<String, Value>) {
         let Some(call) = self.call_mut(id) else { return };
         if matches!(call.phase, Phase::Running { .. }) {
             call.item.extra.extend(extra);
         }
     }
 
-    /// The body's outcome. An update is progress: the tool runs on.
-    pub(super) fn body_settled(
+    /// The body's outcome; `true` when it reports a cancellation nobody asked for. An update
+    /// is progress: the tool runs on.
+    pub fn body_settled<E: From<Effect>>(
         &mut self,
         id: CallId,
         outcome: ToolOutcome,
-        fx: &mut Vec<Effect>,
+        fx: &mut Vec<E>,
     ) -> bool {
         if let ToolOutcome::Update { raw, .. } = outcome {
             self.progress(id, raw, fx);
@@ -230,11 +297,11 @@ impl ToolCalls {
     }
 
     /// The parent's verdict on a `final_result` candidate: `None` accepted.
-    pub(super) fn final_settled(
+    pub(crate) fn final_settled<E: From<Effect>>(
         &mut self,
         id: CallId,
         rejection: Option<String>,
-        fx: &mut Vec<Effect>,
+        fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
         if !matches!(call.phase, Phase::Validating) {
@@ -250,16 +317,16 @@ impl ToolCalls {
     }
 
     /// Cancels every call still in flight and returns the ones whose settlement is still owed.
-    pub(super) fn cancel(&mut self, fx: &mut Vec<Effect>) -> Vec<CallId> {
+    pub fn cancel<E: From<Effect>>(&mut self, fx: &mut Vec<E>) -> Vec<CallId> {
         let mut owed = Vec::new();
         for call in &mut self.calls {
             match call.phase {
                 Phase::Preparing { .. } | Phase::ReadingBack { .. } | Phase::Running { .. } => {
-                    fx.push(Effect::ToolCancel { call: call.id });
+                    fx.push(Effect::Cancel { call: call.id }.into());
                     owed.push(call.id);
                 }
                 Phase::Admitting { prepared, .. } => {
-                    fx.push(Effect::ToolArgumentsRelease { prepared });
+                    fx.push(Effect::ReleaseArguments { prepared }.into());
                     settle(call, ToolOutcome::Cancelled, false, fx);
                 }
                 Phase::Validating | Phase::Settled(_) => {}
@@ -268,11 +335,24 @@ impl ToolCalls {
         owed
     }
 
-    pub(super) fn all_settled(&self) -> bool {
+    /// The call as recorded so far, its approval marks included.
+    pub fn item(&self, id: CallId) -> Option<&FunctionCall> {
+        self.calls.iter().find(|c| c.id == id).map(|c| &c.item)
+    }
+
+    /// The call's settlement, once it has one.
+    pub fn settled(&self, id: CallId) -> Option<&Settled> {
+        match &self.calls.iter().find(|c| c.id == id)?.phase {
+            Phase::Settled(settled) => Some(settled),
+            _ => None,
+        }
+    }
+
+    pub fn all_settled(&self) -> bool {
         self.calls.iter().all(|c| matches!(c.phase, Phase::Settled(_)))
     }
 
-    pub(super) fn has_terminal_outcome(&self) -> bool {
+    pub(crate) fn has_terminal_outcome(&self) -> bool {
         self.calls.iter().any(|call| {
             matches!(&call.phase,
             Phase::Settled(settled) if matches!(settled.outcome,
@@ -281,7 +361,7 @@ impl ToolCalls {
         })
     }
 
-    pub(super) fn delegation_checkpoint(
+    pub(crate) fn delegation_checkpoint(
         &self,
         delegated: &[CallId],
         mode: tool_outcome::Mode,
@@ -318,7 +398,7 @@ impl ToolCalls {
     }
 
     /// The settled calls in model order.
-    pub(super) fn finish(self) -> Vec<Recorded> {
+    pub fn finish(self) -> Vec<Recorded> {
         self.calls
             .into_iter()
             .filter_map(|c| match c.phase {
@@ -334,7 +414,12 @@ impl ToolCalls {
 
     /// Decides every prepared call whose earlier calls of the same tool are decided, in model
     /// order: approval binds the validated identity, and a grant is consumed by the first repeat.
-    fn admit(&mut self, agent: &AgentDefinition, history: &[ChatItem], fx: &mut Vec<Effect>) {
+    fn admit<'h, E: From<Effect>>(
+        &mut self,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        fx: &mut Vec<E>,
+    ) {
         for index in 0..self.calls.len() {
             if !matches!(self.calls[index].phase, Phase::Admitting { .. }) {
                 continue;
@@ -352,18 +437,18 @@ impl ToolCalls {
             if undecided {
                 continue;
             }
-            self.decide(index, agent, history, fx);
+            self.decide(index, tools, history.clone(), fx);
         }
     }
 
-    fn decide(
+    fn decide<'h, E: From<Effect>>(
         &mut self,
         index: usize,
-        agent: &AgentDefinition,
-        history: &[ChatItem],
-        fx: &mut Vec<Effect>,
+        tools: &[FunctionToolInfo],
+        history: impl Iterator<Item = &'h ChatItem> + Clone,
+        fx: &mut Vec<E>,
     ) {
-        let Some(tool) = agent::tool(agent, &self.calls[index].item.name) else { return };
+        let Some(tool) = find(tools, &self.calls[index].item.name) else { return };
         let Phase::Admitting { prepared, ref identity, confirmed } = self.calls[index].phase else {
             return;
         };
@@ -371,23 +456,23 @@ impl ToolCalls {
         let canonical = approval::canonical(&identity);
         if let Some(read_back) = tool.needs_approval {
             // The history and this step's earlier decisions, the read-backs' answers included.
-            let mut decided: Vec<ChatItem> = history.to_vec();
-            decided
-                .extend(self.calls[..index].iter().map(|c| ChatItem::FunctionCall(c.item.clone())));
+            let earlier: Vec<ChatItem> = (self.calls[..index].iter())
+                .map(|c| ChatItem::FunctionCall(c.item.clone()))
+                .collect();
             let call = &mut self.calls[index];
-            if approval::granted(&decided, &self.approval_answers, &call.item.name, &canonical) {
+            let decided = history.map(|item| item).chain(&earlier);
+            if approval::granted(decided, &self.approval_answers, &call.item.name, &canonical) {
                 approval::set_mark(&mut call.item, Approval::Granted, &canonical);
             } else if read_back == ReadBack::Function {
-                fx.push(Effect::ReadBackRender {
-                    call: call.id,
-                    tool: call.item.name.clone(),
-                    prepared,
-                });
+                fx.push(
+                    Effect::ReadBack { call: call.id, tool: call.item.name.clone(), prepared }
+                        .into(),
+                );
                 call.phase = Phase::ReadingBack { prepared, identity };
                 return;
             } else {
                 approval::set_mark(&mut call.item, Approval::Asked, &canonical);
-                fx.push(Effect::ToolArgumentsRelease { prepared });
+                fx.push(Effect::ReleaseArguments { prepared }.into());
                 let question = approval::read_back(&tool.spec.description, &identity);
                 let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
                 return settle(call, outcome, false, fx);
@@ -413,7 +498,7 @@ impl ToolCalls {
             DuplicateMode::Replace => {
                 for &i in &running {
                     self.calls[i].cancellation_requested = true;
-                    fx.push(Effect::ToolCancel { call: self.calls[i].id });
+                    fx.push(Effect::Cancel { call: self.calls[i].id }.into());
                 }
                 None
             }
@@ -421,7 +506,7 @@ impl ToolCalls {
         if let Some(confirm) = refusal {
             let shown: Vec<&FunctionCall> = running.iter().map(|&i| &self.calls[i].item).collect();
             let text = duplicate_text(&tool.spec.name, &shown, confirm);
-            fx.push(Effect::ToolArgumentsRelease { prepared });
+            fx.push(Effect::ReleaseArguments { prepared }.into());
             return settle(&mut self.calls[index], ToolOutcome::ToolError(text), false, fx);
         }
         let call = &mut self.calls[index];
@@ -429,25 +514,35 @@ impl ToolCalls {
             ArgumentIdentity::Json(value) => value,
             ArgumentIdentity::Fingerprint(_) => Value::Null,
         };
-        fx.push(Effect::Emit(StreamEvent::ToolCall {
-            call_id: call.item.call_id.clone(),
-            tool_name: call.item.name.clone(),
-            arguments,
-        }));
-        fx.push(Effect::ToolExecute { call: call.id, prepared, function_call: call.item.clone() });
+        fx.push(
+            Effect::Emit(StreamEvent::ToolCall {
+                call_id: call.item.call_id.clone(),
+                tool_name: call.item.name.clone(),
+                arguments,
+            })
+            .into(),
+        );
+        fx.push(
+            Effect::Execute { call: call.id, prepared, function_call: call.item.clone() }.into(),
+        );
         call.phase = Phase::Running { identity: canonical };
     }
 }
 
 /// Parses a call's arguments and asks the host to prepare them; an unknown tool or arguments
 /// that are not a JSON object settle at once as feedback.
-fn start(id: CallId, item: &FunctionCall, agent: &AgentDefinition, fx: &mut Vec<Effect>) -> Phase {
-    let failed = |text: String, fx: &mut Vec<Effect>| {
+fn start<E: From<Effect>>(
+    id: CallId,
+    item: &FunctionCall,
+    tools: &[FunctionToolInfo],
+    fx: &mut Vec<E>,
+) -> Phase {
+    let failed = |text: String, fx: &mut Vec<E>| {
         let outcome = ToolOutcome::ToolError(text);
-        fx.push(result_event(item, &outcome));
+        fx.push(result_event(item, &outcome).into());
         Phase::Settled(Settled { outcome, retry: true })
     };
-    let Some(tool) = agent::tool(agent, &item.name) else {
+    let Some(tool) = find(tools, &item.name) else {
         return failed(format!("unknown tool `{}`", item.name), fx);
     };
     let parsed = match tool_arguments::parse(&item.arguments) {
@@ -455,11 +550,14 @@ fn start(id: CallId, item: &FunctionCall, agent: &AgentDefinition, fx: &mut Vec<
         Err(error) => return failed(error, fx),
     };
     if let Some(repair) = parsed.repair {
-        fx.push(Effect::ArgumentsRepaired {
-            call_id: item.call_id.clone(),
-            error: repair.error,
-            repaired: repair.repaired,
-        });
+        fx.push(
+            Effect::ArgumentsRepaired {
+                call_id: item.call_id.clone(),
+                error: repair.error,
+                repaired: repair.repaired,
+            }
+            .into(),
+        );
     }
     let mut arguments = parsed.arguments;
     let confirmed = match tool.on_duplicate {
@@ -471,8 +569,12 @@ fn start(id: CallId, item: &FunctionCall, agent: &AgentDefinition, fx: &mut Vec<
     if !tool.raw_schema {
         arguments = with_defaults(arguments, &tool.spec.json_schema);
     }
-    fx.push(Effect::ToolPrepare { call: id, arguments, function_call: item.clone() });
+    fx.push(Effect::Prepare { call: id, arguments, function_call: item.clone() }.into());
     Phase::Preparing { confirmed }
+}
+
+fn find<'a>(tools: &'a [FunctionToolInfo], name: &str) -> Option<&'a FunctionToolInfo> {
+    tools.iter().find(|t| t.spec.name == name)
 }
 
 /// The schema's defaults for omitted parameters: the framework's, applied before the host
@@ -515,8 +617,8 @@ fn value_outcome(text: &str) -> ToolOutcome {
     ToolOutcome::Value { text: text.to_owned(), reply_required: true, verbatim: false, more: None }
 }
 
-fn settle(call: &mut Call, outcome: ToolOutcome, retry: bool, fx: &mut Vec<Effect>) {
-    fx.push(result_event(&call.item, &outcome));
+fn settle<E: From<Effect>>(call: &mut Call, outcome: ToolOutcome, retry: bool, fx: &mut Vec<E>) {
+    fx.push(result_event(&call.item, &outcome).into());
     call.phase = Phase::Settled(Settled { outcome, retry });
 }
 
