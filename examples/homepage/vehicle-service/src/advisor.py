@@ -118,6 +118,7 @@ class Nick(Agent):
         if unheard := [
             w for w, token in self._must_hear.items() if not heard(items, token)
         ]:
+            self._must_hear[unheard[0]] = ctx.function_call.call_id
             raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
         if missing := self._unfinished():
             raise ToolError(f"Don't hang up yet: {missing}")
