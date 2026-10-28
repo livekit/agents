@@ -648,6 +648,53 @@ async def test_an_expert_never_answers_with_its_progress(
     assert silent.state == "completed" and silent.output == ""
 
 
+@pytest.mark.rule("R25", "B58")
+async def test_the_front_desk_reads_each_progress_line_of_a_delegation_once(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    """Under the live inbox on both sides, the expert's progress reaches the front desk's model
+    once, and no update without text does."""
+    back = Agent(
+        instructions="back office",
+        llm=ScriptedLLM(Reply(tool_calls=[call("book", "b1", day="monday")])),
+    )
+
+    @back.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a cleaning.
+
+        Args:
+            day: the day
+        """
+        await ctx.update("booking")
+        await asyncio.sleep(0.2)
+        return f"booked {day}"
+
+    async def back_office(ctx: A2ASessionContext[Any]) -> Any:
+        return await back.run(ctx.message, message_history=ctx.message_history)
+
+    model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="book monday")]))
+    front = Agent(
+        instructions="front desk",
+        llm=model,
+        tools=[expert(back_office, inbox="live", announce=False)],
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await front.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler, inbox="live")
+    await asyncio.wait_for(desk.send("book monday", context_id=await desk.thread()), 20)
+
+    updates = [
+        i.output
+        for i in model.requests[-1].items
+        if isinstance(i, llm.FunctionCallOutput) and i.call_id.startswith("a1")
+        if not i.call_id.endswith("_final")
+    ]
+    assert len(updates) == 1 and "message: booking" in updates[0]
+
+
 @pytest.mark.rule("R14")
 async def test_a_caller_that_gives_up_leaves_the_experts_task_running(
     door: Callable[..., Door], expert: Callable[..., A2ADelegate]

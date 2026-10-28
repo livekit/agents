@@ -49,6 +49,7 @@ def metadata_of(wire_object: dict[str, Any]) -> dict[str, Any]:
 
 
 NO_INTERRUPT: dict[str, Any] = {"livekit/interrupt": False}
+DELEGATION: dict[str, Any] = {"livekit/kind": "delegation"}
 BACKGROUND = "livekit/background"
 
 
@@ -341,7 +342,7 @@ class Booking:
 class Bookings:
     """A live desk: ``book`` reports progress (``silent`` to the model alone), waits for
     ``release[day]``, then books or asks ``asks[day]``; ``look`` waits silently; "one moment"
-    holds the lane until ``gate``."""
+    holds the lane until ``gate``. A ``delegated`` desk takes every message as a delegation."""
 
     def __init__(
         self,
@@ -352,8 +353,10 @@ class Bookings:
         flags: ToolFlag = ToolFlag.NONE,
         halfway: bool = False,
         silent: bool = False,
+        delegated: bool = False,
     ) -> None:
         self.model = model
+        self.delegated = delegated
         self.halfway, self.progressed = asyncio.Event(), asyncio.Event()
         self.release = {day: asyncio.Event() for day in days}
         self.ended: list[str] = []
@@ -404,7 +407,8 @@ class Bookings:
         )
 
     def send(self, text: str) -> asyncio.Task[Sent]:
-        return asyncio.create_task(self.door.send(text, context_id=self.thread))
+        metadata = DELEGATION if self.delegated else {}
+        return asyncio.create_task(self.door.send(text, context_id=self.thread, **metadata))
 
     async def in_the_background(self, count: int = 1) -> list[dict[str, Any]]:
         return await in_the_background(self.door, self.thread, count)
@@ -483,11 +487,15 @@ async def test_later_progress_is_sent_as_it_is_and_the_model_reads_it_with_the_e
     door: Callable[..., Door],
 ) -> None:
     desk = await bookings(
-        door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_update_1", "b1_final")), halfway=True
+        door,
+        *BOOK_MONDAY,
+        Reply("Booked.", when=told("b1_update_1", "b1_final")),
+        halfway=True,
+        delegated=True,
     )
     first = desk.send("book monday")
     await desk.in_the_background()
-    # the first progress ended the turn with no model request after it
+    # the first progress ended the delegated turn with no model request after it
     assert len(desk.model.requests) == 1
     desk.halfway.set()
     await asyncio.wait_for(desk.progressed.wait(), 20)
@@ -556,12 +564,13 @@ async def test_a_question_of_work_in_the_background_is_asked_and_its_task_waits(
     )
     first = desk.send("book monday")
     (task,) = await desk.in_the_background()
+    requests = len(desk.model.requests)
     desk.release["monday"].set()
     asked = await asyncio.wait_for(first, 20)
 
     # as on a call, the question is what the person gets, with no reply generated for it
     assert asked.state == "input_required" and asked.status_text == question
-    assert len(desk.model.requests) == 1
+    assert len(desk.model.requests) == requests
     answered = await desk.send("nine")
     assert answered.task["id"] == task["id"] and answered.answer == "Booked at nine."
 
@@ -587,7 +596,9 @@ async def test_a_reply_beside_the_call_is_the_only_acknowledgement(
 async def test_a_tool_that_ends_right_after_its_progress_is_called_once(
     door: Callable[..., Door],
 ) -> None:
-    desk = await bookings(door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_final")))
+    desk = await bookings(
+        door, *BOOK_MONDAY, Reply("Booked.", when=told("b1_final")), delegated=True
+    )
     desk.release["monday"].set()
     booked = await asyncio.wait_for(desk.send("book monday"), 20)
 
@@ -595,6 +606,19 @@ async def test_a_tool_that_ends_right_after_its_progress_is_called_once(
     assert desk.ended == ["monday"]
     assert booked.state == "completed" and booked.answer == "Booked."
     assert desk.model.tool_choices == [NOT_GIVEN, NOT_GIVEN]
+
+
+@pytest.mark.rule("R55", "R57")
+async def test_the_person_gets_the_reply_to_a_report(door: Callable[..., Door]) -> None:
+    """A turn facing the person words its progress, in a reply that calls no tools."""
+    desk = await bookings(door, *BOOK_MONDAY, Reply("Booking Monday now.", when=output_of("b1")))
+    first = desk.send("book monday")
+    (task,) = await desk.in_the_background()
+
+    assert task["status"]["message"]["parts"] == [{"text": "Booking Monday now."}]
+    assert desk.model.tool_choices == [NOT_GIVEN, "none"]
+    desk.release["monday"].set()
+    await asyncio.wait_for(first, 20)
 
 
 @pytest.mark.rule("R57")
@@ -735,6 +759,7 @@ async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
         *BOOK_MONDAY,
         Reply(hold=held, when=told("b1_final")),
         Reply("Fine.", when=said("never mind")),
+        delegated=True,
     )
     first = desk.send("book monday")
     await desk.in_the_background()
@@ -751,6 +776,30 @@ async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
     # the next turn's model reads the result, then the reply cut off before it said anything
     items = desk.model.requests[-1].items
     at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "b1_final")
+    reply = items[at + 2]
+    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
+    assert reply.interrupted and reply.content == [""]
+
+
+@pytest.mark.rule("R6")
+async def test_an_interrupt_before_the_reply_to_a_result_is_kept_as_interrupted(
+    door: Callable[..., Door],
+) -> None:
+    desk = await bookings(
+        door,
+        Reply(tool_calls=[call("look", "l1", day="monday")], when=said("look monday")),
+        Reply("Fine.", when=said("never mind")),
+    )
+    first = desk.send("look monday")
+    await asyncio.wait_for(desk.looking.wait(), 20)
+    second = desk.send("never mind")
+    await listed(desk.door, desk.thread, 2)
+    desk.release["monday"].set()
+    await asyncio.wait_for(asyncio.gather(first, second), 20)
+
+    # the result came back as the next message waited: its turn stopped before the reply
+    items = desk.model.requests[-1].items
+    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "l1")
     reply = items[at + 2]
     assert isinstance(reply, ChatMessage) and reply.role == "assistant"
     assert reply.interrupted and reply.content == [""]
@@ -846,7 +895,7 @@ async def test_a_cancel_stops_the_running_tool_after_its_protected_step(
 
 @pytest.mark.rule("R12")
 async def test_a_cancel_stops_work_in_the_background(door: Callable[..., Door]) -> None:
-    desk = await bookings(door, *BOOK_MONDAY)
+    desk = await bookings(door, *BOOK_MONDAY, delegated=True)
     first = desk.send("book monday")
     (task,) = await desk.in_the_background()
     answered = (await desk.door.cancel(task["id"], desk.thread))["result"]

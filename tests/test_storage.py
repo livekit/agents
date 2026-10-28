@@ -321,7 +321,7 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
     assert r1.task.data.metadata[INTERRUPTION_REASON_KEY] == "new-message"
     assert r1.task.data.artifacts is None and r1.output is None
     assert r2.task.status == "completed" and r2.output == "both answered"
-    # what ran is in the history, with no reply from the first turn
+    # what ran is in the history, and the first turn's reply is cut off before it began
     items = await history_items(a, sid, LANE)
     assert [i.type for i in items] == [
         "message",
@@ -329,7 +329,9 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
         "function_call_output",
         "message",
         "message",
+        "message",
     ]
+    assert items[3].interrupted and items[3].content == [""]
     assert items[-1].text_content == "both answered"
     assert set(await run_outcomes(a, sid)) == {"canceled", "completed"}
 
