@@ -5,6 +5,7 @@ pub mod chat_context;
 pub mod ctx_diff;
 pub mod events;
 pub mod fallback;
+pub mod inference;
 pub mod json_repair;
 pub mod llm;
 pub mod mcp;

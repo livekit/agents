@@ -23,6 +23,7 @@ pub struct ApiConnectOptionsError {
 /// `timeout` is the single limit of the providers not yet reading the phases (B-9 removes it with
 /// their migration); nothing that reads the phases reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Host)]
+#[host(host_type = "livekit.agents.types.APIConnectOptions")]
 #[binding(emit, extract)]
 pub struct ApiConnectOptions {
     /// Attempts after the first.

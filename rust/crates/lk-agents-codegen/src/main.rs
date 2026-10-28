@@ -1,8 +1,15 @@
 //! `cargo run -p lk-agents-codegen -- --write` (in `rust/`): read every `#[derive(Host)]` declaration, write every host's view.
 //! `--write` regenerates in place; `--check` exits 1 if any file would change (CI).
-//! The source lists are explicit, not a glob, so generated output never depends on file placement.
+//!
+//! Two readers during the migration to the declaration model: [`decl`] discovers the
+//! `#[host(class)]` declarations of `lk-agents-abi` and writes their pyo3 adapters
+//! ([`adapter`]) and stubs ([`class_stub`]); the families not yet moved are read from the explicit
+//! source lists below.
 
+mod adapter;
 mod bases;
+mod class_stub;
+mod decl;
 mod forward;
 mod ir;
 mod parse;
@@ -261,6 +268,10 @@ fn run(check: bool) -> Result<usize, String> {
     }
 
     let mut stale = 0;
+    let abi = decl::tree::Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
+    let declared = decl::resolve::declarations(&abi)?;
+    stale += put_dir(&root.join(adapter::DIR), &adapter::emit(&declared)?, check)?;
+    let class_stubs = class_stub::emit(&declared)?;
     let bases = bases::emit(&decls, &exposed)?;
     let with_bases = python::emit_with(&decls, &bases, &constants)?;
     let reference: Vec<ir::Decl> = decls
@@ -282,27 +293,23 @@ fn run(check: bool) -> Result<usize, String> {
         for out in &forward {
             stale += put(&python_root.join(&out.path), &out.text, check)?;
         }
-        if !check {
-            write_init(&python_root)?;
+        // The declared classes are the successor's: the reference keeps its own `_core`.
+        if package != REFERENCE_PACKAGE {
+            for out in &class_stubs {
+                stale += put(&python_root.join(&out.path), &out.text, check)?;
+            }
         }
+        stale += put(&python_root.join("__init__.py"), INIT, check)?;
     }
     Ok(stale)
 }
 
-/// Written every time so a fresh checkout imports, and the dir is never a namespace package.
-fn write_init(python_root: &Path) -> Result<(), String> {
-    let init = python_root.join("__init__.py");
-    std::fs::create_dir_all(python_root).map_err(|e| e.to_string())?;
-    std::fs::write(
-        &init,
-        "# GENERATED DIRECTORY -- every file here is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`).\n\
-         #\n\
-         # Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
-         # (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
-         # name here would move it in the public API too.\n",
-    )
-    .map_err(|e| e.to_string())
-}
+/// The generated package's `__init__.py`, so the directory is never a namespace package.
+const INIT: &str = "# GENERATED DIRECTORY -- every file here is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`).\n\
+#\n\
+# Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
+# (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
+# name here would move it in the public API too.\n";
 
 /// Returns 1 when the file on disk differs from what would be written.
 fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {
@@ -318,6 +325,30 @@ fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote  {}", path.display());
     Ok(0)
+}
+
+/// `outs` are the whole of `dir`: any other file there is obsolete, reported by `--check` and
+/// deleted by `--write`.
+fn put_dir(dir: &Path, outs: &[python::Out], check: bool) -> Result<usize, String> {
+    let mut stale = 0;
+    for out in outs {
+        stale += put(&dir.join(&out.path), &out.text, check)?;
+    }
+    for entry in std::fs::read_dir(dir).into_iter().flatten() {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let known = outs.iter().any(|o| dir.join(&o.path) == path);
+        if known {
+            continue;
+        }
+        if check {
+            eprintln!("OBSOLETE  {}", path.display());
+            stale += 1;
+        } else {
+            std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            println!("removed  {}", path.display());
+        }
+    }
+    Ok(stale)
 }
 
 /// Every `Ty::Declared` names a type in the set. Checked after all files (forward references are

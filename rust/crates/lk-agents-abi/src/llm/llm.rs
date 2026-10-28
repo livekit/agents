@@ -3,49 +3,32 @@
 
 use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
 use async_trait::async_trait;
+use lk_agents_host_derive::Host;
 use crate::errors::ProviderError;
 use crate::utils::stream::StreamSource;
 
-/// Plain data: reflection and invocation stay Python.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
+#[derive(Debug, Clone, PartialEq, Eq, Host)]
+#[binding(extract, from_items)]
 pub struct ToolSpec {
     pub name: String,
-    /// `None` reads as the empty string; an absent key is an error.
+    #[binding(default)]
     pub description: String,
-    /// A missing key raises (a null `parameters` is rejected by every provider); `None` reads as
-    /// `{}`.
     pub json_schema: serde_json::Value,
+    #[binding(flatten)]
     pub flags: ToolFlags,
 }
 
 /// A struct, not an enum, so axes don't exclude each other.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
+#[binding(fields_only)]
 pub struct ToolFlags {
-    /// Must not fire on the turn its `beta/` task is entered (`dob.py`). `None` reads as `False`.
+    /// Must not fire on the turn its `beta/` task is entered (`dob.py`).
+    #[binding(default)]
     pub ignore_on_enter: bool,
 }
 
-/// Every key required.
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{item, item_with, or_default, value_from_py};
-        use pyo3::types::PyAnyMethods as _;
-        const OWNER: &str = "ToolSpecFromPy";
-        let obj = &*obj;
-        Ok(ToolSpec {
-            name: item(obj, OWNER, "name")?,
-            description: item_with(obj, OWNER, "description", |v| or_default(v))?,
-            json_schema: item_with(obj, OWNER, "json_schema", |v| {
-                if v.is_none() { Ok(serde_json::Value::Object(serde_json::Map::new())) } else { value_from_py(v, "json_schema") }
-            })?,
-            flags: ToolFlags { ignore_on_enter: item_with(obj, OWNER, "ignore_on_enter", |v| or_default(v))? },
-        })
-    }
-}
-
+#[crate::host(handwritten(extract, emit, host = "str | dict[str, object]"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolChoice {
     Auto,
@@ -291,6 +274,7 @@ pub trait Llm: Send + Sync {
     async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError>;
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The completion's drain half: the same [`StreamSource`] every other leg hands out. Handed to the
 /// host as `InferenceLlmStream`.
 #[crate::host(stream(name = "InferenceLlmStream", doc = "One in-flight completion.", output = LlmChunk))]

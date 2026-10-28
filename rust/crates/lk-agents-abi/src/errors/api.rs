@@ -102,6 +102,7 @@ impl TimeoutPhase {
 }
 
 /// `body` stays on the Python object.
+#[crate::host(error(with = api_error_to_py))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ApiError {
@@ -113,6 +114,12 @@ pub struct ApiError {
     pub request_id: Option<String>,
     /// [`ApiErrorKind::Timeout`] only.
     pub phase: Option<TimeoutPhase>,
+}
+
+/// Raises the `APIError` subclass of `kind`.
+#[cfg(feature = "python")]
+pub fn api_error_to_py(error: ApiError) -> pyo3::PyErr {
+    crate::python::provider_error_to_py(super::ProviderError::Local(error))
 }
 
 impl ApiError {

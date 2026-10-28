@@ -131,7 +131,7 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                         "stream" => out.streams.push(stream(label, &e.ident, &m)?),
                         // The binding maps the error itself; the wire strings are Rust side
                         // only: the enum crosses by its own impls, if at all.
-                        "error" | "wire_strs" => {}
+                        "error" | "wire_strs" | "handwritten" => {}
                         other => {
                             return Err(format!(
                                 "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
@@ -172,8 +172,8 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
             }
             syn::Item::Trait(tr) => {
                 let Some(m) = host_attr_strict(label, &tr.attrs)? else { continue };
-                // A native-only trait has no host surface to describe.
-                if m.first().is_some_and(|x| x.key.split('.').next() == Some("native")) {
+                // A native-only trait has no host surface to describe; a class is `decl`'s.
+                if m.first().is_some_and(|x| matches!(x.key.split('.').next(), Some("native" | "class"))) {
                     continue;
                 }
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;

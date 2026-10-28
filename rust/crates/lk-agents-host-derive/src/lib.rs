@@ -179,6 +179,8 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// | `export` | free fn, const, or an associated const in a plain `impl` | a `#[pyfunction]` (an UPPER_CASE const: a module attribute) |
 /// | `object` | inherent `impl` | `#[pymethods]` on the type's class, or a cell class over it |
 /// | `proxy` | trait | `impl Trait for Py<Trait><B: HostBridge>`: the core calling a host object |
+/// | `class` | trait | nothing: a declaration-model class (`lk-agents-codegen`'s `decl`), adapters generated |
+/// | `handwritten` | a type | nothing: declares that it crosses by its own pyo3 conversions |
 /// | `stream` | the source type of a stream pair | the Rust->host stream class (`recv`/`aclose`/`push`..) |
 /// | `client` / `kwargs` | a config struct | a keyword constructor / a keyword-spread parameter |
 /// | `error` | an error enum or struct | its `HostException`: every wrapper returning it raises through it |
@@ -214,7 +216,7 @@ pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native` on a trait, \
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class` on a trait, `handwritten` on a type, \
     `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, `constant` on a `pub const` (written into its file's Python module), or `group` on an inline mod";
 
@@ -233,7 +235,8 @@ fn expand_host(
         (&parsed, head.as_deref()),
         (I::Fn(_) | I::Const(_) | I::Impl(_), Some("export"))
             | (I::Impl(_), Some("object"))
-            | (I::Trait(_), Some("proxy" | "native"))
+            | (I::Trait(_), Some("proxy" | "native" | "class"))
+            | (I::Enum(_) | I::Struct(_), Some("handwritten"))
             | (I::Type(_) | I::Struct(_), Some("stream"))
             | (I::Struct(_), Some("client" | "kwargs"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
@@ -362,9 +365,13 @@ fn strip(item: &mut syn::Item, group: bool) {
         syn::Item::Trait(t) => {
             t.attrs.retain(|a| !a.path().is_ident("python"));
             for inner in &mut t.items {
-                if let syn::TraitItem::Fn(f) = inner {
-                    clean(&mut f.attrs);
-                    params(&mut f.sig.inputs);
+                match inner {
+                    syn::TraitItem::Fn(f) => {
+                        clean(&mut f.attrs);
+                        params(&mut f.sig.inputs);
+                    }
+                    syn::TraitItem::Type(t) => clean(&mut t.attrs),
+                    _ => {}
                 }
             }
         }
