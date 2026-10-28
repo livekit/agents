@@ -9,11 +9,11 @@ pub mod env;
 // Conversation judges: model calls run concurrently on one conversation (decision 79).
 pub mod evals;
 
-pub mod provider;
 pub mod creds;
 pub mod extra;
 pub mod headers;
 pub mod ids;
+pub mod provider;
 // The two model-backed detectors: same credentials and transport as the providers below.
 pub mod eot;
 pub mod interruption;
@@ -32,15 +32,13 @@ pub mod avatar;
 
 pub mod llm;
 // `_core`'s inference lookups, declared in ABI.
-pub mod models;
 pub mod local_models;
+pub mod models;
 pub mod stt;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
-pub mod token;
 pub mod tts;
 pub mod vad;
-
 
 #[cfg(feature = "python")]
 pub(crate) mod python;
@@ -55,7 +53,6 @@ pub use headers::{
 };
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
 pub use llm::models::{drop_unsupported_params, min_reasoning_effort};
-pub use token::{TokenError, create_access_token};
 
 /// This crate, under the name every other crate calls it by, so `#[derive(Host)]` paths resolve
 /// here too.

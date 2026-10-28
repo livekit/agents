@@ -789,20 +789,14 @@ async fn the_handshake_uses_a_ws_url_a_bearer_token_and_the_hosts_session_id() {
         .find_map(|(name, value)| (name == "Authorization").then(|| value.strip_prefix("Bearer ")))
         .flatten()
         .expect("a bearer token");
-    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
-    validation.validate_aud = false;
-    validation.set_required_spec_claims::<&str>(&[]);
-    let claims = jsonwebtoken::decode::<serde_json::Value>(
-        token,
-        &jsonwebtoken::DecodingKey::from_secret(cloud_options().api_secret.as_bytes()),
-        &validation,
-    )
-    .unwrap()
-    .claims;
-    assert_eq!(claims["inference"]["perform"], serde_json::json!(true));
-    assert_eq!(claims["sub"], serde_json::json!("agent"));
-    assert_eq!(claims["iss"], serde_json::json!(cloud_options().api_key));
-    assert_eq!(claims["exp"].as_u64().unwrap() - claims["nbf"].as_u64().unwrap(), 600);
+    let options = cloud_options();
+    let claims = livekit_token::TokenVerifier::with_api_key(&options.api_key, &options.api_secret)
+        .verify(token)
+        .unwrap();
+    assert!(claims.inference.perform);
+    assert_eq!(claims.sub, "agent");
+    assert_eq!(claims.iss, options.api_key);
+    assert_eq!(claims.exp - claims.nbf, 600);
     assert_eq!(fixture.transport.session_id(), None, "cleared once the connection is gone");
 }
 

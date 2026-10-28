@@ -50,16 +50,6 @@ async-trait.workspace = true
 tokio = { workspace = true }
 # The VAD stream's cancellation, shared by its sink, its source and its worker.
 tokio-util = { version = "0.7", features = ["rt"] }
-# `livekit-api` cannot express this token: its `Claims` carries no `kind` and no `inference`
-# (`livekit-api/src/access_token.rs`). That -- not the cost of the dependency -- is why the JWT is
-# minted here. `features = ["access-token"]` is three crates (`jsonwebtoken`, `hmac`, `signature`),
-# with no reqwest and no tokio. A PR adding both claims upstream is prepared
-# (DECISIONS-FOR-REVIEW N85); when it releases, PLAN.md A3 deletes this and the `jsonwebtoken`
-# dependency with it.
-# `default-features = false`, which turns off `use_pem` -- i.e. `pem` + `simple_asn1` +
-# `num-bigint`, the ASN.1/PEM reader for RSA and EC keys. This token is HS256 over
-# `EncodingKey::from_secret`, which never touches any of it.
-jsonwebtoken = { version = "9", default-features = false }
 # `shortuuid` is `uuid4().hex[:12]`, i.e. six random bytes hex-encoded; `rand` is the whole of it.
 rand = "0.9"
 base64 = { workspace = true }
@@ -72,7 +62,7 @@ base64 = { workspace = true }
 # socket from Python. A gate whose off-state silently disables the implementation is the same
 # mistake as leaving the work in the host: the build was green and the feature was absent.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
-# TLS crypto provider: `ring`, which the workspace already builds for `jsonwebtoken`. reqwest's plain
+# TLS crypto provider: `ring`, shared with the net transport. reqwest's plain
 # `rustls` feature would add `aws-lc-rs` (a 207 s cmake build, measured 2026-09-06) as a second
 # provider; `rustls-no-provider` plus this explicit `rustls` line keeps one.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -95,6 +85,7 @@ pbjson-types.workspace = true
 pyo3 = { workspace = true, optional = true }
 
 [dev-dependencies]
+livekit-token.workspace = true
 # The integration tests' fakes (`testkit`).
 lk-agents-inference = { path = ".", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }

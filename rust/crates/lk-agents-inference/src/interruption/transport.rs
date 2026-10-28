@@ -34,7 +34,7 @@ use crate::interruption::retry::{
     ConnectFailure, closed_unexpectedly, connect_error, session_create_failed,
 };
 use crate::interruption::{LABEL, MODEL, PROVIDER};
-use crate::token::{DEFAULT_TTL_SECS, create_access_token};
+use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 
 /// One connection's two halves.
@@ -62,7 +62,7 @@ impl Default for ConnectionConfig {
             conn_options: ApiConnectOptions::default(),
             transport: Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             headers: Arc::new(Vec::new),
-            token_ttl_secs: DEFAULT_TTL_SECS,
+            token_ttl_secs: INFERENCE_TOKEN_TTL.as_secs(),
         }
     }
 }
@@ -754,15 +754,17 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         )
     };
 
-    // The token's `iat`/`exp` come from the session clock's `wall()`.
-    let now_unix = ctx.clock.wall().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs();
-    let token = create_access_token(&api_key, &api_secret, ctx.config.token_ttl_secs, now_unix)
-        .map_err(|e| StreamError {
-            request: None,
-            error: ApiError::new(format!("failed to mint an inference access token: {e}"))
-                .with_retryable(false),
-            body: None,
-        })?;
+    let token = inference_bearer_with_ttl(
+        &api_key,
+        &api_secret,
+        Duration::from_secs(ctx.config.token_ttl_secs),
+    )
+    .map_err(|e| StreamError {
+        request: None,
+        error: ApiError::new(format!("failed to mint an inference access token: {e}"))
+            .with_retryable(false),
+        body: None,
+    })?;
 
     // An unusable URL is the caller's mistake, which no retry fixes.
     {

@@ -1,6 +1,4 @@
-//! The one [`WebSocketConnector`] that opens a real socket, over `tokio-tungstenite`. Binary
-//! (protobuf), so separate from [`lk_agents_net::websocket`]'s text transport, but it shares
-//! [`classify_tungstenite`](lk_agents_net::websocket::classify_tungstenite) for handshake statuses.
+//! Binary EOT protocol over the shared WebSocket transport.
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -10,8 +8,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::eot::cloud::{WebSocketConnector, WebSocketSink, WebSocketStream};
 use lk_agents_net::transport::TransportError;
 
-type Socket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type Socket = lk_agents_net::websocket::RawWebSocket;
 
 /// `aiohttp.ClientSession.ws_connect(url, headers=...)` (`transports.py:_connect_ws`).
 pub struct TungsteniteEotConnector;
@@ -24,19 +21,9 @@ impl WebSocketConnector for TungsteniteEotConnector {
         url: &str,
         headers: &[(String, String)],
     ) -> Result<(Box<dyn WebSocketSink>, Box<dyn WebSocketStream>), ApiError> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
-
-        let mut request = url.into_client_request().map_err(|e| connect_failed(url, e))?;
-        for (name, value) in headers {
-            let name = HeaderName::from_bytes(name.as_bytes()).map_err(header_failed)?;
-            let value = HeaderValue::from_str(value).map_err(header_failed)?;
-            request.headers_mut().insert(name, value);
-        }
-
-        let (socket, _response) = tokio_tungstenite::connect_async(request)
+        let socket = lk_agents_net::websocket::connect_with_limit(url, headers.to_vec(), None)
             .await
-            .map_err(|e| translate(lk_agents_net::websocket::classify_tungstenite(e)))?;
+            .map_err(translate)?;
         let (sink, stream) = socket.split();
         Ok((Box::new(TungsteniteEotSink { sink }), Box::new(TungsteniteEotStream { stream })))
     }
@@ -46,15 +33,6 @@ impl WebSocketConnector for TungsteniteEotConnector {
 /// recovery.
 fn translate(err: TransportError) -> ApiError {
     lk_agents_net::transport::connect_error("LiveKit turn detector", err).with_retryable(false)
-}
-
-fn connect_failed(url: &str, err: impl std::fmt::Display) -> ApiError {
-    translate(TransportError::Connect(format!("{url}: {err}")))
-}
-
-/// A header the host built that `http` will not accept; reported, not skipped.
-fn header_failed(err: impl std::fmt::Display) -> ApiError {
-    translate(TransportError::Connect(format!("invalid inference header: {err}")))
 }
 
 struct TungsteniteEotSink {
@@ -85,7 +63,9 @@ impl WebSocketStream for TungsteniteEotStream {
                     Some(Ok(Message::Binary(data))) => Some(Ok(data.to_vec())),
                     Some(Ok(Message::Close(_))) | None => None,
                     Some(Ok(_)) => continue,
-                    Some(Err(e)) => Some(Err(translate(lk_agents_net::websocket::classify_tungstenite(e)))),
+                    Some(Err(e)) => {
+                        Some(Err(translate(lk_agents_net::websocket::classify_tungstenite(e))))
+                    }
                 };
             }
         })
@@ -117,17 +97,21 @@ mod tests {
             .status(401)
             .body(Some(b"invalid inference grant".to_vec()))
             .expect("a response");
-        let err = translate(lk_agents_net::websocket::classify_tungstenite(WsError::Http(Box::new(response))));
+        let err = translate(lk_agents_net::websocket::classify_tungstenite(WsError::Http(
+            Box::new(response),
+        )));
         assert_eq!(err.status_code, Some(401));
         assert!(err.message.contains("invalid inference grant"));
         assert!(!err.retryable);
     }
 
-    // Catches: a header the host built being dropped instead of reported.
-    #[test]
-    fn an_unusable_header_fails_the_connection_rather_than_being_skipped() {
-        let err = header_failed("invalid HTTP header name");
-        assert!(err.message.contains("invalid inference header"));
-        assert!(!err.retryable);
+    #[tokio::test]
+    async fn an_unusable_header_fails_the_connection_rather_than_being_skipped() {
+        let error = TungsteniteEotConnector
+            .connect("ws://localhost", &[("invalid\nheader".into(), "value".into())])
+            .await
+            .err()
+            .expect("invalid header fails before connecting");
+        assert!(!error.retryable);
     }
 }

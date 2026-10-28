@@ -6,10 +6,19 @@ use livekit_token::{AccessToken, InferenceGrants, ObservabilityGrants};
 use lk_agents_abi::errors::ApiError;
 
 /// How long a gateway token lives; each request signs its own.
-const INFERENCE_TOKEN_TTL: Duration = Duration::from_secs(600);
+pub const INFERENCE_TOKEN_TTL: Duration = Duration::from_secs(600);
 
 /// The LiveKit Inference gateway's bearer: identity `agent`, allowed to perform inference.
 pub fn inference_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
+    inference_bearer_with_ttl(api_key, api_secret, INFERENCE_TOKEN_TTL)
+}
+
+/// An inference credential with the connection's requested lifetime.
+pub fn inference_bearer_with_ttl(
+    api_key: &str,
+    api_secret: &str,
+    ttl: Duration,
+) -> Result<String, ApiError> {
     if api_key.is_empty() {
         return Err(ApiError::new(
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable",
@@ -25,7 +34,7 @@ pub fn inference_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiEr
     AccessToken::with_api_key(api_key, api_secret)
         .with_identity("agent")
         .with_inference_grants(InferenceGrants::default().with_perform())
-        .with_ttl(INFERENCE_TOKEN_TTL)
+        .with_ttl(ttl)
         .to_jwt()
         .map_err(|e| {
             ApiError::new(format!("failed to sign the inference access token: {e}"))

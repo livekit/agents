@@ -65,7 +65,10 @@ pub use lk_agents_net::http::{QUOTA_HEADER_FIELDS, extract_quota_usage};
 /// [`extract_quota_usage`] over a response's header pairs, names matched case-insensitively.
 pub fn quota_usage(headers: Vec<(String, String)>) -> Vec<(&'static str, String)> {
     extract_quota_usage(|name| {
-        headers.iter().find(|(k, v)| k.eq_ignore_ascii_case(name) && !v.is_empty()).map(|(_, v)| v.as_str())
+        headers
+            .iter()
+            .find(|(k, v)| k.eq_ignore_ascii_case(name) && !v.is_empty())
+            .map(|(_, v)| v.as_str())
     })
 }
 
@@ -161,7 +164,9 @@ pub fn identification_headers(
 ) -> Headers {
     let base = match identification {
         Some(headers) => headers.clone(),
-        None => inference_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class, None, ""),
+        None => {
+            inference_headers(&user_agent(env!("CARGO_PKG_VERSION")), inference_class, None, "")
+        }
     };
     crate::llm::request::request_headers(base, provider)
 }
@@ -174,10 +179,8 @@ pub fn gateway_headers(
     api_key: &str,
     api_secret: &str,
 ) -> Result<Headers, lk_agents_abi::errors::ApiError> {
-    use crate::token::{DEFAULT_TTL_SECS, create_access_token, now_unix};
     let mut headers = identification_headers(identification, inference_class, provider);
-    let token = create_access_token(api_key, api_secret, DEFAULT_TTL_SECS, now_unix())
-        .map_err(|e| lk_agents_abi::errors::ApiError::new(e.to_string()))?;
+    let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
     headers.set("Authorization", format!("Bearer {token}"));
     Ok(headers)
 }

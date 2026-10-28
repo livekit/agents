@@ -10,14 +10,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
-use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock};
+use lk_agents_abi::{
+    ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock,
+};
 use prost::Message as _;
 use tokio::sync::mpsc;
 
-use crate::eot::{EotRequestId, EotWarning};
 use crate::eot::proto;
 use crate::eot::session::TransportPrediction;
 use crate::eot::transport::{EotTransport, PredictionSink};
+use crate::eot::{EotRequestId, EotWarning};
 
 /// `HEADER_SESSION_ID` (`_utils.py:21`): one per connection, and the request-id prefix.
 pub const HEADER_SESSION_ID: &str = "X-LiveKit-Session-ID";
@@ -196,17 +198,8 @@ impl CloudTransport {
         &self,
     ) -> Result<(Box<dyn WebSocketSink>, Box<dyn WebSocketStream>), ApiError> {
         let mut headers = (self.opts.headers)();
-        // `create_access_token(api_key, api_secret, ttl=600)` (`_utils.py:133`).
-        let token = crate::token::create_access_token(
-            &self.opts.api_key,
-            &self.opts.api_secret,
-            600,
-            crate::token::now_unix(),
-        )
-        .map_err(|e| {
-            ApiError::new(format!("failed to mint the turn detector access token: {e}"))
-                .with_retryable(false)
-        })?;
+        let token =
+            lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
         headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
         let session_id = headers
             .iter()
