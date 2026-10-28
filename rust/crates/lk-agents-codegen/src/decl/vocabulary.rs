@@ -5,9 +5,10 @@
 //! |---|---|---|
 //! | trait | `class(name = "X", native = Trait)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait |
 //! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind` |
-//! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`: the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
+//! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>` (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
+//! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error |
 //! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited; a failure is logged |
-//! | proxy method | `read_once` | a `fn(&self) -> T`: read when the proxy is taken from the host (a failure refuses the object), then answered from that value |
+//! | proxy method | `read_once` | a `fn(&self) -> T`: read when the proxy is taken from the host (a failure refuses the object), then answered from that value; `-> &T` lends it |
 //! | proxy method | `bind` | a `fn(&self, x: &X) -> Option<Arc<dyn Self>>`: a copy of the proxy passing `x` after the arguments of every awaited call; no host call |
 //! | proxy method | `bind(wrap = T)` | `bind`, the copy handed out as `T::bound(copy, x, clock)`: a native wrapper the core runs around the host object (a host STT's retry loop) |
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too); a call without one runs in the context the proxy captured when it was taken (the host's running loop and a copy of its context) |

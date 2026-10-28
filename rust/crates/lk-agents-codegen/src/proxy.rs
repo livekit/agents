@@ -80,12 +80,20 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let label = format!("{}.{}", p.rust_name, m.name);
     let params: Vec<String> =
         m.params.iter().map(|q| format!("{}: {}", q.name, param_type(q))).collect();
+    let receiver = if m.consumes { "self: ::std::boxed::Box<Self>" } else { "&self" };
     let sig = format!(
         "fn {}({})",
         m.rust_name,
-        std::iter::once("&self".to_owned()).chain(params).collect::<Vec<_>>().join(", ")
+        std::iter::once(receiver.to_owned()).chain(params).collect::<Vec<_>>().join(", ")
     );
     match m.kind {
+        ProxyCall::ReadOnce if m.lends => {
+            let lent = match &m.ret.ok {
+                Ty::Str => "&str".to_owned(),
+                t => format!("&{}", t.rust()),
+            };
+            return Ok(format!("    {sig} -> {lent} {{\n        &self.{}\n    }}\n", m.rust_name));
+        }
         ProxyCall::ReadOnce => {
             return Ok(format!(
                 "    {sig} -> {} {{\n        ::std::clone::Clone::clone(&self.{})\n    }}\n",
@@ -107,9 +115,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                     q.name
                 ),
             };
-            return Ok(format!("    {sig} -> {} {{\n        Some({out})\n    }}\n", m.ret.ok.rust()));
+            return Ok(format!(
+                "    {sig} -> {} {{\n        Some({out})\n    }}\n",
+                m.ret.ok.rust()
+            ));
         }
-        ProxyCall::Notify | ProxyCall::Await => {}
+        ProxyCall::Notify | ProxyCall::Await | ProxyCall::Call => {}
     }
     // Owned copies move into the call, which runs on the host's loop.
     let mut moved = String::new();
@@ -149,6 +160,16 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             m.ret.err.as_deref().unwrap_or_default()
         ),
     };
+    if m.kind == ProxyCall::Call {
+        let (ret, refused, wrap, err) = result_shape(m, &at)?;
+        let read = from_host("o", &m.ret.ok, &label, &at)?;
+        return Ok(format!(
+            "    {sig} -> {ret} {{\n{moved}        ::pyo3::Python::attach(|py| {{\n            // One place converts the call's failures to its declared error.\n            #[allow(clippy::redundant_closure_call)]\n            let out = (|| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n                self.host.bind(py).call_method1({:?}, ::pyo3::types::PyTuple::new(py, args)?)\n            }})();\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = &out;\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
+            args.len(),
+            args.join(", "),
+            m.name
+        ));
+    }
     // The call's own context, else the one the proxy captured.
     let context = match m.context {
         Some(i) => format!(
@@ -163,33 +184,36 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             "    {sig} {{\n{head}        let runtime = match ::lk_agents_runtime::process::handle() {{\n            Ok(runtime) => runtime,\n            Err(e) => {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n                return;\n            }}\n        }};\n        runtime.spawn(async move {{\n            let context = &context;\n            if let Err(e) = {call}.await {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n            }}\n        }});\n    }}\n",
         )),
         ProxyCall::Await => {
-            let err = m
-                .ret
-                .err
-                .as_ref()
-                .ok_or_else(|| format!("{at}: an awaited call declares its error"))?;
-            let ok = m.ret.ok.rust();
-            let (ret, refused, wrap) = match &m.ret.refusal {
-                None => (format!("::std::result::Result<{ok}, {err}>"), String::new(), "out"),
-                Some(r) => (
-                    format!(
-                        "::std::result::Result<::std::result::Result<{ok}, {}>, {err}>",
-                        r.rust
-                    ),
-                    format!(
-                        "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
-                        r.module, r.class, r.rust
-                    ),
-                    "Ok(out)",
-                ),
-            };
+            let (ret, refused, wrap, err) = result_shape(m, &at)?;
             let read = from_host("o", &m.ret.ok, &label, &at)?;
             Ok(format!(
                 "    async {sig} -> {ret} {{\n{head}        let context = &context;\n        let out = {call}.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n",
             ))
         }
-        ProxyCall::ReadOnce | ProxyCall::Bind => unreachable!("answered above"),
+        ProxyCall::ReadOnce | ProxyCall::Bind | ProxyCall::Call => unreachable!("answered above"),
     }
+}
+
+/// An awaited or called method's return type, the refusal check run on a host failure, the
+/// success value and the declared error.
+fn result_shape(
+    m: &ProxyMethod,
+    at: &str,
+) -> Result<(String, String, &'static str, String), String> {
+    let err = m.ret.err.as_ref().ok_or_else(|| format!("{at}: the call declares its error"))?;
+    let ok = m.ret.ok.rust();
+    Ok(match &m.ret.refusal {
+        None => (format!("::std::result::Result<{ok}, {err}>"), String::new(), "out", err.clone()),
+        Some(r) => (
+            format!("::std::result::Result<::std::result::Result<{ok}, {}>, {err}>", r.rust),
+            format!(
+                "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
+                r.module, r.class, r.rust
+            ),
+            "Ok(out)",
+            err.clone(),
+        ),
+    })
 }
 
 /// The trait's parameter type.

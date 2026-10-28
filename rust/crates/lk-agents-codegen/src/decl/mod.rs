@@ -124,7 +124,9 @@ impl Proxy {
     /// Some call has no `#[host(context)]` parameter: the proxy captures the host's context
     /// (running loop and a copy of its context) when it is taken, and those calls run in it.
     pub fn captures_context(&self) -> bool {
-        self.methods.iter().any(|m| m.context.is_none() && m.kind != ProxyCall::ReadOnce)
+        self.methods
+            .iter()
+            .any(|m| m.context.is_none() && matches!(m.kind, ProxyCall::Await | ProxyCall::Notify))
     }
 
     /// The parameter a `bind` method appends to every awaited call of its proxy.
@@ -148,6 +150,10 @@ pub struct ProxyMethod {
     /// `bind(wrap = T)`: the bound copy is handed out as `T::bound(copy, &x, clock)`, a native
     /// wrapper the core runs around it (the retry loop of a host STT).
     pub wrap: Option<String>,
+    /// `self: Box<Self>`: an awaited call that consumes the proxy.
+    pub consumes: bool,
+    /// `read_once` returning `&T`: lends the value the proxy read.
+    pub lends: bool,
 }
 
 /// How the core calls the host: declared, then checked against the signature.
@@ -155,6 +161,9 @@ pub struct ProxyMethod {
 pub enum ProxyCall {
     /// `async fn`: awaited; dropping the call cancels the host's task, which still settles.
     Await,
+    /// A sync `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL,
+    /// never awaiting; for a read the host answers at once (a room's connection state).
+    Call,
     /// A sync `fn` returning nothing: scheduled on the host and not awaited; a failure is logged.
     Notify,
     /// `fn(&self) -> T`: read from the host once, when the proxy is taken; a failure to read it

@@ -55,9 +55,10 @@ impl Resolver<'_> {
     fn proxy_method(&self, f: &syn::TraitItemFn, trait_path: &str) -> Result<ProxyMethod, String> {
         let at = format!("{}::{}", self.at, f.sig.ident);
         let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["await", "notify", "read_once", "bind", "name"])?;
+        voc::only(&at, &entries, &["await", "call", "notify", "read_once", "bind", "name"])?;
         let kinds = [
             ("await", ProxyCall::Await),
+            ("call", ProxyCall::Call),
             ("notify", ProxyCall::Notify),
             ("read_once", ProxyCall::ReadOnce),
             ("bind", ProxyCall::Bind),
@@ -67,23 +68,28 @@ impl Resolver<'_> {
             (Some((key, kind)), None) => (*key, *kind),
             _ => {
                 return Err(format!(
-                    "{at}: a proxy method declares exactly one of await, notify, read_once, bind"
+                    "{at}: a proxy method declares exactly one of await, call, notify, read_once, bind"
                 ));
             }
         };
-        let shared_receiver = f.sig.receiver().is_some_and(shared);
+        let receiver = f.sig.receiver();
+        // `self: Box<Self>`: the call consumes the proxy (a writer's close), awaited.
+        let consumes = receiver.is_some_and(boxed_self);
+        let shared_receiver =
+            receiver.is_some_and(shared) || (consumes && kind == ProxyCall::Await);
         let sync = f.sig.asyncness.is_none();
         let inputs = f.sig.inputs.iter().filter(|i| matches!(i, syn::FnArg::Typed(_))).count();
         let fits = shared_receiver
             && match kind {
                 ProxyCall::Await => !sync,
+                ProxyCall::Call => sync,
                 ProxyCall::Notify => sync && matches!(f.sig.output, syn::ReturnType::Default),
                 ProxyCall::ReadOnce => sync && inputs == 0,
                 ProxyCall::Bind => sync && inputs == 1,
             };
         if !fits {
             return Err(format!(
-                "{at}: the signature does not fit `{key}` (await: `async fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing; read_once: `fn(&self) -> T`; bind: `fn(&self, x: &X) -> Option<Arc<dyn Self>>`)"
+                "{at}: the signature does not fit `{key}` (await: `async fn(&self | self: Box<Self>, ..) -> Result<T, E>`; call: `fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing; read_once: `fn(&self) -> T` or `-> &T`; bind: `fn(&self, x: &X) -> Option<Arc<dyn Self>>`)"
             ));
         }
         let mut params = Vec::new();
@@ -118,14 +124,22 @@ impl Resolver<'_> {
             check_output(&pat, &ty)?;
             params.push(Param { name, ty, by_ref, kw_only: false, default: None });
         }
+        let mut lends = false;
         let ret = match kind {
             ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
-            ProxyCall::Await => self.proxy_ret(&f.sig.output, &at)?,
+            ProxyCall::Await | ProxyCall::Call => self.proxy_ret(&f.sig.output, &at)?,
             ProxyCall::ReadOnce => {
                 let syn::ReturnType::Type(_, t) = &f.sig.output else {
                     return Err(format!("{at}: read_once returns the value it reads"));
                 };
-                let ok = self.ty(t, &at)?;
+                // `-> &T` lends the value the proxy holds.
+                let ok = match &**t {
+                    syn::Type::Reference(r) if r.mutability.is_none() => {
+                        lends = true;
+                        self.borrowed(&r.elem, &at)?
+                    }
+                    t => self.ty(t, &at)?,
+                };
                 check_input(&at, &ok)?;
                 ProxyRet { ok, refusal: None, err: None }
             }
@@ -149,8 +163,14 @@ impl Resolver<'_> {
                 match voc::rust(&at, &bind.nested, "wrap")? {
                     None => None,
                     Some(t) => match self.shape(self.module, &t, &[], &at)? {
-                        Shape::Named { found: Found::Item { module, item }, args } if args.is_empty() => {
-                            Some(self.krate.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?)
+                        Shape::Named { found: Found::Item { module, item }, args }
+                            if args.is_empty() =>
+                        {
+                            Some(
+                                self.krate
+                                    .extern_path(module, item)
+                                    .map_err(|e| format!("{at}: {e}"))?,
+                            )
                         }
                         _ => return Err(format!("{at}: bind(wrap = T) names a crate type")),
                     },
@@ -166,6 +186,8 @@ impl Resolver<'_> {
             context,
             ret,
             wrap,
+            consumes,
+            lends,
         })
     }
 
@@ -227,4 +249,10 @@ fn optional_ref(t: &syn::Type) -> Option<&syn::Type> {
         }
         _ => None,
     }
+}
+
+/// `self: Box<Self>`.
+fn boxed_self(r: &syn::Receiver) -> bool {
+    r.reference.is_none()
+        && matches!(&*r.ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Box"))
 }

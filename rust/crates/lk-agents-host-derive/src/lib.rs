@@ -329,7 +329,7 @@ fn raised(attr: &proc_macro2::TokenStream) -> bool {
 }
 
 /// The method keys of a declared proxy (`lk-agents-codegen`'s `decl::vocabulary`).
-const PROXY_CALLS: &[&str] = &["await", "notify", "read_once", "bind"];
+const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 
 /// Some method declares how it is called: the trait is a declaration-model proxy.
 fn declared_proxy(t: &syn::ItemTrait) -> bool {

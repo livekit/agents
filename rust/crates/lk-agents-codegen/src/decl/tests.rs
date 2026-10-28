@@ -505,7 +505,7 @@ fn incomplete_proxy_declarations_fail_generation() {
         ),
         (
             "#[host(await, notify)] fn f(&self, #[host(context)] a: &Report);",
-            "exactly one of await, notify, read_once, bind",
+            "exactly one of await, call, notify, read_once, bind",
         ),
         (
             "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>; fn g(&self);",
@@ -719,4 +719,36 @@ fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
     assert!(llm.contains("tuple.get_item(1)?"), "{llm}");
     assert!(llm.contains("extract::<::lk_agents_abi::llm::chat::Chunk>()"), "{llm}");
     assert!(llm.contains("Value::Object(map) => Ok(map)"), "{llm}");
+}
+
+// Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
+// failure of a synchronous call turned into a default, a writer close that cannot consume its
+// proxy, or a borrowed participant read on every call instead of once when the room is taken.
+#[test]
+fn proxy_calls_consumes_and_lends_by_declaration() {
+    let decls = read(&proxy(
+        r#"
+        #[host(call)] fn state(&self, id: &str) -> Result<Chunk, HostError>;
+        #[host(await)] async fn close(self: Box<Self>) -> Result<(), HostError>;
+        #[host(read_once)] fn conn(&self) -> &Conn;
+        "#,
+    ))
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains("fn state(&self, id: &str) -> ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>")
+            && llm.contains("self.host.bind(py).call_method1(\"state\"")
+            && llm.contains("return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));"),
+        "{llm}"
+    );
+    assert!(llm.contains("async fn close(self: ::std::boxed::Box<Self>)"), "{llm}");
+    assert!(
+        llm.contains(
+            "fn conn(&self) -> &::lk_agents_abi::llm::chat::Conn {\n        &self.conn\n    }"
+        ) && llm.contains("obj.call_method0(\"conn\")"),
+        "{llm}"
+    );
+    let err = refuse_proxy("#[host(call)] fn state(&self) -> Chunk;");
+    assert!(err.contains("Result<T, E>"), "{err}");
 }

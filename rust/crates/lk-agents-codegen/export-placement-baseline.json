@@ -18,7 +18,7 @@
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::chat_for_host|host (method (name = \"chat\" , stream = lk_agents_abi :: InferenceLlmStream , kw_only = \"tools\" , defaults (tools = Vec :: new ())))",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::for_host::arg clock|host (ambient)",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::for_host::arg spawner|host (ambient)",
-  "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::for_host|host (new (kw_only = \"attempt_timeout\" , defaults (attempt_timeout = 5.0 , max_retry_per_llm = 0 , retry_interval = 0.5 , retry_on_chunk_sent = false , sticky = false)))",
+  "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::for_host|host (new (kw_only = \"attempt_timeout\" , defaults (attempt_timeout = 5.0 , max_retry_per_llm = 0 , retry_interval = 0.5 , sticky = false)))",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm|lk_agents_abi :: host (object (cell = \"arc\" , as_dyn (Llm = as_llm)))",
   "host|rust/crates/lk-agents-inference/src/fallback/realtime.rs|fn merge_capabilities_of|lk_agents_abi :: host (export (name = \"merge_realtime_capabilities\"))",
   "host|rust/crates/lk-agents-inference/src/fallback/stt.rs|fn stt_capabilities_for_host|lk_agents_abi :: host (export (name = \"stt_fallback_capabilities\" , pid = false))",

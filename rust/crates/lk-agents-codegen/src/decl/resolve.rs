@@ -878,7 +878,7 @@ fn declares_calls(tr: &syn::ItemTrait) -> bool {
 }
 
 /// The method keys of a declared proxy (`lk-agents-host-derive` reads the same list).
-const PROXY_CALLS: &[&str] = &["await", "notify", "read_once", "bind"];
+const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 
 /// A struct carrying `#[class]` (`#[crate::class]`, `#[lk_agents_abi::class]`).
 fn class_struct(item: &syn::Item) -> bool {
