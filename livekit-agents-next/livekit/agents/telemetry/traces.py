@@ -89,9 +89,9 @@ from .utils import REDACTED_EXCEPTION_MESSAGE
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import Event
 
+    from .._core import Tagger
     from ..job import JobContext, SessionReport
     from ..llm import ChatItem
-    from ..observability import Tagger
     from ..voice.agent_session import VoiceSession
 
 _SESSION_OPTION_KEY_ALIASES = {
@@ -1304,7 +1304,7 @@ async def _upload_session_report(
             "model_usage": [u.model_dump() for u in report.model_usage or []],
             "chat_history": to_core_items(report.chat_history.items),
         },
-        tagger._core,
+        tagger,
         lambda item: _chat_item_span_attribute(from_core_item(item)),
     )
     loggers: dict[str, Any] = {}

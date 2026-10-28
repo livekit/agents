@@ -122,7 +122,7 @@ impl UploadGate {
     }
 }
 
-/// Session tags and outcome used in job reports.
+/// Tag sessions with metadata for observability.
 #[napi(js_name = "Tagger")]
 pub struct Tagger {
     pub(crate) inner: lk_agents_abi::telemetry::report::Tagger,
@@ -155,11 +155,6 @@ impl Tagger {
         self.inner.remove(&tag);
     }
 
-    #[napi(js_name = "tags")]
-    pub fn tags(&self) -> Vec<String> {
-        self.inner.tags().map(|v| v.to_string()).collect::<Vec<_>>()
-    }
-
     #[napi(js_name = "sortedTags")]
     pub fn sorted_tags(&self) -> Vec<String> {
         self.inner.sorted_tags().into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
@@ -175,24 +170,24 @@ impl Tagger {
         self.inner.is_empty()
     }
 
-    #[napi(js_name = "evaluations")]
+    #[napi(getter, js_name = "evaluations")]
     pub fn evaluations(&self) -> Vec<crate::generated::records::EvaluationRecord> {
         self.inner.evaluations().iter().map(|v| crate::generated::records::EvaluationRecord::from(v)).collect::<Vec<_>>()
     }
 
-    #[napi(js_name = "outcome", ts_return_type = "'success' | 'fail' | null")]
+    #[napi(getter, js_name = "outcome", ts_return_type = "'success' | 'fail' | null")]
     pub fn outcome(&self) -> Option<String> {
         self.inner.outcome().map(|v| v.as_str().to_owned())
     }
 
-    #[napi(js_name = "outcomeReason")]
+    #[napi(getter, js_name = "outcomeReason")]
     pub fn outcome_reason(&self) -> Option<String> {
         self.inner.outcome_reason().map(|v| v.to_string())
     }
 
-    #[napi(js_name = "recordEvaluation")]
-    pub fn record_evaluation(&mut self, result: &crate::generated::objects::EvaluationResult) {
-        self.inner.record_evaluation(&result.inner);
+    #[napi(js_name = "_coreRecordJudgment")]
+    pub fn _core_record_judgment(&mut self, name: String, verdict: String, reasoning: String, instructions: String) {
+        self.inner.record_judgment(&name, &verdict, &reasoning, &instructions);
     }
 
     #[napi(js_name = "hasEvals")]

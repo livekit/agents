@@ -299,6 +299,7 @@ pub(super) fn rty(at: &str, t: &syn::Type, al: &Aliases) -> Res<RTy> {
                 "SystemTime" => RTy::SystemTime,
                 "Option" => RTy::Option(Box::new(one(0)?)),
                 "Vec" => RTy::Vec(Box::new(one(0)?)),
+                "BTreeSet" | "HashSet" => RTy::Set(Box::new(one(0)?)),
                 "Maybe" => RTy::Maybe(Box::new(one(0)?)),
                 "HashMap" => {
                     if one(0)? != RTy::Str {

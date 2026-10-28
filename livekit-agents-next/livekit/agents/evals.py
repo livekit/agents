@@ -738,7 +738,10 @@ class JudgeGroup:
         # Auto-tag if running within a job context
         try:
             ctx = get_job_context()
-            ctx.tagger._evaluation(evaluation_result)
+            for name, judgment in judgments.items():
+                ctx.tagger._core_record_judgment(
+                    name, judgment.verdict, judgment.reasoning, judgment.instructions
+                )
         except RuntimeError:
             pass  # Not in a job context, skip tagging
 

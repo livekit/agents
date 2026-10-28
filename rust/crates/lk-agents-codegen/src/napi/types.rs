@@ -75,6 +75,7 @@ pub(super) fn n_of_rty(cx: &Cx, t: &RTy) -> Result<N, String> {
         RTy::Vec(i) | RTy::IntoIter(i) => N::Vec(Box::new(n_of_rty(cx, i)?)),
         RTy::Slice(i) => N::Ref(Box::new(N::Vec(Box::new(n_of_rty(cx, i)?)))),
         RTy::Iter(i) => N::Iter(Box::new(n_of_rty(cx, i)?)),
+        RTy::Set(_) => return Err("not yet: a set (`BTreeSet`/`HashSet`) has no Node shape".to_owned()),
         RTy::Tuple(items) => {
             N::Tuple(items.iter().map(|i| n_of_rty(cx, i)).collect::<Result<_, _>>()?)
         }

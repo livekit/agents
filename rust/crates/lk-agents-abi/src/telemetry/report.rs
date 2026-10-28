@@ -1,6 +1,7 @@
 //! `telemetry/traces.py`'s `_upload_session_report` records, its `_UploadGate`, and
 //! `observability.py`'s `Tagger`. The records are [`crate::telemetry`]'s `LogRecord`.
 
+use std::collections::BTreeSet;
 use crate::ChatItem;
 use crate::Clock;
 use crate::evals::EvaluationResult;
@@ -511,9 +512,33 @@ impl std::fmt::Debug for Tagger {
     }
 }
 
-/// Session tags and outcome used in job reports.
+/// Tag sessions with metadata for observability.
 ///
-/// `entries` is the binding's own method (`worker.rs`).
+/// The Tagger allows adding string tags (key:value format) with optional
+/// structured metadata to sessions. Tags and metadata are uploaded to
+/// LiveKit Cloud at session end.
+///
+/// Example:
+/// ```python
+/// # Mark session as successful
+/// ctx.tagger.success(reason="Task completed successfully")
+///
+/// # Mark session as failed
+/// ctx.tagger.fail(reason="User hung up before completing booking")
+///
+/// # Add custom tags
+/// ctx.tagger.add("voicemail:true")
+/// ctx.tagger.add("language:es")
+///
+/// # Add tags with structured metadata
+/// ctx.tagger.add(
+///     "appointment:booked",
+///     metadata={"slot_id": "abc123", "calendar": "cal.com"},
+/// )
+///
+/// # Remove a tag
+/// ctx.tagger.remove("voicemail:true")
+/// ```
 #[crate::host(object)]
 impl Tagger {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
@@ -539,38 +564,44 @@ impl Tagger {
         self.tags.retain(|(k, _)| k != tag);
     }
 
-    /// `success(reason=None)`. Clears any existing `lk.fail` first.
-    #[host(method)]
+    /// Mark the session as successful; ``reason`` is kept apart from the tag.
+    // Clears any existing `lk.fail` first.
+    #[host(method(defaults(reason = None)))]
     pub fn success(&mut self, reason: Option<impl Into<String>>) {
         self.pop(TAG_FAIL);
         self.put(TAG_SUCCESS, None);
         self.outcome_reason = reason.map(Into::into);
     }
 
-    /// `fail(reason=None)`.
-    #[host(method)]
+    /// Mark the session as failed; ``reason`` is kept apart from the tag.
+    #[host(method(defaults(reason = None)))]
     pub fn fail(&mut self, reason: Option<impl Into<String>>) {
         self.pop(TAG_SUCCESS);
         self.put(TAG_FAIL, None);
         self.outcome_reason = reason.map(Into::into);
     }
 
-    /// `add(tag, metadata=None)`. Public API, unchanged.
-    #[host(method)]
+    /// Add a ``key:value`` tag, with optional structured metadata.
+    #[host(method(kw_only = "metadata", defaults(metadata = None)))]
     pub fn add(&mut self, tag: &str, metadata: Option<Value>) {
         self.put(tag, metadata);
     }
 
-    /// `remove(tag)`. Idempotent -- the reference is `dict.pop(tag, None)`.
+    /// Remove a tag; removing an absent one does nothing.
     #[host(method)]
     pub fn remove(&mut self, tag: &str) {
         self.pop(tag);
     }
 
     /// `tags`, in insertion order; see [`Self::sorted_tags`] for the reference's `sorted(...)`.
-    #[host(method)]
     pub fn tags(&self) -> impl Iterator<Item = &str> {
         self.tags.iter().map(|(k, _)| k.as_str())
+    }
+
+    /// The session's tags.
+    #[host(getter(name = "tags"))]
+    pub fn tag_set(&self) -> BTreeSet<String> {
+        self.tags().map(str::to_owned).collect()
     }
 
     /// `sorted(tagger.tags)` -- what the session summary record carries.
@@ -597,14 +628,16 @@ impl Tagger {
         self.tags.is_empty()
     }
 
-    /// `evaluations`. The reference returns a `.copy()`; a shared slice is the Rust equivalent.
-    #[host(method)]
+    /// The judgments recorded by judge groups, one dict each.
+    // The reference returns a `.copy()`; a shared slice is the Rust equivalent.
+    #[host(getter)]
     pub fn evaluations(&self) -> &[EvaluationRecord] {
         &self.evaluation_results
     }
 
-    /// `outcome`, from tag presence; `lk.success` wins if both are set.
-    #[host(method)]
+    /// ``"success"``, ``"fail"`` or ``None``.
+    // From tag presence; `lk.success` wins if both are set.
+    #[host(getter)]
     pub fn outcome(&self) -> Option<Outcome> {
         if self.tags.iter().any(|(k, _)| k == TAG_SUCCESS) {
             Some(Outcome::Success)
@@ -615,29 +648,32 @@ impl Tagger {
         }
     }
 
-    /// `outcome_reason`. Only another `success`/`fail` overwrites it.
-    #[host(method)]
+    /// The reason given with the outcome.
+    // Only another `success`/`fail` overwrites it.
+    #[host(getter)]
     pub fn outcome_reason(&self) -> Option<&str> {
         self.outcome_reason.as_deref()
     }
 
     /// `_evaluation(result)` (`observability.py:115`): one tag and one record per judgment.
-    #[host(method)]
     pub fn record_evaluation(&mut self, result: &EvaluationResult) {
-        let rows: Vec<EvaluationRecord> = result
-            .judgments()
-            .map(|(name, j)| EvaluationRecord {
-                name: name.to_string(),
-                tag: format!("lk.judge.{name}:{}", j.verdict.as_str()),
-                verdict: j.verdict.as_str().to_string(),
-                reasoning: j.reasoning.clone(),
-                instructions: j.instructions.clone(),
-            })
-            .collect();
-        for row in rows {
-            self.put(&row.tag, None);
-            self.evaluation_results.push(row);
+        for (name, j) in result.judgments() {
+            self.record_judgment(name, j.verdict.as_str(), &j.reasoning, &j.instructions);
         }
+    }
+
+    /// One judgment of a judge group's result: its `lk.judge.<name>:<verdict>` tag and record.
+    #[host(method(name = "_core_record_judgment"))]
+    pub fn record_judgment(&mut self, name: &str, verdict: &str, reasoning: &str, instructions: &str) {
+        let tag = format!("lk.judge.{name}:{verdict}");
+        self.put(&tag, None);
+        self.evaluation_results.push(EvaluationRecord {
+            name: name.to_owned(),
+            tag,
+            verdict: verdict.to_owned(),
+            reasoning: reasoning.to_owned(),
+            instructions: instructions.to_owned(),
+        });
     }
 
     /// `has_evals` at `job.py:320`: `bool(self._tagger.evaluations or self._tagger.outcome)`.
@@ -957,9 +993,19 @@ mod python_tests {
             let t = Bound::new(py, Tagger::with_real_clock()).unwrap();
             t.call_method1("add", ("b",)).unwrap();
             t.call_method1("add", ("a",)).unwrap();
-            assert_eq!(t.call_method0("tags").unwrap().extract::<Vec<String>>().unwrap(), vec!["b", "a"]);
+            let order: Vec<String> = t
+                .call_method0("entries")
+                .unwrap()
+                .extract::<Vec<(String, Option<Py<PyAny>>, f64)>>()
+                .unwrap()
+                .into_iter()
+                .map(|(tag, _, _)| tag)
+                .collect();
+            assert_eq!(order, vec!["b", "a"]);
             let bad = py.eval(c"object()", None, None).unwrap();
-            assert!(t.call_method1("add", ("c", bad)).is_err(), "metadata must be JSON, not coerced");
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("metadata", bad).unwrap();
+            assert!(t.call_method("add", ("c",), Some(&kwargs)).is_err(), "metadata must be JSON, not coerced");
         });
     }
 }

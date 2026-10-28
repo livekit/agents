@@ -432,6 +432,7 @@ fn py_ty(cx: Cx, t: &RTy, arg: bool) -> Result<String, String> {
         RTy::Vec(i) | RTy::Slice(i) | RTy::Iter(i) | RTy::IntoIter(i) => {
             format!("list[{}]", py_ty(cx, i, arg)?)
         }
+        RTy::Set(i) => format!("set[{}]", py_ty(cx, i, arg)?),
         RTy::Tuple(items) => {
             format!(
                 "tuple[{}]",

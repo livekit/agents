@@ -384,6 +384,8 @@ pub enum RTy {
     Bytes,
     Option(Box<RTy>),
     Vec(Box<RTy>),
+    /// `BTreeSet<T>`/`HashSet<T>`: a host `set`.
+    Set(Box<RTy>),
     Slice(Box<RTy>),
     /// `impl Iterator<Item = T>` (return only): collected into a list.
     Iter(Box<RTy>),

@@ -33,6 +33,7 @@
 //! - `lk_agents_abi::telemetry::provider::stt_stream_for_host`: parameter `event`: `SpeechEvent` cannot be built from JS: `kind`: a declared enum is read from JS only as a parameter (it has no `FromStr` to rely on)
 //! - `lk_agents_inference::fallback::stt_capabilities_for_host`: field `aligned_transcript`: `AlignedTranscript` has no Node shape (not a declared record, enum or JSON)
 //! - `lk_agents_inference::mcp::resolve_tool_options`: field `flags`: `ToolFlag` has no Node shape (not a declared record, enum or JSON)
+//! - `lk_agents_abi::telemetry::report::Tagger::tag_set`: return: not yet: a set (`BTreeSet`/`HashSet`) has no Node shape
 //! - `lk_agents_voice::background_audio::Sound::for_host`: parameter `stream`: not yet: `Arc<dyn FrameStream>` (a host object behind a proxy)
 //! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::start_for_host`: parameter `room`: not yet: `Arc<dyn SessionRoom>` (a host object behind a proxy)
 //! - `lk_agents_voice::background_audio::BackgroundAudioPlayer::play_for_host`: parameter `sounds`: Vec(Declared { name: "Sound", by_ref: false }) borrows inside a container

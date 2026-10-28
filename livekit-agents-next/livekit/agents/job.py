@@ -37,7 +37,6 @@ from livekit.protocol import agent, models
 
 from . import _core
 from .log import logger
-from .observability import Tagger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
@@ -244,7 +243,7 @@ class JobContext:
 
         self._session_directory = Path(self._tempdir.name)
 
-        self._tagger = Tagger()
+        self._tagger = _core.Tagger()
         self._early_log_handler: _BufferingHandler | None = None
         # this job's cloud-telemetry registration, set by init_recording():
         # span/log/metric attribution and upload gating resolve from it (the
@@ -341,7 +340,7 @@ class JobContext:
             except Exception:
                 logger.exception("failed to save session report")
 
-        has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
+        has_evals = self._tagger.has_evals()
         obs_url = self._run.observability_url
         recording = _core.RecordingOptions(**session._recording_options).recording_enabled()
         if (recording or has_evals) and obs_url:
@@ -405,7 +404,7 @@ class JobContext:
         return Path(self._session_directory)
 
     @property
-    def tagger(self) -> Tagger:
+    def tagger(self) -> _core.Tagger:
         """Returns the Tagger for adding tags and outcomes to the session.
 
         Tags are uploaded to LiveKit Cloud at session end.

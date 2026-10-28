@@ -21,6 +21,7 @@ documentation, and examples.
 import typing
 
 from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, voice
+from ._core import Tagger
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -268,6 +269,7 @@ __all__ = [
     "PlayHandle",
     "FlushSentinel",
     "LanguageCode",
+    "Tagger",
     "io",
     "cli",
     "ipc",
