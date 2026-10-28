@@ -246,6 +246,7 @@ class ResponsesLLMStream(llm.LLMStream):
         self._message_phases: dict[str, str | None] = {}
         self._second_message_started = False
         self._dropped_item_ids: list[str] = []
+        self._hosted_continuations = 0
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -487,6 +488,14 @@ class ResponsesLLMStream(llm.LLMStream):
 
     def _handle_output_items_done(self, event: ResponseOutputItemDoneEvent) -> llm.ChatChunk | None:
         chunk = None
+        if self._text_owner is not None and event.item.type not in (
+            "message",
+            "function_call",
+            "reasoning",
+        ):
+            # the reply continues after a server-side tool, so the next message is
+            # the answer rather than an alternate
+            self._hosted_continuations += 1
         if event.item.type == "function_call":
             if self._second_message_started:
                 self._drop_item(event.item.call_id)
@@ -533,14 +542,15 @@ class ResponsesLLMStream(llm.LLMStream):
         elif event.item_id != self._text_owner:
             # a message counts as a second answer only once it emits text; the
             # owner's phase may arrive on its output_item.done, so read it here
-            if (
-                self._message_phases.get(self._text_owner) != "commentary"
-                or event.item_id in self._dropped_item_ids
-            ):
+            if event.item_id in self._dropped_item_ids:
+                return None
+            if self._hosted_continuations > 0:
+                self._hosted_continuations -= 1
+            elif self._message_phases.get(self._text_owner) != "commentary":
                 self._drop_item(event.item_id)
                 return None
-            # commentary and the answer after it are spoken as one reply; the space
-            # keeps their sentences from running together
+            # commentary or a hosted tool call and the answer after it are spoken as
+            # one reply; the space keeps their sentences from running together
             self._text_owner = event.item_id
             text = " " + text
         return llm.ChatChunk(
