@@ -91,9 +91,11 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
 }
 
 /// Records the in-place exports still convert by pyo3 trait (an in-place export's parameter, a
-/// `#[derive(Host)]` record's field): their conversions stay trait impls written into ABI, which
-/// the shell's functions call. Only shrinks, as those exports become declarations; the records
-/// their fields hold follow them.
+/// `#[derive(Host)]` record's field, handwritten runtime glue): their conversions stay trait impls
+/// written into ABI, which the shell's functions call. The list never grows by itself: an entry
+/// is only added by the commit that declares a record which was a `#[derive(Host)]` record (its
+/// trait impls move from the derive to the generated module), and leaves when its in-place
+/// consumers are declarations (`check_in_place`).
 pub const IN_PLACE: &[&str] = &[
     "::lk_agents_abi::a2a::client::Message",
     "::lk_agents_abi::agent::run::RunError",
@@ -146,12 +148,46 @@ pub fn mark_in_place(decls: &mut Declarations) {
     }
 }
 
-/// Every [`IN_PLACE`] entry is a declared record: the list shrinks as its records leave it.
-pub fn check_in_place(decls: &Declarations) -> Result<(), String> {
-    match IN_PLACE.iter().find(|rust| !decls.records.iter().any(|r| r.rust == **rust)) {
-        Some(rust) => Err(format!("records::IN_PLACE: `{rust}` is not a declared record")),
-        None => Ok(()),
+/// Every [`IN_PLACE`] entry is a declared record, and one the list did not hold at `HEAD` was a
+/// `#[derive(Host)]` record there: the list only trades a derive's trait impls for generated ones.
+pub fn check_in_place(root: &std::path::Path, decls: &Declarations) -> Result<(), String> {
+    let at_head = |path: &str| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(["show", &format!("HEAD:{path}")])
+            .current_dir(root)
+            .output()
+            .ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let held = at_head("rust/crates/lk-agents-codegen/src/records.rs").unwrap_or_default();
+    for rust in IN_PLACE {
+        let Some(r) = decls.records.iter().find(|r| r.rust == *rust) else {
+            return Err(format!("records::IN_PLACE: `{rust}` is not a declared record"));
+        };
+        if held.contains(&format!("\"{rust}\"")) {
+            continue;
+        }
+        let ident = rust.rsplit("::").next().unwrap_or(rust);
+        let derived = at_head(&r.source)
+            .and_then(|text| syn::parse_file(&text).ok())
+            .is_some_and(|file| derived_at(&file.items, ident));
+        if !derived {
+            return Err(format!(
+                "records::IN_PLACE: `{rust}` is new, and was not a #[derive(Host)] record at HEAD: an in-place consumer of a declared record converts through its generated functions"
+            ));
+        }
     }
+    Ok(())
+}
+
+/// `ident` is a `#[derive(Host)]` struct or enum among `items` (inline modules included).
+pub(crate) fn derived_at(items: &[syn::Item], ident: &str) -> bool {
+    items.iter().any(|item| match item {
+        syn::Item::Struct(s) => s.ident == ident && crate::decl::resolve::derives_host(&s.attrs),
+        syn::Item::Enum(e) => e.ident == ident && crate::decl::resolve::derives_host(&e.attrs),
+        syn::Item::Mod(m) => m.content.as_ref().is_some_and(|(_, items)| derived_at(items, ident)),
+        _ => false,
+    })
 }
 
 fn records_in(ty: &Ty, out: &mut Vec<String>) {
@@ -541,6 +577,29 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         }
         other => return Err(format!("`{}` is not a record field", other.rust())),
     })
+}
+
+/// A legacy generated module with the declared records of the same module appended: their imports
+/// after the legacy ones, refusing a record that reuses a legacy name.
+pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
+    const FUTURE: &str = "from __future__ import annotations\n\n";
+    let body = models.split_once(FUTURE).map_or(models, |(_, body)| body);
+    let defined = |text: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| {
+                let name =
+                    l.strip_prefix("class ").or_else(|| l.split_once(" = ").map(|(n, _)| n))?;
+                let name: String =
+                    name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                (!name.is_empty() && !l.starts_with(' ')).then_some(name)
+            })
+            .collect()
+    };
+    let legacy_names = defined(legacy);
+    if let Some(name) = defined(body).intersection(&legacy_names).next() {
+        return Err(format!("the declared record `{name}` reuses a legacy model's name"));
+    }
+    Ok(format!("{}\n\n# The declared records.\n\n{body}", legacy.trim_end()))
 }
 
 /// The models: `_generated/<module>.py` per declared module.

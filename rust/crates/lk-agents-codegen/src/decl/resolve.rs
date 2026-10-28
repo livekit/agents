@@ -1071,7 +1071,7 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
-fn derives_host(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn derives_host(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().filter(|a| a.path().is_ident("derive")).any(|a| {
         a.parse_args_with(
             syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,

@@ -900,3 +900,32 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }
+
+// Catches: a record joining `records::IN_PLACE` that was never a `#[derive(Host)]` record (new trait
+// impls in ABI), or one that was, nested in an inline module, refused.
+#[test]
+fn only_a_derived_record_can_join_the_in_place_records() {
+    let file: syn::File = syn::parse_str(
+        "#[derive(Debug, Host)] pub struct Old; pub struct Plain; pub mod inner { #[derive(lk_agents_host_derive::Host)] pub enum Nested { A } }",
+    )
+    .unwrap();
+    assert!(crate::records::derived_at(&file.items, "Old"));
+    assert!(crate::records::derived_at(&file.items, "Nested"));
+    assert!(!crate::records::derived_at(&file.items, "Plain"));
+}
+
+// Catches: declared records overwriting the legacy models of the module they share (a family
+// migrated record by record), or a declared record redefining a legacy model's name.
+#[test]
+fn declared_records_join_a_legacy_module_without_replacing_it() {
+    let legacy = "# GENERATED FILE -- DO NOT EDIT.\n\nfrom __future__ import annotations\n\nfrom pydantic import BaseModel\n\n\nclass Legacy(BaseModel):\n    x: int\n";
+    let models = "# GENERATED FILE -- DO NOT EDIT.\n\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\n\n\n@dataclass(frozen=True)\nclass Declared:\n    y: int\n";
+    let merged = crate::records::merge(legacy, models).expect("merges");
+    assert!(
+        merged.contains("class Legacy(BaseModel)") && merged.contains("class Declared:"),
+        "{merged}"
+    );
+    assert_eq!(merged.matches("from __future__ import annotations").count(), 1, "{merged}");
+    let clash = models.replace("class Declared", "class Legacy");
+    assert!(crate::records::merge(legacy, &clash).unwrap_err().contains("`Legacy`"));
+}

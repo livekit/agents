@@ -297,7 +297,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
     let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let declared = decl::resolve::declarations(&abi)?;
-    records::check_in_place(&declared)?;
+    records::check_in_place(root, &declared)?;
     let conversions = records::conversions(&declared)?;
     o.add(Path::new(adapter::DIR).join(&conversions.path), &conversions.text);
     for (dir, outs) in
@@ -331,12 +331,24 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         // The reference keeps its hand-written base classes. Every package gets the forwarding
         // modules: the records name them (`.language`), the reference's included.
         let python = if *package == REFERENCE_PACKAGE { &records } else { &with_bases };
-        for out in python.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward) {
-            o.add(python_root.join(&out.path), &out.text);
+        // The declared classes are the successor's: the reference keeps its own `_core`. A module
+        // holding both legacy and declared models is one file.
+        let successor = *package != REFERENCE_PACKAGE;
+        let legacy: Vec<&python::Out> =
+            python.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward).collect();
+        for out in &legacy {
+            let text = match models.iter().find(|m| successor && m.path == out.path) {
+                Some(m) => records::merge(&out.text, &m.text)
+                    .map_err(|e| format!("_generated/{}: {e}", out.path))?,
+                None => out.text.clone(),
+            };
+            o.add(python_root.join(&out.path), &text);
         }
-        // The declared classes are the successor's: the reference keeps its own `_core`.
-        if *package != REFERENCE_PACKAGE {
-            for out in class_stubs.iter().map(|s| &s.out).chain(&models) {
+        if successor {
+            let merged = |m: &&python::Out| legacy.iter().any(|l| l.path == m.path);
+            for out in
+                class_stubs.iter().map(|s| &s.out).chain(models.iter().filter(|m| !merged(m)))
+            {
                 o.add(python_root.join(&out.path), &out.text);
             }
             o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);

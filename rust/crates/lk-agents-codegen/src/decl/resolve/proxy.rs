@@ -47,8 +47,10 @@ impl Resolver<'_> {
         if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
             return Err(format!("{at}: a proxy binds one value"));
         }
-        let async_trait =
-            tr.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
+        let async_trait = tr
+            .attrs
+            .iter()
+            .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "async_trait"));
         let awaits = methods.iter().filter(|m| m.kind == ProxyCall::Await);
         if awaits.clone().any(|m| m.boxed.is_some() == async_trait) {
             return Err(format!(
@@ -96,7 +98,8 @@ impl Resolver<'_> {
             receiver.is_some_and(shared) || (consumes && kind == ProxyCall::Await);
         let sync = f.sig.asyncness.is_none();
         // `fn ..(..) -> BoxFuture<'lt, T>`: an awaited call without `async-trait`.
-        let boxed = if kind == ProxyCall::Await && sync { boxed_future(&f.sig.output) } else { None };
+        let boxed =
+            if kind == ProxyCall::Await && sync { boxed_future(&f.sig.output) } else { None };
         let inputs = f.sig.inputs.iter().filter(|i| matches!(i, syn::FnArg::Typed(_))).count();
         let fits = shared_receiver
             && match kind {
