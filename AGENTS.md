@@ -227,8 +227,10 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - The subject cores (`lk-agents-core`, `-voice`, `-worker`, `-inference`, `-storage`, `-a2a`,
   `-media`) and `lk-agents-abi` have no executor, async transport or SDK dependency in their
   all-features resolved dependency closure: no tokio, futures, pyo3, async-trait, reqwest,
-  tungstenite, `livekit` or `livekit-ffi`. `livekit-protocol` records remain allowed. These
+  tungstenite, rusqlite, `livekit` or `livekit-ffi`. `livekit-protocol` records remain allowed. These
   dependency bans do not apply to runtime, fuzz support, language bindings or build tools.
+- `lk-agents-rtc` follows the same dependency and Clippy policy until its dissolution;
+  this does not authorize new incoming crate edges.
 - Per-core `clippy.toml` uses `disallowed-methods`, `disallowed-types` and `disallowed-macros`
   to reject spawns, `select!`/`join!`, ambient clocks/entropy/environment/process reads,
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.

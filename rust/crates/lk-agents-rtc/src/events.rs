@@ -1,6 +1,7 @@
 //! Room observations, incoming data streams, and event fan-out.
 
 use std::fmt;
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::{AudioFrame, LossyTx, MediaRef, Pushed};
@@ -9,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::traits::{RemoteParticipant, TrackPublication};
 use crate::{ConnectionState, DisconnectReason, ParticipantIdentity, StreamInfo, VideoFrameRef};
 
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 /// Unbounded on purpose: `broadcast` drops the oldest on lag, and a missed `track_subscribed`
 /// waits forever. Control events are rare; only media is lossy.
 pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
@@ -174,6 +176,7 @@ impl TextStream {
 /// `room.on(...)` handlers. Closed subscribers are pruned on the next [`emit`](Self::emit).
 #[derive(Default)]
 pub struct RoomEventBus {
+    #[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
     subscribers: Mutex<Vec<mpsc::UnboundedSender<RoomEvent>>>,
 }
 
@@ -252,6 +255,7 @@ impl RoomEventBus {
 }
 
 impl RoomEventBus {
+    #[allow(clippy::disallowed_methods, reason = "Legacy RTC channels and locks move to runtime.")]
     /// Events emitted before this call are not replayed, as with `room.on`.
     pub fn subscribe(&self) -> Receiver<RoomEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -301,9 +305,11 @@ impl RpcHandler {
 /// ([`RtcRoom::register_byte_stream_handler`](crate::RtcRoom::register_byte_stream_handler)).
 #[lk_agents_abi::class]
 #[derive(Clone)]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct ByteStreamSender(pub(crate) mpsc::UnboundedSender<ByteStream>);
 
 impl ByteStreamSender {
+    #[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn new(tx: mpsc::UnboundedSender<ByteStream>) -> Self {
         ByteStreamSender(tx)
     }
@@ -311,6 +317,11 @@ impl ByteStreamSender {
 
 #[lk_agents_abi::host(object)]
 impl ByteStreamSender {
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "Legacy RTC channels and locks move to runtime."
+    )]
     /// One stream opened by `sender`: its chunks go into what this returns, in order. `None` once
     /// nobody reads the topic any more.
     #[host(method)]
@@ -324,6 +335,7 @@ impl ByteStreamSender {
 /// One inbound byte stream's chunks. The stream ends at [`close`](Self::close), or when the host
 /// drops this.
 #[lk_agents_abi::class]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct ByteChunks(Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>);
 
 #[lk_agents_abi::host(object)]
@@ -343,9 +355,11 @@ impl ByteChunks {
 /// Where a host room delivers the text streams opened on a registered topic.
 #[lk_agents_abi::class]
 #[derive(Clone)]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct TextStreamSender(pub(crate) mpsc::UnboundedSender<TextStream>);
 
 impl TextStreamSender {
+    #[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn new(tx: mpsc::UnboundedSender<TextStream>) -> Self {
         TextStreamSender(tx)
     }
@@ -353,6 +367,11 @@ impl TextStreamSender {
 
 #[lk_agents_abi::host(object)]
 impl TextStreamSender {
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "Legacy RTC channels and locks move to runtime."
+    )]
     /// One stream opened by `sender`; `None` once nobody reads the topic any more.
     #[host(method)]
     pub fn open(&self, info: StreamInfo, sender: ParticipantIdentity) -> Option<TextChunks> {
@@ -364,6 +383,7 @@ impl TextStreamSender {
 
 /// One inbound text stream's chunks; ends at [`close`](Self::close) or when the host drops this.
 #[lk_agents_abi::class]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct TextChunks(Mutex<Option<mpsc::UnboundedSender<String>>>);
 
 #[lk_agents_abi::host(object)]
@@ -384,9 +404,11 @@ impl TextChunks {
 /// [`BoundedLossy`](lk_agents_abi::BoundedLossy). The stream ends at [`close`](Self::close) or when
 /// the host drops this.
 #[lk_agents_abi::class]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct AudioFrameSender(Mutex<Option<LossyTx<AudioFrame>>>);
 
 impl AudioFrameSender {
+    #[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn new(tx: LossyTx<AudioFrame>) -> Self {
         AudioFrameSender(Mutex::new(Some(tx)))
     }
@@ -410,9 +432,11 @@ impl AudioFrameSender {
 /// Where a host track's video stream delivers its frames, as side-table keys (the pixels never
 /// cross); drop-oldest, like the audio one.
 #[lk_agents_abi::class]
+#[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
 pub struct VideoFrameSender(Mutex<Option<LossyTx<VideoFrameRef>>>);
 
 impl VideoFrameSender {
+    #[allow(clippy::disallowed_types, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn new(tx: LossyTx<VideoFrameRef>) -> Self {
         VideoFrameSender(Mutex::new(Some(tx)))
     }

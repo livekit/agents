@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy RTC sites are ratcheted."
+)]
+
 //! RTC capabilities supplied by the host SDK. Shared records live in `lk_agents_abi::voice::rtc`.
 
 mod events;

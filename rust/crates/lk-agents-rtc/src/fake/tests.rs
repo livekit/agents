@@ -10,6 +10,10 @@ use tokio::time::timeout;
 /// make progress*, which is exactly the "is it blocked?" question.
 const NEVER: Duration = Duration::from_secs(3600);
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 /// Await `f`, failing the test rather than hanging when the fake cannot make progress.
 ///
 /// Every async test here is `start_paused`, so this is free. It exists because most of the
@@ -75,6 +79,10 @@ async fn clear_queue_really_discards_the_audio_that_had_not_played() {
 // reset. The reference races it
 // against the interruption event, so a double that never waits makes every playout look
 // finished-at-zero and hides the ordering bugs the race exists to expose.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn wait_for_playout_waits_for_the_clock() {
     let (rtc, _room, source) = published().await;
@@ -118,6 +126,10 @@ async fn clear_queue_releases_a_parked_wait_for_playout() {
 // and that block is the output path's only backpressure -- without it the forwarding loop runs
 // a whole utterance into the source in one tick, after which `clear_queue` has nothing left to
 // cut and interruption silently stops working.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn capture_blocks_once_the_queue_is_full() {
     let (rtc, room, _s) = published().await;
@@ -142,6 +154,10 @@ async fn capture_blocks_once_the_queue_is_full() {
 // Catches: a frame longer than `queue_size_ms` deadlocking. `rtc` unblocks such a frame once
 // the queue drains; here nothing else drains it, so applying the bound unconditionally would
 // hang the very first capture -- and 100 ms is `AudioByteStream`'s default frame.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn a_frame_longer_than_the_queue_still_captures() {
     let (_rtc, room, _s) = published().await;
@@ -453,6 +469,10 @@ async fn a_duplicate_identity_drops_the_older_participant_first() {
 // Catches: `wait_for_subscription` resolving before anyone subscribed. The reference gates the
 // first frame on it so the greeting is not published into a room with nobody listening; a
 // double that returns immediately lets that regression through untouched.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn wait_for_subscription_gates_the_first_frame() {
     let (rtc, _) = FakeRtc::with_virtual_clock();
@@ -630,6 +650,10 @@ async fn registering_a_topic_twice_is_refused_not_replaced() {
 // Catches: a byte-stream double that drops the header. `_pre_connect_audio.py` reads
 // `trackId`, `sampleRate` and `channels` out of `reader.info.attributes` and treats a missing
 // key as a hard error, so a fake carrying only the payload cannot test that path at all.
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn byte_streams_carry_their_header() {
     let (_rtc, room, _s) = published().await;
@@ -666,6 +690,10 @@ async fn byte_streams_carry_their_header() {
 // transcript segment and closes it with `lk.transcription_final=true`; a double that lost the
 // writer's identity would hide a shim opening a stream per token, which frontends render as
 // one message per word.
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn one_text_stream_per_segment_carries_its_deltas_and_final_header() {
     let (_rtc, room, _s) = published().await;
@@ -700,6 +728,10 @@ async fn one_text_stream_per_segment_carries_its_deltas_and_final_header() {
 
 // Catches: a double that cannot fail. The reference wraps every publish in `try/except` and
 // logs; with no injectable failure those `except` arms are dead code in every test.
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn control_calls_can_be_made_to_fail() {
     let (_rtc, room, _s) = published().await;
@@ -727,6 +759,10 @@ async fn control_calls_can_be_made_to_fail() {
 
 // Catches: `set_attributes` replacing the whole map instead of merging, which would drop every
 // attribute the agent set earlier each time `lk.agent.state` changes.
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 #[tokio::test(start_paused = true)]
 async fn set_attributes_merges_and_every_call_is_visible() {
     let (_rtc, room, _s) = published().await;

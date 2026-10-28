@@ -15,8 +15,20 @@ use crate::{Result, RtcError};
 use async_trait::async_trait;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::{Clock, VirtualClock};
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::collections::HashMap;
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -33,6 +45,10 @@ pub struct FakeRtc {
     clock: Arc<dyn Clock>,
     /// `Some` only from [`with_virtual_clock`](FakeRtc::with_virtual_clock); `advance` needs it.
     virtual_clock: Option<Arc<VirtualClock>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<HostState>,
 }
 
@@ -44,11 +60,19 @@ struct HostState {
 }
 
 impl FakeRtc {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// Share the session's clock, so playout and the core's timers run on one timeline.
     pub fn new(clock: Arc<dyn Clock>) -> Arc<Self> {
         Arc::new(FakeRtc { clock, virtual_clock: None, state: Mutex::new(HostState::default()) })
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub fn with_virtual_clock() -> (Arc<Self>, Arc<VirtualClock>) {
         let clock = Arc::new(VirtualClock::new());
         let rtc = Arc::new(FakeRtc {
@@ -143,8 +167,16 @@ pub struct FakeRoom {
     bus: Arc<RoomEventBus>,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
     auto_subscribe: Arc<AtomicBool>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<RoomState>,
 }
 
@@ -153,12 +185,24 @@ struct RoomState {
     /// A closed room emits nothing more; a later state change is not a reconnect.
     closed: bool,
     participants: Vec<Arc<FakeRemoteParticipant>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     byte_handlers: HashMap<String, ByteStreamSender>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     text_handlers: HashMap<String, TextStreamSender>,
 }
 
 impl Default for RoomState {
     // Connected: `ctx.connect()` hands Rust an open room.
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     fn default() -> Self {
         RoomState {
             connection: ConnectionState::Connected,
@@ -171,6 +215,10 @@ impl Default for RoomState {
 }
 
 impl FakeRoom {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     fn new(name: &str, clock: Arc<dyn Clock>) -> Arc<Self> {
         let bus = Arc::new(RoomEventBus::new());
         let auto_subscribe = Arc::new(AtomicBool::new(true));
@@ -277,6 +325,10 @@ impl FakeRoom {
         self.bus.emit(RoomEvent::Close { reason });
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub fn send_text_stream(
         &self,
         sender: impl Into<ParticipantIdentity>,
@@ -298,6 +350,10 @@ impl FakeRoom {
             .map_err(|_| RtcError::Closed("text stream handler"))
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub fn send_byte_stream(
         &self,
         sender: impl Into<ParticipantIdentity>,
@@ -319,6 +375,11 @@ impl FakeRoom {
             .map_err(|_| RtcError::Closed("byte stream handler"))
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// A byte stream left open: chunks go through the returned sender, and dropping it is the
     /// trailer.
     pub fn open_byte_stream(
@@ -428,8 +489,20 @@ pub struct FakeLocalParticipant {
     identity: ParticipantIdentity,
     clock: Arc<dyn Clock>,
     bus: Arc<RoomEventBus>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     auto_subscribe: Arc<AtomicBool>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     next_sid: AtomicU64,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
     byte_writes: tokio::sync::watch::Sender<bool>,
@@ -441,6 +514,10 @@ pub struct FakeLocalParticipant {
 /// What a participant sent, and how much: a peer relaying it waits on the count.
 #[derive(Default)]
 struct SentLog {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     items: Mutex<Vec<Sent>>,
     count: tokio::sync::watch::Sender<usize>,
 }
@@ -467,20 +544,44 @@ pub enum Sent {
 struct LocalState {
     publications: Vec<Arc<FakeTrackPublication>>,
     sources: Vec<Arc<FakeAudioSource>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     attributes: HashMap<String, String>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     attribute_calls: Vec<HashMap<String, String>>,
     transcriptions: Vec<Transcription>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     text_streams: Vec<Arc<Mutex<RecordedTextStream>>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     byte_streams: Vec<Arc<Mutex<RecordedByteStream>>>,
     rpc_calls: Vec<(ParticipantIdentity, String, String)>,
     /// What the next `perform_rpc` answers; `(0, "")` when unset.
     rpc_reply: Option<(u32, String)>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     rpc_handlers: HashMap<String, crate::RpcHandler>,
     dtmf: Vec<(u32, String)>,
     fail_with: Option<RtcError>,
 }
 
 impl FakeLocalParticipant {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     fn new(clock: Arc<dyn Clock>, bus: Arc<RoomEventBus>, auto_subscribe: Arc<AtomicBool>) -> Self {
         FakeLocalParticipant {
             identity: ParticipantIdentity("agent".to_owned()),
@@ -516,6 +617,10 @@ impl FakeLocalParticipant {
         self.sent.count.subscribe()
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub fn attributes(&self) -> HashMap<String, String> {
         self.state.lock().unwrap().attributes.clone()
     }
@@ -525,6 +630,10 @@ impl FakeLocalParticipant {
         self.state.lock().unwrap().dtmf.clone()
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// Each call separately: the reference cancels an in-flight update, so the count matters.
     pub fn attribute_calls(&self) -> Vec<HashMap<String, String>> {
         self.state.lock().unwrap().attribute_calls.clone()
@@ -671,6 +780,10 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(())
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     async fn set_attributes(&self, attrs: HashMap<String, String>) -> Result<()> {
         self.check()?;
         let mut state = self.state.lock().unwrap();
@@ -685,6 +798,10 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(())
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     async fn stream_text(&self, opts: StreamTextOptions) -> Result<Box<dyn TextStreamWriter>> {
         self.check()?;
         let recorded = Arc::new(Mutex::new(RecordedTextStream {
@@ -697,6 +814,10 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(Box::new(FakeTextStreamWriter { recorded }))
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     async fn stream_bytes(
         &self,
         opts: crate::StreamBytesOptions,
@@ -742,6 +863,10 @@ impl LocalParticipant for FakeLocalParticipant {
 }
 
 struct FakeByteStreamWriter {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     recorded: Arc<Mutex<RecordedByteStream>>,
     flowing: tokio::sync::watch::Receiver<bool>,
     index: usize,
@@ -773,6 +898,10 @@ pub struct RecordedByteStream {
 }
 
 struct FakeTextStreamWriter {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     recorded: Arc<Mutex<RecordedTextStream>>,
 }
 
@@ -784,6 +913,10 @@ impl TextStreamWriter for FakeTextStreamWriter {
         Ok(())
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     async fn close(self: Box<Self>, attributes: HashMap<String, String>) -> Result<()> {
         let mut r = self.recorded.lock().unwrap();
         r.closed = true;
@@ -797,6 +930,10 @@ pub struct RecordedTextStream {
     pub opts: StreamTextOptions,
     pub chunks: Vec<String>,
     pub closed: bool,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// The header written at close: `lk.transcription_final`, `lk.expression`, …
     pub close_attributes: HashMap<String, String>,
 }
@@ -811,18 +948,34 @@ pub struct FakeRemoteParticipant {
     identity: ParticipantIdentity,
     kind: ParticipantKind,
     bus: Arc<RoomEventBus>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     auto_subscribe: Arc<AtomicBool>,
     me: Weak<FakeRemoteParticipant>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<RemoteState>,
 }
 
 #[derive(Default)]
 struct RemoteState {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     attributes: HashMap<String, String>,
     publications: Vec<Arc<FakeTrackPublication>>,
 }
 
 impl FakeRemoteParticipant {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     fn new(
         identity: ParticipantIdentity,
         kind: ParticipantKind,
@@ -918,6 +1071,10 @@ impl RemoteParticipant for FakeRemoteParticipant {
         true
     }
 
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     fn attributes(&self) -> HashMap<String, String> {
         self.state.lock().unwrap().attributes.clone()
     }

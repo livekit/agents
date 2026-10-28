@@ -891,7 +891,7 @@ Codegen `--check` enforces export placement and generated output, failing with
 the file and item. The dependency check reads `cargo metadata --all-features`
 and traverses the resolved closure of every subject core and `lk-agents-abi`.
 Those closures must contain no runtime, executor, async transport or host SDK:
-no tokio, futures, pyo3, async-trait, reqwest, tungstenite, `livekit` or
+no tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> subject cores -> abi`, with the composition edges
 `voice -> core`, `voice -> media`, `inference -> media`, `a2a -> storage`,

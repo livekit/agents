@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_types,
+    reason = "Legacy generated RTC proxies emit shared collections; proxies move to runtime."
+)]
+
 //! Host-provided rooms, participants, tracks, streams and audio sources, as bare `#[host(proxy)]`
 //! traits. They are `live`: a getter asks the host every time, since rooms connect after hand-over.
 
@@ -70,12 +75,14 @@ impl dyn RtcRoom + '_ {
         self.event_bus().subscribe()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn byte_streams(&self, topic: &str) -> Result<Receiver<ByteStream>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.register_byte_stream_handler(topic, ByteStreamSender::new(tx))?;
         Ok(rx)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Legacy RTC channels and locks move to runtime.")]
     pub fn text_streams(&self, topic: &str) -> Result<Receiver<TextStream>> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.register_text_stream_handler(topic, TextStreamSender::new(tx))?;
@@ -360,6 +367,7 @@ mod tests {
         fn open_video_stream(&self, _frames: VideoFrameSender) {}
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Legacy RTC channels and locks move to runtime.")]
     /// Bound every await: a default that parks instead of refusing must fail by name, not hang.
     /// `start_paused` makes tokio fire this the instant the task parks, so it costs no real time.
     async fn eventually<F: std::future::Future>(f: F) -> F::Output {

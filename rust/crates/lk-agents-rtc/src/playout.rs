@@ -3,6 +3,10 @@
 //! `Mutex`: `clear_queue` is the interruption path and must not wait behind `capture`. Subtractions
 //! saturate because `queued` is host-supplied.
 
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy shared playout atomics are removed when the ledger moves to voice."
+)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -10,9 +14,25 @@ use crate::PlaybackInfo;
 
 #[derive(Debug, Default)]
 pub struct PlayoutLedger {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy shared playout atomics are removed when the ledger moves to voice."
+    )]
     pushed_ns: AtomicU64,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy shared playout atomics are removed when the ledger moves to voice."
+    )]
     discarded_ns: AtomicU64,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy shared playout atomics are removed when the ledger moves to voice."
+    )]
     reported_played_ns: AtomicU64,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy shared playout atomics are removed when the ledger moves to voice."
+    )]
     reported_discarded_ns: AtomicU64,
 }
 

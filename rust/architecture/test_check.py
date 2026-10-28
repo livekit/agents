@@ -14,6 +14,7 @@ from check import (
     length_violations,
     path_violations,
     ratchet,
+    read_baselines,
     tracked_rust_paths,
 )
 
@@ -34,6 +35,7 @@ def metadata(edges):
 
 # A scratch repository must not inherit the caller's repository or private index.
 _GIT_FREE_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
 
 class DependencyContracts(unittest.TestCase):
     def test_cargo_all_features_exposes_optional_sdk_dependency(self):
@@ -67,7 +69,15 @@ class DependencyContracts(unittest.TestCase):
             self.assertIn("dependency:lk-agents-voice:livekit-ffi", dependency_violations(enabled))
 
     def test_all_feature_resolved_closure_rejects_sdk_and_async_dependencies(self):
-        for banned in ("tokio", "livekit", "livekit-ffi", "futures-util", "pyo3", "reqwest"):
+        for banned in (
+            "tokio",
+            "livekit",
+            "livekit-ffi",
+            "futures-util",
+            "pyo3",
+            "reqwest",
+            "rusqlite",
+        ):
             with self.subTest(banned=banned):
                 actual = dependency_violations(
                     metadata(
@@ -79,6 +89,13 @@ class DependencyContracts(unittest.TestCase):
     def test_direction_rejects_core_to_runtime_even_without_async_dependencies(self):
         actual = dependency_violations(metadata({"lk-agents-core": ["lk-agents-runtime"]}))
         self.assertIn("direction:lk-agents-core:lk-agents-runtime", actual)
+
+    def test_rtc_obeys_core_closure_and_layering_until_it_is_dissolved(self):
+        actual = dependency_violations(
+            metadata({"lk-agents-rtc": ["adapter", "lk-agents-voice"], "adapter": ["tokio"]})
+        )
+        self.assertIn("dependency:lk-agents-rtc:tokio", actual)
+        self.assertIn("direction:lk-agents-rtc:lk-agents-voice", actual)
 
     def test_shared_abi_debt_keeps_its_owning_manifest_identity(self):
         actual = dependency_violations(
@@ -173,6 +190,28 @@ class BaselineContracts(unittest.TestCase):
     def test_same_count_replacement_is_rejected(self):
         self.assertTrue(ratchet({"new"}, {"old"}))
         self.assertFalse(ratchet(set(), {"old"}))
+
+    @patch("check.check_history", return_value=[])
+    def test_first_rtc_and_sqlite_baselines_cannot_receive_retired_core_exemptions(self, history):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {"legacy": "legacy.json", "rtc": "rtc.json", "sqlite": "sqlite.json"}
+            legacy = "dependency:lk-agents-voice:tokio"
+            rtc = "dependency:lk-agents-rtc:tokio"
+            sqlite = "dependency:lk-agents-storage:rusqlite"
+            for family, identity in (("legacy", legacy), ("rtc", rtc), ("sqlite", sqlite)):
+                (root / paths[family]).write_text(json.dumps([identity]))
+            baseline, errors = read_baselines(root, paths)
+            self.assertFalse(errors)
+            self.assertEqual(baseline, {legacy, rtc, sqlite})
+            self.assertEqual(history.call_count, 3)
+            # Removing an older exemption cannot transfer it into a new family's first baseline.
+            (root / paths["legacy"]).write_text("[]")
+            for family in ("rtc", "sqlite"):
+                with self.subTest(family=family):
+                    (root / paths[family]).write_text(json.dumps([legacy]))
+                    _, errors = read_baselines(root, paths)
+                    self.assertTrue(any(legacy in error for error in errors))
 
     @patch.dict(os.environ, _GIT_FREE_ENV, clear=True)
     def test_committed_baseline_cannot_be_expanded_or_reintroduced(self):

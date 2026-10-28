@@ -224,6 +224,10 @@ mod tests {
         room
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Legacy room-wait test timers move to runtime adapter tests."
+    )]
     async fn soon<T>(f: impl std::future::Future<Output = T>) -> T {
         tokio::time::timeout(Duration::from_secs(5), f).await.expect("the wait never ended")
     }

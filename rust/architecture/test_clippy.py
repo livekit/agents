@@ -178,21 +178,24 @@ class ClippyContracts(unittest.TestCase):
                 clippy.compiler_messages("\n".join(map(json.dumps, records)))
 
     def test_configuration_removal_fails_with_crate_and_method(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "rust/crates/lk-agents-abi/clippy.toml"
-            path.parent.mkdir(parents=True)
-            path.write_text(
-                (ROOT / "rust/crates/lk-agents-abi/clippy.toml")
-                .read_text()
-                .replace('  { path = "std::thread::spawn",', '  { path = "not::the::banned_spawn",')
-            )
-            errors = clippy.configuration_errors(root, ["lk-agents-abi"])
-            self.assertTrue(any("lk-agents-abi" in e and "std::thread::spawn" in e for e in errors))
-            path.with_name(".clippy.toml").write_text("")
-            self.assertTrue(
-                any("shadowing" in e for e in clippy.configuration_errors(root, ["lk-agents-abi"]))
-            )
+        for crate in ("lk-agents-abi", "lk-agents-rtc"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / f"rust/crates/{crate}/clippy.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text(
+                    (ROOT / f"rust/crates/{crate}/clippy.toml")
+                    .read_text()
+                    .replace(
+                        '  { path = "std::thread::spawn",', '  { path = "not::the::banned_spawn",'
+                    )
+                )
+                errors = clippy.configuration_errors(root, [crate])
+                self.assertTrue(any(crate in e and "std::thread::spawn" in e for e in errors))
+                path.with_name(".clippy.toml").write_text("")
+                self.assertTrue(
+                    any("shadowing" in e for e in clippy.configuration_errors(root, [crate]))
+                )
 
     def test_compiler_rejects_each_banned_construct_family_and_allowed_item_growth(self):
         self.assertIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"]))

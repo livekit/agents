@@ -8,7 +8,15 @@ use crate::{Result, RtcError};
 use async_trait::async_trait;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::BoundedLossy;
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
 
@@ -19,8 +27,16 @@ pub struct FakeTrackPublication {
     source: TrackSource,
     bus: Arc<RoomEventBus>,
     owner: Option<Weak<FakeRemoteParticipant>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     subscribed: AtomicBool,
     subscription: Notify,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<PublicationState>,
 }
 
@@ -62,6 +78,10 @@ impl StreamRequests {
 }
 
 impl FakeTrackPublication {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub(super) fn new(
         sid: TrackSid,
         source: TrackSource,

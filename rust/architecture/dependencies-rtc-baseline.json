@@ -1,0 +1,11 @@
+[
+  "dependency:lk-agents-rtc:async-trait",
+  "dependency:lk-agents-rtc:mio",
+  "dependency:lk-agents-rtc:pyo3",
+  "dependency:lk-agents-rtc:pyo3-build-config",
+  "dependency:lk-agents-rtc:pyo3-ffi",
+  "dependency:lk-agents-rtc:pyo3-macros",
+  "dependency:lk-agents-rtc:pyo3-macros-backend",
+  "dependency:lk-agents-rtc:tokio",
+  "dependency:lk-agents-rtc:tokio-macros"
+]

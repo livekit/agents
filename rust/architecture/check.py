@@ -15,7 +15,7 @@ import tomllib
 
 CORES = {
     f"lk-agents-{name}"
-    for name in ("core", "voice", "worker", "inference", "storage", "a2a", "media")
+    for name in ("core", "voice", "worker", "inference", "storage", "a2a", "media", "rtc")
 }
 PURE = CORES | {"lk-agents-abi"}
 BANNED = {
@@ -23,6 +23,7 @@ BANNED = {
     "async-std",
     "smol",
     "reqwest",
+    "rusqlite",
     "hyper",
     "hyper-util",
     "mio",
@@ -84,8 +85,8 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-core": {"lk-agents-abi"},
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core"},
             "lk-agents-a2a": {"lk-agents-abi", "lk-agents-storage"},
-            "lk-agents-fuzz": PURE,
-            "lk-agents-runtime": PURE,
+            "lk-agents-fuzz": PURE - {"lk-agents-rtc"},
+            "lk-agents-runtime": PURE - {"lk-agents-rtc"},
             "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
         }.get(name, {"lk-agents-abi"})
         for dep in nodes[root]:
@@ -164,6 +165,50 @@ def check_history(root: Path, path: str, current) -> list[str]:
     return errors
 
 
+DEPENDENCY_BASELINES = {
+    "legacy": "rust/architecture/dependencies-baseline.json",
+    "rtc": "rust/architecture/dependencies-rtc-baseline.json",
+    "sqlite": "rust/architecture/dependencies-sqlite-baseline.json",
+}
+CLIPPY_BASELINES = {
+    "legacy": "rust/architecture/clippy-baseline.json",
+    "rtc": "rust/architecture/clippy-rtc-baseline.json",
+}
+
+
+def baseline_family(identity: str) -> str:
+    """Newly enforced families cannot receive exemptions from an older ratchet."""
+    if identity.startswith("dependency:") and identity.endswith(":rusqlite"):
+        return "sqlite"
+    if identity.startswith(
+        ("dependency:lk-agents-rtc:", "direction:lk-agents-rtc:")
+    ) or identity.startswith(
+        ("allow:rust/crates/lk-agents-rtc/", "site:rust/crates/lk-agents-rtc/")
+    ):
+        return "rtc"
+    return "legacy"
+
+
+def read_baselines(root: Path, paths: dict[str, str]) -> tuple[set[str], list[str]]:
+    """Load independent first baselines, retaining each family's complete history."""
+    baseline = set()
+    errors = []
+    for family, path in paths.items():
+        entries = json.loads((root / path).read_text())
+        if not isinstance(entries, list) or any(not isinstance(entry, str) for entry in entries):
+            raise ValueError(f"{path}: expected an array of identities")
+        if len(set(entries)) != len(entries):
+            raise ValueError(f"{path}: duplicate identities")
+        errors.extend(
+            f"{path}: identity belongs to another baseline family: {entry}"
+            for entry in entries
+            if baseline_family(entry) != family
+        )
+        errors.extend(check_history(root, path, entries))
+        baseline.update(entries)
+    return baseline, errors
+
+
 def check_boundaries() -> int:
     root = Path(__file__).resolve().parents[2]
     command = [
@@ -190,8 +235,12 @@ def check_boundaries() -> int:
     if not paths or paths == [""]:
         raise ValueError("no tracked Rust files found")
     errors = []
+    baseline, history_errors = read_baselines(root, DEPENDENCY_BASELINES)
+    actual = dependency_violations(metadata)
+    errors.extend(ratchet(actual, baseline))
+    errors.extend(history_errors)
+    print(f"dependencies: {len(actual)} existing identities; baseline {len(baseline)}")
     for name, actual in (
-        ("dependencies", dependency_violations(metadata)),
         ("lengths", length_violations(root, paths)),
         ("paths", path_violations(root, paths)),
     ):
@@ -209,7 +258,6 @@ def check_boundaries() -> int:
 
 
 LINTS = ("disallowed_methods", "disallowed_types", "disallowed_macros")
-BASELINE = "rust/architecture/clippy-baseline.json"
 # All configs carry the same compiler-resolved policy; aliases cannot bypass Clippy resolution.
 REQUIRED = {
     "disallowed-methods": {
@@ -628,9 +676,9 @@ def check_clippy() -> int:
         path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
     }
     actual = {f"allow:{identity}" for identity in inventory(root, helper, list(snapshots))}
-    baseline = json.loads((root / BASELINE).read_text())
+    baseline, history_errors = read_baselines(root, CLIPPY_BASELINES)
     errors.extend(ratchet(actual, baseline))
-    errors.extend(check_history(root, BASELINE, baseline))
+    errors.extend(history_errors)
     for error in errors:
         print(error, file=sys.stderr)
     if errors:

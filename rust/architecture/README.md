@@ -9,7 +9,8 @@ the workspace Rust flags.
 - `check.py` validates all-feature Cargo dependency closures, including normal,
   build and dev edges, and workspace layering for subject cores and ABI.
   Forbidden executor, transport, host and SDK families include Tokio, futures,
-  PyO3 and LiveKit SDKs; protocol records are allowed.
+  PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
+  RTC follows core policy until its records, proxies and fakes move to their owners.
 - A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's
   directory compiled by another crate would escape that core's dependency and Clippy policy, so
   every core-directory file is either compiled by its own crate (and linted with it) or an
@@ -31,6 +32,9 @@ the workspace Rust flags.
 Every baseline is compared with every reachable committed version, including
 merge-hidden retirements. Identities cannot be replaced or reintroduced; numeric
 ceilings cannot grow. No check grants or broadens exemptions.
+RTC dependency/Clippy baselines bootstrap the previously unchecked crate once;
+the SQLite dependency baseline bootstraps the newly banned storage driver. Each
+retains independent history and rejects identities from older baseline families.
 
 Unittest and codegen tests include deliberately failing dependency, compiler,
 exemption, length, placement and history fixtures. Compiler counterexamples use

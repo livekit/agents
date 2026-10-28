@@ -10,6 +10,10 @@ use lk_agents_abi::{Clock, Monotone, Ts};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
+#[allow(
+    clippy::disallowed_types,
+    reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+)]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -21,6 +25,10 @@ pub struct FakeAudioSource {
     queue_size: Duration,
     close_started: Monotone<bool>,
     close_flow: tokio::sync::watch::Sender<bool>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     state: Mutex<SourceState>,
     /// Woken by `settle`, `clear_queue` and `close`; parked on by `capture` and `wait_for_playout`.
     wake: Notify,
@@ -46,6 +54,10 @@ struct Queued {
 }
 
 impl FakeAudioSource {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     pub(super) fn new(clock: Arc<dyn Clock>, opts: &TrackPublishOptions) -> Self {
         let now = clock.now();
         FakeAudioSource {
@@ -228,10 +240,18 @@ impl AudioSource for FakeAudioSource {
 pub struct FrameSynth {
     sample_rate: u32,
     samples: u32,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     next: std::sync::atomic::AtomicUsize,
 }
 
 impl FrameSynth {
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Legacy fake locks, atomics, channels and hash collections move to test support."
+    )]
     /// A rate that does not divide into whole frames truncates rather than panics.
     pub fn new(sample_rate: u32, frame_ms: u32) -> Self {
         FrameSynth {
