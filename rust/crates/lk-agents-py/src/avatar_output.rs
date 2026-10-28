@@ -2,10 +2,10 @@
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioFrame, HostRef, RealClock, TokioSpawner};
+use lk_agents_abi::{AudioFrame, HostRef, TokioSpawner};
 use std::sync::Arc;
 
-pub struct DataStreamAudioOutput(lk_agents_runtime::avatar_output::DataStreamAudioOutput);
+pub struct DataStreamAudioOutput(lk_agents_runtime::avatar::output::DataStreamAudioOutput);
 
 impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutput {
     fn new(
@@ -37,7 +37,7 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
             ProviderError::from(lk_agents_abi::errors::ApiError::new(error.to_string()))
         })?;
         let spawner = TokioSpawner::new(handle);
-        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
+        Ok(Self(lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
             room,
             destination_identity,
             sample_rate,
@@ -45,12 +45,7 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
             timeout,
             wait_playback_start,
             lk_agents_runtime::process::host_clock(),
-            Arc::new(spawner.clone()),
-        );
-        Ok(Self(lk_agents_runtime::avatar_output::DataStreamAudioOutput::from_native(
-            output,
-            spawner,
-            Arc::new(RealClock::new()),
+            Arc::new(spawner),
         )))
     }
 
@@ -92,115 +87,6 @@ impl AudioOutput for DataStreamAudioOutput {
     }
     fn resume(&self) {
         self.0.resume();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use lk_agents_abi::voice::io::AudioOutputExt;
-    use lk_agents_abi::{AudioFrame, VirtualClock};
-    use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, RealClock, TokioSpawner};
-    use lk_agents_runtime::avatar_output::DataStreamAudioOutput;
-    use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind};
-    use std::sync::Arc;
-
-    fn fixture(name: &str) -> (DataStreamAudioOutput, Arc<FakeRoom>, Arc<VirtualClock>) {
-        let (rtc, clock) = FakeRtc::with_virtual_clock();
-        let room = rtc.room(name);
-        room.add_participant("avatar", ParticipantKind::Agent);
-        let spawner = TokioSpawner::current();
-        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
-            room.clone(),
-            "avatar".into(),
-            None,
-            None,
-            None,
-            false,
-            clock.clone(),
-            Arc::new(spawner.clone()),
-        );
-        let output = DataStreamAudioOutput::from_native(output, spawner, clock.clone());
-        std::mem::forget(rtc);
-        (output, room, clock)
-    }
-
-    async fn settle() {
-        for _ in 0..40 {
-            tokio::task::yield_now().await;
-        }
-    }
-
-    fn frame() -> AudioFrame {
-        AudioFrame::new(vec![0; 480], 24_000, 1, 240)
-    }
-
-    #[tokio::test]
-    async fn dropping_the_adapter_retains_cleanup_in_the_native_executor() {
-        let (output, room, _clock) = fixture("runtime_avatar_drop");
-        output.capture_frame(&frame()).await.unwrap();
-        room.local_participant().flow_byte_closes(false);
-        drop(output);
-        settle().await;
-        assert!(!room.local_participant().byte_streams()[0].closed);
-        room.local_participant().flow_byte_closes(true);
-        settle().await;
-        assert!(room.local_participant().byte_streams()[0].closed);
-    }
-
-    #[tokio::test]
-    async fn a_deadline_keeps_the_writer_until_release() {
-        let (output, room, clock) = fixture("runtime_avatar_deadline");
-        output.capture_frame(&frame()).await.unwrap();
-        room.local_participant().flow_byte_closes(false);
-        let (sent, received) = tokio::sync::oneshot::channel();
-        let output = Arc::new(output);
-        let closing = Arc::clone(&output);
-        lk_agents_abi::SpawnerExt::spawn_unboxed(&TokioSpawner::current(), async move {
-            closing.aclose().await;
-            let _ = sent.send(());
-        });
-        settle().await;
-        clock.advance(HOST_TEARDOWN_TIMEOUT);
-        received.await.unwrap();
-        assert!(!room.local_participant().byte_streams()[0].closed);
-        room.local_participant().flow_byte_closes(true);
-        settle().await;
-        assert!(room.local_participant().byte_streams()[0].closed);
-        output.aclose().await;
-    }
-    #[test]
-    fn drop_cleanup_runs_after_the_callers_async_runtime_has_closed() {
-        let host_loop = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let native = lk_agents_runtime::process::handle().unwrap();
-        let (rtc, _) = FakeRtc::with_virtual_clock();
-        let room = rtc.room("runtime_avatar_closed_host");
-        room.add_participant("avatar", ParticipantKind::Agent);
-        let clock = Arc::new(RealClock::new());
-        let spawner = TokioSpawner::new(native.clone());
-        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
-            room.clone(),
-            "avatar".into(),
-            None,
-            None,
-            None,
-            false,
-            clock.clone(),
-            Arc::new(spawner.clone()),
-        );
-        let output = DataStreamAudioOutput::from_native(output, spawner, clock.clone());
-        host_loop.block_on(output.capture_frame(&frame())).unwrap();
-        drop(host_loop);
-        drop(output);
-        native.block_on(async {
-            lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, async {
-                while !room.local_participant().byte_streams()[0].closed {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-        });
-        assert!(room.local_participant().byte_streams()[0].closed);
     }
 }
 

@@ -358,3 +358,49 @@ async fn a_delayed_finish_from_a_reused_stream_id_cannot_finish_a_new_output_gen
     assert!(!f.out.tracker().has_pending_segment(new));
     assert_eq!(f.out.aclose().await, Closed::Clean);
 }
+
+#[tokio::test]
+async fn a_dropped_output_still_closes_its_streams_on_its_executor() {
+    let f = fixture("drop_closes_streams", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.room.local_participant().flow_byte_closes(false);
+    drop(f.out);
+    settle().await;
+    assert!(!f.room.local_participant().byte_streams()[0].closed);
+    f.room.local_participant().flow_byte_closes(true);
+    settle().await;
+    assert!(f.room.local_participant().byte_streams()[0].closed);
+}
+
+#[test]
+fn drop_cleanup_runs_after_the_callers_async_runtime_has_closed() {
+    let host_loop = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let native = crate::process::handle().unwrap();
+    let (rtc, _) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("drop_after_host_loop");
+    room.add_participant("avatar", ParticipantKind::Agent);
+    let clock = Arc::new(lk_agents_abi::RealClock::new());
+    let output = DataStreamAudioOutput::new(
+        room.clone(),
+        "avatar".into(),
+        None,
+        None,
+        None,
+        false,
+        clock.clone(),
+        Arc::new(TokioSpawner::new(native.clone())),
+    );
+    host_loop.block_on(output.capture_frame(&frame())).unwrap();
+    drop(host_loop);
+    drop(output);
+    native.block_on(async {
+        lk_agents_abi::timeout(&*clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, async {
+            while !room.local_participant().byte_streams()[0].closed {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    });
+}

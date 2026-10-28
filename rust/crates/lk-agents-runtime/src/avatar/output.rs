@@ -375,11 +375,26 @@ pub struct DataStreamAudioOutput {
     inner: Arc<Inner>,
 }
 
+/// Explicit close while the room is usable is the primary path. A dropped output stops its tasks
+/// and routes at once, and its streams still settle on its executor, observed: this survives the
+/// host loop that dropped it.
 impl Drop for DataStreamAudioOutput {
     fn drop(&mut self) {
         self.inner.tasks.close();
         self.inner.retire_routes();
+        let inner = Arc::clone(&self.inner);
+        let spawner = Arc::clone(&inner.spawner);
+        Arc::new(TaskSet::default()).spawn(&*spawner, "avatar_output_drop", async move {
+            observe_close(inner.aclose().await);
+        });
     }
+}
+
+fn observe_close(closed: Closed) -> Closed {
+    if closed != Closed::Clean {
+        log::error!("avatar output cleanup did not settle cleanly: {closed:?}");
+    }
+    closed
 }
 
 impl DataStreamAudioOutput {
@@ -425,7 +440,7 @@ impl DataStreamAudioOutput {
     }
 
     pub async fn aclose(&self) -> Closed {
-        Arc::clone(&self.inner).aclose().await
+        observe_close(Arc::clone(&self.inner).aclose().await)
     }
 }
 
