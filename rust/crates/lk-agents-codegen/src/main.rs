@@ -72,7 +72,6 @@ const SOURCES: &[&str] = &[
     // The session schema (plan 13.5): the row models Python reads rows as, then everything else
     // that crosses `_core`'s storage boundary: the statements' requests and results, the run
     // records, the turn's context and output, the threads' and the streams' records.
-    "rust/crates/lk-agents-abi/src/a2a/options.rs",
     "rust/crates/lk-agents-storage/src/schema.rs",
     "rust/crates/lk-agents-storage/src/db.rs",
     "rust/crates/lk-agents-storage/src/streams.rs",
