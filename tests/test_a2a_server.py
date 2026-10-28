@@ -521,7 +521,8 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(door: Callable[.
     (task,) = await desk.list_tasks(ctx_id)
     assert task["status"]["state"] == "TASK_STATE_WORKING"
     canceled = await desk.cancel(task["id"], ctx_id, **{"livekit/reason": "user_interrupted"})
-    assert canceled["result"]["status"]["state"] == "TASK_STATE_CANCELED"
+    # the call answers at once; the task ends on its stream once its tool stopped
+    assert canceled["result"]["status"]["state"] == "TASK_STATE_WORKING"
     await past_the_fresh_acquire()
     release.set()
     sent = await running

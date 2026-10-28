@@ -37,6 +37,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from .a2a_driver import (
     AGENT,
     ENDPOINT,
+    Door,
     Reply,
     ScriptedLLM,
     call,
@@ -609,20 +610,82 @@ async def test_the_answer_is_the_artifact_that_ended_last() -> None:
 
 
 @pytest.mark.rule("R25")
+@pytest.mark.xfail(strict=True, reason="R25: a task with no text answers no text")
 async def test_an_expert_never_answers_with_its_progress(
     expert: Callable[..., A2ADelegate],
 ) -> None:
-    """An expert task that ends with no text answers with no text, not its last progress."""
+    """An expert's work ends in the background and its model words nothing: it answers with the
+    work's result. An expert task that ends with no text gives an empty answer."""
 
-    async def silent(ctx: A2ASessionContext[Any]) -> str:
-        await ctx.update("checking the schedule")
-        return ""
+    back = Agent(
+        instructions="back office",
+        llm=ScriptedLLM(Reply(tool_calls=[call("book", "b1", day="monday")])),
+    )
 
+    @back.tool
+    async def book(ctx: RunContext, day: str) -> str:
+        """Book a cleaning.
+
+        Args:
+            day: the day
+        """
+        await ctx.update("booking")
+        await asyncio.sleep(0.2)
+        return f"booked {day}"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        if ctx.message.text_content == "say nothing":
+            await ctx.update("thinking it over")
+            return ""
+        return await back.run(ctx.message, message_history=ctx.message_history)
+
+    delegate = expert(handler, inbox="live")
     progress: list[str] = []
-    result = await expert(silent).run("book a cleaning", progress=progress.append)
-    assert progress == ["checking the schedule"]
-    assert result.state == "completed"
-    assert result.output == ""
+    booked = await delegate.run("book monday", progress=progress.append)
+    silent = await delegate.run("say nothing")
+
+    assert progress == ["booking"]
+    assert booked.state == "completed" and booked.output == "booked monday"
+    assert silent.state == "completed" and silent.output == ""
+
+
+@pytest.mark.rule("R14")
+@pytest.mark.xfail(strict=True, reason="R14: a canceled caller waits for the expert's answer")
+async def test_a_caller_that_gives_up_leaves_the_experts_task_running(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(ctx: A2ASessionContext[Any]) -> str:
+        entered.set()
+        await release.wait()
+        return "It is 120 euros."
+
+    front = Agent(
+        instructions="front desk",
+        llm=ScriptedLLM(Reply(tool_calls=[call("ask", "c1", request="the fare to Oslo")])),
+        tools=[expert(slow)],
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return (await front.run(ctx.message, message_history=ctx.message_history)).output
+
+    desk = door(handler)
+    thread = await desk.thread()
+    asked = asyncio.create_task(desk.send("fare to Oslo?", context_id=thread))
+    await asyncio.wait_for(entered.wait(), 20)
+
+    # the person gives up: the front desk's task stops, the expert's runs on
+    def by_whom(task: dict[str, Any]) -> str | None:
+        return metadata_from_wire(task["history"][0].get("metadata")).get(KIND)
+
+    tasks = {by_whom(t): t["id"] for t in await desk.list_tasks(thread)}
+    await desk.cancel(tasks[None], thread)
+    stopped = await asyncio.wait_for(asked, 20)
+    assert stopped.state == "canceled"
+    states = {t["id"]: t["status"]["state"] for t in await desk.list_tasks(thread)}
+    assert states[tasks["delegation"]] == "TASK_STATE_WORKING"
+    release.set()
 
 
 STREAMED = ("SendStreamingMessage", "message/stream", "SubscribeToTask", "tasks/resubscribe")

@@ -9,6 +9,7 @@ by order or by a predicate on the request and keeps every request.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -298,11 +299,13 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
 
 @dataclass
 class Reply:
-    """What the model answers: text, tool calls, and when, if not simply next in order."""
+    """What the model answers: text, tool calls, and when, if not simply next in order; with
+    ``hold`` the stream stops after the text until it is set."""
 
     content: str = ""
     tool_calls: list[FunctionToolCall] = field(default_factory=list)
     when: Callable[[ChatContext], bool] | None = None
+    hold: asyncio.Event | None = None
 
 
 def call(name: str, call_id: str, **arguments: Any) -> FunctionToolCall:
@@ -356,3 +359,5 @@ class ScriptedStream(FakeLLMStream):
     async def _run(self) -> None:
         if self._reply is not None:
             self._send_chunk(delta=self._reply.content, tool_calls=self._reply.tool_calls)
+            if self._reply.hold is not None:
+                await self._reply.hold.wait()

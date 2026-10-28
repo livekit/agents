@@ -346,8 +346,8 @@ class Booking:
 
 class Bookings:
     """A live desk: ``book`` reports progress (``silent`` to the model alone), waits for
-    ``release[day]``, then books or asks ``asks[day]``; "one moment" holds the lane until
-    ``gate``."""
+    ``release[day]``, then books or asks ``asks[day]``; ``look`` waits silently; "one moment"
+    holds the lane until ``gate``."""
 
     def __init__(
         self,
@@ -363,7 +363,7 @@ class Bookings:
         self.halfway, self.progressed = asyncio.Event(), asyncio.Event()
         self.release = {day: asyncio.Event() for day in days}
         self.ended: list[str] = []
-        self.holding, self.gate = asyncio.Event(), asyncio.Event()
+        self.holding, self.gate, self.looking = asyncio.Event(), asyncio.Event(), asyncio.Event()
         self.agent = Agent(instructions="front desk", llm=model, state_type=Booking)
         self.door: Door
         self.thread = ""
@@ -386,6 +386,17 @@ class Bookings:
                 return InputRequired(asks[day], verbatim=True)
             ctx.state.booked = day
             return f"booked {day}"
+
+        @self.agent.tool(flags=flags)
+        async def look(ctx: RunContext[None, Booking], day: str) -> str:
+            """Look for a free slot.
+
+            Args:
+                day: the day
+            """
+            self.looking.set()
+            await self.release[day].wait()
+            return f"free on {day}"
 
     async def __call__(self, ctx: A2ASessionContext[Booking]) -> Any:
         if ctx.message.text_content == "what did I book?":
@@ -689,6 +700,199 @@ async def test_a_cancellable_tool_in_the_background_can_be_cancelled(
     assert "'b1'" in outputs["g1"].output and not outputs["x1"].is_error
     assert outputs["b1_final"].is_error
     assert ended.state == "completed" and ended.answer == "The booking was cancelled."
+
+
+# ---------------------------------------------------------------------------------------------
+# stopping: an interrupt and a client's cancel
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.rule("R6")
+@pytest.mark.xfail(strict=True, reason="R6: the turn sees an interrupt only before a model call")
+async def test_a_message_stops_the_reply_while_it_streams(door: Callable[..., Door]) -> None:
+    held = asyncio.Event()
+    desk = await bookings(
+        door,
+        Reply("Here is everything", hold=held, when=said("tell me everything")),
+        Reply("Fine.", when=said("never mind")),
+    )
+    first = desk.send("tell me everything")
+
+    async def streaming() -> bool:
+        return len(desk.model.requests) == 1
+
+    await until(streaming, "the reply streams")
+    ran = await asyncio.wait_for(desk.send("never mind"), 20)
+    stopped = await asyncio.wait_for(first, 20)
+    held.set()
+
+    # the task ends with what was shown of the reply as its answer
+    assert stopped.state == "canceled" and stopped.metadata[INTERRUPTED] is True
+    assert stopped.answer == "Here is everything"
+    assert ran.answer == "Fine."
+
+
+@pytest.mark.rule("R6")
+async def test_an_interrupted_reply_that_showed_nothing_is_kept_as_interrupted(
+    door: Callable[..., Door],
+) -> None:
+    held = asyncio.Event()
+    desk = await bookings(
+        door,
+        *BOOK_MONDAY,
+        Reply(hold=held, when=told("b1_final")),
+        Reply("Fine.", when=said("never mind")),
+    )
+    first = desk.send("book monday")
+    await desk.in_the_background()
+    desk.release["monday"].set()
+
+    async def replying() -> bool:
+        return len(desk.model.requests) == 2
+
+    await until(replying, "the delivery's reply streams")
+    await asyncio.wait_for(desk.send("never mind"), 20)
+    held.set()
+    await asyncio.wait_for(first, 20)
+
+    # the next turn's model reads the result, then the reply cut off before it said anything
+    items = desk.model.requests[-1].items
+    at = next(i for i, x in enumerate(items) if getattr(x, "call_id", None) == "b1_final")
+    reply = items[at + 2]
+    assert isinstance(reply, ChatMessage) and reply.role == "assistant"
+    assert reply.interrupted and reply.content == [""]
+
+
+@pytest.mark.rule("R7", "B27")
+@pytest.mark.parametrize(
+    "cancellable",
+    [
+        pytest.param(
+            False,
+            marks=pytest.mark.xfail(
+                strict=True, reason="B27: an interrupt right after the acquire is not seen"
+            ),
+        ),
+        pytest.param(
+            True,
+            marks=pytest.mark.xfail(strict=True, reason="R7: an interrupt waits for every tool"),
+        ),
+    ],
+)
+async def test_an_interrupt_stops_only_a_cancellable_tool(
+    door: Callable[..., Door], cancellable: bool
+) -> None:
+    desk = await bookings(
+        door,
+        Reply(tool_calls=[call("look", "l1", day="monday")], when=said("look monday")),
+        Reply("Fine.", when=said("never mind")),
+        flags=ToolFlag.CANCELLABLE if cancellable else ToolFlag.NONE,
+    )
+    first = desk.send("look monday")
+    await asyncio.wait_for(desk.looking.wait(), 20)
+    second = desk.send("never mind")
+    await listed(desk.door, desk.thread, 2)
+    if not cancellable:
+        desk.release["monday"].set()  # it runs to its end
+    stopped, ran = await asyncio.wait_for(asyncio.gather(first, second), 20)
+
+    assert stopped.state == "canceled" and ran.answer == "Fine."
+    assert desk.outputs()["l1"].is_error is cancellable
+
+
+@pytest.mark.rule("R7")
+@pytest.mark.xfail(strict=True, reason="R7: an interrupted task ends canceled, its work dropped")
+async def test_an_interrupted_task_waits_for_its_work_in_the_background(
+    door: Callable[..., Door],
+) -> None:
+    desk = await bookings(
+        door,
+        Reply(
+            tool_calls=[call("book", "b1", day="monday"), call("look", "l1", day="tuesday")],
+            when=said("book monday"),
+        ),
+        Reply("Fine.", when=said("never mind")),
+        Reply("Booked.", when=told("b1_final")),
+        days=("monday", "tuesday"),
+    )
+    first = desk.send("book monday")
+    # the booking goes to the background while the look holds the turn
+    await asyncio.wait_for(desk.looking.wait(), 20)
+    second = desk.send("never mind")
+    await listed(desk.door, desk.thread, 2)
+    desk.release["tuesday"].set()
+    ran = await asyncio.wait_for(second, 20)
+    await desk.in_the_background()
+    desk.release["monday"].set()
+    booked = await asyncio.wait_for(first, 20)
+
+    assert ran.answer == "Fine."
+    assert booked.state == "completed" and booked.answer == "Booked."
+
+
+@pytest.mark.rule("R12", "B27")
+@pytest.mark.xfail(strict=True, reason="R12: a cancel writes canceled at once and stops no tool")
+async def test_a_cancel_stops_the_running_tool_after_its_protected_step(
+    door: Callable[..., Door],
+) -> None:
+    model = ScriptedLLM(Reply(tool_calls=[call("pay", "p1")]))
+    agent = Agent(instructions="front desk", llm=model)
+    entered, charged, never = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    @agent.tool
+    async def pay(ctx: RunContext) -> str:
+        """Charge the card."""
+        with ctx.uninterruptible():
+            entered.set()
+            await charged.wait()
+        await never.wait()
+        return "paid"
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await agent.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler)
+    thread = await desk.thread()
+    first = asyncio.create_task(desk.send("pay", context_id=thread))
+    await asyncio.wait_for(entered.wait(), 20)
+    (task,) = await desk.list_tasks(thread)
+    await desk.cancel(task["id"], thread)
+    # the task runs on until its protected step ended
+    await asyncio.sleep(0.5)
+    assert not first.done()
+    charged.set()
+    stopped = await asyncio.wait_for(first, 20)
+
+    said = str(stopped.status_text)
+    assert stopped.state == "canceled" and said.startswith("stopped after:") and "pay" in said
+
+
+@pytest.mark.rule("R12")
+@pytest.mark.xfail(strict=True, reason="R12: a cancel leaves work in the background running")
+async def test_a_cancel_stops_work_in_the_background(door: Callable[..., Door]) -> None:
+    desk = await bookings(door, *BOOK_MONDAY)
+    first = desk.send("book monday")
+    (task,) = await desk.in_the_background()
+    answered = (await desk.door.cancel(task["id"], desk.thread))["result"]
+    stopped = await asyncio.wait_for(first, 20)
+
+    # the call answers at once, the request stays off the wire, and the task ends on its stream
+    assert answered["status"]["state"] == "TASK_STATE_WORKING"
+    assert not any("cancel" in key for f in [answered, stopped.task] for key in metadata_of(f))
+    assert stopped.state == "canceled" and str(stopped.status_text).startswith("stopped after:")
+    # the work stopped, and no reply was made for it
+    assert desk.ended == [] and len(desk.model.requests) == 1
+
+
+@pytest.mark.rule("R13")
+async def test_a_cancel_on_an_ended_task_changes_nothing(door: Callable[..., Door]) -> None:
+    desk = await bookings(door, Reply("Hello.", when=said("hi")))
+    done = await asyncio.wait_for(desk.send("hi"), 20)
+    refused = await desk.door.cancel(done.task["id"], desk.thread)
+
+    assert refused["error"]["code"] == -32002  # TaskNotCancelableError
+    (task,) = await desk.door.list_tasks(desk.thread)
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
 # ---------------------------------------------------------------------------------------------
