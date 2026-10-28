@@ -99,8 +99,6 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        await super().start(agent_session, room)
-
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -124,41 +122,24 @@ class AvatarSession(BaseAvatarSession):
         )
 
         logger.debug("starting avatar session")
-        try:
-            simli_session_token_request = await self._ensure_http_session().post(
-                f"{self.api_url}/compose/token",
-                json=self._simli_config.create_json(),
-                headers={"x-simli-api-key": self._simli_config.api_key},
-            )
-            body = await simli_session_token_request.text()
-            simli_session_token_request.raise_for_status()
-        except Exception as e:
-            status = (
-                getattr(simli_session_token_request, "status", "N/A")
-                if "simli_session_token_request" in dir()
-                else "N/A"
-            )
-            detail = body if "body" in dir() else str(e)
-            logger.error(
-                f"failed to create simli session token server returned {status} and detail {detail}"
-            )
-            return
-        try:
-            avatarConnectionRequest = await self._ensure_http_session().post(
-                f"{self.api_url}/integrations/livekit/agents",
-                json={
-                    "session_token": (json.loads(body))["session_token"],
-                    "livekit_token": livekit_token,
-                    "livekit_url": livekit_url,
-                },
-            )
-            body = await avatarConnectionRequest.text()
-            avatarConnectionRequest.raise_for_status()
-        except Exception:
-            logger.error(
-                f"failed to connect to simli avatar session server returned {avatarConnectionRequest.status} and detail {body}"
-            )
-            return
+        token_response = await self._ensure_http_session().post(
+            f"{self.api_url}/compose/token",
+            json=self._simli_config.create_json(),
+            headers={"x-simli-api-key": self._simli_config.api_key},
+        )
+        body = await token_response.text()
+        token_response.raise_for_status()
+        connection_response = await self._ensure_http_session().post(
+            f"{self.api_url}/integrations/livekit/agents",
+            json={
+                "session_token": json.loads(body)["session_token"],
+                "livekit_token": livekit_token,
+                "livekit_url": livekit_url,
+            },
+        )
+        await connection_response.read()
+        connection_response.raise_for_status()
+        await super().start(agent_session, room)
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
                 room=room,
