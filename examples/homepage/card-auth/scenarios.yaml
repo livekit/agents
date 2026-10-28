@@ -17,11 +17,11 @@ scenarios:
       2. When asked if there's anything else, say "No, that's all, thanks." Wait for Avery's
          goodbye, then hang up.
     agent_expectations: >
-      The opening explains it's a demo, that any name and birthday work, and that 1111 gets
-      verified while 0000 shows a failed check, then asks how it can help. It acknowledges the
-      charge and says it has to verify Sam first, before asking for anything. It asks for the
-      name, date of birth, and last four one at a time, says each back briefly, and checks them
-      all at once. Only after the check comes back verified does it describe the charge: Trattoria
+      The opening says it's a demo of financial verification and asks for the caller's name. It
+      acknowledges the charge and says it has to verify Sam first. It asks for the name, date of
+      birth, and last four one at a time, and checks them all at once. Asking for the birthday,
+      it says this is role-play and it needn't be real; asking for the card, it says four ones
+      succeed and four zeros fail. Only after the check comes back verified does it describe the charge: Trattoria
       da Enzo in Rome, Italy, for $186.40. Once Sam says it wasn't them, it says the card is locked
       and the case is with loss prevention, and gives case LP-20417. It says goodbye with a short
       thanks for trying the demo. Replies are one or two short spoken sentences.

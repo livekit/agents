@@ -170,7 +170,6 @@ async def test_a_travel_notice_needs_no_flagged_purchase(agent, published):
     assert "alert" not in published
 
 
-def test_the_greeting_explains_the_demo_cards():
-    assert "one-one-one-one" in GREETING
-    assert "zero-zero-zero-zero" in GREETING
-    assert "how can I help?" in GREETING
+def test_the_card_question_explains_the_demo_cards(agent):
+    assert "four ones for a success, or four zeros for a failure" in agent.instructions
+    assert "Can I get your name?" in GREETING
