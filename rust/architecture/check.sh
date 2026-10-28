@@ -20,7 +20,7 @@ run dependencies-lengths-baseline-history python3 rust/architecture/check.py
 run clippy python3 rust/architecture/clippy.py
 run export-counterexamples cargo test --config "$PWD/rust/.cargo/config.toml" \
     --manifest-path rust/Cargo.toml --locked -q \
-    -p lk-agents-codegen --bin lk-agents-codegen placement
+    -p lk-agents-codegen --bins
 run codegen cargo run --config "$PWD/rust/.cargo/config.toml" \
     --manifest-path rust/Cargo.toml --locked -q \
     -p lk-agents-codegen --bin lk-agents-codegen -- --check

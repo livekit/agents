@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import tomllib
@@ -183,9 +184,51 @@ def inventory(root: Path, helper: Path, paths: list[str]) -> set[str]:
     return set(process.stdout.splitlines())
 
 
-def command(
-    root: Path, crates: list[str], mode: str = "all", *, force_warn: bool = True
-) -> list[str]:
+def target_directory(root: Path) -> Path:
+    """Use Cargo's target selection for helpers and compiler fixtures alike."""
+    result = subprocess.run(
+        [
+            "cargo",
+            "metadata",
+            "--no-deps",
+            "--format-version=1",
+            "--locked",
+            "--config",
+            str(root / "rust/.cargo/config.toml"),
+            "--manifest-path",
+            str(root / "rust/Cargo.toml"),
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return Path(json.loads(result.stdout)["target_directory"])
+
+
+def build_helper(root: Path) -> Path:
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--config",
+            str(root / "rust/.cargo/config.toml"),
+            "--quiet",
+            "--manifest-path",
+            str(root / "rust/Cargo.toml"),
+            "--locked",
+            "-p",
+            "lk-agents-codegen",
+            "--bin",
+            "architecture-allows",
+        ],
+        cwd=root,
+        check=True,
+    )
+    return target_directory(root) / "debug/architecture-allows"
+
+
+def command(root: Path, crates: list[str], mode: str = "all") -> list[str]:
     args = [
         "cargo",
         "clippy",
@@ -195,8 +238,6 @@ def command(
         "--manifest-path",
         str(root / "rust/Cargo.toml"),
         "--locked",
-        "--target-dir",
-        str(root / "rust/target"),
         "--all-targets",
     ]
     for crate in crates:
@@ -217,11 +258,7 @@ def command(
         *args,
         "--message-format=json",
         "--",
-        *(
-            arg
-            for lint in LINTS
-            for arg in (("--force-warn" if force_warn else "-D"), f"clippy::{lint}")
-        ),
+        *(arg for lint in LINTS for arg in ("--force-warn", f"clippy::{lint}")),
     ]
 
 
@@ -296,8 +333,76 @@ def site_inventory(root: Path, helper: Path, locations: list[tuple]) -> set[str]
     return identities
 
 
-def compiler_messages(output: str) -> list[dict]:
-    records = [json.loads(line) for line in output.splitlines()]
+def exemption_errors(root: Path, helper: Path, records: list[dict]) -> list[str]:
+    """Each compiler site must retain an effective source exemption."""
+    from collections import defaultdict
+
+    features = {
+        record["package_id"]: record["features"]
+        for record in records
+        if record.get("reason") == "compiler-artifact"
+    }
+    by_file = defaultdict(set)
+    for record in records:
+        if record.get("reason") != "compiler-message" or "custom-build" in record["target"]["kind"]:
+            continue
+        message = record["message"]
+        if (message.get("code") or {}).get("code") not in {f"clippy::{lint}" for lint in LINTS}:
+            continue
+        expanded = any(s.get("expansion") for s in message["spans"] if s["is_primary"])
+        crate_root = record["target"]["src_path"]
+        package = record["package_id"]
+        if package not in features:
+            raise ValueError(f"{crate_root}: missing compiler feature inventory")
+        for path, line, column, lint, _ in compiler_locations([message], root):
+            by_file[(path, crate_root, package)].add((line, column, lint, expanded))
+    groups = defaultdict(dict)
+    for (path, crate_root, package), sites in by_file.items():
+        groups[(crate_root, package)][path] = sorted(sites)
+    errors = []
+    for (crate_root, package), files in sorted(groups.items()):
+        env = {
+            **os.environ,
+            "ARCHITECTURE_FEATURES": ",".join(features[package]),
+            "ARCHITECTURE_CRATE_ROOT": crate_root,
+        }
+        rows = [
+            "\t".join(
+                [
+                    path,
+                    *(
+                        f"{line}:{column}:{lint.removeprefix('clippy::')}:{int(expanded)}"
+                        for line, column, lint, expanded in sites
+                    ),
+                ]
+            )
+            for path, sites in sorted(files.items())
+        ]
+        process = subprocess.run(
+            [str(helper), "coverage-batch"],
+            input="\n".join(rows) + "\n",
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        sites = [(path, *site) for path, entries in sorted(files.items()) for site in entries]
+        verdicts = process.stdout.splitlines()
+        if len(verdicts) != len(sites) or any(v not in {"allowed", "denied"} for v in verdicts):
+            raise ValueError(f"{crate_root}: incomplete exemption coverage")
+        errors.extend(
+            f"{path}:{line}:{column}: {lint} requires an effective source exemption"
+            for (path, line, column, lint, _), verdict in zip(sites, verdicts, strict=True)
+            if verdict != "allowed"
+        )
+    return errors
+
+
+def compiler_messages(output: str | list[dict]) -> list[dict]:
+    records = (
+        [json.loads(line) for line in output.splitlines()] if isinstance(output, str) else output
+    )
     if (
         not records
         or records[-1].get("reason") != "build-finished"
@@ -319,27 +424,7 @@ def main() -> int:
     errors = configuration_errors(root, crates)
     if errors:
         sys.exit("\n".join(errors))
-    subprocess.run(
-        [
-            "cargo",
-            "build",
-            "--config",
-            str(root / "rust/.cargo/config.toml"),
-            "--quiet",
-            "--manifest-path",
-            str(root / "rust/Cargo.toml"),
-            "--locked",
-            "--target-dir",
-            str(root / "rust/target"),
-            "-p",
-            "lk-agents-codegen",
-            "--bin",
-            "architecture-allows",
-        ],
-        cwd=root,
-        check=True,
-    )
-    helper = root / "rust/target/debug/architecture-allows"
+    helper = build_helper(root)
     snapshots = {
         path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
     }
@@ -355,42 +440,47 @@ def main() -> int:
     env["CLIPPY_CONF_DIR"] = str(root / "rust/crates/lk-agents-abi")
     locations = set()
     for mode in ("default", "python", "all"):
-        for force_warn in (False, True):
-            process = subprocess.run(
-                command(root, crates, mode, force_warn=force_warn),
-                cwd=root,
-                env=env,
-                text=True,
-                capture_output=True,
+        started = time.monotonic()
+        process = subprocess.run(
+            command(root, crates, mode),
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        elapsed = time.monotonic() - started
+        timing = f"{time.strftime('%H:%M:%S')} s0-architecture clippy-{mode} rc={process.returncode} {elapsed:.2f}s"
+        print(timing, flush=True)
+        log = Path(os.environ.get("ARCHITECTURE_TIMINGS_DIR", "/tmp/plan-align")) / "timings.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a") as stream:
+            stream.write(timing + "\n")
+        sys.stderr.write(process.stderr)
+        records = [json.loads(line) for line in process.stdout.splitlines()]
+        if process.returncode:
+            for record in records:
+                if (
+                    record.get("reason") == "compiler-message"
+                    and record["message"]["level"] == "error"
+                ):
+                    sys.stderr.write(record["message"].get("rendered") or str(record["message"]))
+            return process.returncode
+        messages = compiler_messages(records)
+        artifacts = {
+            record["target"]["name"]
+            for record in records
+            if record.get("reason") == "compiler-artifact"
+            and "lib" in record.get("target", {}).get("kind", [])
+        }
+        missing = {name.replace("-", "_") for name in crates} - artifacts
+        if missing:
+            raise ValueError(
+                f"Clippy {mode} transcript is missing core artifacts: {sorted(missing)}"
             )
-            sys.stderr.write(process.stderr)
-            if process.returncode:
-                for line in process.stdout.splitlines():
-                    record = json.loads(line)
-                    if (
-                        record.get("reason") == "compiler-message"
-                        and record["message"]["level"] == "error"
-                    ):
-                        sys.stderr.write(
-                            record["message"].get("rendered") or str(record["message"])
-                        )
-                return process.returncode
-            messages = compiler_messages(process.stdout)
-            artifacts = {
-                record["target"]["name"]
-                for record in (json.loads(line) for line in process.stdout.splitlines())
-                if record.get("reason") == "compiler-artifact"
-                and "lib" in record.get("target", {}).get("kind", [])
-            }
-            missing = {name.replace("-", "_") for name in crates} - artifacts
-            if missing:
-                raise ValueError(
-                    f"Clippy {mode} transcript is missing core artifacts: {sorted(missing)}"
-                )
-            locations.update(compiler_locations(messages, root))
-            print(
-                f"clippy {mode} {'capture' if force_warn else 'deny'}: successful complete compiler pass"
-            )
+        sites = compiler_locations(messages, root)
+        errors.extend(exemption_errors(root, helper, records))
+        locations.update(sites)
+        print(f"clippy {mode}: successful complete compiler pass")
     current = {
         path: hashlib.sha256((root / path).read_bytes()).digest() for path in source_paths(root)
     }
@@ -402,7 +492,7 @@ def main() -> int:
     if changed:
         raise ValueError("core source changed during Clippy captures; rerun: " + ", ".join(changed))
     actual.update(site_inventory(root, helper, sorted(locations)))
-    errors = ratchet(actual, baseline)
+    errors.extend(ratchet(actual, baseline))
     for error in errors:
         print(error, file=sys.stderr)
     print(

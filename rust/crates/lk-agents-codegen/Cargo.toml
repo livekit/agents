@@ -21,3 +21,15 @@ lk-agents-bindgen = { path = "../lk-agents-bindgen" }
 [[bin]]
 name = "architecture-allows"
 path = "../../architecture/allows.rs"
+
+[[example]]
+name = "architecture-fixtures"
+path = "../../architecture/fixtures.rs"
+
+[dev-dependencies]
+tokio.workspace = true
+futures = "0.3"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
+crossbeam-channel = "0.5"
+parking_lot = "0.12"

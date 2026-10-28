@@ -13,37 +13,14 @@ import clippy
 from check import ratchet
 
 ROOT = Path(__file__).resolve().parents[2]
-HELPER = ROOT / "rust/target/debug/architecture-allows"
+HELPER: Path
 
 
 class ClippyContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if (
-            HELPER.exists()
-            and HELPER.stat().st_mtime >= (ROOT / "rust/architecture/allows.rs").stat().st_mtime
-        ):
-            return
-        subprocess.run(
-            [
-                "cargo",
-                "build",
-                "--config",
-                str(ROOT / "rust/.cargo/config.toml"),
-                "--quiet",
-                "--manifest-path",
-                str(ROOT / "rust/Cargo.toml"),
-                "--locked",
-                "--target-dir",
-                str(ROOT / "rust/target"),
-                "-p",
-                "lk-agents-codegen",
-                "--bin",
-                "architecture-allows",
-            ],
-            cwd=ROOT,
-            check=True,
-        )
+        global HELPER
+        HELPER = clippy.build_helper(ROOT)
 
     def test_new_and_broadened_exemptions_fail_even_when_counts_match(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -218,248 +195,148 @@ class ClippyContracts(unittest.TestCase):
             )
 
     def test_compiler_rejects_each_banned_construct_family_and_allowed_item_growth(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "src").mkdir()
-            (root / "Cargo.toml").write_text("""[package]
-name = "architecture-negative-fixture"
-version = "0.0.0"
-edition = "2024"
-[workspace]
-[features]
-native = []
-python = []
-[dependencies]
-tokio = { version = "=1.53.1", features = ["rt", "macros", "time", "sync"] }
-futures = "=0.3.34"
-rand = "=0.9.5"
-uuid = { version = "=1.28.0", features = ["v4"] }
-crossbeam-channel = "=0.5.17"
-parking_lot = "=0.12.5"
-""")
-            (root / "src/lib.rs").write_text("""#![allow(unused, deprecated)]
-#![allow(clippy::disallowed_macros, reason = "legacy macro sites")]
-use rand::{Rng, RngCore};
-pub fn ambient(rng: &mut impl RngCore) {
-    let _ = std::thread::spawn(|| {});
-    let _ = std::time::Instant::now();
-    let _ = std::time::SystemTime::now();
-    let _ = std::collections::hash_map::RandomState::new();
-    let _ = std::process::id();
-    let _ = std::env::var("FIXTURE");
-    let _ = rand::random::<u32>();
-    let _ = rng.next_u64();
-    let _ = rng.random::<u32>();
-    let _ = uuid::Uuid::new_v4();
-    let _ = std::sync::mpsc::channel::<()>();
-    let _ = tokio::sync::mpsc::unbounded_channel::<()>();
-    let _ = futures::channel::mpsc::unbounded::<()>();
-    let _ = crossbeam_channel::unbounded::<()>();
-    let _: std::collections::HashMap<u8, u8> = Default::default();
-    let _: std::collections::HashSet<u8> = Default::default();
-    let _ = std::sync::Mutex::new(());
-    let _ = std::sync::RwLock::new(());
-    let _ = tokio::sync::Mutex::new(());
-    let _ = tokio::sync::RwLock::new(());
-    let _ = parking_lot::Mutex::new(());
-    let _ = parking_lot::RwLock::new(());
-    let _ = std::sync::atomic::AtomicU64::new(0);
-}
-#[cfg(not(feature = "python"))]
-pub fn default_only() {
-    let _ = std::env::var("DEFAULT_ONLY");
-}
-#[cfg(feature = "native")]
-pub fn optional_native() {
-    let _ = std::thread::Builder::new().spawn(|| {});
-}
-pub fn through_handle(handle: &tokio::runtime::Handle) {
-    let _ = handle.spawn(async {});
-}
-pub async fn tasks() {
-    tokio::spawn(async {});
-    tokio::select! { _ = async {} => {} }
-    tokio::join!(async {}, async {});
-    tokio::time::sleep(std::time::Duration::ZERO).await;
-}
-#[allow(clippy::disallowed_methods, reason = "legacy")]
-pub fn old() { std::thread::spawn(|| {}); }
-""")
-            self.assertIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"]))
-            self.assertNotIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"], "default"))
-            self.assertIn("lk-agents-abi/python", clippy.command(ROOT, ["lk-agents-abi"], "python"))
-            env = os.environ.copy()
-            env["CLIPPY_CONF_DIR"] = str(ROOT / "rust/crates/lk-agents-abi")
-            env["CARGO_TARGET_DIR"] = str(ROOT / "rust/target")
-            command = [
-                "cargo",
-                "clippy",
-                "--no-deps",
-                "--config",
-                str(ROOT / "rust/.cargo/config.toml"),
-                "--all-features",
-                "--manifest-path",
-                str(root / "Cargo.toml"),
-                "--message-format=json",
-                "--",
-                *(a for lint in clippy.LINTS for a in ("--force-warn", f"clippy::{lint}")),
-            ]
-            process = subprocess.run(command, env=env, cwd=root, capture_output=True, text=True)
-            self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
-            all_messages = clippy.compiler_messages(process.stdout)
-            default_command = [arg for arg in command if arg != "--all-features"]
-            default_process = subprocess.run(
-                default_command, env=env, cwd=root, capture_output=True, text=True
-            )
-            self.assertEqual(
-                default_process.returncode, 0, default_process.stderr + default_process.stdout
-            )
-            messages = all_messages + clippy.compiler_messages(default_process.stdout)
-            diagnostic_text = "\n".join(m["message"] for m in messages)
-            for name in (
-                "std::thread::spawn",
-                "std::time::Instant::now",
-                "std::time::SystemTime::now",
-                "RandomState::new",
-                "std::process::id",
-                "std::env::var",
-                "rand::random",
-                "next_u64",
-                "rand::Rng::random",
-                "uuid::Uuid::new_v4",
-                "mpsc::channel",
-                "unbounded",
-                "HashMap",
-                "HashSet",
-                "Mutex",
-                "RwLock",
-                "AtomicU64",
-                "tokio::task::spawn",
-                "tokio::select",
-                "tokio::join",
-                "tokio::time::sleep",
-            ):
-                with self.subTest(name=name):
-                    self.assertIn(name, diagnostic_text)
-            rejected_lines = set()
-            for message in messages:
-                if (message.get("code") or {}).get("code") not in {
-                    f"clippy::{lint}" for lint in clippy.LINTS
-                }:
+        self.assertIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"]))
+        self.assertNotIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"], "default"))
+        self.assertIn("lk-agents-abi/python", clippy.command(ROOT, ["lk-agents-abi"], "python"))
+        source = ROOT / "rust/architecture/fixtures.rs"
+        env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / "rust/crates/lk-agents-abi")}
+        command = [
+            "cargo",
+            "clippy",
+            "--no-deps",
+            "--config",
+            str(ROOT / "rust/.cargo/config.toml"),
+            "--manifest-path",
+            str(ROOT / "rust/Cargo.toml"),
+            "--locked",
+            "-p",
+            "lk-agents-codegen",
+            "--example",
+            "architecture-fixtures",
+            "--message-format=json",
+            "--",
+            *(a for lint in clippy.LINTS for a in ("--force-warn", f"clippy::{lint}")),
+        ]
+        process = subprocess.run(command, env=env, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
+        messages = clippy.compiler_messages(process.stdout)
+        diagnostic_text = "\n".join(m["message"] for m in messages)
+        for name in (
+            "std::thread::spawn",
+            "std::time::Instant::now",
+            "std::time::SystemTime::now",
+            "RandomState::new",
+            "std::process::id",
+            "std::env::var",
+            "rand::random",
+            "next_u64",
+            "rand::Rng::random",
+            "uuid::Uuid::new_v4",
+            "mpsc::channel",
+            "unbounded",
+            "HashMap",
+            "HashSet",
+            "Mutex",
+            "RwLock",
+            "AtomicU64",
+            "tokio::task::spawn",
+            "tokio::select",
+            "tokio::join",
+            "tokio::time::sleep",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, diagnostic_text)
+        locations = set()
+        for message in messages:
+            lint = (message.get("code") or {}).get("code", "")
+            if lint not in {f"clippy::{lint}" for lint in clippy.LINTS}:
+                continue
+            for span in message["spans"]:
+                if not span["is_primary"]:
                     continue
-                for span in message["spans"]:
-                    if not span["is_primary"]:
-                        continue
-                    while span:
-                        if span["file_name"].endswith("src/lib.rs"):
-                            rejected_lines.add(span["line_start"])
-                            break
-                        span = (span.get("expansion") or {}).get("span")
-            for line, text in enumerate((root / "src/lib.rs").read_text().splitlines(), 1):
-                if text.strip().startswith(
-                    ("let ", "tokio::spawn", "tokio::select!", "tokio::join!", "tokio::time::sleep")
-                ):
-                    with self.subTest(source_line=text):
-                        self.assertIn(line, rejected_lines)
-
-            def spawn_locations(diagnostics):
-                return [
-                    (
-                        str(root / "src/lib.rs"),
-                        span["line_start"],
-                        span["column_start"],
-                        "clippy::disallowed_methods",
-                        message["message"],
-                    )
-                    for message in diagnostics
-                    if "disallowed method `std::thread::spawn`" in message["message"]
-                    for span in message["spans"]
-                    if span["is_primary"]
-                ]
-
-            def macro_locations(diagnostics):
-                result = set()
-                for message in diagnostics:
-                    if (message.get("code") or {}).get("code") != "clippy::disallowed_macros":
-                        continue
-                    for span in message["spans"]:
-                        if not span["is_primary"]:
-                            continue
-                        while span:
-                            if span["file_name"].endswith("src/lib.rs"):
-                                result.add(
-                                    (
-                                        str(root / "src/lib.rs"),
-                                        span["line_start"],
-                                        span["column_start"],
-                                        "clippy::disallowed_macros",
-                                        message["message"],
-                                    )
-                                )
-                                break
-                            span = (span.get("expansion") or {}).get("span")
-                return sorted(result)
-
-            original_macro_locations = macro_locations(all_messages)
-            original_macro_sites = clippy.site_inventory(ROOT, HELPER, original_macro_locations)
-            original_sites = clippy.site_inventory(ROOT, HELPER, spawn_locations(all_messages))
-            original_allows = clippy.inventory(ROOT, HELPER, [str(root / "src/lib.rs")])
-            # Force-warn must defeat a pre-existing allow, preventing a second banned site there.
-            source = root / "src/lib.rs"
-            source.write_text(
-                source.read_text()
-                .replace(
-                    "pub fn old() { std::thread::spawn(|| {}); }",
-                    "pub fn old() { std::thread::spawn(|| {}); std::thread::spawn(|| {}); }",
+                while span:
+                    if Path(span["file_name"]).resolve() == source.resolve() or span[
+                        "file_name"
+                    ].endswith("architecture/fixtures.rs"):
+                        locations.add(
+                            (
+                                str(source),
+                                span["line_start"],
+                                span["column_start"],
+                                lint,
+                                message["message"],
+                            )
+                        )
+                        break
+                    span = (span.get("expansion") or {}).get("span")
+        self.assertTrue(locations)
+        rejected_lines = {site[1] for site in locations}
+        for line, text in enumerate(source.read_text().splitlines(), 1):
+            if text.strip().startswith(
+                (
+                    "let ",
+                    "tokio::spawn",
+                    "tokio::select!",
+                    "tokio::join!",
+                    "tokio::time::sleep",
+                    "std::thread::spawn",
+                    "input:",
+                    "pub async fn function_exemption",
                 )
-                .replace(
-                    "tokio::select! { _ = async {} => {} }",
-                    "tokio::select! { _ = async {} => {} } tokio::select! { _ = async {} => {} }",
-                )
-            )
-            changed = subprocess.run(command, env=env, cwd=root, capture_output=True, text=True)
-            self.assertEqual(changed.returncode, 0, changed.stderr + changed.stdout)
-            original_spawns = [
-                m for m in all_messages if "disallowed method `std::thread::spawn`" in m["message"]
+            ):
+                with self.subTest(source_line=text):
+                    self.assertIn(line, rejected_lines)
+        sites = clippy.site_inventory(ROOT, HELPER, sorted(locations))
+        # Both calls under the same legacy allowance must be captured; retaining only
+        # the first in a baseline must reject growth without needing a second build.
+        old_sites = {s for s in sites if ":fn old:" in s}
+        self.assertEqual(len(old_sites), 2)
+        self.assertTrue(ratchet(sites, sites - {sorted(old_sites)[-1]}))
+        macro_sites = {s for s in sites if ":fn macro_growth:" in s}
+        self.assertEqual(len(macro_sites), 2)
+        self.assertTrue(ratchet(sites, sites - {sorted(macro_sites)[-1]}))
+        ordered = sorted(locations)
+        scopes = subprocess.run(
+            [str(HELPER), "locations", str(source), *(f"{s[1]}:{s[2]}" for s in ordered)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        expected = {
+            "fn old": "allowed",
+            "fn missing_exemption": "denied",
+            "fn argument_exemption": "denied",
+            "fn async_argument_exemption": "denied",
+            "fn function_exemption": "allowed",
+        }
+        cases = [
+            (site, scope.split("\t")[1].split("/")[0])
+            for site, scope in zip(ordered, scopes, strict=True)
+            if scope.split("\t")[1].split("/")[0] in expected
+        ]
+        self.assertEqual({owner for _, owner in cases}, set(expected))
+        request = "\t".join(
+            [
+                str(source),
+                *(
+                    f"{line}:{column}:{lint.removeprefix('clippy::')}:0"
+                    for (_, line, column, lint, _), _ in cases
+                ),
             ]
-            changed_spawns = [
-                m
-                for m in clippy.compiler_messages(changed.stdout)
-                if "disallowed method `std::thread::spawn`" in m["message"]
-            ]
-            self.assertEqual(len(changed_spawns), len(original_spawns) + 1)
-            self.assertEqual(clippy.inventory(ROOT, HELPER, [str(source)]), original_allows)
-            changed_sites = clippy.site_inventory(
-                ROOT, HELPER, spawn_locations(clippy.compiler_messages(changed.stdout))
-            )
-            self.assertTrue(ratchet(changed_sites, original_sites))
-            changed_macros = macro_locations(clippy.compiler_messages(changed.stdout))
-            self.assertEqual(len(changed_macros), len(original_macro_locations) + 1)
-            self.assertTrue(
-                ratchet(clippy.site_inventory(ROOT, HELPER, changed_macros), original_macro_sites)
-            )
-            # The same legacy site remains permitted by its site identity after deleting the
-            # explicit allow. The ordinary deny pass must still reject the missing exemption.
-            old_call = "pub fn old() { std::thread::spawn(|| {}); }\n"
-            source.write_text(
-                '#[allow(clippy::disallowed_methods, reason = "legacy")]\n' + old_call
-            )
-            deny_command = ["-D" if arg == "--force-warn" else arg for arg in command]
-            allowed = subprocess.run(
-                deny_command, env=env, cwd=root, capture_output=True, text=True
-            )
-            self.assertEqual(allowed.returncode, 0, allowed.stderr + allowed.stdout)
-            source.write_text(old_call)
-            denied = subprocess.run(deny_command, env=env, cwd=root, capture_output=True, text=True)
-            self.assertNotEqual(denied.returncode, 0)
-            denied_messages = [
-                record["message"]
-                for record in (json.loads(line) for line in denied.stdout.splitlines())
-                if record.get("reason") == "compiler-message"
-            ]
-            retained_sites = clippy.site_inventory(ROOT, HELPER, spawn_locations(denied_messages))
-            self.assertTrue(retained_sites)
-            self.assertFalse(ratchet(retained_sites, original_sites))
+        )
+        result = subprocess.run(
+            [str(HELPER), "coverage-batch"],
+            input=request + "\n",
+            cwd=ROOT,
+            env={**os.environ, "ARCHITECTURE_FEATURES": "", "ARCHITECTURE_CRATE_ROOT": str(source)},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.splitlines(), [expected[owner] for _, owner in cases])
+        # Baseline membership cannot replace the missing source exemption.
+        self.assertFalse(ratchet(sites, sites))
 
 
 if __name__ == "__main__":
