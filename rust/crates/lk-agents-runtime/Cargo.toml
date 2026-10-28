@@ -32,13 +32,10 @@ pyo3 = { workspace = true, optional = true }
 # Thread storage (all database interaction) and the A2A door's decisions.
 lk-agents-storage = { path = "../lk-agents-storage" }
 livekit-protocol.workspace = true
-pbjson-types.workspace = true
 prost.workspace = true
 a2a.workspace = true
 serde.workspace = true
 url = "2"
-# `SQLiteStorage`: one file per thread, executed on its own connection thread.
-
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

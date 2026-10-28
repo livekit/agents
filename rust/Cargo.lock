@@ -1578,7 +1578,6 @@ dependencies = [
  "lk-agents-voice",
  "lk-agents-worker",
  "log",
- "pbjson-types",
  "prost",
  "pyo3",
  "reqwest 0.13.4",
