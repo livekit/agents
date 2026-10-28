@@ -157,25 +157,20 @@ class LLM(llm.LLM):
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
         self._pending_tool_calls = set[str]()
-        self._retired_ws: list[ResponsesWebsocket] = []
-        self._close_tasks: set[asyncio.Task[None]] = set()
         self._client: openai.AsyncClient | None = None
         if use_websocket:
-            self._ws = self._make_ws()
+            self._ws = _GatewayResponsesWebsocket(
+                base_url=self._opts.base_url,
+                model=self._opts.model,
+                api_key=self._opts.api_key,
+                api_secret=self._opts.api_secret,
+                provider=self._opts.provider,
+                inference_class=self._opts.inference_class,
+                extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
+                timeout=None,
+            )
         else:
             self._client = self._make_client()
-
-    def _make_ws(self) -> _GatewayResponsesWebsocket:
-        return _GatewayResponsesWebsocket(
-            base_url=self._opts.base_url,
-            model=self._opts.model,
-            api_key=self._opts.api_key,
-            api_secret=self._opts.api_secret,
-            provider=self._opts.provider,
-            inference_class=self._opts.inference_class,
-            extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
-            timeout=None,
-        )
 
     def _make_client(self) -> openai.AsyncClient:
         return openai.AsyncClient(
@@ -199,11 +194,6 @@ class LLM(llm.LLM):
 
     async def aclose(self) -> None:
         await super().aclose()
-        if self._close_tasks:
-            await asyncio.gather(*self._close_tasks, return_exceptions=True)
-        retired, self._retired_ws = self._retired_ws, []
-        for ws in retired:
-            await ws.aclose()
         if self._ws is not None:
             await self._ws.aclose()
         if self._client is not None:
@@ -220,29 +210,18 @@ class LLM(llm.LLM):
 
         Each option is read on the next ``chat()`` call. ``extra_kwargs`` *replaces* the
         persistent kwargs dict rather than merging; pass ``{}`` to clear it. Over WebSocket a
-        new ``model`` replaces the transport, since the gateway binds the model to the socket.
+        new ``model`` invalidates the pool, since the gateway binds the model to the socket;
+        a turn already streaming keeps its socket.
         """
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            if self._ws is not None:
-                self._swap_ws()
+            if isinstance(self._ws, _GatewayResponsesWebsocket):
+                self._ws._set_model(model)
         if is_given(extra_kwargs):
             self._opts.extra_kwargs = dict(extra_kwargs)
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
-
-    def _swap_ws(self) -> None:
-        old, self._ws = self._ws, self._make_ws()
-        if old is None:
-            return
-        try:
-            task = asyncio.get_running_loop().create_task(old.aclose())
-        except RuntimeError:
-            self._retired_ws.append(old)
-            return
-        self._close_tasks.add(task)
-        task.add_done_callback(self._close_tasks.discard)
 
     @property
     def model(self) -> str:
@@ -381,6 +360,10 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         self._provider = provider
         self._inference_class = inference_class
         self._extra_headers = extra_headers
+
+    def _set_model(self, model: str) -> None:
+        self._base_url = self._resolve_url(self._endpoint, model)
+        self._pool.invalidate()
 
     async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         token = create_access_token(self._lk_api_key, self._lk_api_secret)
