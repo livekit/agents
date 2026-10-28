@@ -5,7 +5,9 @@
 use std::time::{Duration, Instant};
 
 use lk_agents_runtime::storage::{CommitOptions, RunOptions, Thread};
+use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
+use lk_agents_storage::schema::TaskData;
 mod storage_common;
 use storage_common::Backend;
 
@@ -295,7 +297,66 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
+fn submitted(task_id: &str) -> TaskWrite {
+    TaskWrite {
+        task_id: task_id.into(),
+        status: TaskState::Submitted,
+        message_id: Some(format!("m_{task_id}")),
+        name: None,
+        data: TaskData::default(),
+        ask: None,
+    }
+}
+
+fn metadata(key: &str) -> serde_json::Map<String, serde_json::Value> {
+    json!({ key: true }).as_object().cloned().unwrap()
+}
+
+/// I-6: a terminal row is immutable. A cancel arriving after the commit leaves the completed
+/// task as it was.
+async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    run.commit(CommitOptions::default()).await.unwrap();
+
+    let after = lane.cancel_task("AST_1", metadata("late")).await.unwrap().expect("the row");
+    assert_eq!(after.status, TaskState::Completed);
+    assert!(after.data.metadata.is_empty(), "nothing merged into a terminal row");
+    assert_eq!(lane.task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
+    fx.cleanup(&[&s]).await;
+}
+
+/// I-6: a client's cancel during the run wins: the run's commit lands its history but cannot
+/// move the canceled row, in either race order.
+async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s1 = fx.thread("w1").await;
+    let s2 = fx.thread("w2").await;
+    let lane = s1.lane(LANE);
+    lane.db().submit(&submitted("AST_1")).await.unwrap();
+    let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let canceled = s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
+    assert_eq!(canceled.unwrap().status, TaskState::Canceled);
+
+    run.history.push(message("i1", ChatRole::User, "hi"));
+    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    let committed = run
+        .commit(CommitOptions { answer_task: Some("AST_1".into()), ..CommitOptions::default() })
+        .await
+        .unwrap();
+    let row = committed.task.expect("read back");
+    assert_eq!(row.status, TaskState::Canceled);
+    assert_eq!(row.data.metadata.get("client"), Some(&json!(true)));
+    assert_eq!(lane.history().await.unwrap().len(), 1, "the rest of the commit landed");
+    fx.cleanup(&[&s1, &s2]).await;
+}
+
 contract!(
+    a_cancel_never_overwrites_a_terminal_task,
+    a_commit_never_overwrites_a_canceled_task,
     the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit,
     a_run_that_aborts_writes_run_ended_and_nothing_else,
     a_committed_run_id_yields_a_closed_run,

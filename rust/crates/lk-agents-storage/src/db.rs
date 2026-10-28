@@ -5,7 +5,7 @@
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::StorageError;
 use crate::run::TaskState;
@@ -494,6 +494,28 @@ impl Decode for PickupDecode {
             .map(TaskState::from_cell)
             .transpose()
             .map_err(StorageError::Decode)
+    }
+}
+
+pub struct CancelDecode {
+    row: usize,
+}
+
+/// `tasks/cancel`, one batch: the conditional transition, then the row as it is after.
+pub fn cancel(lane: &str, task_id: &str, metadata: &Map<String, Value>) -> Plan<CancelDecode> {
+    let mut b = Batch::default();
+    b.add(CancelTask { lane, task_id, metadata: SqlValue::json(metadata) });
+    let row = b.add(SelectTask { lane, task_id });
+    b.plan(CancelDecode { row })
+}
+
+impl Decode for CancelDecode {
+    /// The row after: `canceled`, or unchanged when it was already terminal; `None` when the
+    /// lane has no such task.
+    type Output = Option<TaskRow>;
+
+    fn decode(self, out: &BatchResult) -> Result<Option<TaskRow>, StorageError> {
+        out.at(self.row)?.rows().first().map(TaskRow::from_row).transpose()
     }
 }
 

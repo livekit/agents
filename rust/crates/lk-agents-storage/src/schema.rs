@@ -484,6 +484,18 @@ WHERE lane = :lane AND task_id = :task_id AND status = 'working'
 }
 
 statement! {
+    /// `tasks/cancel`: a row not yet terminal goes `canceled`, `metadata` merged over its own,
+    /// its pending question dropped. A terminal row is left as it is.
+    CancelTask<'a> { lane: &'a str, task_id: &'a str, metadata: SqlValue } => r#"
+UPDATE tasks
+SET status = 'canceled', internal = NULL,
+  data = jsonb_set(data, '$.metadata', jsonb(json_patch(COALESCE(data -> '$.metadata', '{}'), :metadata))),
+  updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
+WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working', 'input-required')
+"#
+}
+
+statement! {
     /// A message received while the lane runs; a retried message id inserts nothing.
     InsertInbox<'a> { lane: &'a str, task_id: &'a str, message_id: &'a str, message: SqlValue } => r#"
 INSERT OR IGNORE INTO inbox (lane, task_id, message_id, message, received_at)
@@ -598,7 +610,7 @@ WHERE lane = :lane
 }
 
 statement! {
-    /// Inserts a task row or updates every column but its `seq`.
+    /// Inserts a task row or updates every column but its `seq`; a terminal row stays as it is.
     UpsertTask<'a> {
         lane: &'a str,
         version: i64,
@@ -620,6 +632,7 @@ ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
   updated_at = excluded.updated_at
+WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }
 
@@ -644,6 +657,7 @@ ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
   updated_at = excluded.updated_at
+WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }
 

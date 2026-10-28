@@ -500,43 +500,16 @@ impl Lane {
         Ok(runs)
     }
 
-    /// `tasks/cancel`: the row `canceled` with `metadata` merged in; a running turn yields at its
-    /// next checkpoint. `None` when the task is not the lane's.
+    /// `tasks/cancel`: a row not yet terminal goes `canceled` with `metadata` merged in; a
+    /// running turn yields at its next checkpoint. The row after, unchanged when it was already
+    /// terminal; `None` when the task is not the lane's.
     pub async fn cancel_task(
         &self,
         task_id: &str,
         metadata: Map<String, Value>,
     ) -> Result<Option<TaskRow>, StorageError> {
-        let Some(row) = self.db.task(task_id).await? else { return Ok(None) };
-        let mut data = row.data;
-        data.metadata.extend(metadata);
-        let now = now_ms();
-        let commit = Commit {
-            run_id: format!("cancel_{task_id}_{}", shortuuid("")),
-            tasks: vec![TaskWrite {
-                task_id: row.task_id,
-                status: TaskState::Canceled,
-                message_id: row.message_id,
-                name: row.name,
-                data,
-                ask: row.internal,
-            }],
-            events: vec![EventWrite::run_started(
-                now,
-                &RunStarted {
-                    task_id: Some(task_id.to_owned()),
-                    channel: Some("cancel".into()),
-                    ..RunStarted::default()
-                },
-            )],
-            run_ended: EventWrite::run_ended(
-                now,
-                &RunEnded { outcome: RunOutcome::Completed, reason: None },
-            ),
-            read_task: Some(task_id.to_owned()),
-            ..Commit::default()
-        };
-        Ok(self.db.append(&commit).await?.task)
+        self.db.db.ensure_schema().await?;
+        self.db.db.execute(db::cancel(self.name(), task_id, &metadata)).await
     }
 
     /// Takes the lane and loads it. The run commits with [`Run::commit`] and ends by error with
