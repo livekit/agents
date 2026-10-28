@@ -26,33 +26,19 @@ EXTENSIONS_HEADER = "A2A-Extensions"
 JSONRPC_BINDING = TransportProtocol.JSONRPC.value
 """``JSONRPC``: JSON-RPC 2.0 over HTTP, server-sent events for the streams; mandatory."""
 
-LIVEKIT_PREFIX = "livekit/"
-
 Metadata = dict[str, JsonValue]
-"""A ``metadata`` map as this package reads and writes it: JSON under short keys."""
+"""A ``metadata`` map as the wire carries it."""
 
 
-def shorten(wire_key: str) -> str:
-    """A wire key to its short form; anything else unchanged."""
-    if wire_key.startswith(EXTENSION_URI + "/"):
-        return LIVEKIT_PREFIX + wire_key[len(EXTENSION_URI) + 1 :]
-    return wire_key
-
-
-def widen(short_key: str) -> str:
-    """A short key to the wire; anything else unchanged."""
-    if short_key.startswith(LIVEKIT_PREFIX):
-        return f"{EXTENSION_URI}/{short_key[len(LIVEKIT_PREFIX) :]}"
-    return short_key
-
-
-# the Live extension's keys, short
-KIND = "livekit/kind"
-INTERRUPTED = "livekit/interrupted"
-INTERRUPTION_REASON = "livekit/interruptionReason"
-MERGED_INTO = "livekit/mergedInto"
-REASON = "livekit/reason"
-VERBATIM = "livekit/verbatim"
+# LiveKit's keys, as the wire and the stored rows carry them; ``livekit/<name>`` is the shorthand
+# docs/protocol/a2a.md writes, never a key
+CHANNEL = f"{EXTENSION_URI}/channel"
+KIND = f"{EXTENSION_URI}/kind"
+INTERRUPTED = f"{EXTENSION_URI}/interrupted"
+INTERRUPTION_REASON = f"{EXTENSION_URI}/interruptionReason"
+MERGED_INTO = f"{EXTENSION_URI}/mergedInto"
+REASON = f"{EXTENSION_URI}/reason"
+VERBATIM = f"{EXTENSION_URI}/verbatim"
 """The part of a reply that reaches the person exactly as written; the rest is phrased by the
 agent facing them."""
 
@@ -195,6 +181,7 @@ def _add_security(
 
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
+    "CHANNEL",
     "EXTENSIONS_HEADER",
     "EXTENSION_URI",
     "INTERRUPTED",
@@ -211,9 +198,7 @@ __all__ = [
     "agent_card",
     "as_dict",
     "pb",
-    "shorten",
     "struct",
     "to_json",
     "value",
-    "widen",
 ]

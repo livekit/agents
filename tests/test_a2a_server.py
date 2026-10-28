@@ -31,6 +31,7 @@ from livekit.agents.a2a import (
 )
 from livekit.agents.a2a.codec import TaskUpdate, metadata_from_wire, updates_from_events
 from livekit.agents.a2a.extension import (
+    CHANNEL,
     INTERRUPTED,
     INTERRUPTION_REASON,
     KIND,
@@ -131,9 +132,9 @@ def user_message(
     if context_id:
         msg.context_id = context_id
     if metadata:
-        from livekit.agents.a2a.extension import struct, widen
+        from livekit.agents.a2a.extension import struct
 
-        msg.metadata.CopyFrom(struct({widen(k): v for k, v in metadata.items()}))
+        msg.metadata.CopyFrom(struct(metadata))
     return msg
 
 
@@ -168,13 +169,11 @@ def sse_results(response: httpx.Response) -> list[dict[str, Any]]:
 def wire(
     text: str, message_id: str, *, context_id: str | None = None, **metadata: Any
 ) -> dict[str, Any]:
-    from livekit.agents.a2a.extension import widen
-
     msg: dict[str, Any] = {"messageId": message_id, "role": "ROLE_USER", "parts": [{"text": text}]}
     if context_id:
         msg["contextId"] = context_id
     if metadata:
-        msg["metadata"] = {widen(k): v for k, v in metadata.items()}
+        msg["metadata"] = metadata
     return msg
 
 
@@ -324,7 +323,7 @@ async def test_errors_map_as_the_plan_lists_them(agentdb_storage: AgentDBStorage
         r = await rpc(http, "message/send", {"message": wire("hi", "m9", context_id="AT_unknown")})
         task = r.json()["result"]["task"]
         assert task["status"]["state"] == "TASK_STATE_FAILED"
-        assert metadata_from_wire(task["metadata"])["livekit/reason"] == "thread-not-found"
+        assert task["metadata"][REASON] == "thread-not-found"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -455,7 +454,7 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers
             rpc(
                 http_a,
                 "message/send",
-                {"message": wire("where", "m1", context_id=ctx_id, **{"livekit/channel": "sms"})},
+                {"message": wire("where", "m1", context_id=ctx_id, **{CHANNEL: "sms"})},
             )
         )
         await asyncio.sleep(0.05)
@@ -463,7 +462,7 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers
             rpc(
                 http_b,
                 "message/send",
-                {"message": wire("are you", "m2", context_id=ctx_id, **{"livekit/channel": "sms"})},
+                {"message": wire("are you", "m2", context_id=ctx_id, **{CHANNEL: "sms"})},
             )
         )
         r1, r2 = await asyncio.gather(first, second)
@@ -495,7 +494,7 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
             rpc(
                 http,
                 "message/send",
-                {"message": wire("where", "m1", context_id=ctx_id, **{"livekit/channel": "sms"})},
+                {"message": wire("where", "m1", context_id=ctx_id, **{CHANNEL: "sms"})},
             )
         )
         await asyncio.sleep(0.05)
@@ -503,7 +502,7 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
             rpc(
                 http,
                 "message/send",
-                {"message": wire("are you", "m2", context_id=ctx_id, **{"livekit/channel": "sms"})},
+                {"message": wire("are you", "m2", context_id=ctx_id, **{CHANNEL: "sms"})},
             )
         )
         r1, r2 = await asyncio.gather(first, second)
@@ -669,8 +668,8 @@ async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
     final = results[-1]["statusUpdate"]
     assert final["status"]["state"] == "TASK_STATE_CANCELED"
     # a client's cancel, not the server's interrupt
-    assert INTERRUPTED not in metadata_from_wire(final.get("metadata", {}))
-    assert metadata_from_wire(final["metadata"])["livekit/reason"] == "user_interrupted"
+    assert INTERRUPTED not in final.get("metadata", {})
+    assert final["metadata"][REASON] == "user_interrupted"
 
 
 # ---------------------------------------------------------------------------------------------

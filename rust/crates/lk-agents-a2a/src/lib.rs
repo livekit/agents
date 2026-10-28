@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(o.policy, PolicySpec::Default);
         assert_eq!(
             serde_json::to_string(&interrupted_metadata()).unwrap(),
-            r#"{"livekit/interrupted":true,"livekit/interruptionReason":"new-message"}"#
+            r#"{"https://livekit.io/a2a/ext/agents/v1/interrupted":true,"https://livekit.io/a2a/ext/agents/v1/interruptionReason":"new-message"}"#
         );
     }
 
@@ -487,7 +487,7 @@ mod tests {
                 {"url": "https://x/y.png", "mediaType": "image/png"},
                 {"text": "there"},
             ],
-            "metadata": {"livekit/channel": "sms"},
+            "metadata": {"https://livekit.io/a2a/ext/agents/v1/channel": "sms"},
             "taskId": "AST_1",
             "contextId": "AT_1",
         }));
@@ -522,16 +522,29 @@ mod tests {
             .is_err()
         );
         let delegated = v1(json!({"messageId": "x", "role": "ROLE_USER", "parts": [],
-            "metadata": {"livekit/kind": "delegation"}}));
+            "metadata": {"https://livekit.io/a2a/ext/agents/v1/kind": "delegation"}}));
         assert_eq!(Message::from_a2a(&delegated, 0.0, None).unwrap().channel, "delegation");
         let with_history = v1(json!({"messageId": "y", "role": "ROLE_USER", "parts": [
             {"text": "fare?"},
-            {"data": {"items": []}, "metadata": {"livekit/kind": "chat_ctx"}},
+            {"data": {"items": []}, "metadata": {"https://livekit.io/a2a/ext/agents/v1/kind": "chat_ctx"}},
         ]}));
         assert_eq!(caller_history_of(&with_history), Some(json!({"items": []})));
         let stripped = Message::from_a2a(&with_history, 1.0, None).unwrap();
         assert_eq!(stripped.parts, vec![a2a::Part::text("fare?")]);
         assert_eq!(stripped.to_a2a().parts, vec![a2a::Part::text("fare?")]);
+    }
+
+    // Catches: a sender's `livekit/<name>` key read as LiveKit's own (a2a.md#metadata-keys), e.g.
+    // a direct message choosing the delegation policy or a chat_ctx part dropped as history.
+    #[test]
+    fn short_livekit_keys_on_the_wire_are_the_senders_own() {
+        let raw = v1(json!({"messageId": "m", "role": "ROLE_USER",
+            "metadata": {"livekit/channel": "sms", "livekit/kind": "delegation"},
+            "parts": [{"data": {"items": []}, "metadata": {"livekit/kind": "chat_ctx"}}]}));
+        let m = Message::from_a2a(&raw, 0.0, None).unwrap();
+        assert_eq!(m.channel, A2A_CHANNEL);
+        assert_eq!(caller_history_of(&raw), None);
+        assert_eq!(m.parts, raw.parts, "the data part is the turn's, not a caller history");
     }
 
     #[test]
@@ -578,7 +591,7 @@ mod tests {
             serde_json::to_value(&f).unwrap(),
             json!({"messageId": "msg_X", "taskId": "AST_1", "role": "ROLE_AGENT",
                 "parts": [{"text": "the task failed: worker-lost"}],
-                "metadata": {"livekit/reason": "worker-lost"}})
+                "metadata": {"https://livekit.io/a2a/ext/agents/v1/reason": "worker-lost"}})
         );
         let failed =
             unpersisted_failed("AST_2", "front-desk", None, "lease-timeout", 1, "msg_Y".into());
@@ -590,7 +603,7 @@ mod tests {
         done.data.artifacts = Some(vec![artifact(&json!({"n": 1}), "art_1".into())]);
         assert_eq!(artifact_text(&done), Some(json!({"n": 1})));
         done.data.history = vec![v1(json!({"messageId": "m", "role": "ROLE_USER", "parts": [],
-            "metadata": {"livekit/channel": "sms"}}))];
+            "metadata": {"https://livekit.io/a2a/ext/agents/v1/channel": "sms"}}))];
         assert_eq!(channel_of_record(&done).as_deref(), Some("sms"));
         let r = result_for(done.clone(), "AT_1", Some("r1"));
         assert_eq!((r.answered_by.as_str(), r.run_id.as_deref()), ("AST_2", Some("r1")));

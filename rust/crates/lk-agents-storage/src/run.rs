@@ -138,15 +138,25 @@ pub fn item_changes(
     (changed, deleted.collect())
 }
 
-/// The Live extension's metadata keys, written `livekit/<name>`.
-pub const INTERRUPTED_KEY: &str = "livekit/interrupted";
-pub const INTERRUPTION_REASON_KEY: &str = "livekit/interruptionReason";
-pub const MERGED_INTO_KEY: &str = "livekit/mergedInto";
-pub const CHANNEL_KEY: &str = "livekit/channel";
-pub const KIND_KEY: &str = "livekit/kind";
-pub const KEY_KEY: &str = "livekit/key";
+/// The namespace of LiveKit's A2A metadata keys (docs/protocol/a2a.md#metadata-keys). A key is
+/// `<EXTENSION_URI>/<name>` on the wire and in stored rows alike; a `livekit/<name>` key is the
+/// sender's own and means nothing to the framework.
+pub const EXTENSION_URI: &str = "https://livekit.io/a2a/ext/agents/v1";
+
+/// `<EXTENSION_URI>/<name>`.
+macro_rules! key {
+    ($name:literal) => {
+        concat!("https://livekit.io/a2a/ext/agents/v1/", $name)
+    };
+}
+
+pub const INTERRUPTED_KEY: &str = key!("interrupted");
+pub const INTERRUPTION_REASON_KEY: &str = key!("interruptionReason");
+pub const MERGED_INTO_KEY: &str = key!("mergedInto");
+pub const CHANNEL_KEY: &str = key!("channel");
+pub const KIND_KEY: &str = key!("kind");
 /// The key `Tasks::fail` writes into the status message's metadata.
-pub const REASON_KEY: &str = "livekit/reason";
+pub const REASON_KEY: &str = key!("reason");
 
 /// The `failed` and `rejected` reasons.
 pub const REASON_WORKER_LOST: &str = "worker-lost";

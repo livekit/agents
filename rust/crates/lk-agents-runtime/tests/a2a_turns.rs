@@ -45,7 +45,7 @@ fn a2a(text: &str, message_id: &str, channel: Option<&str>, task_id: Option<&str
         "parts": [{"text": text}],
     });
     if let Some(c) = channel {
-        msg["metadata"] = json!({"livekit/channel": c});
+        msg["metadata"] = json!({"https://livekit.io/a2a/ext/agents/v1/channel": c});
     }
     if let Some(t) = task_id {
         msg["taskId"] = json!(t);
@@ -498,7 +498,7 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else(backend: Backend) {
     let orphan = lane.task(&rows[0].task_id).await.unwrap().unwrap();
     assert_eq!(orphan.status, TaskState::Failed);
     assert_eq!(
-        json_of(&orphan.data.status_message)["metadata"]["livekit/reason"],
+        json_of(&orphan.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
         json!("worker-lost")
     );
     let runs = lane.runs(10).await.unwrap();
@@ -552,7 +552,7 @@ async fn interrupt_yields_and_the_newer_task_answers_both(backend: Backend) {
     assert_eq!(r1.task.data.metadata.get(INTERRUPTION_REASON_KEY), Some(&json!("new-message")));
     assert_eq!(
         serde_json::to_string(&r1.task.data.metadata).unwrap(),
-        r#"{"livekit/interrupted":true,"livekit/interruptionReason":"new-message"}"#
+        r#"{"https://livekit.io/a2a/ext/agents/v1/interrupted":true,"https://livekit.io/a2a/ext/agents/v1/interruptionReason":"new-message"}"#
     );
     assert!(r1.task.data.artifacts.is_none() && r1.output.is_none());
     assert_eq!(r1.task.data.history, vec![user_message("first", "m1", None, None)]);
@@ -685,7 +685,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
         sm,
         json!({"messageId": "msg_X", "role": "ROLE_AGENT",
             "parts": [{"text": "the task failed: worker-lost"}], "taskId": "AST_1",
-            "metadata": {"livekit/reason": "worker-lost"}})
+            "metadata": {"https://livekit.io/a2a/ext/agents/v1/reason": "worker-lost"}})
     );
     assert_eq!(history_texts(&b).await, vec!["second", "answered"], "the dead turn left nothing");
     fx.cleanup(&[&a, &b]).await;
@@ -924,7 +924,7 @@ async fn a_lease_timeout_fails_the_early_row(backend: Backend) {
     let second = short.run(a2a("two", "m2", None, None), Some("AST_2".into())).await.unwrap();
     assert_eq!(second.task.status, TaskState::Failed);
     assert_eq!(
-        json_of(&second.task.data.status_message)["metadata"]["livekit/reason"],
+        json_of(&second.task.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
         json!("lease-timeout")
     );
     assert_eq!(second.run_id, None);
@@ -1002,7 +1002,7 @@ async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
         .unwrap();
     assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Failed));
     assert_eq!(
-        json_of(&r.task.data.status_message)["metadata"]["livekit/reason"],
+        json_of(&r.task.data.status_message)["metadata"]["https://livekit.io/a2a/ext/agents/v1/reason"],
         json!("storage-unavailable")
     );
     assert!(history_texts(&s).await.is_empty(), "the staged turn was not committed");

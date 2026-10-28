@@ -17,6 +17,13 @@ import pytest
 from livekit.agents import Agent, InputRequired, RunContext, _core, persisted
 from livekit.agents._generated.storage_run import LaneRow, TaskRow
 from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
+from livekit.agents.a2a.extension import (
+    CHANNEL,
+    INTERRUPTED,
+    INTERRUPTION_REASON,
+    MERGED_INTO,
+    REASON,
+)
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import AgentDBStorage, RunRejected
@@ -29,9 +36,6 @@ from .fake_llm import FakeLLM, FakeLLMResponse
 pytestmark = [pytest.mark.unit]
 
 LANE = "front-desk"
-INTERRUPTED_KEY = "livekit/interrupted"
-INTERRUPTION_REASON_KEY = "livekit/interruptionReason"
-MERGED_INTO_KEY = "livekit/mergedInto"
 
 
 @dataclass
@@ -53,7 +57,7 @@ def a2a(
         "parts": [{"kind": "text", "text": text}],
     }
     if channel:
-        msg["metadata"] = {"livekit/channel": channel}
+        msg["metadata"] = {CHANNEL: channel}
     if task_id:
         msg["taskId"] = task_id
     return msg
@@ -307,8 +311,8 @@ async def test_interrupt_yields_and_the_newer_task_answers_both(agentdb_workers:
     r1 = await first
     r2 = await second
     assert r1.task.status == "canceled"
-    assert r1.task.data.metadata[INTERRUPTED_KEY] is True
-    assert r1.task.data.metadata[INTERRUPTION_REASON_KEY] == "new-message"
+    assert r1.task.data.metadata[INTERRUPTED] is True
+    assert r1.task.data.metadata[INTERRUPTION_REASON] == "new-message"
     assert r1.task.data.artifacts is None and r1.output is None
     assert r2.task.status == "completed" and r2.output == "both answered"
     # what ran is in the history, with no reply from the first turn
@@ -351,7 +355,7 @@ async def test_inbox_batches_a_burst_into_one_reply(agentdb_workers: Workers) ->
 
     assert batches == [["where", "are you"]]
     assert r1.task.status == "completed" and not r1.task.data.artifacts
-    assert r1.task.data.metadata[MERGED_INTO_KEY] == r2.task.task_id
+    assert r1.task.data.metadata[MERGED_INTO] == r2.task.task_id
     assert r1.answered_by == r2.task.task_id
     assert r2.task.status == "completed" and r2.output == "one reply"
     items = await history_items(a, sid, LANE)
@@ -427,7 +431,7 @@ async def test_a_lapsed_lease_fails_the_orphan_worker_lost(agentdb_workers: Work
     # the inbox drain picked the row up once more and found it working: a dead holder had it
     lost = await task_of(b, sid, LANE, "AST_1")
     assert lost is not None and lost.status == "failed"
-    assert lost.data.status_message["metadata"]["livekit/reason"] == "worker-lost"
+    assert lost.data.status_message["metadata"][REASON] == "worker-lost"
 
 
 async def test_a_resend_after_the_holder_died_fails_worker_lost(
@@ -457,7 +461,7 @@ async def test_a_resend_after_the_holder_died_fails_worker_lost(
 
     lost = await run_turn(b, sid, LANE, a2a("hello", "m1"), "interrupt", echo)
     assert lost.task.task_id == "AST_x" and lost.task.status == "failed"
-    assert lost.task.data.status_message["metadata"]["livekit/reason"] == "worker-lost"
+    assert lost.task.data.status_message["metadata"][REASON] == "worker-lost"
     assert lost.task.data.history == [a2a("hello", "m1")]
     assert await history_items(b, sid, LANE) == []
 
@@ -521,7 +525,7 @@ async def test_input_required_pending_call_is_the_next_messages_output(
     assert outputs[0].output == "here it is"
     answered = await task_of(storage, sid, LANE, first.task.task_id)
     assert answered is not None and answered.status == "completed"
-    assert answered.data.metadata[MERGED_INTO_KEY] == second.task.task_id
+    assert answered.data.metadata[MERGED_INTO] == second.task.task_id
 
 
 async def test_needs_approval_asks_then_runs_on_the_approved_call(
@@ -692,7 +696,7 @@ async def test_a_lease_timeout_fails_the_early_row(agentdb_workers: Workers) -> 
         b, sid, LANE, a2a("two", "m2"), "queue", echo, task_id="AST_2", wait_timeout=0.05
     )
     assert second.task.status == "failed"
-    assert second.task.data.status_message["metadata"]["livekit/reason"] == "lease-timeout"
+    assert second.task.data.status_message["metadata"][REASON] == "lease-timeout"
     row = await task_of(b, sid, LANE, "AST_2")
     assert row is not None and row.status == "failed", "persisted, not the unwritten stand-in"
     gate.set()

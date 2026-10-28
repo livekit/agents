@@ -15,6 +15,7 @@ import pytest
 from livekit.agents import _core
 from livekit.agents._generated.storage_run import ItemRow
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext, TurnOptions
+from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import AgentDBStorage
 from livekit.agents.storage.context import TurnStream
@@ -23,8 +24,6 @@ from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 pytestmark = pytest.mark.unit
 
 LANE = "front-desk"
-INTERRUPTED = "livekit/interrupted"
-INTERRUPTION_REASON = "livekit/interruptionReason"
 
 
 def a2a(text: str, message_id: str) -> dict[str, Any]:

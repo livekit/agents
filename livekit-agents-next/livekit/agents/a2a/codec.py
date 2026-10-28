@@ -1,8 +1,7 @@
 """Between the storage layer's JSON and the A2A wire, in both directions.
 
 Both sides speak A2A v1. A stored message, task history entry or artifact is its v1 protobuf
-JSON with the extension's metadata keys short (``livekit/``); on the wire the keys are the
-extension's own, written per request when the echoed ``A2A-Extensions`` activated them.
+JSON, metadata keys as the wire carries them.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from google.protobuf import json_format, timestamp_pb2
-from pydantic import JsonValue
 
 from .._generated.storage_run import TaskRow
 from ..llm.chat_context import ChatContext
@@ -26,12 +24,10 @@ from .extension import (
     Metadata,
     as_dict,
     pb,
-    shorten,
-    widen,
 )
 
 StoredMessage = dict[str, Any]
-"""A message as the storage layer holds it: v1 protobuf JSON, metadata under short keys."""
+"""A message as the storage layer holds it: v1 protobuf JSON."""
 
 StoredPart = dict[str, Any]
 """One part of a stored message, v1 protobuf JSON."""
@@ -68,15 +64,8 @@ def state_from_pb(state: pb.TaskState) -> str:
 
 
 def metadata_from_wire(raw: object) -> Metadata:
-    """Wire keys to short keys; unknown keys kept as they are."""
-    if not isinstance(raw, Mapping):
-        return {}
-    return {shorten(str(k)): v for k, v in raw.items()}
-
-
-def metadata_to_wire(short: Mapping[str, JsonValue] | None) -> Metadata:
-    """Short keys to wire keys. Every key travels either way: ``metadata`` is core A2A."""
-    return {widen(key): item for key, item in (short or {}).items()}
+    """A wire ``metadata`` map; anything that is not a map is none."""
+    return dict(raw) if isinstance(raw, Mapping) else {}
 
 
 def _active(exts: Extensions | None) -> bool:
@@ -85,18 +74,8 @@ def _active(exts: Extensions | None) -> bool:
 
 
 def _meta(message: _WithMetadata) -> Metadata:
-    """The ``metadata`` of a proto message, short keys."""
-    return metadata_from_wire(as_dict(message.metadata))
-
-
-def _rekey(obj: Mapping[str, Any], keys: Any) -> dict[str, Any]:
-    """``obj`` with its ``metadata`` and its parts' ``metadata`` keys mapped by ``keys``."""
-    out = dict(obj)
-    if isinstance(out.get("metadata"), Mapping):
-        out["metadata"] = keys(out["metadata"])
-    if isinstance(out.get("parts"), list):
-        out["parts"] = [_rekey(p, keys) if isinstance(p, Mapping) else p for p in out["parts"]]
-    return out
+    """The ``metadata`` of a proto message."""
+    return as_dict(message.metadata)
 
 
 # -- parts and messages --
@@ -108,7 +87,7 @@ def message_from_wire(raw: Mapping[str, Any]) -> StoredMessage:
         msg = json_format.ParseDict(dict(raw), pb.Message(), ignore_unknown_fields=True)
     except json_format.ParseError as e:
         raise ValueError(f"an A2A v1 message: {e}") from e
-    return _rekey(json_format.MessageToDict(msg), metadata_from_wire)
+    return json_format.MessageToDict(msg)
 
 
 def message_to_pb(
@@ -118,7 +97,7 @@ def message_to_pb(
     context_id: str | None = None,
     task_id: str | None = None,
 ) -> pb.Message:
-    wire = _rekey(msg, metadata_to_wire)
+    wire = dict(msg)
     if not _active(exts):
         wire["parts"] = [p for p in wire.get("parts") or [] if not _tagged(p, KIND_CHAT_CTX)]
     out = json_format.ParseDict(wire, pb.Message(), ignore_unknown_fields=True)
@@ -149,9 +128,8 @@ def chat_ctx_part(chat_ctx: ChatContext) -> StoredPart:
 
 
 def _tagged(part: Mapping[str, Any], kind: str) -> bool:
-    """Whether the part's metadata carries ``livekit/kind: <kind>`` (short or wire key)."""
-    metadata = part.get("metadata") or {}
-    return kind in (metadata.get(KIND), metadata.get(widen(KIND)))
+    """Whether the part's metadata carries ``livekit/kind: <kind>``."""
+    return (part.get("metadata") or {}).get(KIND) == kind
 
 
 # -- the task object and the events the server sends --
@@ -165,7 +143,7 @@ def _timestamp(ms: int | None) -> timestamp_pb2.Timestamp:
 
 
 def _artifact_to_pb(artifact: Mapping[str, Any], exts: Extensions | None) -> pb.Artifact:
-    wire = _rekey(artifact, metadata_to_wire)
+    wire = dict(artifact)
     if not _active(exts):
         wire["parts"] = [p for p in wire.get("parts") or [] if not _tagged(p, KIND_CHAT_CTX)]
     out = json_format.ParseDict(wire, pb.Artifact(), ignore_unknown_fields=True)
@@ -224,7 +202,7 @@ def task_to_pb(
     if include_artifacts:
         task.artifacts.extend(_artifact_to_pb(a, exts) for a in record.data.artifacts or [])
 
-    metadata = metadata_to_wire(record.data.metadata)
+    metadata = record.data.metadata
     if metadata:
         task.metadata.update(metadata)
     return task
@@ -303,7 +281,7 @@ def final_event(record: TaskRow, context_id: str, *, exts: Extensions) -> pb.Tas
     if status_message is not None:
         event.status.message.CopyFrom(status_message)
 
-    metadata = metadata_to_wire(record.data.metadata)
+    metadata = record.data.metadata
     if metadata:
         event.metadata.update(metadata)
     return event
@@ -486,7 +464,6 @@ __all__ = [
     "message_from_wire",
     "message_to_pb",
     "metadata_from_wire",
-    "metadata_to_wire",
     "state_from_pb",
     "state_to_pb",
     "submitted_task",

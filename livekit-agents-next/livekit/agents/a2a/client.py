@@ -27,7 +27,6 @@ from .codec import (
     TaskUpdate,
     chat_ctx_part,
     message_to_pb,
-    metadata_to_wire,
     updates_from_events,
 )
 from .extension import (
@@ -173,7 +172,7 @@ class AgentClient:
         if context_id and self.offers_extension:
             params["contextId"] = context_id
         if reason:
-            params["metadata"] = metadata_to_wire({REASON: reason})
+            params["metadata"] = {REASON: reason}
 
         result = await self._rpc("CancelTask", params)
         return json_format.ParseDict(result, pb.Task(), ignore_unknown_fields=True)
