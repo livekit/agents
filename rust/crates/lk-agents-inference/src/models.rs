@@ -2,7 +2,7 @@
 //! and local model registry, answered by the modules that own them.
 
 use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
-use lk_agents_abi::inference::{InferenceModels, InvalidOption};
+use lk_agents_abi::inference::{InferenceModels, InvalidOption, VadResolution};
 use serde_json::{Map, Value};
 
 pub struct Models;
@@ -124,6 +124,10 @@ impl InferenceModels for Models {
         )
         .map(|(model, cloud, warnings)| (model.to_owned(), cloud, warnings))
         .map_err(InvalidOption)
+    }
+
+    fn stt_resolve_vad_for_model(model: Option<String>, has_vad: bool) -> VadResolution {
+        crate::stt::options::resolve_vad_for_model(model.as_deref(), has_vad)
     }
 
     fn stt_normalize_fallback_str(model: String) -> SttFallbackModel {

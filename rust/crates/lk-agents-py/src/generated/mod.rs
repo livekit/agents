@@ -135,6 +135,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::amd_category_is_machine, m)?)?;
     m.add_function(wrap_pyfunction!(inference::llm_unsupported_params, m)?)?;
     m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::stt_resolve_vad_for_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_normalize_fallback_str, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_normalize_fallback_str, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;

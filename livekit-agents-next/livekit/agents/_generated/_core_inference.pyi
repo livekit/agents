@@ -104,6 +104,9 @@ def eot_select(
 ) -> tuple[str, bool, list[str]]:
     """The turn detector a host constructs: `(model, cloud, warnings)`."""
 
+def stt_resolve_vad_for_model(model: str | None = None, *, has_vad: bool = False) -> str:
+    """`_resolve_vad_for_model`: what the host does with the caller's VAD for this model."""
+
 def stt_normalize_fallback_str(model: str) -> dict[str, object]:
     """`_normalize_fallback`'s string arm for an STT chain."""
 

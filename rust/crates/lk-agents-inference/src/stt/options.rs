@@ -181,21 +181,9 @@ pub fn capabilities(
     }
 }
 
-/// What `_resolve_vad_for_model` decides; the host performs it.
-#[lk_agents_abi::host(wire_enum)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VadResolution {
-    /// Keep the caller's instance (Speechmatics, which endpoints client-side).
-    Keep,
-    /// Ignore the caller's instance and warn: the model endpoints server-side.
-    DropAndWarn,
-    /// Speechmatics with no VAD supplied: construct the default local one.
-    CreateDefault,
-    /// Nothing to do.
-    None,
-}
+pub use lk_agents_abi::inference::VadResolution;
 
-#[lk_agents_abi::host(export(name = "stt_resolve_vad_for_model", kw_only = "has_vad", defaults(has_vad = false)))]
+/// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
 pub fn resolve_vad_for_model(model: Option<&str>, has_vad: bool) -> VadResolution {
     let is_speechmatics =
         model.is_some_and(|m| m.starts_with("speechmatics/") && m != SPEECHMATICS_SERVER_TURNS);

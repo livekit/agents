@@ -207,6 +207,14 @@ pub fn eot_select(version: ::std::option::Option<::std::string::String>, hosted:
     Ok(out)
 }
 
+/// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
+#[pyfunction]
+#[pyo3(signature = (model = None, *, has_vad = false))]
+pub fn stt_resolve_vad_for_model(model: ::std::option::Option<::std::string::String>, has_vad: bool) -> PyResult<::lk_agents_abi::inference::VadResolution> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_resolve_vad_for_model(model, has_vad);
+    Ok(out)
+}
+
 /// `_normalize_fallback`'s string arm for an STT chain.
 #[pyfunction]
 #[pyo3(signature = (model))]

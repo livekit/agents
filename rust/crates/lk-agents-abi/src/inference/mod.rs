@@ -570,6 +570,13 @@ pub trait InferenceModels {
         local_fallback: bool,
     ) -> Result<(String, bool, Vec<String>), InvalidOption>;
 
+    /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
+    #[host(function)]
+    fn stt_resolve_vad_for_model(
+        #[host(default = None)] model: Option<String>,
+        #[host(kw, default = false)] has_vad: bool,
+    ) -> VadResolution;
+
     /// `_normalize_fallback`'s string arm for an STT chain.
     #[host(function)]
     fn stt_normalize_fallback_str(model: String) -> fallback::SttFallbackModel;
@@ -577,6 +584,20 @@ pub trait InferenceModels {
     /// `_normalize_fallback`'s string arm for a TTS chain.
     #[host(function)]
     fn tts_normalize_fallback_str(model: String) -> fallback::TtsFallbackModel;
+}
+
+/// What `_resolve_vad_for_model` decides; the host performs it.
+#[crate::host(wire_enum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VadResolution {
+    /// Keep the caller's instance (Speechmatics, which endpoints client-side).
+    Keep,
+    /// Ignore the caller's instance and warn: the model endpoints server-side.
+    DropAndWarn,
+    /// Speechmatics with no VAD supplied: construct the default local one.
+    CreateDefault,
+    /// Nothing to do.
+    None,
 }
 
 /// An option value the inference lookups do not know.
