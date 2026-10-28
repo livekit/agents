@@ -765,8 +765,8 @@ mod session_bridge {
         extract_generated::<crate::llm::tool_executor::ToolReport>(v.bind(py))
     }
 
-    // Catches: a variant read as another, a defaulted flag read as given, the approval mark or the
-    // transition dropped, or a dict accepted in place of the model.
+    // Catches: a variant read as another, a defaulted flag read as given, the transition dropped,
+    // or a dict accepted in place of the model.
     #[test]
     fn a_tool_outcome_carries_its_payload() {
         use crate::llm::tool_executor::ToolOutcome;
@@ -783,20 +783,17 @@ mod session_bridge {
                 more: None,
             };
             assert_eq!(a.outcome, value);
-            assert!(a.approval.is_none() && a.transition.is_none());
+            assert!(a.transition.is_none());
             let program = "out = tool_report.ToolReport(\
                            outcome=tool_report.ToolOutcomeInputRequired(question='Yes?', verbatim=True), \
-                           approval='asked', transition=object())";
+                           transition=object())";
             let a = answer(py, program).unwrap();
             let ask =
                 ToolOutcome::InputRequired { question: "Yes?".into(), verbatim: true, tool: None };
             assert_eq!(a.outcome, ask);
-            assert_eq!(a.approval, Some(crate::llm::tool_executor::Approval::Asked));
             assert!(a.transition.is_some());
             let working = "out = tool_report.ToolReport(outcome=tool_report.ToolOutcomeWorking())";
             assert_eq!(answer(py, working).unwrap().outcome, ToolOutcome::Working(None));
-            let unknown = "out = tool_report.ToolReport(outcome=tool_report.ToolOutcomeWorking(), approval='maybe')";
-            assert!(answer(py, unknown).is_err(), "an approval mark outside the literal");
             assert!(answer(py, "out = {'outcome': {'kind': 'working'}}").is_err(), "a dict");
             assert!(answer(py, "out = 'sunny'").is_err(), "not a report at all");
         });

@@ -9,8 +9,9 @@
 //! and the [`AvatarRunner`] queue owner) runs each [`IoOp`] against the host proxies and answers it
 //! with an [`Event`]; it decides nothing.
 
+use std::collections::VecDeque;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
