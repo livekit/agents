@@ -245,11 +245,10 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
+        voice: dict[str, object] = {"id": self._opts.voice_id}
         json_data = {
             "transcript": self._input_text,
-            "voice": {
-                "id": self._opts.voice_id,
-            },
+            "voice": voice,
             "output_format": {
                 "sample_rate": self._opts.sample_rate,
                 "encoding": self._opts.encoding,
@@ -257,7 +256,7 @@ class ChunkedStream(tts.ChunkedStream):
         }
 
         if is_given(self._opts.voice_settings) and self._opts.voice_settings.sampling_params:
-            json_data["voice"]["sampling_params"] = self._opts.voice_settings.sampling_params  # type: ignore[index]
+            voice["sampling_params"] = self._opts.voice_settings.sampling_params
 
         http_url = f"{self._opts.base_url}{self._opts.model}/tts/bytes"
 

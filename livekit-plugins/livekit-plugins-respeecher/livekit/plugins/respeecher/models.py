@@ -1,5 +1,8 @@
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
+
+from pydantic import JsonValue, TypeAdapter
 
 TTSModels = Literal[
     # Respeecher's public English model
@@ -12,7 +15,8 @@ TTSEncoding = Literal["pcm_s16le",]
 
 
 """Check https://space.respeecher.com/docs/api/tts/sampling-params-guide for details"""
-SamplingParams = dict[str, Any]
+SamplingParams = dict[str, JsonValue]
+_SAMPLING_PARAMS = TypeAdapter(SamplingParams)
 
 
 @dataclass
@@ -22,11 +26,16 @@ class VoiceSettings:
     sampling_params: SamplingParams | None = None
 
 
-class Voice(dict):
+class Voice(dict[str, object]):
     """Voice model for Respeecher - behaves like a dict with guaranteed `id` and optional `sampling_params`"""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        mapping: Mapping[str, object] | Iterable[tuple[str, object]] = (),
+        /,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(mapping, **kwargs)
         if "id" not in self:
             raise ValueError("Voice must have an 'id' field")
 
@@ -36,4 +45,5 @@ class Voice(dict):
 
     @property
     def sampling_params(self) -> SamplingParams | None:
-        return self.get("sampling_params")
+        value = self.get("sampling_params")
+        return _SAMPLING_PARAMS.validate_python(value) if value is not None else None
