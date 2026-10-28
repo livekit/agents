@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel
 
 from . import _core
-from ._exceptions import APIConnectionError, APIError, APIStatusError
+from ._exceptions import APIError, APIStatusError
 from .log import logger
 
 if TYPE_CHECKING:
@@ -150,7 +150,7 @@ class Attempts:
                     self._request.succeeded(_now_ns())
                     return value
                 except Exception as error:
-                    action, delay, message = self._request.failure(
+                    action, delay, _ = self._request.failure(
                         isinstance(error, APIError) and error.retryable,
                         error.status_code if isinstance(error, APIStatusError) else None,
                         produced(),
@@ -158,8 +158,6 @@ class Attempts:
                     )
                     if action == "stop":
                         return cast(_T, None)
-                    if action == "exhausted":
-                        raise APIConnectionError(message or str(error)) from error
                     if action == "raise":
                         raise
                     self.emit_error(error, True)
