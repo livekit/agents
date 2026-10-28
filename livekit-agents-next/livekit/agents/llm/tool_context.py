@@ -372,7 +372,7 @@ _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
 _P = ParamSpec("_P")
 
 
-_R = TypeVar("_R", bound=Awaitable[Any])
+_R = TypeVar("_R")
 
 
 class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):

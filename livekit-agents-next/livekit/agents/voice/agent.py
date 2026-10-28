@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 
 
 _P = ParamSpec("_P")
-_R = TypeVar("_R", bound=Awaitable[Any])
+_R = TypeVar("_R")
 _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
 _InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
 _HookFn = Callable[["VoiceSession"], Any]
