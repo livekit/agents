@@ -69,9 +69,18 @@ pub struct RunWrites<'a> {
 }
 
 /// The run's one write: the changed and deleted items, their journal entries, the task rows,
-/// usage, the snapshot when it changed, and `run_ended`. An append-only run writes no state.
-pub fn run_commit(w: RunWrites<'_>) -> Commit {
+/// usage, the snapshot when it changed, and `run_ended`. An append-only (`concurrent`) run writes
+/// no state and may only add items: editing or deleting a loaded one is refused.
+pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     let (items, delete_items) = item_changes(w.history, w.loaded);
+    if !w.exclusive {
+        let edited = items.iter().find(|i| w.loaded.iter().any(|(id, _)| *id == i.id));
+        if let Some(id) = edited.map(|i| &i.id).or(delete_items.first()) {
+            return Err(StorageError::Invalid(format!(
+                "a concurrent run only appends to the history; it edited or deleted item {id}"
+            )));
+        }
+    }
     let mut events = Vec::new();
     if !w.exclusive {
         let started = RunStarted {
@@ -94,7 +103,7 @@ pub fn run_commit(w: RunWrites<'_>) -> Commit {
         let payload = serde_json::to_value(w.usage).unwrap_or(Value::Null);
         events.push(EventWrite { ts_ms: w.now_ms, r#type: "usage".into(), payload });
     }
-    Commit {
+    Ok(Commit {
         run_id: w.run_id.to_owned(),
         delete_items,
         items,
@@ -107,7 +116,7 @@ pub fn run_commit(w: RunWrites<'_>) -> Commit {
             &RunEnded { outcome: w.outcome, reason: w.reason.map(str::to_owned) },
         ),
         read_task: w.answer_task,
-    }
+    })
 }
 
 /// The stored items that differ from what was `loaded`, and the loaded ids no longer in the

@@ -99,7 +99,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     run1.events.append("agent_state_changed", json!({"state": "thinking"}));
     run1.usage.requests = 1;
     run1.usage.input_tokens = 10;
-    let request = run1.writes(CommitOptions::default());
+    let request = run1.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.items.len(), 2, "instructions are not stored");
     assert_eq!(request.items[0].message_id.as_deref(), Some("m1"));
     assert_eq!(
@@ -126,12 +126,12 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(s2.events(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
 
     // An unchanged history writes no item; a changed state is written.
-    assert!(run2.writes(CommitOptions::default()).items.is_empty());
-    let unchanged = run2.writes(CommitOptions::default()).state;
+    assert!(run2.writes(CommitOptions::default()).unwrap().items.is_empty());
+    let unchanged = run2.writes(CommitOptions::default()).unwrap().state;
     assert_eq!(unchanged, None, "unchanged state is not rewritten");
     run2.history.retain(|i| i.id != "i2");
     run2.state = Some(json!({"patient": "Ann", "seen": true}));
-    let request = run2.writes(CommitOptions::default());
+    let request = run2.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.delete_items, vec!["i2".to_owned()]);
     assert_eq!(run2.commit(CommitOptions::default()).await.unwrap().version, 2);
 
@@ -270,7 +270,7 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     a.state = Some(json!({"ignored": true}));
     b.history.push(message("b1", ChatRole::User, "two"));
     let drained = CommitOptions { drained_id: Some(3), ..CommitOptions::default() };
-    let request = a.writes(drained.clone());
+    let request = a.writes(drained.clone()).unwrap();
     assert_eq!(request.state, None);
     assert_eq!(request.drained_id, None);
     assert_eq!(request.events[0].r#type, "run_started");
@@ -448,7 +448,37 @@ async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: B
     fx.cleanup(&[&s]).await;
 }
 
+/// I-18: a `concurrent` run appends only: editing or deleting a loaded item is refused and
+/// nothing is written.
+async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    let mut first = lane.open(RunOptions::new("r0", "AST_0")).await.unwrap();
+    first.history.push(message("i1", ChatRole::User, "hi"));
+    first.commit(CommitOptions::default()).await.unwrap();
+    let concurrent =
+        |run_id: &str| RunOptions { exclusive: false, ..RunOptions::new(run_id, "AST_1") };
+
+    let mut deleting = lane.open(concurrent("r1")).await.unwrap();
+    deleting.history.clear();
+    deleting.history.push(message("i2", ChatRole::User, "new"));
+    assert!(matches!(
+        deleting.commit(CommitOptions::default()).await,
+        Err(StorageError::Invalid(_))
+    ));
+    let mut editing = lane.open(concurrent("r2")).await.unwrap();
+    editing.history[0] = message("i1", ChatRole::User, "rewritten");
+    assert!(matches!(
+        editing.commit(CommitOptions::default()).await,
+        Err(StorageError::Invalid(_))
+    ));
+    assert_eq!(lane.history().await.unwrap(), vec![message("i1", ChatRole::User, "hi")]);
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
     an_item_id_of_another_lane_fails_the_commit_without_mutation,
     waiters_take_the_lane_in_the_order_their_rows_were_submitted,
     a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost,

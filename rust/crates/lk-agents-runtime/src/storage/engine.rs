@@ -718,7 +718,7 @@ impl Run {
     }
 
     /// The run's writes, as the core composes them.
-    pub fn writes(&self, opts: CommitOptions) -> Commit {
+    pub fn writes(&self, opts: CommitOptions) -> Result<Commit, StorageError> {
         run::run_commit(RunWrites {
             run_id: &self.run_id,
             task_id: &self.task_id,
@@ -766,7 +766,7 @@ impl Run {
                 }
                 let keep = opts.keep_lease;
                 let wait = opts.resolve_wait;
-                let commit = self.writes(opts);
+                let commit = self.writes(opts)?;
                 match self.db.db.execute(self.commit_plan(&commit, keep)?).await {
                     Err(StorageError::Uncertain(why)) => {
                         log::warn!(target: "livekit.agents", lane = self.db.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
