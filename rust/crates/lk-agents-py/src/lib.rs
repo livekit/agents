@@ -41,6 +41,8 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type WorkerCli = lk_agents_worker::cli::WorkerCli;
+    type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type TelemetryWorker = lk_agents_runtime::telemetry::work::SdkWorker;
     type SessionReportUpload = lk_agents_runtime::telemetry::upload::SessionReportUploader;
     type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;

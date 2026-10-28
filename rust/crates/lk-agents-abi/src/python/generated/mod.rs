@@ -8,6 +8,7 @@
 mod agent;
 mod llm;
 mod storage;
+mod worker;
 mod telemetry;
 
 /// `obj` is not an instance of the model(s) `expected` names.

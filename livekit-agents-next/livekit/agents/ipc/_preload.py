@@ -1,23 +1,14 @@
 """Side-effect module: the framework's own one-time warm-up, run once per process image.
 
 Each step is lazy one-time work that would otherwise run inside the first job, on the event
-loop, as a 100-500 ms stall at session start. Everything here is fork-safe: imports, a
-``dlopen``, model weights, a cached SSL context; no threads, no event loop.
+loop, as a 100-500 ms stall at session start. Everything imported here is fork-safe: imports, a
+``dlopen`` and a cached SSL context; no clients, threads or event loop.
 
-Where it runs decides how often it costs:
+The forkserver imports this module before plugins and application preloads; spawned
+children import it before their application preloads. Forked children inherit these
+resources copy-on-write and their import is a no-op.
 
-- with the ``forkserver`` start method (Linux) the worker lists this module in
-  ``set_forkserver_preload``, ahead of ``_preload_freeze``, so it runs once in the forkserver
-  and every job process inherits the result copy-on-write;
-- with ``spawn`` (macOS, Windows) each job process imports it while it warms up, before any
-  job is assigned.
-
-The job process always imports it: under a forkserver the module is already in
-``sys.modules`` and the import is a no-op. Only the local inference models depend on where
-the module runs and on ``LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE`` (see
-``_local_inference_models``).
-
-Failures are logged at debug level only: the first real use reports a proper error.
+Active model initialization runs separately in each launched process, before readiness.
 """
 
 from __future__ import annotations
@@ -43,9 +34,8 @@ def _step(name: str, fnc: Callable[[], Any]) -> None:
     try:
         if fnc() is False:
             return
-    except Exception:
-        logger.debug("could not preload %s", name, exc_info=True)
-        return
+    except BaseException as error:
+        raise RuntimeError(f"preload {name!r} failed: {error}") from error
     logger.debug("preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)})
 
 
@@ -94,16 +84,12 @@ def _openai_resources() -> None:
     import openai.resources  # noqa: F401
 
 
-def _httpx_client() -> None:
-    # the first AsyncClient in a process image pays ~40 ms (the SSL context from the CA bundle
-    # among other lazy setup); later ones take a few milliseconds. The inference LLM, STT and
-    # TTS each build an httpx2 client (OpenAI SDK 3 / Anthropic SDK 1).
-    import httpx2
+def _shared_ssl_context() -> None:
+    from ..utils.http_context import _create_ssl_context
 
-    httpx2.AsyncClient()
+    _create_ssl_context()
 
 
-_step("the local inference models", _local_inference_models)
 _step("the livekit-rtc native library", _rtc_native_library)
 _step("the openai SDK resources", _openai_resources)
-_step("the httpx client", _httpx_client)
+_step("the shared SSL context", _shared_ssl_context)

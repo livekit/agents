@@ -45,31 +45,155 @@ fn stream_code(code: HttpStreamResetCode) -> u32 {
     code as u32
 }
 
-/// EOF means the peer half-closed its request.
-pub struct EndpointReader(RecvStream);
-impl EndpointReader {
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TransportError> {
-        self.0.read(buf).await.map_err(transport_err)
+/// Control admission never waits for the data-plane owner or flow control.
+#[derive(Clone)]
+pub struct EndpointControl(tokio::sync::watch::Sender<EndpointControlState>);
+
+#[derive(Clone, Copy, Default)]
+struct EndpointControlState {
+    finish: bool,
+    reset: Option<HttpStreamResetCode>,
+    stop: Option<HttpStreamResetCode>,
+}
+
+impl EndpointControl {
+    pub fn finish(&self) {
+        self.0.send_modify(|state| state.finish = true);
     }
-    /// STOP_SENDING with `code`: nothing more of the peer's bytes is wanted.
-    pub fn stop(&mut self, code: HttpStreamResetCode) {
-        let _ = self.0.stop(stream_code(code));
+
+    pub fn reset(&self, code: HttpStreamResetCode) {
+        self.0.send_modify(|state| {
+            state.reset.get_or_insert(code);
+            state.stop.get_or_insert(code);
+        });
+    }
+
+    pub fn stop(&self, code: HttpStreamResetCode) {
+        self.0.send_modify(|state| {
+            state.stop.get_or_insert(code);
+        });
     }
 }
 
-pub struct EndpointWriter(SendStream);
-impl EndpointWriter {
-    pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        self.0.write_all(bytes).await.map_err(transport_err)
+/// EOF means the peer half-closed its request.
+pub struct EndpointReader {
+    stream: RecvStream,
+    control: EndpointControl,
+}
+
+impl EndpointReader {
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TransportError> {
+        if self.control.0.borrow().stop.is_some() {
+            self.apply_control();
+            return Err(TransportError::Closed("endpoint request stopped".into()));
+        }
+        let mut control = self.control.0.subscribe();
+        let result = {
+            let read = Box::pin(self.stream.read(buf));
+            let stopped = Box::pin(control.wait_for(|state| state.stop.is_some()));
+            match futures_util::future::select(read, stopped).await {
+                futures_util::future::Either::Left((result, stopped)) => {
+                    drop(stopped);
+                    Some(result)
+                }
+                futures_util::future::Either::Right((_, read)) => {
+                    drop(read);
+                    None
+                }
+            }
+        };
+        match result {
+            Some(result) => {
+                self.apply_control();
+                result.map_err(transport_err)
+            }
+            None => {
+                self.apply_control();
+                Err(TransportError::Closed("endpoint request stopped".into()))
+            }
+        }
     }
+
+    pub fn apply_control(&mut self) {
+        if let Some(code) = self.control.0.borrow().stop {
+            let _ = self.stream.stop(stream_code(code));
+        }
+    }
+
+    /// STOP_SENDING with `code`: nothing more of the peer's bytes is wanted.
+    pub fn stop(&mut self, code: HttpStreamResetCode) {
+        self.control.stop(code);
+        self.apply_control();
+    }
+}
+
+pub struct EndpointWriter {
+    stream: SendStream,
+    control: EndpointControl,
+    finished: bool,
+}
+
+impl EndpointWriter {
+    pub fn control(&self) -> EndpointControl {
+        self.control.clone()
+    }
+
+    pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        if {
+            let state = self.control.0.borrow();
+            state.reset.is_some() || state.finish
+        } {
+            self.apply_control()?;
+            return Err(TransportError::Closed("endpoint response stopped".into()));
+        }
+        let mut control = self.control.0.subscribe();
+        let result = {
+            let write = Box::pin(self.stream.write_all(bytes));
+            let stopped = Box::pin(control.wait_for(|state| state.reset.is_some() || state.finish));
+            match futures_util::future::select(write, stopped).await {
+                futures_util::future::Either::Left((result, stopped)) => {
+                    drop(stopped);
+                    Some(result)
+                }
+                futures_util::future::Either::Right((_, write)) => {
+                    drop(write);
+                    None
+                }
+            }
+        };
+        match result {
+            Some(result) => {
+                self.apply_control()?;
+                result.map_err(transport_err)
+            }
+            None => {
+                self.apply_control()?;
+                Err(TransportError::Closed("endpoint response stopped".into()))
+            }
+        }
+    }
+
+    pub fn apply_control(&mut self) -> Result<(), TransportError> {
+        let control = *self.control.0.borrow();
+        if let Some(code) = control.reset {
+            let _ = self.stream.reset(stream_code(code));
+        } else if control.finish && !self.finished {
+            self.stream.finish().map_err(transport_err)?;
+            self.finished = true;
+        }
+        Ok(())
+    }
+
     /// FIN: the body's own framing has ended; the peer reads EOF after the last byte.
     pub fn finish(&mut self) -> Result<(), TransportError> {
-        self.0.finish().map_err(transport_err)
+        self.control.finish();
+        self.apply_control()
     }
-    /// RESET_STREAM with `code`: sound only before any HTTP bytes flowed; after that an outcome
-    /// travels in trailers, where it cannot race the bytes it describes.
+
+    /// RESET_STREAM before a response, or when its framing cannot carry a late failure.
     pub fn reset(&mut self, code: HttpStreamResetCode) {
-        let _ = self.0.reset(stream_code(code));
+        self.control.reset(code);
+        let _ = self.apply_control();
     }
 }
 
@@ -105,7 +229,12 @@ impl EndpointStream {
     }
 
     pub fn split(self) -> (EndpointWriter, EndpointReader) {
-        (EndpointWriter(self.send), EndpointReader(self.recv))
+        let control =
+            EndpointControl(tokio::sync::watch::channel(EndpointControlState::default()).0);
+        (
+            EndpointWriter { stream: self.send, control: control.clone(), finished: false },
+            EndpointReader { stream: self.recv, control },
+        )
     }
     /// Both directions, with `code`.
     pub fn reset(mut self, code: HttpStreamResetCode) {
@@ -291,6 +420,59 @@ mod tests {
         (server, port)
     }
 
+    #[tokio::test]
+    async fn endpoint_stop_during_stalled_io() {
+        use lk_agents_abi::{Clock, RealClock, timeout};
+
+        let clock = RealClock::new();
+        let (mut server, port) = loopback_server();
+        let peer = async {
+            let session = server.accept().await.unwrap().ok().await.unwrap();
+            let _control = session.accept_bi().await.unwrap();
+            let (mut send, mut recv) = session.open_bi().await.unwrap();
+            send.write_all(b"x").await.unwrap();
+            let stopped = send.stopped().await.unwrap();
+            let response = recv.read_to_end(32 << 20).await;
+            (stopped, response)
+        };
+        let worker = async {
+            let transport = WtTransport { insecure: true };
+            let Connected { sink, mut stream } = transport
+                .connect(&format!("https://127.0.0.1:{port}"), None, vec![])
+                .await
+                .unwrap();
+            sink.send(WorkerMessage::default()).await.unwrap();
+            let TransportEvent::EndpointRequest(request) = stream.recv().await.unwrap() else {
+                panic!("expected the peer's endpoint stream");
+            };
+            let (mut writer, mut reader) = request.split();
+            let control = writer.control();
+            let mut first = [0_u8];
+            assert_eq!(reader.read(&mut first).await.unwrap(), Some(1));
+            let mut input = [0_u8];
+            let output = vec![1_u8; 16 << 20];
+            let mut pending = Box::pin(futures_util::future::join(
+                reader.read(&mut input),
+                writer.write_all(&output),
+            ));
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            let before = clock.now();
+            control.reset(HttpStreamResetCode::HsrProtocol);
+            assert!(clock.now().saturating_duration_since(before) < Duration::from_millis(2));
+            let (read, write) = timeout(&clock, Duration::from_secs(2), pending).await.unwrap();
+            assert!(read.is_err(), "stalled read did not settle after reset");
+            assert!(write.is_err(), "stalled write did not settle after reset");
+            sink
+        };
+        let ((stopped, response), sink) =
+            timeout(&clock, Duration::from_secs(5), futures_util::future::join(peer, worker))
+                .await
+                .unwrap();
+        assert_eq!(stopped, Some(HttpStreamResetCode::HsrProtocol as u32));
+        assert!(response.unwrap_err().to_string().contains('4'));
+        sink.close().await;
+    }
+
     // Catches: the preamble framing read as HTTP bytes (or HTTP bytes eaten by the preamble read),
     // `session_id` dropped, a finished response not reaching the peer as EOF, or a bad preamble
     // answered with anything but HSR_PROTOCOL.
@@ -314,13 +496,19 @@ mod tests {
             let body = preamble.encode_to_vec();
             send.write_all(&(body.len() as u32).to_be_bytes()).await.unwrap();
             send.write_all(&body).await.unwrap();
-            send.write_all(b"POST /a2a HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            send.write_all(b"POST /a2a HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
             send.finish().unwrap();
             let response = recv.read_to_end(1 << 16).await.unwrap();
             // A stream whose length prefix exceeds the cap.
             let (mut bad_send, mut bad_recv) = session.open_bi().await.unwrap();
             bad_send.write_all(&(1u32 << 30).to_be_bytes()).await.unwrap();
-            let reset = bad_recv.read_to_end(16).await.map(|_| String::new()).unwrap_or_else(|e| e.to_string());
+            let reset = bad_recv
+                .read_to_end(16)
+                .await
+                .map(|_| String::new())
+                .unwrap_or_else(|e| e.to_string());
             (response, reset)
         });
 
@@ -345,20 +533,29 @@ mod tests {
                     while let Some(n) = reader.read(&mut buf).await.unwrap() {
                         head.extend_from_slice(&buf[..n]);
                     }
-                    assert!(head.starts_with(b"POST /a2a HTTP/1.1"), "{:?}", String::from_utf8_lossy(&head));
+                    assert!(
+                        head.starts_with(b"POST /a2a HTTP/1.1"),
+                        "{:?}",
+                        String::from_utf8_lossy(&head)
+                    );
                     writer.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").await.unwrap();
                     writer.finish().unwrap();
                 }
                 Err(_) => request.reset(HttpStreamResetCode::HsrProtocol),
             }
         }
-        let (response, reset) = tokio::time::timeout(Duration::from_secs(5), server_task).await.unwrap().unwrap();
+        let (response, reset) =
+            tokio::time::timeout(Duration::from_secs(5), server_task).await.unwrap().unwrap();
         assert_eq!(response, b"HTTP/1.1 204 No Content\r\n\r\n");
-        assert!(reset.contains('4'), "the bad preamble was not reset with HSR_PROTOCOL (4): {reset}");
+        assert!(
+            reset.contains('4'),
+            "the bad preamble was not reset with HSR_PROTOCOL (4): {reset}"
+        );
         sink.close().await;
     }
 
     // Catches: control stream not opened first, mis-framed, or a server-opened stream left dangling.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_worker_dials_speaks_on_the_control_stream_and_refuses_a_server_stream() {
         let (mut server, port) = loopback_server();

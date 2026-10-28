@@ -20,13 +20,14 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
+import inspect
 import logging
 import os
 import socket
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from types import FrameType
@@ -36,12 +37,21 @@ from unittest.mock import AsyncMock, create_autospec
 from opentelemetry import trace
 
 from livekit import rtc
+from livekit.protocol import agent
 
 from .. import _core
-from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
+from ..job import (
+    JobAcceptArguments,
+    JobContext,
+    JobExecutorType,
+    JobProcess,
+    RunningJobInfo,
+    _JobContextVar,
+)
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions
+from .launch import load_preload_modules
 
 _T = TypeVar("_T")
 
@@ -54,6 +64,8 @@ class JobArgs:
     session_end_fnc: Callable[[JobContext], Awaitable[None]] | None
     simulation_end_fnc: Callable[[Any], Any] | None
     session_end_timeout: float
+    preload_modules: tuple[str, ...] = ()
+    setup_fnc: Callable[[JobProcess], None] | None = None
     user_arguments: Any | None = None
     mp_cch: socket.socket | None = None
     log_config: tuple[str, str] | None = None
@@ -70,6 +82,8 @@ def job_main(args: JobArgs) -> None:
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
+        preload_modules=args.preload_modules,
+        setup_fnc=args.setup_fnc,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
     serve_parent(cast(socket.socket, args.mp_cch), job_proc)
@@ -121,12 +135,16 @@ class _JobProc:
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
         simulation_end_fnc: Callable[[Any], Any] | None = None,
+        preload_modules: Sequence[str] = (),
+        setup_fnc: Callable[[JobProcess], None] | None = None,
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
+        self._preload_modules = tuple(preload_modules)
+        self._setup_fnc = setup_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
         # stamped on the process's log lines
@@ -141,12 +159,40 @@ class _JobProc:
             http_proxy=http_proxy,
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
-        from . import _preload  # noqa: F401
+        from . import _preload
+
+        load_preload_modules(self._preload_modules)
+        _preload._step("the local inference models", _preload._local_inference_models)
+        if self._setup_fnc is not None:
+            setup_fnc: Callable[[JobProcess], object] = self._setup_fnc
+            result = setup_fnc(self._job_proc)
+            if inspect.isawaitable(result) or inspect.isasyncgen(result):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise TypeError(
+                    "setup_fnc returned an awaitable or async generator; "
+                    "process setup must be synchronous"
+                )
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
-    async def _core_start_job(self, fields: dict[str, Any]) -> _core.JobRun:
-        return self._start_job(RunningJobInfo._from_wire(fields))
+    async def _core_start_job(self, fields: _core.StartJobFields) -> _core.JobRun:
+        return self._start_job(
+            RunningJobInfo(
+                accept_arguments=JobAcceptArguments(
+                    name=fields.name, identity=fields.identity, metadata=fields.metadata
+                ),
+                job=agent.Job.FromString(bytes(fields.job)),
+                url=fields.url,
+                token=fields.token,
+                worker_id=fields.worker_id,
+                fake_job=fields.fake_job,
+                received_at=fields.received_at,
+                accepted_at=fields.accepted_at,
+                assigned_at=fields.assigned_at,
+                launched_at=fields.launched_at,
+            )
+        )
 
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces()
@@ -357,6 +403,8 @@ def thread_main(args: JobArgs) -> None:
         executor_type=JobExecutorType.THREAD,
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
+        preload_modules=args.preload_modules,
+        setup_fnc=args.setup_fnc,
     )
     serve_parent(cast(socket.socket, args.mp_cch), job_proc)
 
@@ -396,14 +444,11 @@ def serve_parent(mp_cch: socket.socket, host: Any) -> None:
     """A child process's (or job thread's) side of the parent's socket: the handshake
     (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
     hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
-    initialization returns at once (the parent was told)."""
+    initialization raises after notifying the parent."""
     _initialize_stack_dump_worker()
-    try:
-        client = _core.IpcClient(
-            mp_cch.detach(), host.initialize, process=host._executor_type == JobExecutorType.PROCESS
-        )
-    except Exception:
-        return
+    client = _core.IpcClient(
+        mp_cch.detach(), host.initialize, process=host._executor_type == JobExecutorType.PROCESS
+    )
     host._client = client
 
     loop = asyncio.new_event_loop()

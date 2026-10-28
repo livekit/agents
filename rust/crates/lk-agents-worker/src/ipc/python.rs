@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use lk_agents_abi::python::{CancellingHandle, HostBridge, check_pid, pyo3_async_runtimes};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::PyTuple;
 
 mod host;
 use host::*;
@@ -247,17 +247,18 @@ impl PyProcSupervisor {
         })
     }
 
-    /// Hands the process its job, `fields` as `RunningJobInfo._to_wire()` gives them.
+    /// Hands the process its validated ABI job record.
     fn start_job<'py>(
         &self,
         py: Python<'py>,
-        fields: &Bound<'py, PyDict>,
+        fields: lk_agents_abi::worker::job::StartJobFields,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let job = start_job_of(fields)?;
+        let job = fields;
         let sup = self.sup.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            sup.start_job(job).await;
-            Ok(())
+            sup.start_job(job)
+                .await
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
         })
     }
 
@@ -356,12 +357,18 @@ impl PyIpcClient {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut stop = child.stop.subscribe();
             let served = async {
-                while let Some(msg) = child.client.recv().await {
+                loop {
+                    let Some(msg) = child.client.recv().await else {
+                        return child
+                            .client
+                            .wait_reader()
+                            .await
+                            .map_err(|error| PyRuntimeError::new_err(error.to_string()));
+                    };
                     if !child.on_message(&host, msg).await? {
-                        break;
+                        return Ok(());
                     }
                 }
-                PyResult::Ok(())
             };
             let outcome = tokio::select! {
                 r = served => r,

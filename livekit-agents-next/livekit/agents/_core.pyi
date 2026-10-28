@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from ._generated._core_agent import *  # noqa: F401, F403
 from ._generated._core_classes import *  # noqa: F401, F403
-from ._generated._core_classes import ChatItem
+from ._generated._core_classes import ChatItem, StartJobFields
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
 from ._generated._core_telemetry import *  # noqa: F401, F403
@@ -27,9 +27,11 @@ from ._generated._core_telemetry import (
     _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
 )
 from ._generated._core_storage import *  # noqa: F401, F403
+from ._generated._core_worker import *  # noqa: F401, F403
 from ._generated.storage import EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
 from ._generated.storage_turn import Policy, TurnOptions, TurnResult
+from ._generated.worker_options import ServerOptions
 
 # --- runtime.rs ----------------------------------------------------------------------------------
 
@@ -79,8 +81,8 @@ def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | No
 class ServerConfig:
     """``AgentServer``'s options, resolved against the environment; writable until it starts."""
 
-    def __init__(self, options: dict[str, Any]) -> None: ...
-    def update(self, options: dict[str, Any]) -> None: ...
+    def __init__(self, options: ServerOptions) -> None: ...
+    def update(self, options: ServerOptions) -> None: ...
     @property
     def ws_url(self) -> str: ...
     @property
@@ -183,8 +185,8 @@ class ProcSupervisor:
     def _core_wait_exit(self) -> Awaitable[bool]: ...
     def aclose(self) -> Awaitable[None]: ...
     def kill(self) -> Awaitable[None]: ...
-    def start_job(self, fields: dict[str, Any]) -> Awaitable[None]:
-        """Sends the StartJobRequest of ``fields`` (``RunningJobInfo._to_wire()``)."""
+    def start_job(self, fields: StartJobFields) -> Awaitable[None]:
+        """Returns after the child accepts the typed job record."""
     @property
     def killed(self) -> bool: ...
 

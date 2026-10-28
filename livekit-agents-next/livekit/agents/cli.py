@@ -13,6 +13,7 @@ import os
 import pkgutil
 import signal
 import sys
+from builtins import ExceptionGroup
 from types import FrameType
 from typing import Any
 
@@ -20,9 +21,11 @@ from livekit.protocol import agent
 
 from . import _core
 from ._exceptions import CLIError
+from ._generated.worker_cli import CliArgs, CliArgsConsole, CliArgsDownloadFiles, CliArgsStart
 from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
 from .log import DEV_LEVEL, _add_global_log_fields, logger
 from .telemetry import loop_monitor
+from .types import NOT_GIVEN
 from .worker import AgentServer, Plugin
 
 __all__ = ["main", "run_app"]
@@ -58,9 +61,9 @@ class _ExitCli(SystemExit):
 def main(argv: list[str] | None = None) -> int:
     """``python -m livekit.agents``: the user's server found from the entrypoint."""
     args = _core.parse_cli(sys.argv[1:] if argv is None else argv)
-    if args["command"] == "download-files":
+    if isinstance(args, CliArgsDownloadFiles):
         return _download_files()
-    return _dispatch(_load_server(args["entrypoint"]), args)
+    return _dispatch(_load_server(args.entrypoint), args)
 
 
 def run_app(server: AgentServer) -> None:
@@ -69,10 +72,10 @@ def run_app(server: AgentServer) -> None:
         raise SystemExit(status)
 
 
-def _dispatch(server: AgentServer, args: dict[str, Any]) -> int:
-    if args["command"] == "console":
-        _run_console(server, args["connect_addr"], args["record"])
-    elif args["command"] == "start":
+def _dispatch(server: AgentServer, args: CliArgs) -> int:
+    if isinstance(args, CliArgsConsole):
+        _run_console(server, args.connect_addr, args.record)
+    elif isinstance(args, CliArgsStart):
         return _run_worker(server, args)
     else:
         return _download_files()
@@ -213,14 +216,17 @@ def setup_logging(log_level: str, style: str) -> logging.Handler:
 # --- the worker --------------------------------------------------------------------------------
 
 
-def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool = False) -> int:
+def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool = False) -> int:
     """``start``: the worker until a signal, then drained (not in dev) and closed; nonzero
     when the worker failed."""
-    if args["options"]:
-        server.update_options(**args["options"])
-    server._config.simulation = args["simulation"]
-    devmode = args["dev"]
-    setup_logging(args["log_level"], args["log_style"])
+    server.update_options(
+        ws_url=args.ws_url if args.ws_url is not None else NOT_GIVEN,
+        api_key=args.api_key if args.api_key is not None else NOT_GIVEN,
+        api_secret=args.api_secret if args.api_secret is not None else NOT_GIVEN,
+    )
+    server._config.simulation = args.simulation
+    devmode = args.dev
+    setup_logging(args.log_level, args.log_style)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -254,7 +260,7 @@ def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool
 
     try:
         main_task = loop.create_task(
-            _serve(server, devmode, args["cli_addr"], unregistered=unregistered),
+            _serve(server, devmode, args.cli_addr, unregistered=unregistered),
             name="worker_main_task_cli",
         )
         with contextlib.suppress(_ExitCli):
@@ -270,9 +276,14 @@ def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool
     finally:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, lambda *_: os._exit(1))
-        _close_loop(loop)
+        _close_loop(loop, exits)
 
-    return int(not main_task.cancelled() and main_task.exception() is not None)
+    if main_task.cancelled():
+        return 0
+    error = main_task.exception()
+    if error is not None:
+        logger.error("worker failed", exc_info=error)
+    return int(error is not None)
 
 
 async def _serve(
@@ -293,9 +304,6 @@ async def _serve(
         channel = asyncio.ensure_future(dev)
     try:
         await server.run(devmode=devmode, unregistered=unregistered)
-    except Exception:
-        logger.exception("worker failed")
-        raise  # retrieved by _run_worker as the exit status
     finally:
         if channel is not None:
             channel.cancel()
@@ -314,17 +322,22 @@ def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, 
         loop.default_exception_handler(context)
 
 
-def _close_loop(loop: asyncio.AbstractEventLoop) -> None:
-    with contextlib.suppress(Exception):
-        tasks = asyncio.all_tasks(loop)
-        for task in tasks:
-            task.cancel()
-        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+def _close_loop(loop: asyncio.AbstractEventLoop, exits: _core.ExitSignals | None = None) -> None:
+    # The native process owner remains responsive even when a task or executor holds the loop.
+    exits = exits or _core.ExitSignals(escalate=False)
+    exits.closing()
+    tasks = asyncio.all_tasks(loop)
+    for task in tasks:
+        task.cancel()
+    results = loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
     loop_monitor.stop_monitoring(loop)
-    with contextlib.suppress(Exception):
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.run_until_complete(loop.shutdown_default_executor())
+    loop.run_until_complete(loop.shutdown_asyncgens())
+    loop.run_until_complete(loop.shutdown_default_executor())
     loop.close()
+    exits.closed()
+    failures = [result for result in results if isinstance(result, Exception)]
+    if failures:
+        raise ExceptionGroup("event-loop task cleanup failed", failures)
 
 
 class _DevServer:
@@ -402,4 +415,4 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     finally:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, lambda *_: os._exit(1))
-        _close_loop(loop)
+        _close_loop(loop, exits)

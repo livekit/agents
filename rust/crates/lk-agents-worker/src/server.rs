@@ -51,6 +51,7 @@ pub struct ServerSettings {
     /// The job processes' settings, which the host's pool takes as they are.
     pub job_executor_type: String,
     pub multiprocessing_context: String,
+    pub(crate) multiprocessing_fallback: bool,
     pub job_memory_warn_mb: f64,
     pub job_memory_limit_mb: f64,
     pub shutdown_process_timeout: f64,
@@ -81,6 +82,7 @@ impl Default for ServerSettings {
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
             job_executor_type: "process".into(),
+            multiprocessing_fallback: false,
             multiprocessing_context: if cfg!(target_os = "linux") { "forkserver" } else { "spawn" }
                 .into(),
             job_memory_warn_mb: 1000.0,
@@ -93,6 +95,114 @@ impl Default for ServerSettings {
 }
 
 impl ServerSettings {
+    /// Validate the whole update before replacing the running configuration.
+    pub fn apply(
+        &mut self,
+        options: lk_agents_abi::worker::worker::ServerOptions,
+    ) -> Result<(), String> {
+        use lk_agents_abi::Maybe::Given;
+        let mut next = self.clone();
+        if let Given(value) = options.ws_url {
+            next.ws_url = value;
+        }
+        if let Given(value) = options.api_key {
+            next.api_key = value;
+        }
+        if let Given(value) = options.api_secret {
+            next.api_secret = value;
+        }
+        if let Given(value) = options.agent_name {
+            next.agent_name = value;
+        }
+        if let Given(value) = options.host {
+            next.host = value;
+        }
+        if let Given(value) = options.max_retry {
+            next.max_retry = value;
+        }
+        if let Given(value) = options.permissions {
+            next.permissions = value;
+        }
+        if let Given(value) = options.http_proxy {
+            next.http_proxy = value;
+        }
+        if let Given(value) = options.prometheus_port {
+            next.prometheus_port = value;
+        }
+        if let Given(value) = options.prometheus_multiproc_dir {
+            next.prometheus_multiproc_dir = value;
+        }
+        if let Given(value) = options.version {
+            next.version = value;
+        }
+        if let Given(value) = options.job_executor_type {
+            next.job_executor_type = value;
+        }
+        if let Given(value) = options.multiprocessing_context {
+            next.multiprocessing_context = value;
+            next.multiprocessing_fallback = false;
+        }
+        if let Given(value) = options.job_memory_warn_mb {
+            next.job_memory_warn_mb = value;
+        }
+        if let Given(value) = options.job_memory_limit_mb {
+            next.job_memory_limit_mb = value;
+        }
+        if let Given(value) = options.shutdown_process_timeout {
+            next.shutdown_process_timeout = value;
+        }
+        if let Given(value) = options.session_end_timeout {
+            next.session_end_timeout = value;
+        }
+        if let Given(value) = options.initialize_process_timeout {
+            next.initialize_process_timeout = value;
+        }
+        if let Given(value) = options.port {
+            next.port = EnvOption::Fixed(value);
+        }
+        if let Given(value) = options.load_threshold {
+            next.load_threshold = EnvOption::Fixed(value);
+        }
+        if let Given(value) = options.num_idle_processes {
+            next.num_idle_processes = Some(EnvOption::Fixed(value));
+        }
+        if let Given(value) = options.drain_timeout {
+            next.drain_timeout = value.unwrap_or(0.0);
+        }
+        next.validate()?;
+        if next.multiprocessing_context == "forkserver" && !cfg!(target_os = "linux") {
+            next.multiprocessing_fallback = true;
+            next.multiprocessing_context = "spawn".into();
+        }
+        *self = next;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("drain_timeout", self.drain_timeout),
+            ("job_memory_warn_mb", self.job_memory_warn_mb),
+            ("job_memory_limit_mb", self.job_memory_limit_mb),
+            ("shutdown_process_timeout", self.shutdown_process_timeout),
+            ("session_end_timeout", self.session_end_timeout),
+            ("initialize_process_timeout", self.initialize_process_timeout),
+        ] {
+            if !value.is_finite() || value < 0.0 || value > 3_155_760_000.0 {
+                return Err(format!("{name} must be finite and non-negative"));
+            }
+        }
+        if self.load_threshold.get(false).is_nan() || self.load_threshold.get(false) < 0.0 {
+            return Err("load_threshold must be non-negative".into());
+        }
+        if !matches!(self.job_executor_type.as_str(), "process" | "thread") {
+            return Err("job_executor_type must be process or thread".into());
+        }
+        if !matches!(self.multiprocessing_context.as_str(), "spawn" | "forkserver") {
+            return Err("multiprocessing_context must be spawn or forkserver".into());
+        }
+        Ok(())
+    }
+
     /// The environment read where `__init__` reads it: an empty URL or credential falls back to
     /// its variable, `LIVEKIT_AGENT_NAME_OVERRIDE` wins over `agent_name`, which wins over
     /// `LIVEKIT_AGENT_NAME`; the worker token and the deployment are only the environment's.
@@ -646,6 +756,51 @@ mod tests {
         assert!(s.check_registration(true).unwrap_err().contains("agent_name"));
     }
 
+    #[test]
+    fn invalid_server_update_cannot_partially_change_launch_configuration() {
+        use lk_agents_abi::Maybe::Given;
+        use lk_agents_abi::worker::worker::ServerOptions;
+        let mut server = settings();
+        let original_url = server.ws_url.clone();
+        let error = server
+            .apply(ServerOptions {
+                ws_url: Given("wss://new.example".into()),
+                initialize_process_timeout: Given(f64::NAN),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(error.contains("initialize_process_timeout"));
+        assert_eq!(server.ws_url, original_url, "a refused update changes no option");
+        server
+            .apply(ServerOptions {
+                ws_url: Given("wss://new.example".into()),
+                initialize_process_timeout: Given(4.0),
+                drain_timeout: Given(None),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(server.ws_url, "wss://new.example");
+        assert_eq!(server.initialize_process_timeout, 4.0);
+        assert_eq!(server.drain_timeout, 0.0, "explicit null disables the deadline");
+        assert_eq!(server.shutdown_process_timeout, 10.0, "omission preserves other fields");
+    }
+
+    #[test]
+    fn unsupported_start_method_is_refused_before_launch() {
+        use lk_agents_abi::Maybe::Given;
+        use lk_agents_abi::worker::worker::ServerOptions;
+        let mut server = settings();
+        let method = server.multiprocessing_context.clone();
+        let error = server
+            .apply(ServerOptions {
+                multiprocessing_context: Given("fork".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(error.contains("multiprocessing_context"));
+        assert_eq!(server.multiprocessing_context, method);
+    }
+
     struct Probe;
 
     #[async_trait::async_trait]
@@ -656,6 +811,31 @@ mod tests {
 
         async fn metrics(&self) -> Option<(String, String)> {
             Some(("text/plain; version=0.0.4".into(), "lk_agents_worker_load 0.5\n".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_route_inventory_health_listener_serves_no_content() {
+        let status = ServerStatus::default();
+        assert_eq!(
+            health_route("GET", "/", &settings(), ServerType::Room, &status, &Probe).await.0,
+            503
+        );
+        status.ready.send_replace(true);
+        assert_eq!(
+            health_route("GET", "/", &settings(), ServerType::Room, &status, &Probe).await.0,
+            200
+        );
+        for path in [
+            "/threads",
+            "/threads/AT_unknown/tasks",
+            "/content/file.txt",
+            "/.well-known/agent-card.json",
+        ] {
+            assert_eq!(
+                health_route("GET", path, &settings(), ServerType::Room, &status, &Probe).await.0,
+                404
+            );
         }
     }
 

@@ -33,13 +33,12 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice)
+executed=(lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice lk-agents-worker)
 compiled=(
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
     "lk-agents-host-derive: proc macros; exercised by every crate that derives"
     "lk-agents-media: tests not in the gate yet (K-12 closure)"
     "lk-agents-rtc: tests not in the gate yet (K-12 closure)"
-    "lk-agents-worker: tests not in the gate yet; worker DST is K-2"
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
     "lk-agents-codegen: unit tests not in the gate yet; codegen --check runs in ci.yml core"
     "lk-agents-runtime: tests not in the gate yet (runtime verification is K-30)"
@@ -61,7 +60,7 @@ for crate in "${executed[@]}"; do printf '  %-24s executed\n' "$crate"; done
 for row in "${compiled[@]}"; do printf '  %-24s compiled only:%s\n' "${row%%:*}" "${row#*:}"; done
 for row in "${outside[@]}"; do printf '  %-24s outside:%s\n' "${row%%:*}" "${row#*:}"; done
 printf '  not in the gate yet: pytest --unit --audio_eot (tests.yml), B-19 conformance, I-27\n'
-printf '  backend contracts, G-12 IPC stress, K-30 runtime verification (K-12 closure)\n'
+printf '  backend contracts, K-30 runtime verification (K-12 closure)\n'
 unplaced=$(comm -23 <(echo "$crates") <(echo "$placed" | sort))
 twice=$(echo "$placed" | sort | uniq -d)
 stale=$(comm -13 <(echo "$crates") <(echo "$placed" | sort -u))
@@ -74,6 +73,23 @@ python3 crates/lk-agents-fuzz/corpus/derive.py --check
 
 step "build"
 cargo check -q --workspace --all-targets
+
+step "worker core and real transport tests"
+cargo test -q -p lk-agents-worker
+
+py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
+agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}
+step "worker generated API, CLI and endpoint contracts"
+PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
+    ../tests/conformance/test_worker_records.py ../tests/conformance/test_python_bootstrap.py \
+    ../tests/test_endpoint_routes.py ../tests/test_http.py --unit -q
+
+step "bounded real IPC, preload and shutdown journeys"
+LIVEKIT_IPC_SOAK_BATCHES=3 LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE=0 \
+    PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
+    ../tests/conformance/test_worker_ipc_resources.py \
+    ../tests/conformance/test_worker_preload.py ../tests/conformance/test_cli_shutdown.py \
+    ../tests/test_it_ipc.py --e2e -q
 
 step "agent core tests"
 cargo test -q -p lk-agents-core
@@ -89,7 +105,6 @@ cargo test -q -p lk-agents-inference -p lk-agents-abi
 # fork guard) against a live interpreter: the repository's venv unless `PYO3_PYTHON` names one. A
 # process per test (nextest), since some set process globals (the fork guard, cached host classes).
 step "abi tests against the interpreter"
-py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 PYO3_PYTHON=$py PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)') \
     cargo nextest run --cargo-quiet --status-level fail --final-status-level fail \
     -p lk-agents-abi --features python

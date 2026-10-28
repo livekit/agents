@@ -13,6 +13,7 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference" }
 # The shared agent execution core whose `AgentRun` effects `agent_run` executes.
 lk-agents-core = { path = "../lk-agents-core" }
+lk-agents-worker = { path = "../lk-agents-worker" }
 lk-agents-media = { path = "../lk-agents-media" }
 # Signs the gateway token (and later every framework credential): no private claims or signer.
 livekit-token.workspace = true
@@ -46,6 +47,9 @@ url = "2"
 rand = "0.9"
 # `SQLiteStorage`: one file per thread, executed on its own connection thread.
 rusqlite = { version = "0.32.1", features = ["bundled"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }

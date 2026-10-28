@@ -33,3 +33,5 @@ pub mod sse;
 pub mod task;
 pub mod telemetry;
 pub mod token;
+
+pub mod worker_cli;

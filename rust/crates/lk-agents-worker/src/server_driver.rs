@@ -248,8 +248,12 @@ impl<H: ServerHost> ServerRuntime<H> {
             }
         };
         let mut drain = None;
+        let mut started_notification = None;
         if let Some(result) = started {
-            let effects = state.handle(ServerInput::StartupFinished(result), origin.elapsed());
+            let readiness = result.as_ref().ok().cloned();
+            let effects =
+                state.handle(ServerInput::StartupFinished(result.map(|_| ())), origin.elapsed());
+            let notify_started = effects.contains(&ServerEffect::Started);
             if effects.contains(&ServerEffect::Drain) {
                 drain =
                     Some(self.drain_resources(
@@ -258,6 +262,10 @@ impl<H: ServerHost> ServerRuntime<H> {
                     ));
             }
             self.publish(&state, effects);
+            if notify_started {
+                started_notification =
+                    Some((self.host.started().boxed(), readiness.expect("startup succeeded")));
+            }
         }
         while !matches!(state.phase(), ServerPhase::Closing | ServerPhase::Closed) {
             tokio::select! {
@@ -274,6 +282,16 @@ impl<H: ServerHost> ServerRuntime<H> {
                             drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
                         }
                         self.publish(&state, effects);
+                    }
+                }
+                result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
+                    let (_, readiness) = started_notification.take().expect("notification pending");
+                    match result {
+                        Ok(()) => { readiness.send_replace(true); }
+                        Err(error) => {
+                            let effects = state.handle(ServerInput::Failed(error), origin.elapsed());
+                            self.publish(&state, effects);
+                        }
                     }
                 }
                 result = pending_drain(&mut drain), if drain.is_some() => {
@@ -294,6 +312,7 @@ impl<H: ServerHost> ServerRuntime<H> {
         drop(drain);
         let effects = state.handle(ServerInput::Close, origin.elapsed());
         self.publish(&state, effects);
+        drop(started_notification);
         stop.send_replace(true);
         let mut closing = resources.close(self.host.clone());
         while !closing.is_empty() {
@@ -324,7 +343,7 @@ impl<H: ServerHost> ServerRuntime<H> {
         start: &ServerStart,
         stop: &watch::Sender<bool>,
         resources: &mut Resources,
-    ) -> Result<(), String> {
+    ) -> Result<watch::Sender<bool>, String> {
         let mut settings = start.settings.clone();
         if !start.has_rtc && !start.has_text_doors {
             return Err("No RTC session entrypoint has been registered".into());
@@ -390,6 +409,12 @@ impl<H: ServerHost> ServerRuntime<H> {
                 .map_err(|error| error.to_string())?;
             resources.metrics =
                 Some(tokio::spawn(server::serve_metrics(listener, probe, stop.subscribe())));
+        }
+        if settings.multiprocessing_fallback {
+            crate::diagnostics::emit(
+                log::Level::Warn,
+                "the forkserver is used on Linux only, job processes are spawned".into(),
+            );
         }
         host.start(settings.clone(), start.devmode, start.has_rtc).await?;
         if !start.unregistered {
@@ -460,9 +485,7 @@ impl<H: ServerHost> ServerRuntime<H> {
                 host.worker_load(status.load()).await?;
             }
         }));
-        self.host.started().await?;
-        readiness.send_replace(true);
-        Ok(())
+        Ok(readiness)
     }
 
     #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]

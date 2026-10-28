@@ -14,6 +14,7 @@ from livekit.protocol import models
 from livekit.rtc.jupyter import display_room
 
 from . import cli
+from ._generated.worker_cli import CliArgsStart
 from .job import JobExecutorType
 from .worker import AgentServer
 
@@ -124,16 +125,19 @@ def run_app(server: AgentServer, *, jupyter_url: str | None = None) -> None:
 
         asyncio.run_coroutine_threadsafe(simulate_job(), asyncio.get_event_loop())
 
-    options = {"ws_url": ws_url, "api_key": api_key, "api_secret": api_secret}
     cli._run_worker(
         server,
-        {
-            "log_level": "DEBUG",
-            "log_style": "json",
-            "dev": False,
-            "cli_addr": None,
-            "simulation": False,
-            "options": {k: v for k, v in options.items() if v},
-        },
+        CliArgsStart(
+            entrypoint=None,
+            log_level="DEBUG",
+            log_format="json",
+            log_style="json",
+            dev=False,
+            cli_addr=None,
+            simulation=False,
+            ws_url=ws_url or None,
+            api_key=api_key or None,
+            api_secret=api_secret or None,
+        ),
         unregistered=True,
     )

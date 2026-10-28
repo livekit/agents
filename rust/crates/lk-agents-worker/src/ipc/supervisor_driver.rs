@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use super::supervisor::*;
-use super::wire::{self, Hello, StartJob, ToChild, ToParent};
+use super::wire::{self, Hello, StartJob, ToChild, ToParent, WireError};
 
 const QUEUE: usize = 16;
 
@@ -19,6 +19,7 @@ pub fn time_ms() -> i64 {
 enum Command {
     Input(Input),
     Initialize(Hello, oneshot::Sender<Result<Option<Duration>, InitError>>),
+    StartJob(StartJob, oneshot::Sender<Result<(), StartJobError>>),
 }
 
 #[derive(Clone, Default)]
@@ -32,8 +33,9 @@ struct Control {
     launch_rejected: Option<String>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Status {
+    failure: Option<lk_agents_abi::worker::ipc::IpcFailure>,
     killed: bool,
     kill_settled: bool,
     exited: bool,
@@ -63,7 +65,7 @@ impl ProcSupervisor {
             loop {
                 let read = wire::read::<ToParent, _>(&mut reader).await;
                 let failed = read.is_err();
-                if messages_tx.send(read.map_err(|e| e.to_string())).await.is_err() || failed {
+                if messages_tx.send(read.map_err(Arc::new)).await.is_err() || failed {
                     break;
                 }
             }
@@ -72,7 +74,9 @@ impl ProcSupervisor {
         let (written_tx, written) = mpsc::channel(QUEUE);
         let writing = tokio::spawn(async move {
             while let Some((id, message)) = queued.recv().await {
-                let result = wire::write(&mut writer, &message).await.map_err(|e| e.to_string());
+                let result = wire::write(&mut writer, &message)
+                    .await
+                    .map_err(|error| Arc::new(WireError::Io(error)));
                 let failed = result.is_err();
                 if written_tx.send((id, result)).await.is_err() || failed {
                     break;
@@ -88,6 +92,8 @@ impl ProcSupervisor {
             host: Arc::new(host),
             writes,
             init: None,
+            job: None,
+            next_job_id: 0,
             status: status_tx,
         };
         tokio::spawn(driver.run(commands_rx, control_rx, messages, written, reading, writing));
@@ -96,6 +102,16 @@ impl ProcSupervisor {
 
     pub fn killed(&self) -> bool {
         self.status.borrow().killed
+    }
+
+    pub fn completion(
+        &self,
+        exit_code: Option<i32>,
+    ) -> lk_agents_abi::worker::ipc::ProcessCompletion {
+        lk_agents_abi::worker::ipc::ProcessCompletion {
+            exit_code,
+            failure: self.status.borrow().failure.clone(),
+        }
     }
 
     async fn until(&self, done: impl Fn(&Status) -> bool) {
@@ -113,8 +129,14 @@ impl ProcSupervisor {
         let _ = self.commands.send(Command::Input(Input::Supervise)).await;
     }
 
-    pub async fn start_job(&self, job: StartJob) {
-        let _ = self.commands.send(Command::Input(Input::StartJob(Box::new(job)))).await;
+    pub async fn start_job(&self, job: StartJob) -> Result<(), StartJobError> {
+        validate_start_job(&job)?;
+        let (reply, result) = oneshot::channel();
+        self.commands
+            .send(Command::StartJob(job, reply))
+            .await
+            .map_err(|_| StartJobError::Closed)?;
+        result.await.unwrap_or(Err(StartJobError::Closed))
     }
 
     pub async fn launched(&self, pid: u32) {
@@ -179,6 +201,8 @@ struct Driver<H: ProcHost> {
     host: Arc<H>,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
+    job: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
+    next_job_id: u64,
     status: watch::Sender<Status>,
 }
 
@@ -192,8 +216,8 @@ impl<H: ProcHost> Driver<H> {
         mut self,
         mut commands: mpsc::Receiver<Command>,
         mut control: watch::Receiver<Control>,
-        mut messages: mpsc::Receiver<Result<ToParent, String>>,
-        mut written: mpsc::Receiver<(u64, Result<(), String>)>,
+        mut messages: mpsc::Receiver<Result<ToParent, Arc<WireError>>>,
+        mut written: mpsc::Receiver<(u64, Result<(), Arc<WireError>>)>,
         reading: tokio::task::JoinHandle<()>,
         writing: tokio::task::JoinHandle<()>,
     ) {
@@ -240,7 +264,7 @@ impl<H: ProcHost> Driver<H> {
                 },
                 result = written.recv(), if writer_open => match result {
                     Some((id, result)) => Input::Written { id, result },
-                    None => { writer_open = false; Input::ReaderClosed(Some("IPC writer closed".into())) }
+                    None => { writer_open = false; Input::ReaderClosed(Some(Arc::new(WireError::Unexpected("IPC writer closed".into())))) }
                 },
                 command = commands.recv(), if commands_open => match command {
                     Some(Command::Input(input)) => input,
@@ -255,6 +279,16 @@ impl<H: ProcHost> Driver<H> {
                         }
                         self.init = Some(reply);
                         Input::Initialize(hello)
+                    }
+                    Some(Command::StartJob(job, reply)) => {
+                        if self.job.is_some() {
+                            let _ = reply.send(Err(StartJobError::AlreadyRunning));
+                            continue;
+                        }
+                        self.next_job_id += 1;
+                        let request_id = self.next_job_id;
+                        self.job = Some((request_id, reply));
+                        Input::StartJob { request_id, job: Box::new(job) }
                     }
                     None => { commands_open = false; Input::Kill }
                 },
@@ -296,6 +330,9 @@ impl<H: ProcHost> Driver<H> {
         if let Some(init) = self.init.take() {
             let _ = init.send(Err(InitError::Closed));
         }
+        if let Some((_, job)) = self.job.take() {
+            let _ = job.send(Err(StartJobError::Closed));
+        }
         self.host.release();
         self.status.send_modify(|status| {
             status.reaped = self.state.reaped();
@@ -312,6 +349,7 @@ impl<H: ProcHost> Driver<H> {
 
     fn publish(&self) {
         self.status.send_modify(|s| {
+            s.failure = self.state.protocol_failure().map(Into::into);
             s.killed = self.state.killed();
             s.kill_settled = self.state.kill_settled();
             s.exited = self.state.exited();
@@ -330,7 +368,9 @@ impl<H: ProcHost> Driver<H> {
                             time_ms(),
                             Input::Written {
                                 id,
-                                result: Err(format!("IPC write submission failed: {error}")),
+                                result: Err(Arc::new(WireError::Unexpected(format!(
+                                    "IPC write submission failed: {error}"
+                                )))),
                             },
                         ));
                     }
@@ -380,6 +420,13 @@ impl<H: ProcHost> Driver<H> {
                 Effect::Initialized(result) => {
                     if let Some(init) = self.init.take() {
                         let _ = init.send(result);
+                    }
+                }
+                Effect::JobStarted { request_id, result } => {
+                    if self.job.as_ref().is_some_and(|(pending, _)| *pending == request_id)
+                        && let Some((_, reply)) = self.job.take()
+                    {
+                        let _ = reply.send(result);
                     }
                 }
                 Effect::IncompleteCleanup(observation) => {

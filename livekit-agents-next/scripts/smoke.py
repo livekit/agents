@@ -1543,7 +1543,22 @@ async def job() -> None:
         worker_id="smoke",
         fake_job=True,
     )
-    await sup.start_job(request._to_wire())
+    await sup.start_job(
+        _core.StartJobFields(
+            job=request.job.SerializeToString(),
+            name=request.accept_arguments.name,
+            identity=request.accept_arguments.identity,
+            metadata=request.accept_arguments.metadata,
+            url=request.url,
+            token=request.token,
+            worker_id=request.worker_id,
+            fake_job=request.fake_job,
+            received_at=request.received_at,
+            accepted_at=request.accepted_at,
+            assigned_at=request.assigned_at,
+            launched_at=request.launched_at,
+        )
+    )
     await asyncio.wait_for(serving, 30)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 30)
@@ -1745,13 +1760,15 @@ async def cli() -> None:
 
     from livekit.agents import cli as agents_cli
     from livekit.agents._exceptions import CLIError
+    from livekit.agents._generated.worker_cli import CliArgsStart
     from livekit.agents.job import JobAcceptArguments, RunningJobInfo
     from livekit.protocol import agent as agent_proto
     from livekit.protocol.agent_pb import agent_dev
 
     print("== cli")
     args = _core.parse_cli(["start", "agent.py", "--dev", "--reload-addr", "127.0.0.1:1"])
-    assert (args["entrypoint"], args["cli_addr"], args["log_style"]) == (
+    assert isinstance(args, CliArgsStart)
+    assert (args.entrypoint, args.cli_addr, args.log_style) == (
         "agent.py",
         "127.0.0.1:1",
         "dev",

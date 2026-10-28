@@ -8,7 +8,7 @@
 //! |-------------------|----------------------------------------|-----------------------------|
 //! | `"job_request"`   | a `JobRequest` dict, for `on_request`  | a decision dict             |
 //! | `"launch_job"`    | a `RunningJobInfo` dict                | the LiveKit job id          |
-//! | `"terminate_job"` | `{"job_id"}`                           | ignored                     |
+//! | `"terminate_job"` | `job_id`                           | ignored                     |
 //! | `"load"`          | `{}`, for a `load_fnc`                 | a float                     |
 //! | `"endpoint"`      | the preamble fields and an `EndpointStream` | ignored; serve to completion |
 //!
@@ -23,12 +23,14 @@ use lk_agents_abi::python::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyDict, PyList};
+use pyo3::types::{PyDict, PyList};
 use pyo3_async_runtimes::TaskLocals;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::transport::{AgentEndpointKind, EndpointReader, EndpointWriter, HttpStreamResetCode};
+use crate::transport::{
+    AgentEndpointKind, EndpointControl, EndpointReader, EndpointWriter, HttpStreamResetCode,
+};
 use crate::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, HostError, JobDecision, JobId, TransportConfig,
     WorkerCommand, WorkerHost, protocol,
@@ -46,6 +48,7 @@ type Half<T> = Arc<tokio::sync::Mutex<Option<T>>>;
 pub struct PyEndpointStream {
     reader: Half<EndpointReader>,
     writer: Half<EndpointWriter>,
+    control: EndpointControl,
 }
 
 /// The largest single `read`; a body streams through many.
@@ -98,45 +101,48 @@ impl PyEndpointStream {
     }
 
     /// FIN: the response is complete. Idempotent; a stream already reset raises.
-    fn finish(&self, py: Python<'_>) -> PyResult<()> {
+    fn finish(&self) -> PyResult<()> {
         check_pid()?;
-        let writer = self.writer.clone();
-        py.detach(|| {
-            let mut guard = writer.blocking_lock();
-            match guard.as_mut() {
-                Some(writer) => writer.finish().map_err(|e| PyRuntimeError::new_err(e.to_string())),
-                None => Ok(()),
+        self.control.finish();
+        if let Ok(mut writer) = self.writer.try_lock() {
+            if let Some(writer) = writer.as_mut() {
+                writer
+                    .apply_control()
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             }
-        })
-    }
-
-    /// RESET_STREAM with an `HttpStreamResetCode` number, and STOP_SENDING with the same.
-    fn reset(&self, py: Python<'_>, code: i32) -> PyResult<()> {
-        check_pid()?;
-        let code = reset_code(code)?;
-        let (writer, reader) = (self.writer.clone(), self.reader.clone());
-        py.detach(|| {
-            if let Some(w) = writer.blocking_lock().as_mut() {
-                w.reset(code);
-            }
-            if let Some(r) = reader.blocking_lock().as_mut() {
-                r.stop(code);
-            }
-        });
+        }
         Ok(())
     }
 
-    /// STOP_SENDING only: the response went out whole and nothing more of the request is wanted.
-    fn stop(&self, py: Python<'_>, code: i32) -> PyResult<()> {
+    /// RESET_STREAM and STOP_SENDING, admitted independently of pending data I/O.
+    fn reset(&self, code: i32) -> PyResult<()> {
         check_pid()?;
-        let code = reset_code(code)?;
-        let reader = self.reader.clone();
-        py.detach(|| {
-            if let Some(r) = reader.blocking_lock().as_mut() {
-                r.stop(code);
+        self.control.reset(reset_code(code)?);
+        if let Ok(mut writer) = self.writer.try_lock() {
+            if let Some(writer) = writer.as_mut() {
+                let _ = writer.apply_control();
             }
-        });
+        }
+        self.apply_stop();
         Ok(())
+    }
+
+    /// STOP_SENDING only: the response went out whole and nothing more is wanted.
+    fn stop(&self, code: i32) -> PyResult<()> {
+        check_pid()?;
+        self.control.stop(reset_code(code)?);
+        self.apply_stop();
+        Ok(())
+    }
+}
+
+impl PyEndpointStream {
+    fn apply_stop(&self) {
+        if let Ok(mut reader) = self.reader.try_lock() {
+            if let Some(reader) = reader.as_mut() {
+                reader.apply_control();
+            }
+        }
     }
 }
 
@@ -152,6 +158,7 @@ use pyo3::types::PyBytes;
 struct NativeStream {
     reader: Half<EndpointReader>,
     writer: Half<EndpointWriter>,
+    control: EndpointControl,
 }
 
 #[async_trait]
@@ -176,21 +183,30 @@ impl StreamIo for NativeStream {
     }
 
     async fn finish(&self) {
-        if let Some(w) = self.writer.lock().await.as_mut() {
-            let _ = w.finish();
+        self.control.finish();
+        if let Ok(mut writer) = self.writer.try_lock() {
+            if let Some(writer) = writer.as_mut() {
+                let _ = writer.apply_control();
+            }
         }
     }
 
     async fn reset(&self, code: HttpStreamResetCode) {
-        if let Some(w) = self.writer.lock().await.as_mut() {
-            w.reset(code);
+        self.control.reset(code);
+        if let Ok(mut writer) = self.writer.try_lock() {
+            if let Some(writer) = writer.as_mut() {
+                let _ = writer.apply_control();
+            }
         }
         self.stop(code).await;
     }
 
     async fn stop(&self, code: HttpStreamResetCode) {
-        if let Some(r) = self.reader.lock().await.as_mut() {
-            r.stop(code);
+        self.control.stop(code);
+        if let Ok(mut reader) = self.reader.try_lock() {
+            if let Some(reader) = reader.as_mut() {
+                reader.apply_control();
+            }
         }
     }
 }
@@ -451,17 +467,15 @@ impl PyEndpointServer {
         request: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
-        let info = RequestInfo {
-            request_id: request.getattr("request_id")?.extract()?,
-            route: request.getattr("route")?.extract()?,
-            scheme: request.getattr("scheme")?.extract()?,
-            client_addr: request.getattr("client_addr")?.extract()?,
-            timeout_ms: request.getattr("timeout_ms")?.extract::<i64>()?.max(0) as u64,
-        };
+        let info: RequestInfo = request.extract()?;
         let io: Arc<dyn StreamIo> = match stream.cast::<PyEndpointStream>() {
             Ok(s) => {
                 let s = s.borrow();
-                Arc::new(NativeStream { reader: s.reader.clone(), writer: s.writer.clone() })
+                Arc::new(NativeStream {
+                    reader: s.reader.clone(),
+                    writer: s.writer.clone(),
+                    control: s.control.clone(),
+                })
             }
             Err(_) => Arc::new(HostStream(CancellingHandle::new(py, stream.clone().unbind())?)),
         };
@@ -531,7 +545,7 @@ impl WorkerHost for PyWorkerHost {
         }
         let job_id = req.job.id.clone();
         // `resuming` is set when a call migrates off a draining worker.
-        let res = self.open("job_request", |py| Ok((&req).into_pyobject(py)?.into_any())).await;
+        let res = self.open("job_request", |py| Ok(req.into_pyobject(py)?.into_any())).await;
         match res {
             // A failed `request_fnc` rejects without terminating, so the server can redispatch.
             Err(e) => JobDecision::Failed(e),
@@ -541,19 +555,13 @@ impl WorkerHost for PyWorkerHost {
     }
 
     async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {
-        let v = self.open("launch_job", |py| Ok((&info).into_pyobject(py)?.into_any())).await?;
+        let v = self.open("launch_job", |py| Ok(info.into_pyobject(py)?.into_any())).await?;
         Python::attach(|py| v.extract::<String>(py))
             .map_err(|e| HostError::new(format!("launch_job returned a non-str job id: {e}")))
     }
 
     async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
-        self.open("terminate_job", |py| {
-            let d = PyDict::new(py);
-            d.set_item("job_id", &id)?;
-            Ok(d.into_any())
-        })
-        .await
-        .map(|_| ())
+        self.open("terminate_job", |py| Ok(id.into_pyobject(py)?.into_any())).await.map(|_| ())
     }
 
     async fn user_load(&self) -> Option<f32> {
@@ -571,6 +579,7 @@ impl WorkerHost for PyWorkerHost {
         let EndpointRequest { preamble, stream } = request;
         let request_id = preamble.request_id.clone();
         let (writer, reader) = stream.split();
+        let control = writer.control();
         let reader: Half<EndpointReader> = Arc::new(tokio::sync::Mutex::new(Some(reader)));
         let writer: Half<EndpointWriter> = Arc::new(tokio::sync::Mutex::new(Some(writer)));
         let halves = (reader.clone(), writer.clone());
@@ -582,7 +591,7 @@ impl WorkerHost for PyWorkerHost {
         let outcome = self
             .open("endpoint", |py| {
                 let d = PyDict::new(py);
-                d.set_item("stream", PyEndpointStream { reader, writer })?;
+                d.set_item("stream", PyEndpointStream { reader, writer, control })?;
                 d.set_item("kind", kind)?;
                 d.set_item("request_id", &preamble.request_id)?;
                 d.set_item("authorized", preamble.authorized)?;
@@ -690,58 +699,6 @@ fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option
 
 lk_agents_abi::register_host!(fn endpoint_url_base);
 
-/// The given options written over `s`; an unknown one is refused.
-fn apply(s: &mut ServerSettings, options: &Bound<'_, PyDict>) -> PyResult<()> {
-    fn text(v: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(v.extract::<Option<String>>()?.unwrap_or_default())
-    }
-    for (key, v) in options.iter() {
-        let key: String = key.extract()?;
-        let wrap = |e: PyErr| PyValueError::new_err(format!("{key}: {e}"));
-        match key.as_str() {
-            "ws_url" => s.ws_url = text(&v)?,
-            "api_key" => s.api_key = text(&v)?,
-            "api_secret" => s.api_secret = text(&v)?,
-            "agent_name" => s.agent_name = text(&v)?,
-            "host" => s.host = text(&v)?,
-            "port" => s.port = EnvOption::Fixed(v.extract().map_err(wrap)?),
-            "load_threshold" => s.load_threshold = EnvOption::Fixed(v.extract().map_err(wrap)?),
-            "num_idle_processes" => {
-                s.num_idle_processes = Some(EnvOption::Fixed(v.extract().map_err(wrap)?))
-            }
-            "drain_timeout" => s.drain_timeout = v.extract::<Option<f64>>()?.unwrap_or(0.0),
-            "max_retry" => s.max_retry = v.extract()?,
-            "permissions" => s.permissions = v.extract()?,
-            "http_proxy" => s.http_proxy = v.extract()?,
-            "prometheus_port" => s.prometheus_port = v.extract()?,
-            "prometheus_multiproc_dir" => s.prometheus_multiproc_dir = v.extract()?,
-            "version" => s.version = v.extract()?,
-            "job_executor_type" => s.job_executor_type = v.extract()?,
-            "multiprocessing_context" => {
-                let context: String = v.extract()?;
-                // a fork is safe from one thread only: off Linux the preloaded forkserver runs several
-                s.multiprocessing_context = if context == "forkserver" && !cfg!(target_os = "linux")
-                {
-                    crate::diagnostics::emit(
-                        log::Level::Warn,
-                        "the forkserver is used on Linux only, job processes are spawned".into(),
-                    );
-                    "spawn".into()
-                } else {
-                    context
-                };
-            }
-            "job_memory_warn_mb" => s.job_memory_warn_mb = v.extract()?,
-            "job_memory_limit_mb" => s.job_memory_limit_mb = v.extract()?,
-            "shutdown_process_timeout" => s.shutdown_process_timeout = v.extract()?,
-            "session_end_timeout" => s.session_end_timeout = v.extract()?,
-            "initialize_process_timeout" => s.initialize_process_timeout = v.extract()?,
-            other => return Err(PyValueError::new_err(format!("unknown server option {other:?}"))),
-        }
-    }
-    Ok(())
-}
-
 /// `AgentServer`'s options (`_core.ServerConfig`): what it was given, with the environment read
 /// where an option was left empty. Writable until the server starts.
 #[pyclass(name = "ServerConfig", module = "livekit.agents._core")]
@@ -765,11 +722,11 @@ impl PyServerConfig {
     /// `options`: `AgentServer`'s arguments by name; `http_proxy` left out reads `HTTPS_PROXY`,
     /// else `HTTP_PROXY`.
     #[new]
-    fn new(options: &Bound<'_, PyDict>) -> PyResult<Self> {
+    fn new(options: lk_agents_abi::worker::worker::ServerOptions) -> PyResult<Self> {
         let mut s = ServerSettings::default();
         let env = |name: &str| std::env::var(name).ok();
         s.http_proxy = ServerSettings::env_proxy(env);
-        apply(&mut s, options)?;
+        s.apply(options).map_err(PyValueError::new_err)?;
         Ok(PyServerConfig {
             settings: Arc::new(std::sync::Mutex::new(s.with_env(env))),
             running: Arc::default(),
@@ -777,11 +734,11 @@ impl PyServerConfig {
     }
 
     /// `update_options`: the given options, before the server starts.
-    fn update(&self, options: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn update(&self, options: lk_agents_abi::worker::worker::ServerOptions) -> PyResult<()> {
         if self.running.load(Ordering::Acquire) {
             return Err(PyRuntimeError::new_err("cannot update options after starting the server"));
         }
-        apply(&mut self.get(), options)
+        self.get().apply(options).map_err(PyValueError::new_err)
     }
 
     #[getter]
@@ -852,28 +809,32 @@ impl crate::server_driver::ServerHost for PyWorkerHost {
         has_rtc: bool,
     ) -> Result<(), String> {
         self.open("start", move |py| {
-            let arguments = PyDict::new(py);
-            arguments.set_item("devmode", devmode)?;
-            arguments.set_item("job_processes", has_rtc)?;
-            arguments.set_item("env", start.child_env().into_py_dict(py)?)?;
-            arguments.set_item("job_executor_type", &start.job_executor_type)?;
-            arguments.set_item("multiprocessing_context", &start.multiprocessing_context)?;
-            let pool = PyDict::new(py);
-            pool.set_item(
-                "num_idle_processes",
-                start.num_idle_processes.unwrap_or(EnvOption::Fixed(0)).get(devmode),
-            )?;
-            pool.set_item("initialize_timeout", start.initialize_process_timeout)?;
-            pool.set_item("close_timeout", start.shutdown_process_timeout)?;
-            pool.set_item("session_end_timeout", start.session_end_timeout)?;
-            pool.set_item("memory_warn_mb", start.job_memory_warn_mb)?;
-            pool.set_item("memory_limit_mb", start.job_memory_limit_mb)?;
-            pool.set_item(
-                "http_proxy",
-                start.http_proxy.as_deref().filter(|proxy| !proxy.is_empty()),
-            )?;
-            arguments.set_item("pool", pool)?;
-            Ok(arguments.into_any())
+            use lk_agents_abi::worker::worker::{ProcessPoolOptions, ProcessStartOptions};
+            Ok(ProcessStartOptions {
+                devmode,
+                job_processes: has_rtc,
+                env: start
+                    .child_env()
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value))
+                    .collect(),
+                job_executor_type: start.job_executor_type.clone(),
+                multiprocessing_context: start.multiprocessing_context.clone(),
+                pool: ProcessPoolOptions {
+                    num_idle_processes: start
+                        .num_idle_processes
+                        .unwrap_or(EnvOption::Fixed(0))
+                        .get(devmode),
+                    initialize_timeout: start.initialize_process_timeout,
+                    close_timeout: start.shutdown_process_timeout,
+                    session_end_timeout: start.session_end_timeout,
+                    memory_warn_mb: start.job_memory_warn_mb,
+                    memory_limit_mb: start.job_memory_limit_mb,
+                    http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
+                },
+            }
+            .into_pyobject(py)?
+            .into_any())
         })
         .await
         .map(|_| ())
@@ -1121,21 +1082,26 @@ mod tests {
         Python::attach(f)
     }
 
-    // Catches: `ServerOptions.permissions` not reaching the config (`hidden=True` registering a
-    // visible agent), or a partial dict raising instead of defaulting.
     #[test]
-    fn the_permissions_dict_reaches_the_config_and_missing_keys_default() {
+    fn typed_permissions_record_reaches_configuration() {
         attach(|py| {
-            let d = PyDict::new(py);
-            d.set_item("hidden", true).unwrap();
-            d.set_item("can_publish", false).unwrap();
-            d.set_item("can_publish_sources", vec![1, 2]).unwrap();
-            let p: crate::WorkerPermissions = d.as_any().extract().unwrap();
-            assert!(p.hidden && !p.can_publish, "{p:?}");
-            assert_eq!(p.can_publish_sources, vec![1, 2]);
-            assert!(p.can_subscribe && p.can_publish_data && p.can_update_metadata, "{p:?}");
-            let empty: crate::WorkerPermissions = PyDict::new(py).as_any().extract().unwrap();
-            assert_eq!(empty, crate::WorkerPermissions::default());
+            let module = py.import("livekit.agents._generated.worker_options").unwrap();
+            let fields = PyDict::new(py);
+            fields.set_item("hidden", true).unwrap();
+            fields.set_item("can_publish", false).unwrap();
+            fields.set_item("can_publish_sources", vec![1, 2]).unwrap();
+            let permissions =
+                module.getattr("WorkerPermissions").unwrap().call((), Some(&fields)).unwrap();
+            let options = PyDict::new(py);
+            options.set_item("permissions", permissions).unwrap();
+            let options =
+                module.getattr("ServerOptions").unwrap().call((), Some(&options)).unwrap();
+            let mut config = ServerSettings::default();
+            config.apply(options.extract().unwrap()).unwrap();
+            assert!(config.permissions.hidden);
+            assert!(!config.permissions.can_publish);
+            assert_eq!(config.permissions.can_publish_sources, vec![1, 2]);
+            assert!(config.permissions.can_subscribe && config.permissions.can_publish_data);
         });
     }
 

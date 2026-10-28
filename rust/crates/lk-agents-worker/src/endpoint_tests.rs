@@ -27,8 +27,17 @@ impl Fake {
 
 #[async_trait]
 impl StreamIo for Fake {
-    async fn read(&self, _max: usize) -> Result<Vec<u8>, String> {
-        let next = self.inbox.lock().unwrap().pop_front();
+    async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
+        let next = {
+            let mut inbox = self.inbox.lock().unwrap();
+            inbox.pop_front().map(|mut chunk| {
+                if chunk.len() > max {
+                    let rest = chunk.split_off(max);
+                    inbox.push_front(rest);
+                }
+                chunk
+            })
+        };
         match next {
             Some(c) => Ok(c),
             None => std::future::pending().await,
@@ -142,4 +151,101 @@ fn the_scope_path_is_unquoted_and_split_from_the_query() {
     assert_eq!(s.path, "/a b/\u{20ac}");
     assert_eq!(s.raw_path, b"/a%20b/%E2%82%AC");
     assert_eq!(s.query_string, b"q=%20");
+}
+
+struct RefuseInvalidBody;
+
+#[async_trait]
+impl AsgiApp for RefuseInvalidBody {
+    async fn call(&self, _: Scope, conn: Conn) -> Result<(), AppError> {
+        assert_eq!(conn.receive().await, Received::Disconnect);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn endpoint_limit_vectors_reject_header_overflow() {
+    let mut head = b"GET / HTTP/1.1\r\nHost: a\r\nX-Large: ".to_vec();
+    head.extend(vec![b'x'; 1 << 20]);
+    head.extend(b"\r\n\r\n");
+    let io = Fake::with(&head);
+    serve(io.clone(), info(0), &RefuseInvalidBody, &Registry::default()).await;
+    assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrProtocol));
+    assert!(io.out().is_empty());
+}
+
+#[tokio::test]
+async fn endpoint_limit_vectors_reject_chunk_line_and_trailer_overflow() {
+    for prefix in [b"1;".as_slice(), b"0\r\nX-Large: ".as_slice()] {
+        let mut request =
+            b"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        request.extend(prefix);
+        request.extend(vec![b'x'; 1 << 20]);
+        let io = Fake::with(&request);
+        serve(io.clone(), info(0), &RefuseInvalidBody, &Registry::default()).await;
+        assert_eq!(*io.reset.lock().unwrap(), Some(Reset::HsrProtocol));
+    }
+}
+
+struct WaitForWebsocketLimit;
+
+#[async_trait]
+impl AsgiApp for WaitForWebsocketLimit {
+    async fn call(&self, _: Scope, conn: Conn) -> Result<(), AppError> {
+        assert_eq!(conn.receive().await, Received::WsConnect);
+        conn.send(Sent::WsAccept { subprotocol: None, headers: vec![] }).await.unwrap();
+        let mut messages = 0;
+        loop {
+            match conn.receive().await {
+                Received::WsDisconnect { code } => {
+                    assert_eq!(code, 1009);
+                    assert!(messages <= 16);
+                    return Ok(());
+                }
+                Received::WsBytes(_) => messages += 1,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn endpoint_limit_vectors_refuse_oversized_websocket_prefix_before_payload() {
+    let mut request = b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec();
+    request.extend([0x82, 0xff]);
+    request.extend(((1_u64 << 20) + 1).to_be_bytes());
+    request.extend([0_u8; 4]);
+    let io = Fake::with(&request);
+    serve(io.clone(), info(0), &WaitForWebsocketLimit, &Registry::default()).await;
+    assert!(io.finished.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn endpoint_limit_vectors_refuse_websocket_message_and_inbox_overflow() {
+    let upgrade = b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    let mut flood = upgrade.to_vec();
+    for _ in 0..17 {
+        flood.extend([0x82, 0x81, 0, 0, 0, 0, b'x']);
+    }
+    let mut fragmented = upgrade.to_vec();
+    for n in 0..5 {
+        fragmented.extend([
+            if n == 0 {
+                0x02
+            } else if n == 4 {
+                0x80
+            } else {
+                0x00
+            },
+            0xff,
+        ]);
+        fragmented.extend((1_u64 << 20).to_be_bytes());
+        fragmented.extend([0_u8; 4]);
+        fragmented.extend(vec![b'x'; 1 << 20]);
+    }
+    for request in [flood, fragmented] {
+        let io = Fake::with(&request);
+        serve(io.clone(), info(0), &WaitForWebsocketLimit, &Registry::default()).await;
+        assert!(io.finished.load(Ordering::Acquire));
+    }
 }

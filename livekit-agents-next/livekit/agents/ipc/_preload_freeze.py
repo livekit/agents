@@ -1,15 +1,8 @@
-"""The forkserver's last preload: it forks every job process from here, which is only safe while
-it runs a single thread (a thread holding a lock at the fork leaves the lock held forever in
-the child). It logs an error naming the threads a preload left running, then preserves
-copy-on-write sharing for the preloaded objects: cyclic GC in a job process writes inherited
-object metadata and makes those pages private.
-"""
+"""Refuse unsafe forkserver images before freezing their immutable preload data."""
 
 import gc
 import os
 import threading
-
-from ..log import logger
 
 
 def _native_threads() -> list[str]:
@@ -21,8 +14,8 @@ def _native_threads() -> list[str]:
             import psutil
 
             return ["thread"] * psutil.Process().num_threads()
-        except Exception:
-            return []
+        except Exception as error:
+            raise RuntimeError("cannot inspect forkserver threads; refusing to fork") from error
     names = []
     for tid in tasks:
         try:
@@ -33,15 +26,15 @@ def _native_threads() -> list[str]:
     return names
 
 
+# Finalizers must run before the last inspection: they can themselves start threads.
+gc.collect()
 _threads = _native_threads()
+if not _threads:
+    raise RuntimeError("cannot inspect forkserver threads; refusing to fork")
 if threading.active_count() > 1 or len(_threads) > 1:
-    logger.error(
-        "the forkserver runs more than one thread after its preloads, the job processes it "
-        "forks can deadlock: Python threads %s, OS threads %s",
-        [t.name for t in threading.enumerate()],
-        _threads,
+    raise RuntimeError(
+        "forkserver preloads left background threads; refusing to fork: "
+        f"Python threads {[t.name for t in threading.enumerate()]}, OS threads {_threads}"
     )
 
-# Do not freeze unreachable cycles for the forkserver lifetime.
-gc.collect()
 gc.freeze()

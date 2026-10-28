@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// The version both ends must speak; a change to a message is a new version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The largest message a side reads: a job's `Job` protobuf is a few kilobytes.
 pub const MAX_FRAME: usize = 4 << 20;
@@ -27,7 +27,7 @@ pub enum ToChild {
     /// Answered with a `Pong` once the child's event loop ran a callback.
     Ping { sent_ms: u64 },
     /// The process's one job.
-    StartJob(Box<StartJob>),
+    StartJob { request_id: u64, job: Box<StartJob> },
     /// Acked with `ShutdownAck`; the job then shuts down with `reason` (the process exits at once
     /// without one).
     Shutdown { reason: String },
@@ -45,6 +45,11 @@ pub enum ToParent {
     },
     Pong {
         sent_ms: u64,
+    },
+    /// Confirms host acceptance of the correlated job, or its rejection cause.
+    JobAccepted {
+        request_id: u64,
+        error: Option<String>,
     },
     ShutdownAck,
     /// The job is shutting down (or the process, without one).
@@ -65,26 +70,12 @@ pub struct Hello {
     pub health_timeout_ms: Option<u64>,
 }
 
-/// A job (`RunningJobInfo`): its `Job` protobuf, the accept arguments, where it connects, and the
-/// dispatch timeline (unix seconds, 0 when unknown).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct StartJob {
-    pub job: Vec<u8>,
-    pub name: String,
-    pub identity: String,
-    pub metadata: String,
-    pub url: String,
-    pub token: String,
-    pub worker_id: String,
-    pub fake_job: bool,
-    pub received_at: f64,
-    pub accepted_at: f64,
-    pub assigned_at: f64,
-    pub launched_at: f64,
-}
+pub use lk_agents_abi::worker::job::StartJobFields as StartJob;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
+    #[error("the IPC peer closed before the next frame")]
+    Eof,
     #[error("the socket closed: {0}")]
     Io(#[from] io::Error),
     #[error("a {0}-byte frame is over the {MAX_FRAME}-byte limit")]
@@ -95,6 +86,29 @@ pub enum WireError {
     Unexpected(String),
     #[error("the other side speaks protocol version {theirs}, this one {PROTOCOL_VERSION}")]
     Version { theirs: u32 },
+}
+
+impl From<&WireError> for lk_agents_abi::worker::ipc::IpcFailure {
+    fn from(error: &WireError) -> Self {
+        match error {
+            WireError::Eof => Self::Io {
+                kind: "UnexpectedEof".into(),
+                os_error: None,
+                message: error.to_string(),
+            },
+            WireError::Io(cause) => Self::Io {
+                kind: format!("{:?}", cause.kind()),
+                os_error: cause.raw_os_error(),
+                message: cause.to_string(),
+            },
+            WireError::Malformed(cause) => Self::Malformed { message: cause.to_string() },
+            WireError::TooLarge(size) => Self::TooLarge { size: *size as u64 },
+            WireError::Unexpected(message) => Self::Unexpected { message: message.clone() },
+            WireError::Version { theirs } => {
+                Self::Version { received: *theirs, expected: PROTOCOL_VERSION }
+            }
+        }
+    }
 }
 
 /// A message's bytes.
@@ -116,7 +130,11 @@ pub async fn read<T: DeserializeOwned, R: AsyncRead + Unpin + ?Sized>(
     r: &mut R,
 ) -> Result<T, WireError> {
     let mut len = [0u8; 4];
-    r.read_exact(&mut len).await?;
+    let first = r.read(&mut len[..1]).await?;
+    if first == 0 {
+        return Err(WireError::Eof);
+    }
+    r.read_exact(&mut len[1..]).await?;
     let len = u32::from_be_bytes(len) as usize;
     if len > MAX_FRAME {
         return Err(WireError::TooLarge(len));
@@ -131,10 +149,13 @@ pub async fn write<T: Serialize, W: AsyncWrite + Unpin + ?Sized>(
     w: &mut W,
     msg: &T,
 ) -> io::Result<()> {
-    let data = encode(msg);
-    if data.len() > MAX_FRAME {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, WireError::TooLarge(data.len())));
+    // Measure with postcard's non-allocating flavor before constructing the encoded payload.
+    let size = postcard::serialize_with_flavor(msg, postcard::ser_flavors::Size::default())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    if size > MAX_FRAME {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, WireError::TooLarge(size)));
     }
+    let data = encode(msg);
     let mut frame = Vec::with_capacity(4 + data.len());
     frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
     frame.extend_from_slice(&data);

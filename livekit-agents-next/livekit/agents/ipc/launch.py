@@ -2,10 +2,85 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    from ..job import JobProcess
+
+_FORKSERVER_PRELOAD_MODULES = "LIVEKIT_AGENTS_FORKSERVER_PRELOAD_MODULES"
+
+
+class _ForkServerState(Protocol):
+    # CPython publishes these launch-integration fields, but typeshed omits them.
+    _forkserver_pid: int | None
+    _preload_modules: list[str]
+
+
+def validate_setup_fnc(
+    setup_fnc: Callable[[JobProcess], None] | None,
+) -> Callable[[JobProcess], None] | None:
+    """Process setup is synchronous because initialization precedes the job event loop."""
+    if setup_fnc is not None and (
+        not callable(setup_fnc)
+        or inspect.iscoroutinefunction(setup_fnc)
+        or inspect.isasyncgenfunction(setup_fnc)
+        or inspect.iscoroutinefunction(type(setup_fnc).__call__)
+        or inspect.isasyncgenfunction(type(setup_fnc).__call__)
+    ):
+        raise TypeError("setup_fnc must be a synchronous callable")
+    return setup_fnc
+
+
+def preload_module_names(modules: Sequence[str]) -> tuple[str, ...]:
+    """Validate the launch configuration before allocating a child process."""
+    if isinstance(modules, str):
+        raise TypeError("preload_modules must be a sequence of module names, not a string")
+    names = tuple(modules)
+    for module in names:
+        if not isinstance(module, str) or not all(
+            part.isidentifier() for part in module.split(".")
+        ):
+            raise ValueError(f"invalid preload module name {module!r}")
+    return names
+
+
+def load_preload_modules(modules: Sequence[str]) -> None:
+    """Import in order and retain the failing module and original cause."""
+    for module in modules:
+        try:
+            importlib.import_module(module)
+        except BaseException as error:
+            # multiprocessing's forkserver ignores ImportError from its preload list.
+            raise RuntimeError(f"preload module {module!r} failed: {error}") from error
+
+
+def configure_forkserver(context: BaseContext, modules: Sequence[str]) -> None:
+    """Install one fail-closed preload entrypoint before the forkserver starts."""
+    modules = preload_module_names(modules)
+    from multiprocessing.forkserver import _forkserver
+
+    state = cast(_ForkServerState, _forkserver)
+    # Retain the ordered configuration in multiprocessing's own preload inventory. The
+    # bootstrap already imports these modules, so its trailing imports are cached no-ops.
+    inventory = ["livekit.agents.ipc._preload_forkserver", *modules]
+    if state._forkserver_pid is not None:
+        if state._preload_modules != inventory:
+            raise RuntimeError(
+                "the running forkserver has different preload_modules; configure all servers "
+                "with the same ordered preloads before launching jobs, or use spawn"
+            )
+        return
+    # The forkserver is a fresh interpreter; only its environment survives that exec.
+    os.environ[_FORKSERVER_PRELOAD_MODULES] = os.pathsep.join(modules)
+    context.set_forkserver_preload(inventory)
 
 
 @dataclass(frozen=True)

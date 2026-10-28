@@ -10,58 +10,13 @@ use lk_agents_abi::python::pyo3_async_runtimes;
 use lk_agents_abi::python::{CancellingHandle, HostBridge, HostHandle};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
-use std::borrow::Cow;
+use pyo3::types::{PyDict, PyTuple};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// A job from its fields by name.
-pub(super) fn start_job_of(fields: &Bound<'_, PyDict>) -> PyResult<StartJob> {
-    let get = |name: &str| -> PyResult<Bound<'_, PyAny>> {
-        fields
-            .get_item(name)?
-            .ok_or_else(|| PyValueError::new_err(format!("the job's {name} is missing")))
-    };
-    Ok(StartJob {
-        job: get("job")?.extract::<Cow<[u8]>>()?.into_owned(),
-        name: get("name")?.extract()?,
-        identity: get("identity")?.extract()?,
-        metadata: get("metadata")?.extract()?,
-        url: get("url")?.extract()?,
-        token: get("token")?.extract()?,
-        worker_id: get("worker_id")?.extract()?,
-        fake_job: get("fake_job")?.extract()?,
-        received_at: get("received_at")?.extract()?,
-        accepted_at: get("accepted_at")?.extract()?,
-        assigned_at: get("assigned_at")?.extract()?,
-        launched_at: get("launched_at")?.extract()?,
-    })
-}
-
-/// A job's fields by name, for `RunningJobInfo._from_wire`.
-pub(super) fn fields_of_job<'py>(py: Python<'py>, job: &StartJob) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("job", PyBytes::new(py, &job.job))?;
-    for (name, value) in [
-        ("name", &job.name),
-        ("identity", &job.identity),
-        ("metadata", &job.metadata),
-        ("url", &job.url),
-        ("token", &job.token),
-        ("worker_id", &job.worker_id),
-    ] {
-        d.set_item(name, value)?;
-    }
-    d.set_item("fake_job", job.fake_job)?;
-    for (name, value) in [
-        ("received_at", job.received_at),
-        ("accepted_at", job.accepted_at),
-        ("assigned_at", job.assigned_at),
-        ("launched_at", job.launched_at),
-    ] {
-        d.set_item(name, value)?;
-    }
-    Ok(d)
+/// The shared ABI job record, without a second handwritten wire projection.
+pub(super) fn fields_of_job<'py>(py: Python<'py>, job: &StartJob) -> PyResult<Bound<'py, PyAny>> {
+    Ok(job.clone().into_pyobject(py)?.into_any())
 }
 
 /// `msg` on the `livekit.agents` logger, with `exc`'s traceback.
@@ -249,26 +204,30 @@ impl Child {
                 Ok(self.send(ToParent::Pong { sent_ms }).await.is_ok())
             }
             // the job starts once: its run ends with the parent's shutdown
-            ToChild::StartJob(job) => {
-                if lock(&self.run).is_some() {
-                    py_log(
-                        Level::Warning,
-                        "trying to start a new job while one is already running",
-                        None,
-                    );
-                    return Ok(true);
+            ToChild::StartJob { request_id, job } => {
+                let accepted: PyResult<()> = async {
+                    if lock(&self.run).is_some() {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                            "a job is already running",
+                        ));
+                    }
+                    let run = host
+                        .await_call(|h| {
+                            h.call_method1("_core_start_job", (fields_of_job(h.py(), &job)?,))
+                        })
+                        .await?;
+                    let run: Py<PyJobRun> = Python::attach(|py| -> PyResult<_> {
+                        Ok(run.bind(py).cast::<PyJobRun>()?.clone().unbind())
+                    })?;
+                    let _ = run.get().0.parent.set(Arc::clone(self));
+                    *lock(&self.run) = Some(run);
+                    Ok(())
                 }
-                let run = host
-                    .await_call(|h| {
-                        h.call_method1("_core_start_job", (fields_of_job(h.py(), &job)?,))
-                    })
-                    .await?;
-                let run: Py<PyJobRun> = Python::attach(|py| -> PyResult<_> {
-                    Ok(run.bind(py).cast::<PyJobRun>()?.clone().unbind())
-                })?;
-                let _ = run.get().0.parent.set(Arc::clone(self));
-                *lock(&self.run) = Some(run);
-                Ok(true)
+                .await;
+                let error = accepted.as_ref().err().map(ToString::to_string);
+                let sent = self.send(ToParent::JobAccepted { request_id, error }).await.is_ok();
+                accepted?;
+                Ok(sent)
             }
             // acked, then the process ends with its job (at once without one)
             ToChild::Shutdown { reason } => {
@@ -592,8 +551,10 @@ pub(super) fn run_process_owner<'py>(
                     let pid = resource.control().expect("identity observed").pid;
                     drop(resource);
                     sup.reaped(code).await;
-                    let _ =
-                        host.await_call(|h| h.call_method1("_core_completed", (code, pid))).await;
+                    let completion = sup.completion(i32::try_from(code).ok());
+                    let _ = host
+                        .await_call(|h| h.call_method1("_core_completed", (completion, pid)))
+                        .await;
                     ran.send_replace(Some(true));
                     return;
                 }

@@ -5,10 +5,11 @@
 //! every timeout as a deadline ([`Supervision::wake_at`], acted on by
 //! [`Supervision::tick`]). Socket, timer and process execution live in `supervisor_driver`.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use super::wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent};
+use super::wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
 /// How often the memory monitor samples the process.
 pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
@@ -106,6 +107,45 @@ pub enum InitError {
     Failed(String),
     #[error("the job process speaks protocol version {0}, the worker {PROTOCOL_VERSION}")]
     Version(u32),
+    #[error("IPC protocol failed: {0}")]
+    Protocol(Arc<WireError>),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartJobError {
+    #[error("invalid job launch fields: {0}")]
+    InvalidFields(String),
+    #[error("the process is not initialized")]
+    NotReady,
+    #[error("the process already accepted a job or is accepting one")]
+    AlreadyRunning,
+    #[error("the IPC connection is closed")]
+    Closed,
+    #[error("IPC protocol failed: {0}")]
+    Protocol(Arc<WireError>),
+    #[error("the child refused the job: {0}")]
+    Rejected(String),
+    #[error("the child did not acknowledge the job before its deadline")]
+    Timeout,
+}
+
+pub(crate) fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
+    use prost::Message;
+    livekit_protocol::Job::decode(job.job.as_slice())
+        .map_err(|error| StartJobError::InvalidFields(format!("job protobuf: {error}")))?;
+    for (field, value) in [
+        ("received_at", job.received_at),
+        ("accepted_at", job.accepted_at),
+        ("assigned_at", job.assigned_at),
+        ("launched_at", job.launched_at),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(StartJobError::InvalidFields(format!(
+                "{field} must be finite and nonnegative"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Seconds as a `Duration`: zero when negative or NaN.
@@ -129,16 +169,19 @@ pub enum Input {
     KillFinished(Result<(), String>),
     Written {
         id: u64,
-        result: Result<(), String>,
+        result: Result<(), Arc<WireError>>,
     },
     /// Send `Hello` and wait for `Ready`, within the initialize timeout.
     Initialize(Hello),
     /// The initialization settled: pings, the pong deadline and the memory monitor start.
     Supervise,
-    StartJob(Box<StartJob>),
+    StartJob {
+        request_id: u64,
+        job: Box<StartJob>,
+    },
     Message(ToParent),
     /// The child's end closed, or (`Some`) sent a frame this side cannot read.
-    ReaderClosed(Option<String>),
+    ReaderClosed(Option<Arc<WireError>>),
     /// The graceful close: `Shutdown`, then the ack and the exit, each within the close timeout.
     Shutdown,
     Kill,
@@ -176,6 +219,10 @@ pub enum Effect {
     SampleMemory,
     /// The initialization settled: how long it took, `None` when it timed out.
     Initialized(Result<Option<Duration>, InitError>),
+    JobStarted {
+        request_id: u64,
+        result: Result<(), StartJobError>,
+    },
 }
 
 /// A native termination request failed; exit/reaping ownership remains unchanged.
@@ -191,6 +238,12 @@ pub struct CleanupObservation {
     pub pid: u32,
     pub exited: bool,
     pub reaped: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WritePurpose {
+    Ping,
+    Protocol,
 }
 
 /// Where a graceful close is.
@@ -232,6 +285,8 @@ pub struct Supervision {
     /// Waiting for `Ready`: since when, and until when.
     init: Option<(Duration, Duration)>,
     initialized_requested: bool,
+    initialized: bool,
+    pending_job: Option<(u64, Duration)>,
     startup_at: Option<Duration>,
     supervising: bool,
     next_ping: Option<Duration>,
@@ -251,13 +306,14 @@ pub struct Supervision {
     exited: bool,
     running_job: bool,
     reader_closed: bool,
+    reader_deadline: Option<Duration>,
     reaped: bool,
     launch_rejected: bool,
     exitcode: Option<i64>,
     cleanup_at: Option<Duration>,
     next_write: u64,
-    pending_writes: BTreeSet<u64>,
-    protocol_failure: Option<String>,
+    pending_writes: BTreeMap<u64, WritePurpose>,
+    protocol_failure: Option<Arc<WireError>>,
 }
 
 impl Supervision {
@@ -267,6 +323,8 @@ impl Supervision {
             spawned: now,
             init: None,
             initialized_requested: false,
+            initialized: false,
+            pending_job: None,
             startup_at: None,
             supervising: false,
             next_ping: None,
@@ -286,12 +344,13 @@ impl Supervision {
             exited: false,
             running_job: false,
             reader_closed: false,
+            reader_deadline: None,
             reaped: false,
             launch_rejected: false,
             exitcode: None,
             cleanup_at: None,
             next_write: 0,
-            pending_writes: BTreeSet::new(),
+            pending_writes: BTreeMap::new(),
             protocol_failure: None,
         }
     }
@@ -316,7 +375,7 @@ impl Supervision {
             return None;
         }
         if self.exited {
-            return self.cleanup_at;
+            return [self.cleanup_at, self.reader_deadline].into_iter().flatten().min();
         }
         let close = match self.close {
             Close::Ack(at) | Close::ShuttingDown(at) | Close::Exit(at) => Some(at),
@@ -326,6 +385,7 @@ impl Supervision {
         [
             self.startup_at,
             self.init.map(|(_, at)| at),
+            self.pending_job.map(|(_, at)| at),
             self.next_ping,
             self.pong_deadline,
             sample,
@@ -346,7 +406,15 @@ impl Supervision {
         // A reply received at a deadline cannot revive an expired phase.
         let mut due = self.tick(now, wall_ms);
         out.append(&mut due);
-        if self.exited && !matches!(input, Input::Reaped(_) | Input::LaunchFailed(_)) {
+        if self.exited
+            && !matches!(
+                input,
+                Input::Reaped(_)
+                    | Input::LaunchFailed(_)
+                    | Input::ReaderClosed(_)
+                    | Input::Message(_)
+            )
+        {
             return out;
         }
         match input {
@@ -408,10 +476,15 @@ impl Supervision {
                 }
             }
             Input::Written { id, result } => {
-                if self.pending_writes.remove(&id)
-                    && let Err(reason) = result
-                {
-                    out.extend(self.handle(now, wall_ms, Input::ReaderClosed(Some(reason))));
+                if let (Some(purpose), Err(reason)) = (self.pending_writes.remove(&id), result) {
+                    let expected_ping_close = purpose == WritePurpose::Ping
+                        && self.shutting_down
+                        && matches!(reason.as_ref(), WireError::Io(error) if matches!(error.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::NotConnected));
+                    if !expected_ping_close {
+                        out.extend(self.handle(now, wall_ms, Input::ReaderClosed(Some(reason))));
+                    }
                 }
             }
             Input::Initialize(hello) => {
@@ -448,37 +521,36 @@ impl Supervision {
                     }
                 }
             }
-            Input::StartJob(job) => {
-                self.running_job = true;
-                self.send(ToChild::StartJob(job), &mut out);
+            Input::StartJob { request_id, job } => {
+                let failure = if let Some(failure) = &self.protocol_failure {
+                    Some(StartJobError::Protocol(failure.clone()))
+                } else if self.stopping() {
+                    Some(StartJobError::Closed)
+                } else if !self.initialized {
+                    Some(StartJobError::NotReady)
+                } else if self.pending_job.is_some() || self.running_job {
+                    Some(StartJobError::AlreadyRunning)
+                } else {
+                    None
+                };
+                if let Some(error) = failure {
+                    out.push(Effect::JobStarted { request_id, result: Err(error) });
+                } else {
+                    self.pending_job = Some((request_id, now + secs(self.opts.initialize_timeout)));
+                    self.send(ToChild::StartJob { request_id, job }, &mut out);
+                }
             }
             Input::Message(msg) => self.on_message(now, wall_ms, msg, &mut out),
             Input::ReaderClosed(reason) => {
-                if self.reader_closed {
-                    return out;
-                }
-                let orderly_close = self.closing && self.shutting_down;
-                self.reader_closed = true;
-                self.next_ping = None;
-                self.protocol_failure = reason.clone();
-                if let Some(reason) = reason.filter(|_| !self.closing || !self.shutting_down) {
-                    out.push(Effect::Log(
-                        Level::Error,
-                        format!("invalid IPC message: {reason}"),
-                        Vec::new(),
-                    ));
-                }
-                if self.init.take().is_some() {
-                    out.push(Effect::Initialized(Err(InitError::Closed)));
-                }
-                // a close never waits for an ack that cannot arrive
-                self.acked = true;
-                self.shutting_down = true;
-                self.advance_close(now);
-                if !self.exited && !orderly_close {
-                    self.closing = true;
-                    self.begin_kill(&mut out);
-                    self.cleanup_at.get_or_insert(now + self.termination_timeout());
+                let reason = reason.unwrap_or_else(|| Arc::new(WireError::Eof));
+                if self.shutting_down && matches!(*reason, WireError::Eof) {
+                    self.reader_closed = true;
+                    self.reader_deadline = None;
+                    self.next_ping = None;
+                    self.acked = true;
+                    self.advance_close(now);
+                } else {
+                    self.fail_protocol(now, reason, &mut out);
                 }
             }
             Input::Shutdown => self.shutdown(now, &mut out),
@@ -503,9 +575,12 @@ impl Supervision {
             Input::Sampled(sample) => self.on_sample(now, sample, &mut out),
             Input::Exited(code) => {
                 self.exited = true;
+                if self.initialized_requested && !self.reader_closed {
+                    self.reader_deadline = Some(now + secs(self.opts.close_timeout));
+                }
                 self.startup_at = None;
                 self.cleanup_at.get_or_insert(now + secs(self.opts.close_timeout));
-                if self.init.take().is_some() {
+                if self.reader_closed && self.init.take().is_some() {
                     out.push(Effect::Initialized(Err(InitError::Closed)));
                 }
                 if self.reaped {
@@ -514,8 +589,6 @@ impl Supervision {
                 (self.next_ping, self.pong_deadline, self.next_sample, self.kill_at) =
                     (None, None, None, None);
                 self.close = Close::None;
-                self.acked = true;
-                self.shutting_down = true;
                 self.observe_exitcode(code, &mut out);
             }
         }
@@ -535,6 +608,17 @@ impl Supervision {
                 exited: self.exited,
                 reaped: self.reaped,
             }));
+        }
+        if self.reader_deadline.is_some_and(|at| at <= now) {
+            self.reader_deadline = None;
+            self.fail_protocol(
+                now,
+                Arc::new(WireError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "IPC reader did not settle after process exit",
+                ))),
+                &mut out,
+            );
         }
         if self.exited {
             return out;
@@ -558,6 +642,15 @@ impl Supervision {
             if self.opts.killable {
                 self.begin_kill(&mut out);
             }
+        }
+        if let Some((request_id, deadline)) = self.pending_job
+            && deadline <= now
+        {
+            self.pending_job = None;
+            out.push(Effect::JobStarted { request_id, result: Err(StartJobError::Timeout) });
+            self.closing = true;
+            self.begin_kill(&mut out);
+            self.cleanup_at.get_or_insert(now + self.termination_timeout());
         }
         if let Some(at) = self.next_ping
             && at <= now
@@ -628,6 +721,16 @@ impl Supervision {
     }
 
     fn on_message(&mut self, now: Duration, wall_ms: i64, msg: ToParent, out: &mut Vec<Effect>) {
+        if self.exited {
+            match &msg {
+                ToParent::Ready { version, error }
+                    if *version != PROTOCOL_VERSION || error.is_some() => {}
+                ToParent::JobAccepted { error: Some(_), .. }
+                | ToParent::ShuttingDown
+                | ToParent::Exiting { .. } => {}
+                _ => return,
+            }
+        }
         if let Some((started, _)) = self.init.take() {
             let result = match msg {
                 ToParent::Ready { version, .. } if version != PROTOCOL_VERSION => {
@@ -635,6 +738,7 @@ impl Supervision {
                 }
                 ToParent::Ready { error: Some(error), .. } => Err(InitError::Failed(error)),
                 ToParent::Ready { error: None, .. } => {
+                    self.initialized = true;
                     let elapsed = now.saturating_sub(started);
                     let extra =
                         vec![("elapsed_time", ExtraValue::Float(round(elapsed.as_secs_f64(), 2)))];
@@ -647,7 +751,15 @@ impl Supervision {
                 }
                 _ => Err(InitError::Unexpected),
             };
+            let refusal = match &result {
+                Err(InitError::Version(theirs)) => Some(WireError::Version { theirs: *theirs }),
+                Err(error) => Some(WireError::Unexpected(error.to_string())),
+                Ok(_) => None,
+            };
             out.push(Effect::Initialized(result));
+            if let Some(refusal) = refusal {
+                self.fail_protocol(now, Arc::new(refusal), out);
+            }
             return;
         }
         match msg {
@@ -676,6 +788,13 @@ impl Supervision {
             }
             ToParent::ShuttingDown => {
                 self.shutting_down = true;
+                self.next_ping = None;
+                self.pong_deadline = None;
+                if self.close == Close::None {
+                    self.closing = true;
+                    self.close = Close::Exit(now + secs(self.opts.close_timeout));
+                    self.cleanup_at.get_or_insert(now + self.termination_timeout());
+                }
                 self.advance_close(now);
             }
             ToParent::Exiting { reason } => {
@@ -685,7 +804,73 @@ impl Supervision {
                     false => out.push(Effect::Log(Level::Debug, "job exiting".into(), extra)),
                 }
             }
-            ToParent::Ready { .. } => {}
+            ToParent::JobAccepted { request_id, error } => {
+                if self.pending_job.is_some_and(|(pending, _)| pending == request_id) {
+                    self.pending_job = None;
+                    let result = match error {
+                        Some(error) => Err(StartJobError::Rejected(error)),
+                        None => {
+                            self.running_job = true;
+                            Ok(())
+                        }
+                    };
+                    let refused = result.is_err();
+                    out.push(Effect::JobStarted { request_id, result });
+                    if refused {
+                        self.closing = true;
+                        self.begin_kill(out);
+                        self.cleanup_at.get_or_insert(now + self.termination_timeout());
+                    }
+                } else {
+                    self.fail_protocol(
+                        now,
+                        Arc::new(WireError::Unexpected(format!(
+                            "job acknowledgment {request_id} has no pending submission"
+                        ))),
+                        out,
+                    );
+                }
+            }
+            ToParent::Ready { .. } => self.fail_protocol(
+                now,
+                Arc::new(WireError::Unexpected("unsolicited Ready".into())),
+                out,
+            ),
+        }
+    }
+
+    /// The first protocol failure remains authoritative even when OS exit reports zero.
+    pub fn protocol_failure(&self) -> Option<&WireError> {
+        self.protocol_failure.as_deref()
+    }
+
+    fn fail_protocol(&mut self, now: Duration, failure: Arc<WireError>, out: &mut Vec<Effect>) {
+        if self.protocol_failure.is_some() {
+            return;
+        }
+        self.protocol_failure = Some(failure.clone());
+        self.reader_closed = true;
+        self.reader_deadline = None;
+        self.initialized = false;
+        self.next_ping = None;
+        self.pong_deadline = None;
+        self.closing = true;
+        out.push(Effect::Log(Level::Error, format!("invalid IPC message: {failure}"), Vec::new()));
+        if self.init.take().is_some() {
+            out.push(Effect::Initialized(Err(InitError::Protocol(failure.clone()))));
+        }
+        if let Some((request_id, _)) = self.pending_job.take() {
+            out.push(Effect::JobStarted {
+                request_id,
+                result: Err(StartJobError::Protocol(failure)),
+            });
+        }
+        self.acked = true;
+        self.shutting_down = true;
+        self.advance_close(now);
+        self.begin_kill(out);
+        if !self.reaped() {
+            self.cleanup_at.get_or_insert(now + self.termination_timeout());
         }
     }
 
@@ -694,6 +879,9 @@ impl Supervision {
             return;
         }
         self.closing = true;
+        if let Some((request_id, _)) = self.pending_job.take() {
+            out.push(Effect::JobStarted { request_id, result: Err(StartJobError::Closed) });
+        }
         self.send(ToChild::Shutdown { reason: String::new() }, out);
         self.cleanup_at = Some(now + secs(self.opts.close_timeout) * 3 + self.kill_grace());
         self.close = Close::Ack(now + secs(self.opts.close_timeout));
@@ -744,7 +932,8 @@ impl Supervision {
     }
 
     pub fn cleaned(&self) -> bool {
-        self.launch_rejected || self.reaped()
+        self.launch_rejected
+            || (self.reaped() && (!self.initialized_requested || self.reader_closed))
     }
 
     pub fn reaped(&self) -> bool {
@@ -765,7 +954,12 @@ impl Supervision {
         }
         self.next_write += 1;
         let id = self.next_write;
-        self.pending_writes.insert(id);
+        let purpose = if matches!(message, ToChild::Ping { .. }) {
+            WritePurpose::Ping
+        } else {
+            WritePurpose::Protocol
+        };
+        self.pending_writes.insert(id, purpose);
         out.push(Effect::Send { id, message });
     }
 

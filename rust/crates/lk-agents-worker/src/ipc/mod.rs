@@ -30,7 +30,7 @@ pub mod wire;
 #[cfg(feature = "python")]
 pub(crate) use supervisor::secs;
 pub use supervisor::{
-    Extra, ExtraValue, InitError, Level, MemoryError, ProcHost, SupervisorOptions,
+    Extra, ExtraValue, InitError, Level, MemoryError, ProcHost, StartJobError, SupervisorOptions,
 };
 pub use supervisor_driver::ProcSupervisor;
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
@@ -61,7 +61,7 @@ pub struct IpcClient {
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     inbox: tokio::sync::Mutex<mpsc::Receiver<ToChild>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    reader: Mutex<Option<JoinHandle<()>>>,
+    reader: Mutex<Option<JoinHandle<Result<(), WireError>>>>,
 }
 
 impl IpcClient {
@@ -131,6 +131,17 @@ impl IpcClient {
         self.inbox.lock().await.recv().await
     }
 
+    /// The reader's original transport/protocol outcome after its inbox closes.
+    pub async fn wait_reader(&self) -> Result<(), WireError> {
+        let reader = lock(&self.reader).take();
+        match reader {
+            Some(reader) => {
+                reader.await.map_err(|error| WireError::Unexpected(error.to_string()))?
+            }
+            None => Ok(()),
+        }
+    }
+
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Stops reading, writes what is queued (for up to [`FLUSH_TIMEOUT`]) and closes the socket.
     pub async fn close(&self) {
@@ -159,7 +170,7 @@ async fn read_parent<R: AsyncRead + Unpin, F: FnOnce()>(
     inbox: mpsc::Sender<ToChild>,
     health_timeout: Option<Duration>,
     on_orphan: F,
-) {
+) -> Result<(), WireError> {
     let far = Duration::from_secs(1 << 30);
     let timeout = health_timeout.map(|t| t.min(far));
     let mut deadline = Instant::now() + timeout.unwrap_or(far);
@@ -169,10 +180,12 @@ async fn read_parent<R: AsyncRead + Unpin, F: FnOnce()>(
             biased;
             () = tokio::time::sleep_until(deadline), if timeout.is_some() => {
                 on_orphan();
-                return;
+                return Err(WireError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut, "the IPC parent exceeded its health timeout"
+                )));
             }
             permit = inbox.reserve(), if pending.is_some() => {
-                let Ok(permit) = permit else { return; };
+                let Ok(permit) = permit else { return Ok(()); };
                 permit.send(pending.take().unwrap());
             }
             msg = wire::read::<ToChild, _>(&mut reader), if pending.is_none() => match msg {
@@ -180,9 +193,9 @@ async fn read_parent<R: AsyncRead + Unpin, F: FnOnce()>(
                     if let Some(timeout) = timeout { deadline = Instant::now() + timeout; }
                     pending = Some(msg);
                 }
-                Err(_) => {
+                Err(error) => {
                     on_orphan();
-                    return;
+                    return Err(error);
                 }
             },
         }

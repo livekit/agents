@@ -93,6 +93,7 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/tool_executor.rs",
     "rust/crates/lk-agents-worker/src/auth.rs",
     "rust/crates/lk-agents-worker/src/config.rs",
+    "rust/crates/lk-agents-abi/src/worker/endpoint/reset_codes.rs",
     "rust/crates/lk-agents-worker/src/cli.rs",
     "rust/crates/lk-agents-inference/src/amd/detector.rs",
     "rust/crates/lk-agents-voice/src/keyterm_detection.rs",

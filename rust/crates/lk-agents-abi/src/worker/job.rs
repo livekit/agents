@@ -1,6 +1,7 @@
 //! The end of a job (`job.py`). Deliberately better than the reference's unbounded `gather`: the
 //! shutdown callbacks run in order, each failure isolated, each bounded.
 
+use lk_agents_host_derive::Host;
 use std::future::Future;
 use std::time::Duration;
 
@@ -65,9 +66,9 @@ where
 mod python {
     use pyo3::prelude::*;
 
-    use crate::python::{CancelPythonTask, check_pid, pyo3_async_runtimes, schedule_coroutine};
     use crate::CallbackOutcome;
     use crate::python::Ambient;
+    use crate::python::{CancelPythonTask, check_pid, pyo3_async_runtimes, schedule_coroutine};
 
     /// The logger the job's own lines go to, as `job_proc_lazy_main.py`'s did.
     const LOG: &str = "livekit.agents";
@@ -132,7 +133,7 @@ mod python {
     struct ShutdownCallback {
         guard: Option<CancelPythonTask>,
         done: Option<tokio::sync::oneshot::Receiver<PyResult<Py<PyAny>>>>,
-    /// It raised when called, or is not a coroutine.
+        /// It raised when called, or is not a coroutine.
         failed: Option<String>,
     }
 
@@ -143,7 +144,9 @@ mod python {
                 schedule_coroutine(py, locals, coro)
             });
             match scheduled {
-                Ok((guard, done)) => ShutdownCallback { guard: Some(guard), done: Some(done), failed: None },
+                Ok((guard, done)) => {
+                    ShutdownCallback { guard: Some(guard), done: Some(done), failed: None }
+                }
                 Err(e) => ShutdownCallback { guard: None, done: None, failed: Some(e.to_string()) },
             }
         }
@@ -160,7 +163,10 @@ mod python {
     impl std::future::Future for ShutdownCallback {
         type Output = Result<(), String>;
 
-        fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
             use std::task::Poll;
             if let Some(e) = self.failed.take() {
                 return Poll::Ready(Err(e));
@@ -223,13 +229,11 @@ mod tests {
         let results: Vec<Result<(), String>> = vec![Err("boom".into()), Ok(()), Ok(())];
         let callbacks: Vec<_> = results.into_iter().map(|r| move || ready(r)).collect();
         let mut seen = vec![];
-        let abandoned: Vec<Ready<_>> = run_shutdown_callbacks(
-            &clock,
-            callbacks,
-            SHUTDOWN_CALLBACK_TIMEOUT,
-            |i, o| seen.push((i, o.clone())),
-        )
-        .await;
+        let abandoned: Vec<Ready<_>> =
+            run_shutdown_callbacks(&clock, callbacks, SHUTDOWN_CALLBACK_TIMEOUT, |i, o| {
+                seen.push((i, o.clone()))
+            })
+            .await;
         assert!(abandoned.is_empty());
         assert_eq!(
             seen,
@@ -245,19 +249,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_hanging_callback_hits_its_deadline_is_handed_back_and_the_rest_still_run() {
         let clock = SimClock::new();
-        let callbacks: Vec<Box<dyn FnOnce() -> Cb>> = vec![
-            Box::new(|| Box::pin(pending())),
-            Box::new(|| Box::pin(ready(Ok(())))),
-        ];
+        let callbacks: Vec<Box<dyn FnOnce() -> Cb>> =
+            vec![Box::new(|| Box::pin(pending())), Box::new(|| Box::pin(ready(Ok(()))))];
         let start = clock.now();
         let mut seen = vec![];
-        let abandoned = run_shutdown_callbacks(
-            &clock,
-            callbacks,
-            Duration::from_secs(10),
-            |i, o| seen.push((i, o.clone())),
-        )
-        .await;
+        let abandoned =
+            run_shutdown_callbacks(&clock, callbacks, Duration::from_secs(10), |i, o| {
+                seen.push((i, o.clone()))
+            })
+            .await;
         assert_eq!(seen, [(0, CallbackOutcome::TimedOut), (1, CallbackOutcome::Ok)]);
         assert_eq!(abandoned.len(), 1);
         assert_eq!(clock.now(), start.saturating_add(Duration::from_secs(10)));
@@ -286,4 +286,25 @@ mod tests {
             .await;
         assert_eq!(*log.borrow(), ["start 7", "done 0", "start 3", "done 1", "start 5", "done 2"]);
     }
+}
+
+/// The process's one job, shared by the generated host boundary and the IPC wire protocol.
+#[derive(Debug, Clone, Default, PartialEq, Host)]
+#[crate::class(from_py_object)]
+#[binding(class, new)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct StartJobFields {
+    #[python(ty = "bytes")]
+    pub job: Vec<u8>,
+    pub name: String,
+    pub identity: String,
+    pub metadata: String,
+    pub url: String,
+    pub token: String,
+    pub worker_id: String,
+    pub fake_job: bool,
+    pub received_at: f64,
+    pub accepted_at: f64,
+    pub assigned_at: f64,
+    pub launched_at: f64,
 }

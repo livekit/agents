@@ -16,6 +16,7 @@ import pytest
 
 from livekit import api
 from livekit.agents import AgentServer, cli
+from livekit.agents._generated.worker_cli import CliArgsStart
 from livekit.protocol import models
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -142,11 +143,13 @@ def test_notebook_starts_and_dispatches_with_available_credentials(
     monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", lambda coro, _: pending.append(coro))
 
     def start_worker(
-        server: AgentServer, args: dict[str, Any], *, unregistered: bool = False
+        server: AgentServer, args: CliArgsStart, *, unregistered: bool = False
     ) -> None:
         assert unregistered, "notebooks with join tokens cannot register as workers"
-        assert args["log_style"] == "json"
-        server.update_options(**args["options"])
+        assert args.log_style == "json"
+        server.update_options(
+            ws_url=args.ws_url or "", api_key=args.api_key or "", api_secret=args.api_secret or ""
+        )
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:

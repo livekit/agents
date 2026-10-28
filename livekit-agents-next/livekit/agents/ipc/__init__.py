@@ -14,19 +14,20 @@ import signal
 import socket
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from enum import Enum
 from multiprocessing.context import BaseContext
 from types import FrameType
 from typing import Any, Literal
 
 from .. import _core, utils
-from ..job import JobContext, JobExecutorType, RunningJobInfo
+from .._generated.worker_ipc import ProcessCompletion
+from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..utils import shortuuid
 from . import child
-from .launch import ProcessReceipt, start_process
+from .launch import ProcessReceipt, preload_module_names, start_process, validate_setup_fnc
 
 __all__ = ["JobExecutor", "JobStatus", "ProcPool"]
 
@@ -112,6 +113,8 @@ class JobExecutor:
         initialize_timeout: float,
         close_timeout: float,
         session_end_timeout: float,
+        preload_modules: Sequence[str] = (),
+        setup_fnc: Callable[[JobProcess], None] | None = None,
         memory_warn_mb: float = 0,
         memory_limit_mb: float = 0,
         ping_interval: float,
@@ -121,6 +124,8 @@ class JobExecutor:
         mp_ctx: BaseContext | None = None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
+        preload_modules = preload_module_names(preload_modules)
+        setup_fnc = validate_setup_fnc(setup_fnc)
         if thread and os.name == "nt":
             raise ValueError("the thread executor is not supported on Windows; use a spawn process")
         self._loop = loop
@@ -134,7 +139,8 @@ class JobExecutor:
             and self._mp_ctx.get_start_method() == "forkserver"
             and sys.platform != "linux"
         ):
-            raise ValueError("the forkserver start method is supported on Linux only")
+            logger.warning("the forkserver is used on Linux only, job processes are spawned")
+            self._mp_ctx = mp.get_context("spawn")
         self._thread = thread
         self._killable = not thread
         # the core's supervision of the process; a thread has no pong deadline (it cannot be
@@ -164,6 +170,8 @@ class JobExecutor:
             session_end_fnc=session_end_fnc,
             simulation_end_fnc=simulation_end_fnc,
             session_end_timeout=session_end_timeout,
+            preload_modules=tuple(preload_modules),
+            setup_fnc=setup_fnc,
         )
         self._id = shortuuid("THEXEC_" if thread else "PCEXEC_")
 
@@ -253,7 +261,8 @@ class JobExecutor:
         if not self._launched.done():
             self._launched.set_exception(RuntimeError(cause))
 
-    async def _core_completed(self, exitcode: int, pid: int) -> None:
+    async def _core_completed(self, completion: ProcessCompletion, pid: int) -> None:
+        exitcode = completion.exit_code
         self._pid = pid or None
         self._exitcode = exitcode
         if self._thread:
@@ -265,7 +274,9 @@ class JobExecutor:
             self._proc._popen.finalizer()
         if self._running_job and self._killable:
             metrics.job_ended()
-        self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
+        self._job_status = (
+            JobStatus.SUCCESS if exitcode == 0 and completion.failure is None else JobStatus.FAILED
+        )
 
     def _create_process(self, cch: socket.socket) -> Any:
         from ..cli import _log_config
@@ -317,11 +328,26 @@ class JobExecutor:
             raise RuntimeError("process already has a running job")
         if not self.started or not self._pch.initialized:
             raise RuntimeError("process not initialized")
+        await self._pch.start_job(
+            _core.StartJobFields(
+                job=info.job.SerializeToString(),
+                name=info.accept_arguments.name,
+                identity=info.accept_arguments.identity,
+                metadata=info.accept_arguments.metadata,
+                url=info.url,
+                token=info.token,
+                worker_id=info.worker_id,
+                fake_job=info.fake_job,
+                received_at=info.received_at,
+                accepted_at=info.accepted_at,
+                assigned_at=info.assigned_at,
+                launched_at=info.launched_at,
+            )
+        )
         if self._killable:
             metrics.job_started()
         self._job_status = JobStatus.RUNNING
         self._running_job = info
-        await self._pch.start_job(info._to_wire())
 
     async def aclose(self) -> None:
         """attempt to gracefully close the process: an initialized one is asked to shut down
@@ -379,6 +405,8 @@ class ProcPool(
         initialize_timeout: float,
         close_timeout: float,
         session_end_timeout: float,
+        preload_modules: Sequence[str] = (),
+        setup_fnc: Callable[[JobProcess], None] | None = None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
         memory_warn_mb: float,
@@ -395,6 +423,8 @@ class ProcPool(
             "initialize_timeout": initialize_timeout,
             "close_timeout": close_timeout,
             "session_end_timeout": session_end_timeout,
+            "preload_modules": tuple(preload_modules),
+            "setup_fnc": setup_fnc,
             "ping_interval": 2.5,
             "ping_timeout": 60,
             "high_ping_threshold": 0.5,

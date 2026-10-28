@@ -43,8 +43,8 @@ pub mod webtransport;
 mod ws;
 
 pub use webtransport::{
-    AgentEndpointKind, EndpointReader, EndpointStream, EndpointWriter, HttpStreamResetCode,
-    StreamPreamble, WtTransport,
+    AgentEndpointKind, EndpointControl, EndpointReader, EndpointStream, EndpointWriter,
+    HttpStreamResetCode, StreamPreamble, WtTransport,
 };
 pub use ws::WsTransport;
 

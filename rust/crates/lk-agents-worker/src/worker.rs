@@ -694,6 +694,12 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
     /// One exchange stream: the preamble is read here, then the host serves the bytes. A stream
     /// aborted by a reconnect or shutdown is dropped, which quinn resets with code 0 (`HSR_ABORT`).
     fn serve_endpoint(&mut self, stream: EndpointStream) {
+        if self.endpoints.len()
+            >= lk_agents_abi::worker::endpoint::EndpointLimits::default().pending_handlers
+        {
+            stream.refuse();
+            return;
+        }
         let host = self.host.clone();
         let id = self.next_endpoint;
         self.next_endpoint = self.next_endpoint.wrapping_add(1);

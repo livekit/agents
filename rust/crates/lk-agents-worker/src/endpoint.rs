@@ -23,10 +23,9 @@ use tokio_tungstenite::tungstenite::{
 
 use crate::LOG;
 use crate::transport::HttpStreamResetCode as Reset;
+use lk_agents_abi::worker::endpoint::EndpointLimits;
 
 const READ_SIZE: usize = 64 * 1024;
-/// `wire.MaxRequestHeadSize`; the node enforces it, this only bounds what a bad peer makes us hold.
-const MAX_REQUEST_HEAD: usize = 1 << 20;
 
 pub type Headers = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -44,15 +43,7 @@ pub trait StreamIo: Send + Sync {
     async fn stop(&self, code: Reset);
 }
 
-/// The preamble fields the bridge reads.
-#[derive(Debug, Clone, Default)]
-pub struct RequestInfo {
-    pub request_id: String,
-    pub route: String,
-    pub scheme: String,
-    pub client_addr: String,
-    pub timeout_ms: u64,
-}
+pub use lk_agents_abi::worker::endpoint::EndpointRequest as RequestInfo;
 
 /// The ASGI scope, without `state` (the host adds `request.state.lk_request`).
 #[derive(Debug, Clone, PartialEq)]
@@ -221,18 +212,24 @@ enum HeadError {
 
 /// Up to and including the blank line, plus whatever came after it.
 async fn read_head(io: &dyn StreamIo) -> Result<Vec<u8>, HeadError> {
+    let max = EndpointLimits::default().request_head_bytes;
     let mut buf = Vec::new();
-    while find(&buf, b"\r\n\r\n").is_none() {
-        if buf.len() > MAX_REQUEST_HEAD {
+    loop {
+        if let Some(end) = find(&buf, b"\r\n\r\n") {
+            if end + 4 > max {
+                return Err(HeadError::Protocol("request head exceeds 1 MiB".into()));
+            }
+            return Ok(buf);
+        }
+        if buf.len() >= max {
             return Err(HeadError::Protocol("request head exceeds 1 MiB".into()));
         }
-        let chunk = io.read(READ_SIZE).await.map_err(|_| HeadError::Gone)?;
+        let chunk = io.read(READ_SIZE.min(max - buf.len())).await.map_err(|_| HeadError::Gone)?;
         if chunk.is_empty() {
             return Err(HeadError::Protocol("stream ended before the request head".into()));
         }
         buf.extend_from_slice(&chunk);
     }
-    Ok(buf)
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -508,7 +505,12 @@ impl HttpExchange {
                 r.done = true;
                 Received::Request { body: Vec::new(), more_body: false }
             }
-            Err(()) => Received::Disconnect,
+            Err(()) => {
+                r.done = true;
+                self.done.send_replace(true);
+                self.io.reset(Reset::HsrProtocol).await;
+                Received::Disconnect
+            }
         }
     }
 
@@ -530,7 +532,14 @@ impl HttpExchange {
                 }
                 Body::Chunked(state) => match *state {
                     ChunkState::Size => {
-                        if let Some(i) = find(&r.buf, b"\r\n") {
+                        let end = find(&r.buf, b"\r\n");
+                        if end.map_or(
+                            r.buf.len() >= EndpointLimits::default().chunk_line_bytes,
+                            |i| i + 2 > EndpointLimits::default().chunk_line_bytes,
+                        ) {
+                            return Err(());
+                        }
+                        if let Some(i) = end {
                             let line: Vec<u8> = r.buf.drain(..i + 2).collect();
                             let size = line[..i].split(|b| *b == b';').next().unwrap_or_default();
                             let size = std::str::from_utf8(size).map_err(|_| ())?.trim();
@@ -571,7 +580,15 @@ impl HttpExchange {
                             r.body = Body::Done;
                             continue;
                         }
-                        if let Some(i) = find(&r.buf, b"\r\n\r\n") {
+                        let end = find(&r.buf, b"\r\n\r\n");
+                        if end
+                            .map_or(r.buf.len() >= EndpointLimits::default().trailers_bytes, |i| {
+                                i + 4 > EndpointLimits::default().trailers_bytes
+                            })
+                        {
+                            return Err(());
+                        }
+                        if let Some(i) = end {
                             r.buf.drain(..i + 4);
                             r.body = Body::Done;
                             continue;
@@ -601,6 +618,9 @@ impl HttpExchange {
     }
 
     pub async fn send(&self, msg: Sent) -> Result<(), String> {
+        if *self.done.borrow() {
+            return Err("endpoint exchange is closed".into());
+        }
         match msg {
             Sent::ResponseStart { status, mut headers } => {
                 let mut resp = self.resp.lock().await;
@@ -677,6 +697,9 @@ impl HttpExchange {
 
     /// Report an outcome other than success in the only sound place for it.
     async fn fail(&self, completion: &str, reason: &str, code: Reset) {
+        if *self.done.borrow() {
+            return;
+        }
         let mut resp = self.resp.lock().await;
         if resp.ended {
             return;
@@ -841,10 +864,11 @@ pub struct WsExchange {
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Holds the order of writes: bytes are taken from the pipe and written under it.
     write_lock: Mutex<()>,
+    events: mpsc::Sender<Received>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    events: mpsc::UnboundedSender<Received>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    inbox: Mutex<mpsc::UnboundedReceiver<Received>>,
+    inbox: Mutex<mpsc::Receiver<Received>>,
+    disconnect: watch::Sender<Option<u16>>,
+    accept_ready: watch::Sender<bool>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     accepted: AtomicBool,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -857,7 +881,29 @@ impl WsExchange {
     }
 
     pub async fn receive(&self) -> Received {
-        self.inbox.lock().await.recv().await.unwrap_or(Received::WsDisconnect { code: 1006 })
+        let mut inbox = self.inbox.lock().await;
+        if let Ok(event) = inbox.try_recv() {
+            return event;
+        }
+        let mut disconnect = self.disconnect.subscribe();
+        if let Some(code) = *disconnect.borrow() {
+            return Received::WsDisconnect { code };
+        }
+        let next = {
+            let event = Box::pin(inbox.recv());
+            let closed = Box::pin(disconnect.changed());
+            match futures_util::future::select(event, closed).await {
+                futures_util::future::Either::Left((event, closed)) => {
+                    drop(closed);
+                    event
+                }
+                futures_util::future::Either::Right((_, event)) => {
+                    drop(event);
+                    None
+                }
+            }
+        };
+        next.unwrap_or(Received::WsDisconnect { code: (*disconnect.borrow()).unwrap_or(1006) })
     }
 
     async fn write_raw(&self, data: &[u8]) -> Result<(), String> {
@@ -896,14 +942,26 @@ impl WsExchange {
         if !self.accepted.load(Ordering::Acquire) {
             return true;
         }
+        let mut parsed = 0;
         loop {
+            parsed += 1;
+            if parsed == 16 {
+                tokio::task::yield_now().await;
+                parsed = 0;
+            }
             let next = self.ws().read();
             match next {
                 Ok(Message::Text(t)) => {
-                    let _ = self.events.send(Received::WsText(t.to_string()));
+                    if self.events.try_send(Received::WsText(t.to_string())).is_err() {
+                        self.close(1009, "websocket inbox limit exceeded").await;
+                        return false;
+                    }
                 }
                 Ok(Message::Binary(b)) => {
-                    let _ = self.events.send(Received::WsBytes(b.to_vec()));
+                    if self.events.try_send(Received::WsBytes(b.to_vec())).is_err() {
+                        self.close(1009, "websocket inbox limit exceeded").await;
+                        return false;
+                    }
                 }
                 // the reply is queued; `flush` below sends it
                 Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
@@ -911,7 +969,7 @@ impl WsExchange {
                     let _ = self.flush().await;
                     if !self.closed.swap(true, Ordering::AcqRel) {
                         let code = frame.map_or(1005, |f| u16::from(f.code));
-                        let _ = self.events.send(Received::WsDisconnect { code });
+                        self.disconnect.send_replace(Some(code));
                     }
                     self.io.finish().await;
                     return false;
@@ -920,13 +978,22 @@ impl WsExchange {
                     let _ = self.flush().await;
                     return true;
                 }
-                Err(_) => return false,
+                Err(tungstenite::Error::Capacity(_)) => {
+                    self.close(1009, "websocket frame or message limit exceeded").await;
+                    return false;
+                }
+                Err(_) => {
+                    self.close(1002, "invalid websocket frame").await;
+                    return false;
+                }
             }
         }
     }
 
     async fn read_loop(self: Arc<Self>) {
-        loop {
+        let mut accepted = self.accept_ready.subscribe();
+        let _ = accepted.wait_for(|ready| *ready).await;
+        while !self.closed.load(Ordering::Acquire) {
             let Ok(chunk) = self.io.read(READ_SIZE).await else { break };
             if chunk.is_empty() {
                 break;
@@ -938,7 +1005,7 @@ impl WsExchange {
         }
         // the peer is gone (FIN, reset or a protocol error): tell the app once
         if !self.closed.swap(true, Ordering::AcqRel) {
-            let _ = self.events.send(Received::WsDisconnect { code: 1006 });
+            self.disconnect.send_replace(Some(1006));
             self.io.finish().await;
         }
     }
@@ -967,6 +1034,7 @@ impl WsExchange {
                 if !self.process().await && !self.closed.load(Ordering::Acquire) {
                     self.close(1002, "").await;
                 }
+                self.accept_ready.send_replace(true);
                 Ok(())
             }
             Sent::WsText(_) | Sent::WsBytes(_) => {
@@ -1031,7 +1099,7 @@ impl WsExchange {
         let _ = self.ws().close(Some(frame));
         let _ = self.flush().await;
         self.io.finish().await;
-        let _ = self.events.send(Received::WsDisconnect { code });
+        self.disconnect.send_replace(Some(code));
     }
 }
 
@@ -1072,11 +1140,14 @@ async fn serve_ws(
     scope.scheme = if info.scheme == "https" { "wss" } else { "ws" }.into();
     scope.subprotocols = subprotocols.clone();
 
-    let config = WebSocketConfig::default().max_message_size(None).max_frame_size(None);
+    let limits = EndpointLimits::default();
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(limits.websocket_message_bytes))
+        .max_frame_size(Some(limits.websocket_frame_bytes));
     let mut pipe = Pipe::default();
     pipe.inbound.extend(head.rest);
-    let (events, inbox) = mpsc::unbounded_channel();
-    let _ = events.send(Received::WsConnect);
+    let (events, inbox) = mpsc::channel(limits.websocket_inbox);
+    let _ = events.try_send(Received::WsConnect);
     let ex = Arc::new(WsExchange {
         io,
         key,
@@ -1085,6 +1156,8 @@ async fn serve_ws(
         write_lock: Mutex::new(()),
         events,
         inbox: Mutex::new(inbox),
+        disconnect: watch::channel(None).0,
+        accept_ready: watch::channel(false).0,
         accepted: AtomicBool::new(false),
         closed: AtomicBool::new(false),
     });
@@ -1120,6 +1193,7 @@ async fn serve_ws(
     }
     registry.lock().remove(&id);
     reader.abort();
+    let _ = reader.await;
     ex.close(1000, "").await;
 }
 

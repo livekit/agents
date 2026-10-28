@@ -56,8 +56,8 @@ fn every_message_round_trips() {
         }),
         ToChild::Hello(hello()),
         ToChild::Ping { sent_ms: 1761500000123 },
-        ToChild::StartJob(Box::new(job())),
-        ToChild::StartJob(Box::default()),
+        ToChild::StartJob { request_id: 1, job: Box::new(job()) },
+        ToChild::StartJob { request_id: 2, job: Box::default() },
         ToChild::Shutdown { reason: String::new() },
         ToChild::Shutdown { reason: "room disconnected".into() },
         ToChild::DumpStacks,
@@ -69,6 +69,8 @@ fn every_message_round_trips() {
         ToParent::Ready { version: PROTOCOL_VERSION, error: None },
         ToParent::Ready { version: 7, error: Some("boom ✗".into()) },
         ToParent::Pong { sent_ms: u64::MAX },
+        ToParent::JobAccepted { request_id: 1, error: None },
+        ToParent::JobAccepted { request_id: 1, error: Some("refused".into()) },
         ToParent::ShutdownAck,
         ToParent::ShuttingDown,
         ToParent::Exiting { reason: "shutdown".into() },
@@ -107,11 +109,11 @@ async fn frames_are_length_prefixed_and_bounded() {
 
     let big = StartJob { job: vec![0; MAX_FRAME], ..job() };
     assert!(
-        write(&mut a, &ToChild::StartJob(Box::new(big))).await.is_err(),
+        write(&mut a, &ToChild::StartJob { request_id: 1, job: Box::new(big) }).await.is_err(),
         "an oversized message is not sent"
     );
     drop(a);
-    assert!(matches!(read::<ToChild, _>(&mut b).await, Err(WireError::Io(_))));
+    assert!(matches!(read::<ToChild, _>(&mut b).await, Err(WireError::Eof)));
 }
 
 // ------------------------------------------------------------------------------- supervision
@@ -277,7 +279,9 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
     let (sup, host, mut child) = setup(opts());
     let init = waits(&sup).await;
     child.write_all(&[0, 0, 0, 1, 99]).await.unwrap();
-    assert!(matches!(init.await.unwrap(), Err(InitError::Closed)));
+    assert!(
+        matches!(init.await.unwrap(), Err(InitError::Protocol(failure)) if matches!(*failure, WireError::Malformed(_)))
+    );
     assert!(
         host.messages().iter().any(|m| m.starts_with("invalid IPC message: malformed message"))
     );
@@ -477,7 +481,17 @@ async fn memory_monitor_warns_with_the_baseline_and_growth() {
         Ok((610.0, "uss".into())),
         Ok((700.0, "uss".into())),
     ]);
-    sup.start_job(job()).await;
+    let initialize = waits(&sup).await;
+    assert!(matches!(recv(&mut child).await, ToChild::Hello(_)));
+    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    initialize.await.unwrap().unwrap();
+    let accepted = tokio::spawn({
+        let sup = sup.clone();
+        async move { sup.start_job(job()).await }
+    });
+    let ToChild::StartJob { request_id, .. } = recv(&mut child).await else { panic!() };
+    write(&mut child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
+    accepted.await.unwrap().unwrap();
     sup.supervise().await;
     let drain = tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
     tokio::time::sleep(Duration::from_secs(16)).await;
@@ -662,12 +676,13 @@ async fn client_stops_at_a_malformed_frame() {
     parent.write_all(&[0, 0, 0, 1, 99]).await.unwrap();
     write(&mut parent, &ToChild::DumpStacks).await.unwrap();
     assert_eq!(client.recv().await, None);
+    assert!(matches!(client.wait_reader().await, Err(WireError::Malformed(_))));
 }
 
 #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn supervisor_blocked_writer() {
-    let (parent, _child) = UnixStream::pair().unwrap();
+    let (parent, mut child) = UnixStream::pair().unwrap();
     let host = Arc::new(FakeHost::default());
     host.alive.store(true, Ordering::SeqCst);
     let sup = ProcSupervisor::new(
@@ -675,9 +690,16 @@ async fn supervisor_blocked_writer() {
         host.clone(),
         SupervisorOptions { ping_timeout: 1.0, ..opts() },
     );
+    let initialize = waits(&sup).await;
+    assert!(matches!(read::<ToChild, _>(&mut child).await.unwrap(), ToChild::Hello(_)));
+    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
+    initialize.await.unwrap().unwrap();
     let mut large = job();
     large.metadata = "x".repeat(3 << 20);
-    sup.start_job(large).await;
+    let pending = tokio::spawn({
+        let sup = sup.clone();
+        async move { sup.start_job(large).await }
+    });
     sup.supervise().await;
     let killed = tokio::time::timeout(Duration::from_secs(2), async {
         while host.kills.load(Ordering::SeqCst) == 0 {
@@ -686,6 +708,10 @@ async fn supervisor_blocked_writer() {
     })
     .await;
     assert!(killed.is_ok(), "a stalled peer must not suspend the health deadline");
+    assert!(!pending.is_finished(), "a blocked write cannot fabricate child acceptance");
+    sup.exited(Some(-9)).await;
+    sup.reaped(-9).await;
+    assert!(pending.await.unwrap().is_err());
 }
 
 #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
@@ -727,10 +753,12 @@ async fn repeated_initialize_callers_are_refused_without_replacing_the_first_wai
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
     write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
     assert!(first.await.unwrap().unwrap().is_some());
+    assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
     sup.exited(Some(0)).await;
     sup.reaped(0).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 #[tokio::test(start_paused = true)]
 async fn native_exit_wakes_eligibility_before_the_reaping_receipt_releases_the_owner() {
     let (sup, host, _child) = setup(opts());

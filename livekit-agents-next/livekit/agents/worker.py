@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import inspect
 import logging
 import multiprocessing as mp
 import os
 import threading
 from abc import ABC
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 
@@ -19,17 +18,20 @@ from livekit import rtc
 from livekit.protocol import agent, models
 
 from . import _core, ipc, telemetry, utils
+from ._generated.worker_options import ServerOptions, WorkerPermissions
+from ._generated.worker_server import RegisteredInfo
 from .http import AgentHttp
+from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
     JobAcceptArguments,
     JobContext,
     JobExecutorType,
+    JobProcess,
     JobRequest,
     RunningJobInfo,
 )
 from .log import logger
 from .simulation import SimulationContext
-from .storage.backends import Storage
 from .storage.context import Handler
 from .storage.resolve import CallThreadEntrypoint
 from .types import NOT_GIVEN, NotGivenOr
@@ -38,21 +40,12 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from .a2a.endpoint import A2AEndpoint, A2ASessionOptions
+    from .storage.backends import Storage
 
 
 class ServerType(Enum):
     ROOM = agent.JobType.JT_ROOM
     PUBLISHER = agent.JobType.JT_PUBLISHER
-
-
-@dataclass
-class WorkerPermissions:
-    can_publish: bool = True
-    can_subscribe: bool = True
-    can_publish_data: bool = True
-    can_update_metadata: bool = True
-    can_publish_sources: list[models.TrackSource] = field(default_factory=list)
-    hidden: bool = False
 
 
 Entrypoint = Callable[[JobContext], Awaitable[None]]
@@ -158,15 +151,13 @@ class AgentHandler:
         return decorator
 
 
-def _core_options(given: dict[str, Any]) -> dict[str, Any]:
+def _core_options(given: dict[str, Any]) -> ServerOptions:
     """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = ("self", "__class__", "storage", "load_fnc")
+    skip = ("self", "__class__", "storage", "load_fnc", "preload_modules", "setup_fnc")
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
     if "job_executor_type" in options:
         options["job_executor_type"] = options["job_executor_type"].value
-    if "permissions" in options:
-        options["permissions"] = dataclasses.asdict(options["permissions"])
-    return options
+    return ServerOptions(**options)
 
 
 class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "worker_registered"]]):
@@ -200,14 +191,18 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         port: NotGivenOr[int] = NOT_GIVEN,
         http_proxy: NotGivenOr[str | None] = NOT_GIVEN,
         multiprocessing_context: NotGivenOr[Literal["spawn", "forkserver"]] = NOT_GIVEN,
+        preload_modules: Sequence[str] = (),
+        setup_fnc: Callable[[JobProcess], None] | None = None,
         prometheus_port: NotGivenOr[int] = NOT_GIVEN,
         prometheus_multiproc_dir: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        options = _core_options(locals())
+        options = _core_options({**locals(), "version": __version__})
         AgentHandler.__init__(self)
         utils.EventEmitter.__init__(self)
-        self._config = _core.ServerConfig({**options, "version": __version__})
+        self._config = _core.ServerConfig(options)
         self._storage = storage
+        self._preload_modules = preload_module_names(preload_modules)
+        self._setup_fnc = validate_setup_fnc(setup_fnc)
         self.load_fnc = load_fnc
         self._rtc: RtcDoor | None = None
         # built here and not in run(): the @server.http decorators run at import time
@@ -360,9 +355,9 @@ class _ServerHost:
 
     # --- the lifecycle
 
-    async def _start(self, opts: dict[str, Any]) -> None:
+    async def _start(self, opts: _core.ProcessStartOptions) -> None:
         """The job processes, when the core wants them."""
-        os.environ.update(opts["env"])
+        os.environ.update(opts.env)
         # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
         http_context._set_default_cert_env()
         logger.info(
@@ -371,19 +366,17 @@ class _ServerHost:
         for p in Plugin.registered_plugins:
             logger.info("plugin registered", extra={"plugin": p.title, "version": p.version})
         door = self._server._rtc
-        if not opts["job_processes"] or door is None:
+        if not opts.job_processes or door is None:
             return
-        mp_ctx = mp.get_context(opts["multiprocessing_context"])
-        if opts["multiprocessing_context"] == "forkserver":
+        mp_ctx = mp.get_context(opts.multiprocessing_context)
+        if opts.multiprocessing_context == "forkserver":
             # the framework's warm-up runs once in the forkserver and is inherited via COW;
             # under `spawn` each job process imports it itself (see ipc._preload)
-            plugin_packages = [p.package for p in Plugin.registered_plugins] + [
-                "livekit.agents.ipc._preload",
-                # Must remain last; it freezes objects imported by earlier preloads.
-                "livekit.agents.ipc._preload_freeze",
-            ]
+            from .ipc.launch import configure_forkserver
+
+            plugin_packages = [p.package for p in Plugin.registered_plugins]
             logger.info("preloading plugins", extra={"packages": plugin_packages})
-            mp_ctx.set_forkserver_preload(plugin_packages)
+            configure_forkserver(mp_ctx, [*plugin_packages, *self._server._preload_modules])
         loop = asyncio.get_running_loop()
         storage = self._server._storage
         self._proc_pool = ipc.ProcPool(
@@ -392,10 +385,18 @@ class _ServerHost:
             ),
             session_end_fnc=door.on_session_end,
             simulation_end_fnc=door.on_simulation_end,
+            preload_modules=self._server._preload_modules,
+            setup_fnc=self._server._setup_fnc,
             loop=loop,
-            job_executor_type=JobExecutorType(opts["job_executor_type"]),
+            job_executor_type=JobExecutorType(opts.job_executor_type),
             mp_ctx=mp_ctx,
-            **opts["pool"],
+            num_idle_processes=opts.pool.num_idle_processes,
+            initialize_timeout=opts.pool.initialize_timeout,
+            close_timeout=opts.pool.close_timeout,
+            session_end_timeout=opts.pool.session_end_timeout,
+            memory_warn_mb=opts.pool.memory_warn_mb,
+            memory_limit_mb=opts.pool.memory_limit_mb,
+            http_proxy=opts.pool.http_proxy,
         )
         for event in ("process_started", "process_closed", "process_job_launched"):
             self._proc_pool.on(event, self._job_status)
@@ -404,12 +405,12 @@ class _ServerHost:
     async def _started(self, _: Any) -> None:
         self._server.emit("worker_started")
 
-    async def _registered(self, info: dict[str, Any]) -> None:
+    async def _registered(self, info: RegisteredInfo) -> None:
         server = self._server
         server.emit(
             "worker_registered",
-            info["worker_id"],
-            models.ServerInfo(region=info["region"], protocol=info["protocol"]),
+            info.worker_id,
+            models.ServerInfo(region=info.region, protocol=info.protocol),
         )
 
     async def _idle_processes(self, target: int) -> None:
@@ -448,7 +449,7 @@ class _ServerHost:
     # --- the user's callbacks
 
     @utils.log_exceptions(logger=logger)
-    async def _job_request(self, req: dict[str, Any]) -> dict[str, Any]:
+    async def _job_request(self, req: _core.JobRequest) -> dict[str, Any]:
         """The voice door's ``on_request``, which the core asks only when there is one; a
         request it leaves unanswered or raises in, the core rejects."""
         answer: dict[str, Any] = {"decision": "unanswered"}
@@ -467,30 +468,35 @@ class _ServerHost:
 
         door = self._server._rtc
         assert door is not None and door.on_request is not None
-        job = agent.Job.FromString(req["job"]["proto"])
+        job = agent.Job.FromString(req.job.proto)
         await door.on_request(JobRequest(job=job, on_reject=on_reject, on_accept=on_accept))
         return answer
 
-    async def _launch_job(self, info: dict[str, Any]) -> str:
+    async def _launch_job(self, info: _core.RunningJobInfo) -> str:
         """A job the core took, with the timeline it stamped."""
-        job = agent.Job.FromString(info["job"]["proto"])
+        job = agent.Job.FromString(info.job.proto)
         await self.launch(
             RunningJobInfo(
-                accept_arguments=JobAcceptArguments(**info["accept_arguments"]),
+                accept_arguments=JobAcceptArguments(
+                    name=info.accept_arguments.name,
+                    identity=info.accept_arguments.identity,
+                    metadata=info.accept_arguments.metadata,
+                    attributes=dict(info.accept_arguments.attributes),
+                ),
                 job=job,
-                url=info["url"],
-                token=info["token"],
-                worker_id=info["worker_id"],
-                fake_job=info["fake_job"],
-                received_at=info["received_at"],
-                accepted_at=info["accepted_at"],
-                assigned_at=info["assigned_at"],
+                url=info.url,
+                token=info.token,
+                worker_id=info.worker_id,
+                fake_job=info.fake_job,
+                received_at=info.received_at,
+                accepted_at=info.accepted_at,
+                assigned_at=info.assigned_at,
             )
         )
         return job.id  # `job_status` is keyed on the LiveKit job id
 
-    async def _terminate_job(self, args: dict[str, Any]) -> None:
-        if self._proc_pool is not None and (proc := self._proc_pool.get_by_job_id(args["job_id"])):
+    async def _terminate_job(self, job_id: str) -> None:
+        if self._proc_pool is not None and (proc := self._proc_pool.get_by_job_id(job_id)):
             await proc.aclose()
 
     async def _load(self, _: Any) -> float:

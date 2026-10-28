@@ -6,45 +6,46 @@
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use prost::Message as _;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::LOG;
 
-/// A command line or entrypoint the CLI cannot run (`CLIError`).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[lk_agents_abi::host(error(kind = "livekit.agents._exceptions.CLIError"))]
-pub enum CliError {
-    #[error("{0}\nusage: python -m livekit.agents {{start,console,download-files}} [entrypoint] [options]")]
-    Usage(String),
-    #[error("Could not find a default file to run, please provide an explicit path")]
-    NoDefaultFile,
-    #[error("Path does not exist {0}")]
-    NoPath(String),
+pub use lk_agents_abi::worker::cli::{CliArgs, CliError};
+
+pub struct WorkerCli;
+
+impl lk_agents_abi::worker::cli::WorkerCli for WorkerCli {
+    fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError> {
+        parse_cli(argv)
+    }
+    fn entrypoint_module(path: Option<String>) -> Result<(String, String), CliError> {
+        entrypoint_module(path)
+    }
 }
 
 // ------------------------------------------------------------------------------------ arguments
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// The command line `lk agent` passes, as the dict the host dispatches on: `command` (`start`,
-/// `console` or `download-files`), `entrypoint`, and for `start` `log_level`, `log_format`
-/// (`json` or `colored`), `log_style` (the line style: `json`, `dev` or `compact`), `dev`,
-/// `cli_addr` (also read as the legacy `--reload-addr`),
-/// `simulation` and `options` (the server's `ws_url`/`api_key`/`api_secret` given on the line);
-/// for `console` `connect_addr` and `record`.
-#[lk_agents_abi::host(export(pid = false))]
-pub fn parse_cli(argv: Vec<String>) -> Result<Value, CliError> {
+/// The typed command line `lk agent` passes to the host launcher.
+pub fn parse_cli(argv: Vec<String>) -> Result<CliArgs, CliError> {
     let usage = |m: String| CliError::Usage(m);
     let mut args = argv.into_iter();
     let command = args.next().ok_or_else(|| usage("a command is required".into()))?;
     let (flags, switches): (&[&str], &[&str]) = match command.as_str() {
         "start" => (
-            &["--log-level", "--log-format", "--url", "--api-key", "--api-secret", "--cli-addr", "--reload-addr"],
+            &[
+                "--log-level",
+                "--log-format",
+                "--url",
+                "--api-key",
+                "--api-secret",
+                "--cli-addr",
+                "--reload-addr",
+            ],
             &["--dev", "--simulation"],
         ),
         "console" => (&["--connect-addr"], &["--record"]),
@@ -62,7 +63,9 @@ pub fn parse_cli(argv: Vec<String>) -> Result<Value, CliError> {
         if flags.contains(&key.as_str()) {
             let value = match inline {
                 Some(v) => v,
-                None => args.next().ok_or_else(|| usage(format!("argument {key}: expected one argument")))?,
+                None => args
+                    .next()
+                    .ok_or_else(|| usage(format!("argument {key}: expected one argument")))?,
             };
             values.insert(key, value);
         } else if switches.contains(&key.as_str()) && inline.is_none() {
@@ -87,36 +90,32 @@ pub fn parse_cli(argv: Vec<String>) -> Result<Value, CliError> {
             if cli_addr.is_some() && !flag("--dev") {
                 return Err(usage("--cli-addr requires --dev".into()));
             }
-            let mut options = Map::new();
-            for (key, flag) in [("ws_url", "--url"), ("api_key", "--api-key"), ("api_secret", "--api-secret")] {
-                if let Some(v) = get(flag).filter(|v| !v.is_empty()) {
-                    options.insert(key.into(), v.into());
-                }
-            }
-            json!({
-                "command": command,
-                "entrypoint": entrypoint,
-                "log_level": get("--log-level").unwrap_or_else(|| "INFO".into()),
-                "log_format": log_format,
-                // the line style: JSON in production, colored in development (compact under a simulation)
-                "log_style": match (log_format.as_str(), flag("--dev"), flag("--simulation")) {
+            CliArgs::Start {
+                entrypoint,
+                log_level: get("--log-level").unwrap_or_else(|| "INFO".into()),
+                log_style: match (log_format.as_str(), flag("--dev"), flag("--simulation")) {
                     ("json", false, _) => "json",
                     (_, _, true) => "compact",
                     _ => "dev",
-                },
-                "dev": flag("--dev"),
-                "cli_addr": cli_addr,
-                "simulation": flag("--simulation"),
-                "options": options,
-            })
+                }
+                .into(),
+                log_format,
+                dev: flag("--dev"),
+                cli_addr,
+                simulation: flag("--simulation"),
+                ws_url: get("--url").filter(|value| !value.is_empty()),
+                api_key: get("--api-key").filter(|value| !value.is_empty()),
+                api_secret: get("--api-secret").filter(|value| !value.is_empty()),
+            }
         }
-        "console" => json!({
-            "command": command,
-            "entrypoint": entrypoint,
-            "connect_addr": get("--connect-addr").ok_or_else(|| usage("the following arguments are required: --connect-addr".into()))?,
-            "record": flag("--record"),
-        }),
-        _ => json!({ "command": command }),
+        "console" => CliArgs::Console {
+            entrypoint,
+            connect_addr: get("--connect-addr").ok_or_else(|| {
+                usage("the following arguments are required: --connect-addr".into())
+            })?,
+            record: flag("--record"),
+        },
+        _ => CliArgs::DownloadFiles,
     })
 }
 
@@ -128,18 +127,24 @@ const DEFAULT_PATHS: [&str; 6] =
 
 /// The entrypoint's module, as `(import string, directory to put on sys.path)`: `path`, or the
 /// first default file in the working directory; a file inside packages imports through them.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn entrypoint_module(path: Option<String>) -> Result<(String, String), CliError> {
     let path = match path {
         Some(p) => PathBuf::from(p),
-        None => DEFAULT_PATHS.iter().map(PathBuf::from).find(|p| p.is_file()).ok_or(CliError::NoDefaultFile)?,
+        None => DEFAULT_PATHS
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.is_file())
+            .ok_or(CliError::NoDefaultFile)?,
     };
     if !path.exists() {
         return Err(CliError::NoPath(path.display().to_string()));
     }
-    let absolute = std::path::absolute(&path).map_err(|_| CliError::NoPath(path.display().to_string()))?;
+    let absolute =
+        std::path::absolute(&path).map_err(|_| CliError::NoPath(path.display().to_string()))?;
     let module = match absolute.file_stem() {
-        Some(stem) if stem == "__init__" && absolute.is_file() => absolute.parent().unwrap_or(&absolute).to_path_buf(),
+        Some(stem) if stem == "__init__" && absolute.is_file() => {
+            absolute.parent().unwrap_or(&absolute).to_path_buf()
+        }
         _ => absolute.clone(),
     };
     let mut parts = vec![stem(&module)];
@@ -174,9 +179,29 @@ pub struct LogFields {
 
 /// `logging.LogRecord`'s own attributes, which a line never repeats as extras.
 const RESERVED: [&str; 23] = [
-    "args", "asctime", "created", "exc_info", "exc_text", "filename", "funcName", "levelname",
-    "levelno", "lineno", "module", "msecs", "message", "msg", "name", "pathname", "process",
-    "processName", "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+    "args",
+    "asctime",
+    "created",
+    "exc_info",
+    "exc_text",
+    "filename",
+    "funcName",
+    "levelname",
+    "levelno",
+    "lineno",
+    "module",
+    "msecs",
+    "message",
+    "msg",
+    "name",
+    "pathname",
+    "process",
+    "processName",
+    "relativeCreated",
+    "stack_info",
+    "thread",
+    "threadName",
+    "taskName",
 ];
 
 /// One log line. `style` is `json` (production: one object per line, Python's `json.dumps`
@@ -207,11 +232,19 @@ pub fn format_log_record(
         _ => String::new(),
     };
     let (reset, gray) = (esc("0"), esc("90"));
-    let extra = if record.extra.is_empty() { String::new() } else { py_json(&Value::Object(record.extra), false) };
+    let extra = if record.extra.is_empty() {
+        String::new()
+    } else {
+        py_json(&Value::Object(record.extra), false)
+    };
     let (level, name) = (format!("{:<4}", record.level), record.name);
     let mut line = match style {
-        "console" => format!("\r{asctime} {color}{level}{reset} {name} {message} {gray}{extra}{reset}"),
-        "compact" => format!("{asctime} {color}{level}{reset} {name} {message} {gray}{extra}{reset}"),
+        "console" => {
+            format!("\r{asctime} {color}{level}{reset} {name} {message} {gray}{extra}{reset}")
+        }
+        "compact" => {
+            format!("{asctime} {color}{level}{reset} {name} {message} {gray}{extra}{reset}")
+        }
         _ => format!("{asctime} - {color}{level}{reset} {name} - {message} {gray}{extra}{reset}"),
     };
     for trace in [exception, stack].into_iter().flatten() {
@@ -221,7 +254,13 @@ pub fn format_log_record(
     line
 }
 
-fn json_line(record: LogFields, message: String, exception: Option<String>, stack: Option<String>, ensure_ascii: bool) -> String {
+fn json_line(
+    record: LogFields,
+    message: String,
+    exception: Option<String>,
+    stack: Option<String>,
+    ensure_ascii: bool,
+) -> String {
     let mut line = Map::new();
     let mut fields = match record.msg {
         Some(dict) => {
@@ -230,7 +269,10 @@ fn json_line(record: LogFields, message: String, exception: Option<String>, stac
         }
         None => {
             line.insert("message".into(), message.into());
-            Map::from_iter([("level".into(), record.level.into()), ("name".into(), record.name.into())])
+            Map::from_iter([
+                ("level".into(), record.level.into()),
+                ("name".into(), record.name.into()),
+            ])
         }
     };
     if let Some(exc) = exception.filter(|_| fields.get("exc_info").is_none_or(falsy)) {
@@ -249,7 +291,9 @@ fn json_line(record: LogFields, message: String, exception: Option<String>, stac
 }
 
 fn falsy(v: &Value) -> bool {
-    matches!(v, Value::Null | Value::Bool(false)) || v.as_str() == Some("") || v.as_f64() == Some(0.0)
+    matches!(v, Value::Null | Value::Bool(false))
+        || v.as_str() == Some("")
+        || v.as_f64() == Some(0.0)
 }
 
 /// `datetime.fromtimestamp(created, tz=timezone.utc).isoformat()`.
@@ -332,7 +376,13 @@ fn write_str(s: &str, ascii: bool, out: &mut String) {
 /// `repr(float)`: the shortest round trip, in exponent form outside `1e-4 <= |f| < 1e16`.
 fn py_float(f: f64) -> String {
     if !f.is_finite() {
-        return if f.is_nan() { "NaN".into() } else if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
+        return if f.is_nan() {
+            "NaN".into()
+        } else if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        };
     }
     let abs = f.abs();
     if abs != 0.0 && !(1e-4..1e16).contains(&abs) {
@@ -452,7 +502,16 @@ fn to_proto(job: DevJob) -> livekit_protocol::agent::RunningAgentJobInfo {
 }
 
 fn from_proto(pb: livekit_protocol::agent::RunningAgentJobInfo) -> DevJob {
-    (pb.job, pb.accept_name, pb.accept_identity, pb.accept_metadata, pb.url, pb.token, pb.worker_id, pb.mock_job)
+    (
+        pb.job,
+        pb.accept_name,
+        pb.accept_identity,
+        pb.accept_metadata,
+        pb.url,
+        pb.token,
+        pb.worker_id,
+        pb.mock_job,
+    )
 }
 
 /// The dev channel to `lk agent dev` at `cli_addr` (`host:port`), length-prefixed
@@ -469,7 +528,9 @@ pub async fn dev_channel(
     api_secret: String,
     server: Arc<dyn DevServer>,
 ) {
-    if let Err(err) = serve_dev_channel(cli_addr, agent_name, url, (api_key, api_secret), server).await {
+    if let Err(err) =
+        serve_dev_channel(cli_addr, agent_name, url, (api_key, api_secret), server).await
+    {
         log::error!(target: LOG, "dev channel failed: {err}");
     }
 }
@@ -505,8 +566,12 @@ async fn serve_dev_channel(
         Ok(decoded.message)
     }
 
-    send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() })).await.map_err(io)?;
-    send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {})).await.map_err(io)?;
+    send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() }))
+        .await
+        .map_err(io)?;
+    send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
+        .await
+        .map_err(io)?;
     let Ok(first) = recv(&mut stream).await else { return Ok(()) };
     if let Some(Message::GetRunningJobsResponse(kept)) = first {
         if !kept.jobs.is_empty() {
@@ -541,6 +606,9 @@ async fn serve_dev_channel(
 /// orchestrator leaves between SIGTERM and SIGKILL, so the drain still gets its time.
 pub const EXIT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Final event-loop cleanup runs after the server has released its owned processes.
+pub const LOOP_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// No exit asked yet.
@@ -549,10 +617,14 @@ enum Phase {
     Exiting,
     /// The worker drains and closes: a signal is the operator forcing the exit.
     Draining,
+    /// The host is cancelling tasks, finalizing generators and closing its executor.
+    Closing,
+    /// Every host cleanup operation settled and the loop closed.
+    Closed,
 }
 
 #[derive(Debug)]
-struct ExitState {
+pub struct ExitSignals {
     phase: Phase,
     /// The exit is served on the loop (the watchdog stands down).
     served: bool,
@@ -560,97 +632,75 @@ struct ExitState {
     escalating: bool,
 }
 
-/// `_core.ExitSignals`: what a SIGINT or SIGTERM means for the worker. The first schedules the
-/// exit on the event loop; if the loop does not serve it within [`EXIT_ESCALATION_TIMEOUT`], it is
-/// blocked, and the main thread is signalled again so the exit is raised inside the blocking
-/// frame. A second signal forces the exit, and so does any signal once the worker drains. Built on
-/// the main thread, which the watchdog signals.
-pub struct ExitSignals {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    state: Arc<Mutex<ExitState>>,
-    /// Whether an unserved exit is raised in the blocked main thread (the worker, not the
-    /// console).
-    escalate: bool,
-    #[cfg(unix)]
-    main: libc::pthread_t,
-}
-
-#[lk_agents_abi::host(object(cell = "arc", pid = false))]
 impl ExitSignals {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    #[host(new(defaults(escalate = true)))]
-    pub fn new(escalate: bool) -> Self {
-        ExitSignals {
-            state: Arc::new(Mutex::new(ExitState { phase: Phase::Running, served: false, escalating: false })),
-            escalate,
-            #[cfg(unix)]
-            // SAFETY: `pthread_self` has no preconditions.
-            main: unsafe { libc::pthread_self() },
-        }
+    pub fn new() -> Self {
+        Self { phase: Phase::Running, served: false, escalating: false }
     }
 
     /// A signal arrived; `exit_served` says whether the loop already served the exit. Answers
     /// `"schedule"` (schedule the exit on the loop), `"raise"` (raise it here: the loop is
     /// blocked), `"force"` (exit the process now) or `"ignore"`.
-    #[host(method)]
-    pub fn signal(&self, exit_served: bool) -> &'static str {
-        let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if std::mem::take(&mut s.escalating) {
+    pub fn signal(&mut self, exit_served: bool) -> &'static str {
+        if std::mem::take(&mut self.escalating) {
             // The watchdog's own signal: a raise only while the exit is still unserved, else the
             // loop resumed and won the race and raising could skip the drain.
-            return if exit_served || s.served { "ignore" } else { "raise" };
+            return if exit_served || self.served { "ignore" } else { "raise" };
         }
-        match s.phase {
+        match self.phase {
             Phase::Running => {
-                s.phase = Phase::Exiting;
-                drop(s);
-                if self.escalate {
-                    self.arm_watchdog();
-                }
+                self.phase = Phase::Exiting;
                 "schedule"
             }
-            Phase::Exiting | Phase::Draining => "force",
+            Phase::Exiting | Phase::Draining | Phase::Closing => "force",
+            Phase::Closed => "ignore",
         }
     }
 
     /// The loop served the exit: the watchdog stands down.
-    #[host(method)]
-    pub fn served(&self) {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).served = true;
+    pub fn served(&mut self) {
+        self.served = true;
     }
 
     /// The worker drains and closes: from now on a signal forces the exit.
-    #[host(method)]
-    pub fn draining(&self) {
-        let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        s.phase = Phase::Draining;
-        s.served = true;
+    pub fn draining(&mut self) {
+        self.phase = Phase::Draining;
+        self.served = true;
+    }
+
+    pub fn escalation_due(&mut self) -> bool {
+        if !self.escalation_pending() {
+            return false;
+        }
+        self.escalating = true;
+        true
+    }
+
+    pub fn escalation_pending(&self) -> bool {
+        !self.served && self.phase == Phase::Exiting
+    }
+
+    /// Returns true once, so repeated closing callers share one watchdog.
+    pub fn closing(&mut self) -> bool {
+        if matches!(self.phase, Phase::Closing | Phase::Closed) {
+            return false;
+        }
+        self.phase = Phase::Closing;
+        self.served = true;
+        true
+    }
+
+    pub fn closed(&mut self) {
+        self.phase = Phase::Closed;
+    }
+
+    pub fn cleanup_due(&self) -> bool {
+        self.phase == Phase::Closing
     }
 }
 
-impl ExitSignals {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    fn arm_watchdog(&self) {
-        let state = self.state.clone();
-        #[cfg(unix)]
-        let main = self.main as usize;
-        std::thread::spawn(move || {
-            std::thread::sleep(EXIT_ESCALATION_TIMEOUT);
-            let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
-            if s.served || s.phase != Phase::Exiting {
-                return;
-            }
-            s.escalating = true;
-            drop(s);
-            log::debug!(target: LOG, "the event loop did not serve the exit, raising it in the main thread");
-            // Delivered to the main thread at the OS level, so its blocking call is interrupted
-            // and the handler runs right away.
-            #[cfg(unix)]
-            // SAFETY: `main` is the live main thread's id, taken on it at construction.
-            unsafe {
-                libc::pthread_kill(main as libc::pthread_t, libc::SIGTERM);
-            }
-        });
+impl Default for ExitSignals {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -664,17 +714,36 @@ mod tests {
 
     #[test]
     fn the_go_cli_contract() -> Result<(), CliError> {
-        let start = parse_cli(argv("start agent.py --dev --log-level DEBUG --reload-addr 127.0.0.1:9 --url wss://x")).unwrap();
-        assert_eq!(start["entrypoint"], "agent.py");
-        assert_eq!(start["cli_addr"], "127.0.0.1:9");
-        assert_eq!(start["log_format"], "json");
-        assert_eq!(start["log_style"], "dev", "colored in development");
-        assert_eq!(parse_cli(argv("start"))?["log_style"], "json");
-        assert_eq!(parse_cli(argv("start --log-format colored --simulation"))?["log_style"], "compact");
-        assert_eq!(start["options"], json!({"ws_url": "wss://x"}));
+        let CliArgs::Start { entrypoint, cli_addr, log_format, log_style, ws_url, .. } = parse_cli(
+            argv("start agent.py --dev --log-level DEBUG --reload-addr 127.0.0.1:9 --url wss://x"),
+        )?
+        else {
+            panic!("expected start")
+        };
+        assert_eq!(entrypoint.as_deref(), Some("agent.py"));
+        assert_eq!(cli_addr.as_deref(), Some("127.0.0.1:9"));
+        assert_eq!(log_format, "json");
+        assert_eq!(log_style, "dev", "colored in development");
+        assert_eq!(ws_url.as_deref(), Some("wss://x"));
+        let CliArgs::Start { log_style, .. } = parse_cli(argv("start"))? else {
+            panic!("expected start")
+        };
+        assert_eq!(log_style, "json");
+        let CliArgs::Start { log_style, .. } =
+            parse_cli(argv("start --log-format colored --simulation"))?
+        else {
+            panic!("expected start")
+        };
+        assert_eq!(log_style, "compact");
         assert!(parse_cli(argv("start --cli-addr x")).is_err(), "the dev channel needs --dev");
-        let console = parse_cli(argv("console --connect-addr=127.0.0.1:1 --record")).unwrap();
-        assert_eq!(console["record"], true);
+        let CliArgs::Console { connect_addr, record, .. } =
+            parse_cli(argv("console --connect-addr=127.0.0.1:1 --record"))?
+        else {
+            panic!("expected console")
+        };
+        assert_eq!(connect_addr, "127.0.0.1:1");
+        assert!(record);
+        assert!(matches!(parse_cli(argv("download-files"))?, CliArgs::DownloadFiles));
         assert!(parse_cli(argv("console")).is_err());
         assert!(parse_cli(argv("start --log-format xml")).is_err());
         assert!(parse_cli(argv("start --nope")).is_err());
@@ -689,7 +758,10 @@ mod tests {
             pid: Some(7),
             created: 1_700_000_000.5,
             msg: None,
-            extra: Map::from_iter([("job_id".to_owned(), "AJ_1".into()), ("lag".to_owned(), 0.00001.into())]),
+            extra: Map::from_iter([
+                ("job_id".to_owned(), "AJ_1".into()),
+                ("lag".to_owned(), 0.00001.into()),
+            ]),
         };
         assert_eq!(
             format_log_record("json", record, "héllo".into(), String::new(), None, None, true),
@@ -699,18 +771,49 @@ mod tests {
 
     #[test]
     fn colored_lines_carry_their_extras() {
-        let record = LogFields { level: "WARNING".into(), name: "x".into(), extra: Map::from_iter([("a".to_owned(), 1.into())]), ..Default::default() };
-        let line = format_log_record("compact", record, "hi".into(), "12:00:00".into(), Some("Traceback".into()), None, false);
-        assert_eq!(line, "12:00:00 \x1b[33mWARNING\x1b[0m x hi \x1b[90m{\"a\": 1}\x1b[0m\nTraceback");
+        let record = LogFields {
+            level: "WARNING".into(),
+            name: "x".into(),
+            extra: Map::from_iter([("a".to_owned(), 1.into())]),
+            ..Default::default()
+        };
+        let line = format_log_record(
+            "compact",
+            record,
+            "hi".into(),
+            "12:00:00".into(),
+            Some("Traceback".into()),
+            None,
+            false,
+        );
+        assert_eq!(
+            line,
+            "12:00:00 \x1b[33mWARNING\x1b[0m x hi \x1b[90m{\"a\": 1}\x1b[0m\nTraceback"
+        );
     }
 
     #[test]
     fn the_exit_policy() {
-        let exit = ExitSignals::new(false);
+        let mut exit = ExitSignals::new();
         assert_eq!(exit.signal(false), "schedule");
         exit.served();
         assert_eq!(exit.signal(true), "force", "a second signal forces the exit");
         exit.draining();
         assert_eq!(exit.signal(true), "force");
+    }
+
+    #[test]
+    fn final_loop_cleanup_remains_owned_until_the_loop_closed() {
+        let mut exit = ExitSignals::new();
+        assert_eq!(exit.signal(false), "schedule");
+        assert!(exit.closing());
+        assert!(!exit.escalation_due(), "a stale first-signal watchdog cannot skip cleanup");
+        assert!(!exit.closing(), "repeated cleanup callers share the same deadline");
+        assert!(exit.cleanup_due(), "draining alone did not close the host loop");
+        assert_eq!(exit.signal(true), "force");
+        exit.closed();
+        assert!(!exit.cleanup_due());
+        assert!(!exit.closing(), "a completed cleanup cannot arm another watchdog");
+        assert_eq!(exit.signal(true), "ignore");
     }
 }

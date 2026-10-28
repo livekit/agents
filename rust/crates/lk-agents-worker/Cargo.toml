@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 livekit-protocol.workspace = true
 prost.workspace = true
-lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 # The job process protocol (`ipc/wire.rs`): typed messages, postcard-encoded.
 serde.workspace = true

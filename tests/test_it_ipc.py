@@ -10,6 +10,7 @@ processes import the entrypoint from it, as they import a user's agent file.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -37,7 +38,7 @@ if SCENARIO == "slow_init" and current_process().name == "job_proc":
 
 # ============================================================================ the tests
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.e2e
 
 _core = pytest.importorskip("livekit.agents._core", reason="needs livekit-agents-next")
 psutil = pytest.importorskip("psutil")
@@ -66,7 +67,9 @@ class Worker:
             stdout=self.out,
             stderr=subprocess.STDOUT,
             cwd=str(Path(__file__).parents[1]),
+            start_new_session=True,
         )
+        self.owned: dict[int, float] = {}
 
     def lines(self) -> list[dict[str, Any]]:
         lines = []
@@ -84,6 +87,7 @@ class Worker:
         path = self.dir / name
         deadline = time.monotonic() + timeout
         while not path.exists():
+            self.snapshot()
             if self.proc.poll() is not None:
                 pytest.fail(f"worker exited ({self.proc.returncode}) before {name}:\n{self.tail()}")
             if time.monotonic() > deadline:
@@ -100,11 +104,51 @@ class Worker:
     def tail(self) -> str:
         return "\n".join(json.dumps(x) for x in self.lines()[-40:])
 
+    def snapshot(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        try:
+            root = psutil.Process(self.proc.pid)
+            children = [root, *root.children(recursive=True)]
+            for process in children:
+                with contextlib.suppress(psutil.NoSuchProcess):
+                    self.owned[process.pid] = process.create_time()
+                    records.append(
+                        {
+                            "pid": process.pid,
+                            "created": process.create_time(),
+                            "status": process.status(),
+                            "threads": process.num_threads(),
+                            "fds": process.num_fds(),
+                        }
+                    )
+        except psutil.NoSuchProcess:
+            pass
+        return records
+
     def close(self) -> None:
-        if self.proc.poll() is None:
-            self.proc.kill()
-            self.proc.wait()
+        before = self.snapshot()
+        artifact = self.dir / "process-cleanup.json"
+        artifact.write_text(json.dumps({"before": before, "known": self.owned}, indent=2))
+        # The session includes forkserver/tracker and descendants even after logical-parent death.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        self.proc.wait(timeout=5)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            retained = []
+            for pid, created in self.owned.items():
+                with contextlib.suppress(psutil.NoSuchProcess):
+                    process = psutil.Process(pid)
+                    if process.create_time() == created:
+                        retained.append({"pid": pid, "status": process.status()})
+            if not retained:
+                break
+            time.sleep(0.02)
+        artifact.write_text(
+            json.dumps({"before": before, "known": self.owned, "after": retained}, indent=2)
+        )
         self.out.close()
+        assert not retained, f"owned processes remain (zombies are not reaped): {artifact}"
 
 
 @pytest.fixture
@@ -125,8 +169,8 @@ def _gone(pid: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
-                return True
+            # A zombie has exited but still consumes a process-table entry until reaped.
+            psutil.Process(pid).status()
         except psutil.NoSuchProcess:
             return True
         time.sleep(0.1)
@@ -210,6 +254,7 @@ def test_job_processes_exit_when_the_worker_is_killed(worker) -> None:
     SIGKILLed or OOM-killed: a child must notice its parent's socket close and exit."""
     w = worker("idle", jobs=1, num_idle_processes=2)
     job = json.loads(w.marker("room-0.started"))
+    w.snapshot()
     children = [c.pid for c in psutil.Process(w.proc.pid).children(recursive=True)]
     assert job["pid"] in children
     os.kill(w.proc.pid, signal.SIGKILL)
@@ -276,26 +321,30 @@ async def _drive(server: Any, jobs: int) -> None:
     started = asyncio.Event()
     server.on("worker_started", started.set)
     run = asyncio.create_task(server.run(devmode=False, unregistered=True))
-    await asyncio.wait(
-        {run, asyncio.ensure_future(started.wait())},
-        timeout=60,
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    if run.done():
-        run.result()
-    for i in range(jobs):
-        room = f"room-{i}"
-        await server.simulate_job(room, fake_job=True)
-        # one job at a time: the next once this one left the pool (ended, crashed or killed)
-        while True:
-            began = (MARKERS / f"{room}.started").exists() or (
-                MARKERS / f"{room}.shutdown"
-            ).exists()
-            if began and not server.active_jobs:
-                break
-            await asyncio.sleep(0.05)
-    await server.aclose()
-    await run
+    readiness = asyncio.create_task(started.wait())
+    try:
+        await asyncio.wait({run, readiness}, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        if run.done():
+            run.result()
+        if not started.is_set():
+            raise TimeoutError("the worker did not become ready")
+        for i in range(jobs):
+            room = f"room-{i}"
+            await server.simulate_job(room, fake_job=True)
+            # Start the next job only after the previous one's actual lifecycle settled.
+            while True:
+                began = (MARKERS / f"{room}.started").exists() or (
+                    MARKERS / f"{room}.shutdown"
+                ).exists()
+                if began and not server.active_jobs:
+                    break
+                await asyncio.sleep(0.05)
+    finally:
+        readiness.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await readiness
+        await server.aclose()
+        await run
 
 
 def _worker_main() -> None:
@@ -304,13 +353,13 @@ def _worker_main() -> None:
     options = json.loads(os.environ["IT_OPTS"])
     ping_timeout = options.pop("it_ping_timeout", None)
     if ping_timeout is not None:
-        init = ipc.proc_pool.ProcPool.__init__
+        init = ipc.ProcPool.__init__
 
         def patched(self: Any, *args: Any, **kwargs: Any) -> None:
             init(self, *args, **kwargs)
-            self._proc_args["ping_timeout"] = ping_timeout
+            self._executor_args["ping_timeout"] = ping_timeout
 
-        ipc.proc_pool.ProcPool.__init__ = patched  # type: ignore[method-assign]
+        ipc.ProcPool.__init__ = patched  # type: ignore[method-assign]
     if "job_executor_type" in options:
         options["job_executor_type"] = JobExecutorType(options["job_executor_type"])
     options.setdefault("num_idle_processes", 1)

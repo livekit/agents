@@ -15,7 +15,6 @@ here; a thread grant reaches a public route as its bearer, for the handler to ve
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -24,41 +23,19 @@ from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
 from starlette.types import ASGIApp
 
 from . import _core
-
-# `AgentHttp.HttpStreamResetCode` (livekit_agent.proto): the QUIC code a stream is reset with
-# before any HTTP bytes flowed. After bytes flowed an outcome travels in trailers instead.
-HSR_ABORT = 0
-HSR_REFUSED = 1
-HSR_INTERNAL = 2
-HSR_TIMEOUT = 3
-HSR_PROTOCOL = 4
+from ._core import (
+    HSR_ABORT as HSR_ABORT,
+    HSR_INTERNAL as HSR_INTERNAL,
+    HSR_PROTOCOL as HSR_PROTOCOL,
+    HSR_REFUSED as HSR_REFUSED,
+    HSR_TIMEOUT as HSR_TIMEOUT,
+)
+from ._generated.worker_endpoint import (
+    EndpointOptions as EndpointOptions,
+    EndpointRequest as EndpointRequest,
+)
 
 _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]
-
-
-@dataclasses.dataclass(frozen=True)
-class EndpointRequest:
-    """The node's preamble for one request, as ``request.state.lk_request``."""
-
-    request_id: str
-    authorized: bool
-    """The caller holds agent-endpoint call permission for this agent and deployment. Always true
-    on a route that is not public."""
-    route: str
-    """The manifest template that matched, e.g. ``/items/{id}``."""
-    kind: str
-    """``"http"``, or ``"text"`` for a session endpoint."""
-    client_addr: str
-    scheme: str
-    timeout_ms: int
-
-
-@dataclasses.dataclass
-class EndpointOptions:
-    """Per-route policy carried in the manifest."""
-
-    public: bool = False
-    """Reachable without a project token."""
 
 
 class AgentHttp:
