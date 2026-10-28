@@ -90,7 +90,7 @@ class WebSocketV1Adapter:
         )
         _websocket_v1._codec_for_protocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
-        self._websocket_protocol = websocket_protocol
+        self._websocket_protocol: _websocket_v1.WebSocketProtocol = websocket_protocol
         self._api_key = api_key
         self._ensure_session = ensure_session
         self._allow_custom_endpoint = allow_custom_endpoint

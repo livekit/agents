@@ -23,7 +23,7 @@ import contextlib
 import json
 import os
 import traceback
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlparse
 
 import aiohttp
@@ -283,7 +283,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> "SpeechStream":
         """Create a streaming transcription session."""
         opts_language = LanguageCode(language) if is_given(language) else self._opts.language

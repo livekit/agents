@@ -395,7 +395,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if next_task is None:
                     next_task = asyncio.ensure_future(sent_iter.__anext__())
 
-                waiters: set[asyncio.Future[Any]] = {next_task}
+                waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
+                    next_task
+                }
                 if active is not None:
                     waiters.add(active.waiter)
                 await asyncio.wait(
@@ -405,7 +407,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
 
                 if active is not None and active.waiter.done():
-                    active = await self._settle_stream(active)
+                    await self._settle_stream(active)
+                    active = None
                     continue
 
                 if not next_task.done():

@@ -185,7 +185,7 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        **kwargs: Any,
+        **kwargs: object,
     ):
         """Create a new instance of Speechmatics STT using Agent STT SDK.
 
@@ -526,7 +526,7 @@ class STT(stt.STT):
         self,
         focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
         ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        focus_mode: Any = NOT_GIVEN,
+        focus_mode: object = NOT_GIVEN,
     ) -> None:
         """Deprecated no-op, kept so code written against the previous plugin still runs.
 
@@ -563,7 +563,7 @@ class SpeechStream(stt.RecognizeStream):
         self._vad: VAD | None = vad_instance
         self._vad_stream: VADStream | None = None
 
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[None]] = []
 
         # Speaker result event
         self._speaker_result_event: asyncio.Event = asyncio.Event()
@@ -656,14 +656,14 @@ class SpeechStream(stt.RecognizeStream):
         self._tasks = [audio_task, message_task]
 
         # Optional VAD task: calls `client.finalize()` on end of speech
-        vad_task: asyncio.Task | None = None
+        vad_task: asyncio.Task[None] | None = None
         if self._vad_stream is not None:
             vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
             self._tasks.append(vad_task)
 
         # Wait for tasks to complete
         try:
-            done, pending = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
 
@@ -1148,7 +1148,7 @@ _MIGRATED_ARGS: dict[str, tuple[str, Callable[[Any], Any]]] = {
 }
 
 
-def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
+def _check_deprecated_args(kwargs: dict[str, object], opts: STTOptions) -> None:
     """Warn about deprecated kwargs, and migrate the ones that still have an equivalent.
 
     Anything in `_DROPPED_ARGS` is reported and discarded; anything in `_MIGRATED_ARGS`

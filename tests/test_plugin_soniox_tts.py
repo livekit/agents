@@ -18,8 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.tts import AudioEmitter
 from livekit.plugins import soniox
 from livekit.plugins.soniox.tts import _Connection
@@ -40,40 +42,50 @@ SENTENCES = [
 ]
 
 
+@pytest.mark.real_time
 async def test_websocket_authenticates_once_for_multiple_streams() -> None:
     sent: asyncio.Queue[str] = asyncio.Queue()
-    received: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
-    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
-    ws.closed = False
-    ws.send_str = AsyncMock(side_effect=sent.put)
-    ws.receive = AsyncMock(side_effect=received.get)
-    session = MagicMock(spec=aiohttp.ClientSession)
-    session.ws_connect = AsyncMock(return_value=ws)
-    tts = soniox.TTS(api_key="test-key", http_session=session)
+    auth_headers: list[str | None] = []
 
-    try:
-        for stream_id in ("first", "second"):
-            connection = await tts._current_connection(timeout=1.0)
-            waiter = asyncio.get_running_loop().create_future()
-            connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
-            try:
-                connection.send_text(stream_id, "Hello!", text_end=True)
-                config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
-                text = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+    async def handle(request: web.Request) -> web.WebSocketResponse:
+        auth_headers.append(request.headers.get("Authorization"))
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for message in socket:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                await sent.put(message.data)
+        return socket
 
-                assert "api_key" not in config
-                assert config["model"] == tts.model
-                assert config["stream_id"] == stream_id
-                assert text == {"stream_id": stream_id, "text": "Hello!", "text_end": True}
-            finally:
-                connection.unregister_stream(stream_id)
-                waiter.cancel()
-
-        session.ws_connect.assert_awaited_once_with(
-            tts._opts.websocket_url, headers={"Authorization": "Bearer test-key"}
+    app = web.Application()
+    app.router.add_get("/tts", handle)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        tts = soniox.TTS(
+            api_key="test-key",
+            http_session=session,
+            websocket_url=str(server.make_url("/tts")),
         )
-    finally:
-        await tts.aclose()
+        try:
+            for stream_id in ("first", "second"):
+                connection = await tts._current_connection(
+                    conn_options=APIConnectOptions(max_retry=0)
+                )
+                waiter = asyncio.get_running_loop().create_future()
+                connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
+                try:
+                    connection.send_text(stream_id, "Hello!", text_end=True)
+                    config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+                    text = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+
+                    assert "api_key" not in config
+                    assert config["model"] == tts.model
+                    assert config["stream_id"] == stream_id
+                    assert text == {"stream_id": stream_id, "text": "Hello!", "text_end": True}
+                finally:
+                    connection.unregister_stream(stream_id)
+                    waiter.cancel()
+            assert auth_headers == ["Bearer test-key"]
+        finally:
+            await tts.aclose()
 
 
 @pytest.mark.parametrize("stream_id", [None, ""])
@@ -212,7 +224,7 @@ async def _synthesize(
 ) -> int:
     tts = soniox.TTS(api_key="fake-key", **tts_kwargs)
 
-    async def _fake_current_connection(*, timeout: float) -> Any:
+    async def _fake_current_connection(*, conn_options: APIConnectOptions) -> _FakeConnection:
         return fake
 
     tts._current_connection = _fake_current_connection  # type: ignore[method-assign]

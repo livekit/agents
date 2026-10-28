@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, NamedTuple
 
@@ -52,7 +53,7 @@ END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
 
 
-def is_end_token(token: dict) -> bool:
+def is_end_token(token: Mapping[str, object]) -> bool:
     """Return True if the given token marks an end or finalized event."""
     return token.get("text") in (END_TOKEN, FINALIZED_TOKEN)
 

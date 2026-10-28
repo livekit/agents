@@ -166,7 +166,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if self._opts.qwen_options is not None:
             qwen_opts = self._opts.qwen_options
-            payload: dict = {
+            payload: dict[str, str | bool | float | int] = {
                 "model": self._opts.model,
                 "text": self._input_text,
                 "language": qwen_opts.language,
