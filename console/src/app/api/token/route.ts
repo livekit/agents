@@ -3,6 +3,7 @@ import { AccessToken, RoomConfiguration, type VideoGrant } from "livekit-server-
 
 import { backendHeaders, backendURL, localDeveloper } from "@/lib/backend";
 import { decode } from "@/lib/decode";
+import type { CreatedSession } from "@/lib/types";
 
 /** Mint a room participant token and attach the selected conversation to its dispatch. */
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
   const key = process.env.LIVEKIT_API_KEY;
   const secret = process.env.LIVEKIT_API_SECRET;
   if (!url || !key || !secret)
-    return NextResponse.json({ error: "LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET are not set" }, { status: 500 });
+    return NextResponse.json({ error: "Calls are not configured" }, { status: 500 });
 
   let body: ReturnType<typeof decode.callRequest>;
   let metadata: ReturnType<typeof decode.callMetadata>;
@@ -22,7 +23,6 @@ export async function POST(request: Request) {
     const dispatch = body.room_config.agents[0];
     if (!dispatch) throw new Error("Select an agent");
     metadata = decode.callMetadata(JSON.parse(dispatch.metadata));
-    if (!metadata.endpoint) throw new Error("Select an endpoint");
   } catch {
     return NextResponse.json({ error: "Select an agent and endpoint for this call" }, { status: 400 });
   }
@@ -34,8 +34,8 @@ export async function POST(request: Request) {
       headers: backendHeaders(),
       body: JSON.stringify({ sub: metadata.sub ?? body.participant_identity ?? "demo-user", agent: agentName, endpoint: metadata.endpoint }),
     });
-    if (!made.ok) return NextResponse.json({ error: `session: ${made.status} ${await made.text()}` }, { status: 502 });
-    sessionId = decode.created(await made.json()).session.sessionId;
+    if (!made.ok) return NextResponse.json({ error: "The conversation could not be created" }, { status: 502 });
+    sessionId = (await made.json() as CreatedSession).session.sessionId;
   }
 
   const identity = body.participant_identity || metadata.sub || "demo-user";

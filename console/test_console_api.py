@@ -79,7 +79,9 @@ class SnapshotAccess(unittest.IsolatedAsyncioTestCase):
             if request.url.host == "admin.test":
                 self.assertEqual(request.url.path, "/twirp/livekit.AgentDBService/DumpDatabase")
                 claims = jwt.decode(
-                    request.headers["authorization"].split()[1], options={"verify_signature": False}
+                    request.headers["authorization"].split()[1],
+                    "console-test-signing-secret-at-least-32-bytes",
+                    algorithms=["HS256"],
                 )
                 self.assertTrue(claims["agent"]["databaseAdmin"])
                 self.assertEqual(__import__("json").loads(request.content), {"database_id": "DB_1"})

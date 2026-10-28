@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { A2AClient, interpret, uuid } from "./a2a";
+import { A2AClient, decodeCard, decodeMessage, interpret, uuid } from "./a2a";
 import {
   HttpError,
   getConfig,
@@ -11,8 +11,7 @@ import {
   nameSession,
 } from "./api";
 import { listExamples, sameExample, type Example } from "./examples";
-import { decode } from "./decode";
-import type { Message } from "./generated/Message";
+import type { Message } from "./a2a";
 import { text } from "./format";
 import type {
   Entry,
@@ -33,7 +32,7 @@ function pendingFrom(value: string | null): Pending | null {
     const raw: unknown = JSON.parse(value);
     if (!raw || typeof raw !== "object" || !("message" in raw)) return null;
     return {
-      message: decode.message(raw.message),
+      message: decodeMessage(raw.message),
       taskId: "taskId" in raw && typeof raw.taskId === "string" ? raw.taskId : undefined,
       sessionId: "sessionId" in raw && typeof raw.sessionId === "string" ? raw.sessionId : undefined,
       cursor: "cursor" in raw && typeof raw.cursor === "string" ? raw.cursor : undefined,
@@ -419,7 +418,7 @@ export function useConversation({
         },
       );
       if (!cardResponse.ok) throw new Error(`Agent card failed (HTTP ${cardResponse.status})`);
-      const agentCard = decode.card(await cardResponse.json());
+      const agentCard = decodeCard(await cardResponse.json());
       controller.signal.throwIfAborted();
       grantRef.current = minted;
       setGrant(minted);

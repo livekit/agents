@@ -58,6 +58,21 @@ describe("browser A2A transport", () => {
       expect(body.locked).toBe(false);
     }
   });
+  it("rejects malformed agent payloads before displaying or completing a reply", async () => {
+    for (const payload of [
+      { task: { id: "AST_1", status: { state: "TASK_STATE_COMPLETED" } } },
+      { statusUpdate: { taskId: "AST_1", contextId: "AT_1", status: {} } },
+      { artifactUpdate: { taskId: "AST_1", contextId: "AT_1", artifact: { artifactId: "a", parts: [{ text: 42 }] } } },
+      { ...task, ...ending },
+    ]) {
+      const cancel = vi.fn();
+      const stream = response([new TextEncoder().encode(`data:${frame(payload)}\n\n`)], cancel);
+      vi.stubGlobal("fetch", vi.fn(async () => stream));
+      await expect(collect(new A2AClient("https://agent", "scoped"))).rejects.toThrow();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(stream.body?.locked).toBe(false);
+    }
+  });
   it("aborts a pending read and cancels a reader when iteration stops", async () => {
     const cancel = vi.fn();
     const stream = response([new TextEncoder().encode(`data:${frame(task)}\n\n`)], cancel);

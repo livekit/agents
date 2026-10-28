@@ -1,6 +1,121 @@
-import { decode } from "./decode";
-import type { Part, StreamResponse } from "./generated/StreamResponse";
+import { record } from "./decode";
 
+/** A2A JSON fields consumed by the conversation and replay views. */
+export type Part = { text?: string; data?: unknown };
+export type Message = {
+  messageId: string;
+  contextId?: string;
+  taskId?: string;
+  role: "ROLE_UNSPECIFIED" | "ROLE_USER" | "ROLE_AGENT";
+  parts: Part[];
+  referenceTaskIds?: string[];
+};
+export type Artifact = { artifactId: string; parts: Part[] };
+type TaskStatus = { state: string; message?: Message };
+export type StreamResponse = {
+  task?: {
+    id: string;
+    contextId?: string;
+    status: TaskStatus;
+    artifacts?: Artifact[];
+    metadata?: Record<string, unknown>;
+  };
+  message?: Message;
+  statusUpdate?: {
+    taskId: string;
+    contextId: string;
+    status: TaskStatus;
+    metadata?: Record<string, unknown>;
+  };
+  artifactUpdate?: { taskId: string; contextId: string; artifact: Artifact; append?: boolean };
+};
+export type AgentCard = {
+  name: string;
+  description: string;
+  version?: string;
+  capabilities?: { streaming?: boolean };
+  supportedInterfaces?: { url: string; protocolBinding: string; protocolVersion: string }[];
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
+  skills?: unknown[];
+};
+
+function parts(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (part) => record(part) && (part.text === undefined || typeof part.text === "string"),
+    )
+  );
+}
+export function decodeMessage(value: unknown): Message {
+  if (
+    !record(value) ||
+    typeof value.messageId !== "string" ||
+    !parts(value.parts) ||
+    !["ROLE_UNSPECIFIED", "ROLE_USER", "ROLE_AGENT"].includes(String(value.role)) ||
+    [value.taskId, value.contextId].some((id) => id !== undefined && typeof id !== "string") ||
+    (value.referenceTaskIds !== undefined &&
+      (!Array.isArray(value.referenceTaskIds) ||
+        !value.referenceTaskIds.every((id) => typeof id === "string")))
+  )
+    throw new Error("The saved message could not be read");
+  return value as Message;
+}
+export function decodeCard(value: unknown): AgentCard {
+  if (!record(value) || typeof value.name !== "string" || typeof value.description !== "string")
+    throw new Error("The agent's details could not be read");
+  return value as AgentCard;
+}
+function status(value: unknown): boolean {
+  if (!record(value) || typeof value.state !== "string") return false;
+  if (value.message !== undefined) decodeMessage(value.message);
+  return true;
+}
+function artifact(value: unknown): boolean {
+  return record(value) && typeof value.artifactId === "string" && parts(value.parts);
+}
+function streamResponse(value: unknown): StreamResponse {
+  if (
+    !record(value) ||
+    [value.task, value.message, value.statusUpdate, value.artifactUpdate].filter(
+      (item) => item !== undefined,
+    ).length !== 1
+  )
+    throw new Error("The agent's reply could not be read");
+  const task = value.task;
+  if (
+    task !== undefined &&
+    (!record(task) ||
+      typeof task.id !== "string" ||
+      typeof task.contextId !== "string" ||
+      !task.contextId ||
+      !status(task.status) ||
+      (task.artifacts !== undefined &&
+        (!Array.isArray(task.artifacts) || !task.artifacts.every(artifact))))
+  )
+    throw new Error("The agent's task could not be read");
+  if (value.message !== undefined) decodeMessage(value.message);
+  for (const update of [value.statusUpdate, value.artifactUpdate]) {
+    if (update === undefined) continue;
+    if (
+      !record(update) ||
+      typeof update.taskId !== "string" ||
+      typeof update.contextId !== "string"
+    )
+      throw new Error("The agent's update could not be read");
+  }
+  if (record(value.statusUpdate) && !status(value.statusUpdate.status))
+    throw new Error("The agent's status could not be read");
+  if (
+    record(value.artifactUpdate) &&
+    (!artifact(value.artifactUpdate.artifact) ||
+      (value.artifactUpdate.append !== undefined &&
+        typeof value.artifactUpdate.append !== "boolean"))
+  )
+    throw new Error("The agent's answer could not be read");
+  return value as StreamResponse;
+}
 export const EXT = "https://livekit.io/a2a/ext/agents/v1";
 export const key = (name: string) => `${EXT}/${name}`;
 
@@ -117,18 +232,14 @@ export function cutEvents(buffer: string): { events: string[]; rest: string; cur
 
 export const uuid = () => `msg_${crypto.randomUUID()}`;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 function decodeFrame(value: unknown, cursor?: string): Frame {
-  if (!record(value) || value.jsonrpc !== "2.0" || !(value.id === null || typeof value.id === "string" || typeof value.id === "number") || (("error" in value) === ("result" in value))) throw new Error("Invalid JSON-RPC response");
+  if (!record(value) || value.jsonrpc !== "2.0" || !(value.id === null || typeof value.id === "string" || typeof value.id === "number") || (("error" in value) === ("result" in value))) throw new Error("The agent's reply could not be read");
   if ("error" in value) {
     if (!record(value.error) || typeof value.error.code !== "number" || typeof value.error.message !== "string")
-      throw new Error("Invalid JSON-RPC error");
+      throw new Error("The agent's error could not be read");
     return { error: { code: value.error.code, message: value.error.message } };
   }
-  const result = decode.stream(value.result);
-  if (result.task && !result.task.contextId) throw new Error("Task has no contextId");
+  const result = streamResponse(value.result);
   return { result, cursor };
 }
 

@@ -10,14 +10,13 @@ import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager, closing
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
-import jwt
 import tomllib
 import uvicorn
-from generated.livekit_agentdb_pb2 import AgentDB
 from google.protobuf.json_format import MessageToDict, ParseDict
 from models import DatabaseDump, QueryResult
 from starlette.applications import Starlette
@@ -26,6 +25,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from livekit import api
 from livekit.agents._generated.storage_threads import ThreadInfo, ThreadItem
 from livekit.agents.a2a import AgentThreadGrant, Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
@@ -49,10 +49,12 @@ credentials = Credentials(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API
 
 def storage_token() -> str:
     """The backend-only credential for the existing AgentDB admin service."""
-    key, secret = credentials.api_key, credentials.api_secret
-    now = int(time.time())
-    claims = {"iss": key, "nbf": now - 5, "exp": now + TOKEN_TTL, "agent": {"databaseAdmin": True}}
-    return jwt.encode(claims, secret, algorithm="HS256")
+    return (
+        api.AccessToken(credentials.api_key, credentials.api_secret)
+        .with_agent_grants(api.AgentGrants(database_admin=True))
+        .with_ttl(timedelta(seconds=TOKEN_TTL))
+        .to_jwt()
+    )
 
 
 def row(t: ThreadInfo) -> dict[str, Any]:
@@ -78,6 +80,8 @@ def dump_of(model: Any) -> Any:
 @asynccontextmanager
 async def snapshot(thread_id: str):
     """Export through the existing AgentDBService, retaining its credential server-side."""
+    from livekit.protocol.agentdb import AgentDB
+
     if not ADMIN_URL:
         raise RuntimeError("Set CONSOLE_AGENTDB_ADMIN_URL to the AgentDB admin service")
     info = await storage.get_thread(thread_id, fresh=True)

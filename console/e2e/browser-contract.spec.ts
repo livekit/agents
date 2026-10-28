@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { AgentCard } from "../src/lib/generated/AgentCard";
+import type { AgentCard } from "../src/lib/a2a";
 
 const endpoint = "http://127.0.0.1:3107/agents/desk/default/chat";
 const card: AgentCard = { name: "Coverage assistant", description: "Helps with coverage", version: "1", capabilities: { streaming: true }, supportedInterfaces: [{ url: `${endpoint}/v1`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }], defaultInputModes: ["text"], defaultOutputModes: ["text"], skills: [] };

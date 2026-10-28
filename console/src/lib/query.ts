@@ -1,5 +1,5 @@
 import { querySnapshot } from "./api";
-export type { QueryResult } from "./generated/QueryResult";
+export type { QueryResult } from "./types";
 export type Status =
   | { state: "connecting" }
   | { state: "open"; tip: number; latency: number | null }

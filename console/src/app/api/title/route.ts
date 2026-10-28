@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { backendHeaders, backendURL, localDeveloper } from "@/lib/backend";
 import { decode } from "@/lib/decode";
+import type { SessionRow } from "@/lib/types";
 
 const FALLBACK_CHARS = 40;
 export const dynamic = "force-dynamic";
@@ -19,11 +20,11 @@ export async function POST(request: Request) {
   if (!localDeveloper(request)) return NextResponse.json({ error: "Developer access required" }, { status: 403 });
   let body: ReturnType<typeof decode.titleRequest>;
   try { body = decode.titleRequest(await request.json()); }
-  catch { return NextResponse.json({ error: "sessionId and firstMessage are required" }, { status: 400 }); }
+  catch { return NextResponse.json({ error: "Choose a conversation and message" }, { status: 400 }); }
   const { sessionId, firstMessage } = body;
   const current = await fetch(`${backendURL}/api/sessions/${encodeURIComponent(sessionId)}/info`, { cache: "no-store", headers: backendHeaders() });
-  if (!current.ok) return NextResponse.json({ error: `session: ${current.status}` }, { status: current.status });
-  const existing = decode.session(await current.json()).attributes.title;
+  if (!current.ok) return NextResponse.json({ error: "The conversation could not be loaded" }, { status: current.status });
+  const existing = (await current.json() as SessionRow).attributes.title;
   if (existing) return NextResponse.json({ title: existing, written: false });
   const title = fallbackTitle(firstMessage);
 
@@ -32,6 +33,6 @@ export async function POST(request: Request) {
     headers: backendHeaders(),
     body: JSON.stringify({ attributes: { title } }),
   });
-  if (!written.ok) return NextResponse.json({ error: `attributes: ${written.status}` }, { status: 502 });
+  if (!written.ok) return NextResponse.json({ error: "The conversation title could not be saved" }, { status: 502 });
   return NextResponse.json({ title, written: true });
 }

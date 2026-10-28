@@ -1,60 +1,63 @@
-import Ajv, { type ValidateFunction } from "ajv";
-import type { AgentCard } from "./generated/AgentCard";
-import type { StreamResponse } from "./generated/StreamResponse";
-import type { ConsoleConfig } from "./generated/ConsoleConfig";
-import type { Grant } from "./generated/Grant";
-import type { SessionDump } from "./generated/SessionDump";
-import type { SessionRow } from "./generated/SessionRow";
-import type { History } from "./generated/History";
-import type { Sessions } from "./generated/Sessions";
-import type { CreatedSession } from "./generated/CreatedSession";
-import type { QueryResult } from "./generated/QueryResult";
-import type { Examples } from "./generated/Examples";
-import type { Message } from "./generated/Message";
-import message from "./generated/Message.json";
-import type { CallRequest } from "./generated/CallRequest";
-import type { CallMetadata } from "./generated/CallMetadata";
-import type { CallToken } from "./generated/CallToken";
-import type { TitleRequest } from "./generated/TitleRequest";
-import callRequest from "./generated/CallRequest.json";
-import callMetadata from "./generated/CallMetadata.json";
-import callToken from "./generated/CallToken.json";
-import titleRequest from "./generated/TitleRequest.json";
-import agentCard from "./generated/AgentCard.json";
-import streamResponse from "./generated/StreamResponse.json";
-import config from "./generated/ConsoleConfig.json";
-import grant from "./generated/Grant.json";
-import sessionDump from "./generated/SessionDump.json";
-import sessionRow from "./generated/SessionRow.json";
-import history from "./generated/History.json";
-import sessions from "./generated/Sessions.json";
-import createdSession from "./generated/CreatedSession.json";
-import queryResult from "./generated/QueryResult.json";
-import examples from "./generated/Examples.json";
+import type { CallRequest, CallMetadata, CallToken, TitleRequest } from "./types";
 
-const ajv = new Ajv({ strict: false, validateFormats: false });
-function decoder<T>(schema: object): (value: unknown) => T {
-  const validate: ValidateFunction<T> = ajv.compile<T>(schema);
-  return (value) => {
-    if (!validate(value)) throw new Error(`Invalid response: ${ajv.errorsText(validate.errors)}`);
-    return value;
-  };
+export function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+const optionalString = (value: unknown) => value == null || typeof value === "string";
+
+/** Validate browser input before minting credentials or saving a title. */
 export const decode = {
-  callRequest: decoder<CallRequest>(callRequest),
-  callMetadata: decoder<CallMetadata>(callMetadata),
-  callToken: decoder<CallToken>(callToken),
-  titleRequest: decoder<TitleRequest>(titleRequest),
-  message: decoder<Message>(message),
-  card: decoder<AgentCard>(agentCard),
-  stream: decoder<StreamResponse>(streamResponse),
-  config: decoder<ConsoleConfig>(config),
-  grant: decoder<Grant>(grant),
-  dump: decoder<SessionDump>(sessionDump),
-  session: decoder<SessionRow>(sessionRow),
-  history: decoder<History>(history),
-  sessions: decoder<Sessions>(sessions),
-  created: decoder<CreatedSession>(createdSession),
-  query: decoder<QueryResult>(queryResult),
-  examples: decoder<Examples>(examples),
+  callRequest(value: unknown): CallRequest {
+    if (
+      !record(value) ||
+      !record(value.room_config) ||
+      !Array.isArray(value.room_config.agents) ||
+      !value.room_config.agents.length ||
+      !value.room_config.agents.every(
+        (agent) =>
+          record(agent) &&
+          typeof agent.agent_name === "string" &&
+          agent.agent_name.trim() &&
+          typeof agent.metadata === "string",
+      ) ||
+      ![value.room_name, value.participant_name, value.participant_identity].every(
+        optionalString,
+      ) ||
+      (value.participant_attributes != null &&
+        (!record(value.participant_attributes) ||
+          !Object.values(value.participant_attributes).every((item) => typeof item === "string")))
+    )
+      throw new Error("Select an agent for this call");
+    return value as CallRequest;
+  },
+  callMetadata(value: unknown): CallMetadata {
+    if (
+      !record(value) ||
+      typeof value.endpoint !== "string" ||
+      !value.endpoint.trim() ||
+      ![value.session_id, value.sub].every(optionalString)
+    )
+      throw new Error("Select an endpoint for this call");
+    return value as CallMetadata;
+  },
+  callToken(value: unknown): CallToken {
+    if (
+      !record(value) ||
+      ![value.server_url, value.participant_token, value.session_id].every(
+        (item) => typeof item === "string" && item.length > 0,
+      )
+    )
+      throw new Error("The call could not be started");
+    return value as CallToken;
+  },
+  titleRequest(value: unknown): TitleRequest {
+    if (
+      !record(value) ||
+      typeof value.sessionId !== "string" ||
+      !value.sessionId ||
+      typeof value.firstMessage !== "string"
+    )
+      throw new Error("Choose a conversation and message");
+    return value as TitleRequest;
+  },
 };
