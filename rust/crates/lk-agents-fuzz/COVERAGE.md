@@ -641,14 +641,14 @@ Lessons taken from agent-store's simulation and gosim:
 - **A coin per kind of trouble** (agent-store's swarm hunt), so adding a kind never moves
   another's draw.
 - **Fail a livelock by name** (gosim's "no progress" watchdog): a run that takes
-  `NO_PROGRESS_STEPS` (10,000) steps at one virtual instant, in the journal or in its own loop,
+  `NO_PROGRESS_STEPS` (20 x the busiest instant measured, 6,262 loop steps) steps at one virtual instant, in the journal or in its own loop,
   is stopped there and reported as `virtual_time_advances`. Before, such a run hung the whole
   campaign.
 - **Judge by known bugs, with the protocol fixed before the run** (gosim's benchmark,
-  agent-store's held-out findings): not yet done here; section 12.
+  agent-store's held-out findings): `bench/known_bugs.sh`, section 12.
 - **Bursts and same-instant orderings** (gosim's scheduling policy): the case owns the driver's
-  queue and half the seeds pick the next event by partial-order sampling (`drive::queue::Policy`);
-  section 8.
+  queue; a quarter of the seeds deliver in arrival order, a quarter by BasicPOS, half by BasicPOS
+  with the transitional task bridge (`drive::queue::Policy`); section 8.
 
 ## 8. Biases left
 
@@ -656,10 +656,11 @@ Each is a choice the search makes for every run that a real call does not.
 
 - **The order is the queue's, not the runtime's.** Applying an input does not yield, so a case
   can build a burst the driver untangles in one cycle, and the case picks what the driver's queue
-  delivers next: arrival order, or basic partial-order sampling over the event sources and the
-  driver's task pool (`drive::queue::Policy`, half the seeds each). Each source keeps its own
-  order, and full POS is not used: every event reaches one core, so it would degenerate to a
-  random walk. Tasks still run in tokio's fixed order on a single thread.
+  delivers next: arrival order, or basic partial-order sampling over the event sources (the
+  microphone's frames one of them) and the driver's task pool, or, under the transitional task
+  bridge, each task the run spawns as its own process (`drive::queue::Policy`). Each source keeps
+  its own order. There are no read/write footprints and no race-based reassignment (owner
+  decision 21). The pool's tasks still run in tokio's fixed order on a single thread.
 - **Time moves in 100 ms beats of 10 ms frames.** Frames never arrive one by one, and nothing
   lands inside a beat.
 - **Fixed pools of values**: the person's sentences (`USER_TURNS`) and the agent's lines
@@ -910,7 +911,7 @@ Found by them and fixed, each with a regression test that fails with its fix rev
 | A pause decided after the person stopped (a detector's late verdict) never armed its resume | `late_verdict_pause_resumes` |
 | The native realtime session stamped its metrics with seconds since the model was created and its items in 1970 | `realtime_metrics_wall_clock` (500 of 1,024 survey seeds with the fix reverted) |
 
-`livekit-agents-next/scripts/parity.py` now compares payloads whole against the reference: each
+`livekit-agents-next/scripts/parity.py` (deleted since, owner decision 22) compared payloads whole against the reference: each
 message's metrics (the models it names, which timings it carries), each metrics record's kind,
 label, model and attribution, and the history's order by `created_at`. It found, and the core now
 matches the reference on: a `say` message naming the LLM and TTS and an `llm_node_ttfs`; a realtime
@@ -1029,7 +1030,7 @@ to fail with the bug and to pass without it.
 had moved, the bug was re-created in today's code with the smallest change that brings the
 behaviour back (the patches are not committed). Then the checks ran: the launch gate's DST steps
 (the fuzz suites with the regression tests, the 1,024-seed survey, the 4,096-seed campaign),
-`smoke.py`, `parity.py` on a wheel rebuilt with the bug, `fuzz.py` and, for provider clients,
+`smoke.py`, `parity.py` (since deleted) on a wheel rebuilt with the bug, `fuzz.py` and, for provider clients,
 their crates' unit tests. "gate:" names the regression test that fails, "search:" the rule and
 seed the random survey or campaign fails on with no hand-written test. A regression test written
 with a fix guards that exact path; the search guards its neighbours.
