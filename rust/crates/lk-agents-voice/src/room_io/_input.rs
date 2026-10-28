@@ -12,8 +12,6 @@ use lk_agents_rtc::{
     RtcRoom, TrackPublication, TrackSid, TrackSource, VideoFrameRef, silence_frame,
 };
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -258,6 +256,8 @@ struct ReaderState {
     linked: Option<ParticipantIdentity>,
     reading: Option<TrackSid>,
     generation: u64,
+    attachment: u64,
+    attached: bool,
     /// Wakes the reading pump so it returns and drops its queue; the generation counter alone
     /// can't reach a pump parked in `recv`.
     stop: Option<Arc<Notify>>,
@@ -291,6 +291,13 @@ impl Lease {
     }
 }
 
+/// Media retains the selection and attachment that admitted it until consumption.
+pub(crate) struct InputFrame<T> {
+    generation: u64,
+    attachment: u64,
+    item: T,
+}
+
 /// Which track a leg reads and the one pump reading it: linking, claiming, releasing, the
 /// generation check and the bounded queue.
 pub(crate) struct TrackReader<T> {
@@ -299,11 +306,9 @@ pub(crate) struct TrackReader<T> {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Drop-oldest. `Option` so [`close`](Self::close) can drop the sender, ending the consumer's
     /// `recv`.
-    tx: Mutex<Option<LossyTx<T>>>,
+    tx: Mutex<Option<LossyTx<InputFrame<T>>>>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    rx: tokio::sync::Mutex<BoundedLossy<T>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    attached: AtomicBool,
+    rx: tokio::sync::Mutex<BoundedLossy<InputFrame<T>>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The running pump's handle; a superseded pump returns on its own stop.
     pump: Mutex<Option<AbortHandle>>,
@@ -311,17 +316,18 @@ pub(crate) struct TrackReader<T> {
 
 impl<T> TrackReader<T> {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub(crate) fn new((tx, rx): (LossyTx<T>, BoundedLossy<T>)) -> Self {
+    pub(crate) fn new((tx, rx): (LossyTx<InputFrame<T>>, BoundedLossy<InputFrame<T>>)) -> Self {
         TrackReader {
             state: Mutex::new(ReaderState {
                 linked: None,
                 reading: None,
                 generation: 0,
+                attachment: 0,
+                attached: true,
                 stop: None,
             }),
             tx: Mutex::new(Some(tx)),
             rx: tokio::sync::Mutex::new(rx),
-            attached: AtomicBool::new(true),
             pump: Mutex::new(None),
         }
     }
@@ -424,7 +430,11 @@ impl<T> TrackReader<T> {
     pub(crate) fn ended(&self, lease: &Lease) {
         let mut s = self.state.lock().unwrap();
         if s.generation == lease.generation {
-            s.stop_pump();
+            // EOF ends production, but accepted frames still belong to this selection.
+            s.reading = None;
+            if let Some(stop) = s.stop.take() {
+                stop.notify_one();
+            }
         }
     }
 
@@ -432,25 +442,46 @@ impl<T> TrackReader<T> {
     /// stop the signal can't cover: the pre-connect leg never polls `stopped()`, and the live
     /// `select!` isn't atomic with `stop_pump`. Both are decided under the same mutex.
     pub(crate) fn deliver(&self, lease: &Lease, item: T) -> bool {
-        if self.state.lock().unwrap().generation != lease.generation {
+        let state = self.state.lock().unwrap();
+        if state.generation != lease.generation || state.reading.is_none() {
             return false;
         }
-        if !self.attached.load(Ordering::Relaxed) {
+        if !state.attached {
             // Detached: drop rather than close the track, so a re-attach resumes mid-stream.
             return true;
         }
         match self.tx.lock().unwrap().as_ref() {
-            Some(tx) => tx.push(item) != Pushed::Closed,
+            Some(tx) => {
+                tx.push(InputFrame {
+                    generation: state.generation,
+                    attachment: state.attachment,
+                    item,
+                }) != Pushed::Closed
+            }
             None => false,
         }
     }
 
     pub(crate) async fn recv(&self) -> Option<T> {
-        self.rx.lock().await.recv().await
+        let mut rx = self.rx.lock().await;
+        while let Some(frame) = rx.recv().await {
+            let state = self.state.lock().unwrap();
+            if state.attached
+                && frame.generation == state.generation
+                && frame.attachment == state.attachment
+            {
+                return Some(frame.item);
+            }
+        }
+        None
     }
 
     pub(crate) fn set_attached(&self, attached: bool) {
-        self.attached.store(attached, Ordering::Relaxed);
+        let mut state = self.state.lock().unwrap();
+        if state.attached != attached {
+            state.attached = attached;
+            state.attachment += 1;
+        }
     }
 
     pub(crate) fn keep(&self, handle: AbortHandle) {
@@ -747,6 +778,51 @@ mod tests {
     use super::*;
     use lk_agents_abi::TokioSpawner;
     use lk_agents_rtc::FakeRtc;
+
+    #[tokio::test]
+    async fn replacing_a_track_rejects_its_buffered_input() {
+        let reader = TrackReader::new(BoundedLossy::channel(8));
+        reader.link(Some("user".into()));
+        let old = reader
+            .claim(&"user".into(), TrackSource::Microphone, &"old".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        assert!(reader.deliver(&old, "old audio"));
+        let new = reader
+            .claim(&"user".into(), TrackSource::Microphone, &"new".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        assert!(reader.deliver(&new, "new audio"));
+        assert_eq!(reader.recv().await, Some("new audio"));
+        assert!(!reader.deliver(&old, "late old audio"));
+        reader.ended(&old);
+        assert_eq!(reader.reading(), Some("new".into()));
+    }
+
+    #[tokio::test]
+    async fn reattaching_the_same_input_rejects_its_previous_buffer() {
+        let reader = TrackReader::new(BoundedLossy::channel(8));
+        reader.link(Some("user".into()));
+        let track = reader
+            .claim(&"user".into(), TrackSource::Microphone, &"mic".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        assert!(reader.deliver(&track, "previous attachment"));
+        reader.set_attached(false);
+        assert!(reader.deliver(&track, "detached audio"));
+        reader.set_attached(true);
+        assert!(reader.deliver(&track, "current attachment"));
+        assert_eq!(reader.recv().await, Some("current attachment"));
+    }
+
+    #[tokio::test]
+    async fn a_track_ending_preserves_its_accepted_audio() {
+        let reader = TrackReader::new(BoundedLossy::channel(8));
+        reader.link(Some("user".into()));
+        let track = reader
+            .claim(&"user".into(), TrackSource::Microphone, &"mic".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        assert!(reader.deliver(&track, "last audio"));
+        reader.ended(&track);
+        assert_eq!(reader.recv().await, Some("last audio"));
+    }
 
     #[tokio::test]
     async fn preconnect_normalizes_channels_even_when_rate_matches() {
