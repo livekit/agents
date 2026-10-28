@@ -487,7 +487,24 @@ impl RealtimeMachine {
             }
             Command::PushItem(lk_agents_abi::llm::realtime::PushItem { item, .. }) => match wire::to_wire_item(&item, self.images.as_ref()) {
                 Ok(v) => {
-                    Step::frame(wire::conversation_item_create(&self.ids.short("video_"), v, None))
+                    let event_id = self.ids.short("video_");
+                    // Until the server confirms it, the pushed item is part of the conversation
+                    // the server is being brought to: a context update sent meanwhile does not
+                    // create it a second time (`item_create_duplicate_item_id`).
+                    let id = item.id().to_owned();
+                    let target = self.expected_ctx();
+                    let update = self.ctx_update.get_or_insert_with(|| CtxUpdate {
+                        awaiting_create: HashSet::new(),
+                        awaiting_delete: HashSet::new(),
+                        by_event_id: HashMap::new(),
+                        target,
+                        touched: HashSet::new(),
+                    });
+                    update.target.items.push(*item);
+                    update.touched.insert(id.clone());
+                    update.awaiting_create.insert(id.clone());
+                    update.by_event_id.insert(event_id.clone(), (false, id));
+                    Step::frame(wire::conversation_item_create(&event_id, v, None))
                 }
                 Err(e) => Step::event(Event::Error(self.error(now, e, true))),
             },

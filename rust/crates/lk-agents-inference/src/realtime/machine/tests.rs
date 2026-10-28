@@ -4,7 +4,7 @@ use super::*;
 use crate::realtime::dialect::{OPENAI, XAI};
 use crate::realtime::testfix::{machine, msg};
 use lk_agents_abi::llm::realtime::{
-    GenerateReply, GenerationCreated, Interrupt, PushAudio, Say, UpdateChatCtx, UpdateInstructions,
+    GenerateReply, GenerationCreated, Interrupt, PushAudio, PushItem, Say, UpdateChatCtx, UpdateInstructions,
 };
 use lk_agents_abi::{Clock, VirtualClock};
 use serde_json::json;
@@ -228,6 +228,30 @@ fn a_context_update_becomes_the_delete_and_create_ops_its_diff_implies() {
     recv(&mut m, at(2), item_added(Some("a"), "c", "third"));
     assert!(m.ctx_update.is_none(), "settled once the server acked both");
     assert_eq!(m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["a", "c"]);
+}
+
+// Catches: a context update sent while a pushed item was still unconfirmed creating it again
+// (`item_create_duplicate_item_id`, survey seed 1264): the pushed item is part of the
+// conversation the server is being brought to.
+#[test]
+fn a_context_update_does_not_recreate_an_item_still_being_pushed() {
+    let mut m = machine(OPENAI);
+    m.open(at(0));
+    recv(&mut m, at(0), item_added(None, "a", "first"));
+    let push = m.command(
+        at(1),
+        Command::PushItem(PushItem { item: Box::new(msg("b", "typed")), reply_required: true }),
+    );
+    assert_eq!(types(&push.frames), ["conversation.item.create"]);
+    let step = m.command(
+        at(1),
+        Command::UpdateChatCtx(UpdateChatCtx {
+            chat_ctx: ChatContext::new(vec![msg("a", "first"), msg("b", "typed")]),
+        }),
+    );
+    assert!(step.frames.is_empty(), "nothing to bring: {:?}", types(&step.frames));
+    recv(&mut m, at(2), item_added(Some("a"), "b", "typed"));
+    assert!(m.ctx_update.is_none(), "settled once the push is confirmed");
 }
 
 // Catches: treating `item_create_duplicate_item_id` as a rejection.
