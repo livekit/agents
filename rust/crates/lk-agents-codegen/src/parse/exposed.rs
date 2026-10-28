@@ -145,8 +145,8 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                 for m in host_attrs_strict(label, &st.attrs)? {
                     match head_of(&m).as_str() {
                         "client" | "kwargs" => out.kwargs.push(kw_record(label, st, &al)?),
-                        // The binding maps the error itself.
-                        "error" => {}
+                        // The binding maps the error itself; a handwritten type crosses by its own impls.
+                        "error" | "handwritten" => {}
                         "stream" => out.streams.push(stream(label, &st.ident, &m)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => {

@@ -3,29 +3,46 @@
 
 use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
 use async_trait::async_trait;
-use lk_agents_host_derive::Host;
 use crate::errors::ProviderError;
 use crate::utils::stream::StreamSource;
 
 /// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
-#[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[binding(extract, from_items)]
+// The omission-only defaults below move to the record declaration with the records family.
+#[crate::host(handwritten(extract, host = "dict[str, object]"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: String,
-    #[binding(default)]
+    /// Defaults to the empty string only when absent; null is invalid.
     pub description: String,
+    /// Explicit JSON, including JSON null; a missing key raises.
     pub json_schema: serde_json::Value,
-    #[binding(flatten)]
     pub flags: ToolFlags,
 }
 
 /// A struct, not an enum, so axes don't exclude each other.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[binding(fields_only)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ToolFlags {
-    /// Must not fire on the turn its `beta/` task is entered (`dob.py`).
-    #[binding(default)]
+    /// Must not fire on the turn its `beta/` task is entered (`dob.py`). Defaults on omission.
     pub ignore_on_enter: bool,
+}
+
+/// Required identity/schema; declared description/flag defaults apply only to omission.
+#[cfg(feature = "python")]
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
+    type Error = pyo3::PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use crate::python::{item, item_or, item_with, value_from_py};
+        use pyo3::types::PyAnyMethods as _;
+        const OWNER: &str = "ToolSpecFromPy";
+        let obj = &*obj;
+        Ok(ToolSpec {
+            name: item(obj, OWNER, "name")?,
+            description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
+            json_schema: item_with(obj, OWNER, "json_schema", |v| value_from_py(v, "ToolSpec.json_schema"))?,
+            flags: ToolFlags { ignore_on_enter: item_or(obj, OWNER, "ignore_on_enter", |v| v.extract(), || false)? },
+        })
+    }
 }
 
 #[crate::host(handwritten(extract, emit, host = "str | dict[str, object]"))]
