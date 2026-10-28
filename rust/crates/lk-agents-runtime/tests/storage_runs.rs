@@ -372,7 +372,66 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+/// Waiters run in the order their messages' rows were submitted: a later message cannot take a
+/// free lane while an older one still waits for it.
+async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    lane.open(RunOptions::new("r0", ""))
+        .await
+        .unwrap()
+        .commit(CommitOptions::default())
+        .await
+        .unwrap();
+    for task_id in ["AST_first", "AST_second"] {
+        assert!(lane.db().submit(&submitted(task_id)).await.unwrap());
+    }
+    let second = || RunOptions { wait: false, pickup: true, ..RunOptions::new("r2", "AST_second") };
+    let refused = lane.open(second()).await.err().expect("the older waiter goes first");
+    assert!(matches!(refused, StorageError::LeaseHeld(_)), "{refused}");
+    let first = RunOptions { wait: false, pickup: true, ..RunOptions::new("r1", "AST_first") };
+    let mut run = lane.open(first).await.unwrap();
+    assert!(run.picked_up);
+    run.commit(CommitOptions::default()).await.unwrap();
+    // the first row is working now: the second is the oldest waiter and takes the lane
+    lane.open(second()).await.unwrap().commit(CommitOptions::default()).await.unwrap();
+    fx.cleanup(&[&s]).await;
+}
+
+/// A holder stalled past its TTL keeps the lane while nobody took it: the late renewal stands on
+/// the unchanged token. A released lease never renews.
+async fn a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost(backend: Backend) {
+    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    let run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    let lease = run.lease().unwrap().clone();
+    lease.stop();
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert!(lane.info().await.unwrap().unwrap().lease_until <= unix_now(), "the lease lapsed");
+    lease.keep_alive();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(!lease.is_lost(), "renewed on the standing token");
+    assert!(lane.info().await.unwrap().unwrap().lease_until > unix_now(), "live again");
+    lease.stop();
+
+    lease.release(None).await.unwrap();
+    lease.keep_alive();
+    let lost = tokio::time::timeout(Duration::from_secs(2), lease.lost()).await;
+    assert!(lost.is_ok(), "a released lease is lost at its next renewal");
+    assert_eq!(lane.info().await.unwrap().unwrap().lease_until, 0);
+    drop(run);
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    waiters_take_the_lane_in_the_order_their_rows_were_submitted,
+    a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost,
     a_dropped_run_stops_renewing_and_its_lease_lapses,
     a_cancel_never_overwrites_a_terminal_task,
     a_commit_never_overwrites_a_canceled_task,
