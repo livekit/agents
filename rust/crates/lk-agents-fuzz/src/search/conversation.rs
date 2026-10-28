@@ -66,7 +66,7 @@ use crate::{
 /// the search pays for.
 mod speaker;
 
-use speaker::Playing;
+use speaker::Playback;
 
 #[derive(Clone, Copy, Debug)]
 struct Persona {
@@ -501,7 +501,7 @@ async fn converse_in(
         rng: Rng::with_seed(seed),
         budget,
         unanswered: BTreeSet::new(),
-        heard: BTreeMap::new(),
+        playback: Default::default(),
         planned: BTreeSet::new(),
         streams: BTreeMap::new(),
         delivered: 0,
@@ -548,9 +548,8 @@ struct Talk {
     budget: usize,
     /// Predictions the predictor will never answer, so the driver's timeout runs on them.
     unanswered: BTreeSet<u32>,
-    /// Segments whose audio the person has heard begin: the speaker reported them started, and how
-    /// far its reports have got.
-    heard: BTreeMap<u32, Playing>,
+    /// The speaker: the segments it reported started and how far, and whether the output reset.
+    playback: Playback,
     /// The chat requests the model has planned its answer to: every one ever opened, once.
     planned: BTreeSet<u32>,
     /// The model's answers still streaming, by chat: each delivery and the instant it is due.
@@ -739,6 +738,7 @@ impl Talk {
             && self.rng.u8(0..100) < self.providers.sink_resets
             && let Some(output) = self.first(Kind::Output)
         {
+            self.playback.reset = true;
             self.send(Input::SinkReset { output: Ref::new(output) }).await?;
         }
         // A voice provider that went down comes back, as outages end.

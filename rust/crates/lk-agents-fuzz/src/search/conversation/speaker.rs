@@ -2,8 +2,20 @@
 //! progress and their finish, and now and then loses a finish on the way to the tracker.
 use super::*;
 
-/// In a hundred finishes, how many the speaker's transport loses on the way to the tracker.
+/// In a hundred finishes, how many the speaker's transport loses on the way to the tracker; of
+/// the first finish after a reset, which a resetting transport loses far more often.
 const FINISH_LOST: u8 = 2;
+const FINISH_LOST_AFTER_RESET: u8 = 25;
+
+/// What the speaker keeps between beats.
+#[derive(Default)]
+pub(super) struct Playback {
+    /// Segments whose audio the person has heard begin: the speaker reported them started, and
+    /// how far its reports have got.
+    heard: BTreeMap<u32, Playing>,
+    /// The output reset since the speaker last finished a segment.
+    pub(super) reset: bool,
+}
 
 /// A segment the speaker started: when, and how much of it the speaker has reported played.
 pub(super) struct Playing {
@@ -15,7 +27,7 @@ impl Talk {
     /// Whether the person is hearing the agent right now: a segment the speaker reported started
     /// and has not finished.
     pub(super) fn hearing(&self) -> bool {
-        self.run.record.live().of(Kind::Segment).iter().any(|s| self.heard.contains_key(s))
+        self.run.record.live().of(Kind::Segment).iter().any(|s| self.playback.heard.contains_key(s))
     }
 
     /// The speaker starts the oldest segment it was handed and has not started, once nothing is
@@ -31,10 +43,10 @@ impl Talk {
             .live()
             .of(Kind::Segment)
             .into_iter()
-            .find(|s| !self.heard.contains_key(s));
+            .find(|s| !self.playback.heard.contains_key(s));
         if let Some(segment) = next {
             let at = self.now_ms();
-            self.heard.insert(segment, Playing { at, reported: 0 });
+            self.playback.heard.insert(segment, Playing { at, reported: 0 });
             self.send(Input::PlayoutStarted { segment: Ref::new(segment) }).await?;
         }
         Ok(())
@@ -46,7 +58,7 @@ impl Talk {
         let now = self.now_ms();
         for segment in self.run.record.live().of(Kind::Segment) {
             let Some(length) = self.segment_ms(segment) else { continue };
-            let Some(playing) = self.heard.get_mut(&segment) else { continue };
+            let Some(playing) = self.playback.heard.get_mut(&segment) else { continue };
             let played = now.saturating_sub(playing.at).min(length);
             if played > playing.reported {
                 let ms = Millis(played - playing.reported);
@@ -64,7 +76,7 @@ impl Talk {
         let now = self.now_ms();
         for segment in self.run.record.live().of(Kind::Segment) {
             let Some(length) = self.segment_ms(segment) else { continue };
-            if self.heard.get(&segment).is_none_or(|p| now < p.at + length) {
+            if self.playback.heard.get(&segment).is_none_or(|p| now < p.at + length) {
                 continue;
             }
             self.report_progress().await?;
@@ -78,7 +90,9 @@ impl Talk {
     /// report lost on the way.
     fn finish(&mut self, segment: u32) -> Input {
         let segment = Ref::new(segment);
-        match self.rng.u8(0..100) < FINISH_LOST {
+        let reset = std::mem::take(&mut self.playback.reset);
+        let lost = if reset { FINISH_LOST_AFTER_RESET } else { FINISH_LOST };
+        match self.rng.u8(0..100) < lost {
             true => Input::PlayoutFinishLost { segment },
             false => Input::PlayoutFinished { segment },
         }

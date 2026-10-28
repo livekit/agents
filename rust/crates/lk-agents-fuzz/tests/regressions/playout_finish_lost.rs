@@ -1,5 +1,5 @@
 //! A playout whose finish the output never reports settles once the output played all of it.
-use lk_agents_fuzz::drive::{Run, Setup, simulate};
+use lk_agents_fuzz::drive::{Case, Run, Setup, run, simulate};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
 
 // Catches: an output that played the speech's audio and lost its "playback finished" report (a
@@ -137,4 +137,35 @@ fn a_lost_finish_is_due_a_margin_after_the_last_report() {
     let speeches = host.speeches();
     let [speech] = &speeches[..] else { panic!("one speech, got {}", speeches.len()) };
     assert!(speech.is_done(), "the lost finish was not due a margin after the last report");
+}
+
+// Catches: the speaker's own finish arriving after the playout's lost-finish margin had settled
+// the segment for it was refused by the output fake, which had already let the segment go: the
+// segment stayed open past the close and read as a leak (`nothing_left_live`, campaign seed
+// 11256, its output replaced). A late report of a finish the product settled still ends the
+// segment.
+#[test]
+fn a_finish_reported_after_the_margin_settles_the_segment() {
+    let inputs = vec![
+        Input::Say {
+            text: AgentText("Hello there.".into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        },
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutStarted { segment: Ref::new(0) },
+        Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(10_000) },
+        Input::Advance { ms: Millis(5_000) },
+        Input::PlayoutFinished { segment: Ref::new(0) },
+        // The output replaced: no clear at the close settles what it still holds.
+        Input::SetAudioOutput { attach: true },
+        Input::Advance { ms: Millis(100) },
+        Input::Close { drain: true },
+        Input::AwaitExit {},
+    ];
+    let setup = Setup { sync_transcription: true, ..Setup::default() };
+    let outcome = run(Case { setup, inputs, ..Case::default() });
+    let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.as_str()).collect();
+    assert!(!failed.contains(&"nothing_left_live"), "{failed:?}");
 }

@@ -74,7 +74,9 @@ impl VideoInput for FakeVideoInput {
     fn label(&self) -> &str {
         "fake::video_input"
     }
-    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>> {
+    async fn next_frame(
+        &self,
+    ) -> lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>> {
         let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
         Ok(Some(lk_agents_rtc::VideoFrameRef {
             media: MediaRef::new(ordinal, &self.refs),
@@ -303,13 +305,16 @@ impl Playout {
     }
 
     /// This segment finished playing. True when it was flushed and still owed; a segment still
-    /// taking frames cannot have finished, and one already reported is not reported twice.
+    /// taking frames cannot have finished, and one already reported is not reported twice. A
+    /// finish the product already settled for the sink (its lost-finish bound) is still the
+    /// speaker's report: the tracker drops it, the segment is done (seed 11256).
     pub(super) fn report(&self, segment: u32) -> bool {
         let Some(position) = self.finished(segment) else { return false };
         self.tracker.playback_finished(PlaybackFinished {
             playback_position: position,
             ..Default::default()
-        })
+        });
+        true
     }
 
     /// This segment finished playing and the report of it was lost: the speaker's progress
