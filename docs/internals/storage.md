@@ -49,15 +49,19 @@ The engine has three layers:
 | Layer | Responsibility |
 | --- | --- |
 | `Storage` | Thread lifecycle and opening a thread; implemented by AgentDB and local SQLite backends |
-| Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission/deduplication, lane acquisition, inbox policy, fencing and managed commit decisions |
+| Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission, lane acquisition and renewal, fencing and managed commits |
 | Internal `SqliteConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
 
-The pure storage core decides plans and outcomes. The AgentDB and SQLite
-backends live in the same crate behind its `backend` feature: async I/O that
-executes the plans, schedules renewals and owns pools and resources, reaching
-the network through `lk-agents-net`. `lk-agents-core` depends on the decisions
-without that feature. The DST replaces the backends with an in-memory fake. The backends share the schema
-and turn state machine. Host-visible records and bindings are generated from
+`lk-agents-storage` is a plain async crate that owns all database interaction:
+both backends, retries, fencing, lease renewal, resolution of lost
+acknowledgments, pools and resources, reaching the network through
+`lk-agents-net`. Every failure is a precise typed error: `Uncertain`,
+`Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` or
+`VersionConflict`. The A2A task decisions (deduplication, arrival order, inbox
+policy, task transitions) live in `lk_agents_core::a2a` over request/result
+records and error types declared in ABI; core does not depend on storage. The
+runtime's A2A door executes core's storage effects by calling storage and feeds
+the typed results back. The backends share the schema. Host-visible records and bindings are generated from
 Rust declarations through the ABI machinery.
 
 The internal adapter deliberately targets SQLite semantics. A future non-SQL
@@ -124,7 +128,8 @@ pub trait SqliteConnection: Send + Sync {
 Connections preserve the distinction between a rejected write and a commit
 whose acknowledgment was lost. A timeout or disconnect must not be reported as
 proof of rollback. The engine applies the existing run-id idempotency and
-version/fence rules when resolving uncertain outcomes. Both backends enforce
+version/fence rules when resolving uncertain outcomes and reports an outcome it
+cannot resolve as `Uncertain`. Both backends enforce
 the same schema compatibility, serialization limits and storage error contract.
 
 ## Reading thread items and tasks
@@ -547,9 +552,11 @@ hand, which is why the two are separate.
 
 ## Verification
 
-Run the same storage contract suite against SQLite and AgentDB. AgentDB
-integration tests use a Cloud project; local tests need only a temporary
-directory. Cover:
+Run the same storage contract suite against real SQLite and AgentDB. A fake
+AgentDB server injects faults (disconnects, lost acknowledgments, rejections,
+slow responses) to reach every typed error; AgentDB integration tests use a
+Cloud project; local tests need only a temporary directory. The DST fakes the
+storage port and injects every error kind into the A2A decisions. Cover:
 
 - Thread lifecycle, expiry visibility, paging, and recovery from partial
   creation or deletion.

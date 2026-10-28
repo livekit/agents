@@ -23,9 +23,9 @@ for validation and review.
 
 | Layer | Owns | Boundary |
 | --- | --- | --- |
-| Decision cores | Agent execution, tool/approval/output policy, session lifecycle, scheduling, MCP and A2A decisions, storage commit policy | Synchronous events in, effects out; no I/O, executor, or host objects |
+| Decision cores | Agent execution, tool/approval/output policy, session lifecycle, scheduling, MCP and A2A task decisions | Synchronous events in, effects out; no I/O, executor, or host objects |
 | Data-plane core | Media transformations, buffering, gates, fan-out and playout accounting | Frames and control data in, transformed data and effects out; no device or network access |
-| Async I/O crates | The shared transport (`lk-agents-net`); provider clients with retry, fallback and reconnect execution and evaluation judge orchestration; worker registration, IPC and supervision; storage backends; media workers; the delegation A2A client | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
+| Async I/O crates | The shared transport and the delegation A2A client (`lk-agents-net`); provider clients with retry, fallback and reconnect execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
 | `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker, the process runtime and the host stream adapter | Executes core effects, returns correlated events and wires the async I/O crates |
 | `lk-agents-py` | Python module registration, generated conversions and adapters, and HostInvoker's Python entry | The only crate containing pyo3; no framework policy or I/O implementation |
 | Python package | Public API, user callbacks, provider implementations, host SDK objects and process launch/bootstrap | Calls `_core`; host objects are reached through generated proxies and HostInvoker |
@@ -41,15 +41,14 @@ tools and host RTC objects.
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
-| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`); MCP tool listing, schema rendering, result and error mapping, pagination and close decisions; chat formatting, tool-argument processing, JSON repair and deterministic run/event assertions; no voice lifecycle or transport dependency |
+| `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination and close decisions; chat formatting, tool-argument processing, JSON repair and deterministic run/event assertions; no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
-| `lk-agents-storage` | Schema, statement plans, lease/fence decisions and commit rules; the AgentDB and SQLite backends (async I/O) behind its `backend` feature |
-| `lk-agents-media` | Synchronous decoding, encoding, image conversion, resampling, media filters and sample arithmetic; optional native codecs; media workers (codec, recording and image execution, async I/O) behind its `workers` feature |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing |
+| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error (`Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound`, `VersionConflict`) |
+| `lk-agents-media` | Synchronous decoding, encoding, image conversion, resampling, media filters and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the delegation A2A client for remote agent calls |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
-| Delegation A2A client | Async I/O: remote agent calls over A2A |
-| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, AgentRun and TextSession drivers, A2A door I/O, thin MCP session I/O over the SDK, HostInvoker, the process runtime with its fork guard and the host stream adapter; wires the async I/O crates and re-exports the implementations generated bindings select |
+| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker, the process runtime with its fork guard and the host stream adapter; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
@@ -59,31 +58,29 @@ tools and host RTC objects.
 ```text
 lk-agents-py -> lk-agents-runtime, lk-agents-abi
 lk-agents-runtime -> sans-I/O crates, async I/O crates
-lk-agents-voice -> lk-agents-core -> lk-agents-storage -> lk-agents-abi
+lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
 lk-agents-inference -> lk-agents-media
-inference, worker, A2A client, storage[backend] -> lk-agents-net
+inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 lk-agents-fuzz -> sans-I/O crates + lk-agents-abi
 ```
 
-The sans-I/O crates are `lk-agents-core`, `lk-agents-voice`, `lk-agents-storage`
-and `lk-agents-media`, built without their async features. `lk-agents-media` is a
-synchronous data-plane core, so voice and inference compose it like
-`lk-agents-core`. `lk-agents-core` depends on `lk-agents-storage` without its
-`backend` feature and uses the storage decisions for A2A tasks; it never reaches
-a backend. The backends execute `lk-agents-storage`'s decisions in the same crate.
-Likewise voice depends on `lk-agents-media` without its `workers` feature.
+The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
+`lk-agents-media`. `lk-agents-media` is a synchronous data-plane core with no
+async runtime, so voice and inference compose it like `lk-agents-core`.
+`lk-agents-core` has no dependency on `lk-agents-storage`: its A2A decisions
+emit storage effects over request/result records and error types declared in
+ABI, and the runtime's A2A door executes them by calling storage.
 
-`lk-agents-net` is the one shared async transport: inference, the worker, the
-delegation A2A client and the storage backends use its HTTP client with
+`lk-agents-net` is the one shared async transport and hosts the delegation A2A
+client: inference, the worker and the AgentDB backend use its HTTP client with
 declared phase deadlines, SSE decoding, WebSocket connect, owned task handles
 and gateway token signing rather than building their own.
 
 The runtime depends on the async I/O crates to wire voice and text sessions:
-providers, storage backends, the worker server, judges, media workers and the
-delegation client. `lk-agents-py` depends only on the runtime and ABI: it
-uses ABI for the declared types its generated conversions translate, and the
+providers, storage, the worker server, judges and the delegation client in
+`lk-agents-net`. `lk-agents-py` depends only on the runtime and ABI: it uses ABI for the declared types its generated conversions translate, and the
 runtime re-exports the implementations of declared classes that its generated
 adapters select. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
@@ -326,7 +323,7 @@ and composes AgentRun for each invocation. It accepts explicitly supplied saved
 state and returns updated state. Runtime resolves agent resources and performs
 I/O; application code explicitly loads/saves session state. AgentRun and
 TextSession do not compose A2A lane orchestration or VoiceSession; the separate
-`a2a` module uses the storage decisions. Direct agent runs and voice execution
+`a2a` module decides A2A tasks over ABI-declared storage records. Direct agent runs and voice execution
 use AgentRun without requiring TextSession.
 
 These entrypoints use one shared Rust implementation of agent execution:
@@ -533,7 +530,7 @@ fakes calibrated against the same peers.
 | LLM protocol | Incremental response/tool-call assembly and usage attribution | Partial/malformed output has an explicit outcome; usage is attributed to the originating request |
 | STT protocol | Transcript/speech phase and finalization state | Audio EOF, server EOF and transcript completion are distinct inputs with bounded settlement |
 | TTS protocol | Request/segment progress and finish state | Empty input, final flush, partial audio and provider failure have explicit outcomes |
-| VAD/local model | Window/input state and interpretation of model output | Media workers execute the model; measured durations and model results drive window transitions |
+| VAD/local model | Window/input state and interpretation of model output | Media executes the model; measured durations and model results drive window transitions |
 | EOT protocol | Prediction correlation, supersession and fallback state | Only the current request applies; cloud/local replacement preserves cancellation and transcript ownership |
 | Interruption protocol | Overlap request and verdict lifecycle | Delayed verdicts cannot restore a guard or interrupt an unrelated speech |
 | Fallback | Backend availability, selection, recovery probes and attempt identity | One policy per request chain performs attempts and probes; late recovery cannot revive closed work |
@@ -565,8 +562,8 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | User I/O and nodes | Validated capabilities and attachment identities | Runtime invokes host nodes; core chooses policy from supplied capabilities and outcomes |
 | Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; byte-stream id plus output generation identifies the original segment, without a new protocol field |
 | Avatar runner | Publication, generator/receiver progress, clear-buffer and close state | Frames remain opaque; runtime owns generator/receiver/synchronizer calls |
-| Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing in media; media workers decode files and runtime publishes audio |
-| Recording | Timeline/accounting and flush/finish lifecycle | Runtime captures; media workers encode and write; finalization waits for accepted data and occurs once |
+| Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing and file decoding in media; runtime publishes audio |
+| Recording | Timeline/accounting and flush/finish lifecycle | Runtime captures and writes; media encodes; finalization waits for accepted data and occurs once |
 | Remote session | Request correlation, cancellation, deadline and drain state | Typed messages over runtime-owned room/TCP transport; late replies cannot settle new requests |
 | AMD | Classification phase and deadline | Runtime invokes the model; classification coordinates with the existing session floor |
 | IVR and keyterms | Their bounded request/pass state | Invoke model/provider operations as effects; replacement or cancellation invalidates stale results |
@@ -622,13 +619,21 @@ HTTP routes. A hosted read API is not part of backend storage parity.
 | Storage backend | Thread creation, metadata, lookup/listing, deletion/expiry and database resolution | Cloud services or a local registry and thread files; the same thread visibility and lifecycle contract |
 | Database connection | Request correlation and connection generation | The backend executes the wire protocol; disconnect settles requests without claiming an uncertain write was rolled back |
 | Schema and statement plans | Typed records, validated statements and schema compatibility | Upstream schema is authoritative; no duplicate Python SQL or handwritten extraction of known fields |
-| Lane ownership | Acquisition, renewal, fencing and release decisions | The backend performs SQL/deadline operations; stale owners cannot commit |
+| Lane ownership | Acquisition, renewal, fencing and release | Storage performs them and reports `LeaseLost`; stale owners cannot commit |
 | Managed run | Loaded revision, staged writes and commit/abandon outcome | One fenced commit; explicit application saves; transport acknowledgment and commit boundaries are distinct |
 | A2A task | Arrival policy, message deduplication, pending input and terminal transition (`lk_agents_core::a2a`) | Typed handler/checkpoint outcomes drive policy; completed transport does not imply a persisted Python continuation |
 
-Storage decisions and the A2A task core are sans-I/O. The AgentDB and SQLite
-backends are async I/O: the shared backend contract suite tests them, and the
-DST replaces them with an in-memory fake.
+`lk-agents-storage` is a plain async crate. It owns all database interaction:
+both backends, retries, fencing, lease renewal and resolution of lost
+acknowledgments. Every failure reaches the caller as a precise typed error:
+`Uncertain` (the outcome is unknown), `Rejected { running_task_id }`,
+`LeaseLost`, `Unavailable`, `NotFound` or `VersionConflict`. The A2A task
+decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
+error types declared in ABI; core has no dependency on storage. The runtime's
+thin A2A door executes core's storage effects by calling storage and feeds the
+typed results back. Storage is tested against real SQLite and a fake AgentDB
+server with injected faults; the DST fakes the storage port and injects every
+error kind.
 
 Tests cover concurrent arrivals, lost ownership, duplicate messages, uncertain
 writes, commit failure, worker loss and pending human input. The same storage
@@ -935,22 +940,23 @@ Enforcement must cover:
 
 Codegen `--check` enforces export placement and generated output, failing with
 the file and item. The dependency check resolves the closure of `lk-agents-abi`,
-`lk-agents-core` and `lk-agents-voice` with all of their own features, and of
-`lk-agents-storage` and `lk-agents-media` without `backend` and `workers`; a
-dependent's closure carries only the features that dependent enables. Those
+`lk-agents-core`, `lk-agents-voice` and `lk-agents-media` with all of their own
+features; a dependent's closure carries only the features that dependent enables. Those
 closures must contain no runtime, executor, async transport or host SDK: no
 tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
-edges `voice -> core`, `core -> storage`, `voice -> media`, `inference -> media`,
-`py -> abi`, async I/O crates `-> net` and `fuzz -> sans-I/O crates + abi`
-described above. These dependency bans apply to the sans-I/O crates and ABI, not
-to runtime, the async I/O crates or features, fuzz support, language bindings or
-build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
+edges `voice -> core`, `voice -> media`, `inference -> media`, `py -> abi`,
+async I/O crates `-> net` and `fuzz -> sans-I/O crates + abi` described above;
+core never depends on storage. These dependency bans apply to the sans-I/O
+crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
+support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
 
-Each sans-I/O crate's `clippy.toml` configures `disallowed-methods`, `disallowed-types`
-and `disallowed-macros`. In `lk-agents-storage` and `lk-agents-media` they cover the
-decision and data-plane code, not the feature-gated backend and worker modules. Banned constructs include task/thread spawns,
+The `clippy.toml` of `lk-agents-core`, `lk-agents-voice`, `lk-agents-abi` and
+`lk-agents-media` configures `disallowed-methods`, `disallowed-types` and
+`disallowed-macros`. Media's optional thread pool, added only for a measured
+need, is its one allowed spawn site. Storage, inference, worker and net are
+unrestricted async crates. Banned constructs include task/thread spawns,
 `select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,
 environment/process reads, unbounded tokio/std/futures/crossbeam channels,
 locks, host-shared atomics and randomly ordered hash collections in decision
@@ -1450,17 +1456,18 @@ alignment, continuous recording and cleanup.
 
 ## Managed turns
 
-The storage decisions and `lk_agents_core::a2a` decide leases, fencing, arrival
-order, inbox policies, task transitions and commit plans. Storage backends execute
-database requests and renewals; the runtime's A2A door executes transport writes. Both language hosts use this
+`lk_agents_core::a2a` decides arrival order, inbox policies, task transitions
+and the writes each step needs. `lk-agents-storage` executes database requests,
+fencing and lease renewal and reports typed errors; the runtime's A2A door
+executes core's storage effects through it and the transport writes. Both language hosts use this
 runtime-to-host handler bridge:
 
 ```text
 handle(TurnContext) -> (Sink<Verdict>, Source<TurnEvent>)
 ```
 
-These streams belong to the runtime bridge, not to a core. The storage and A2A
-decisions retain the synchronous `handle(event, now) -> effects` boundary.
+These streams belong to the runtime bridge, not to a core. The A2A decisions
+retain the synchronous `handle(event, now) -> effects` boundary.
 
 The handler emits checkpoints before model calls and answer delivery. The turn
 answers with `continue` or `yield` and consumes the handler's final output.
@@ -1601,9 +1608,9 @@ inputs to decision policy.
 
 Rust emits typed observations with operation identity, supplied timestamps and
 logical span relationships. Recording an observation is synchronous: Rust holds
-no SDK spans, exporters, export queues, upload tasks or watchdog. Generated
-adapters hand each observation to the host language, where the host
-OpenTelemetry SDK turns it into spans, metrics and log records, so applications
+no SDK spans, exporters, export queues, upload tasks or watchdog. Each
+observation reaches the host through HostInvoker like every other host call;
+there the host OpenTelemetry SDK turns it into spans, metrics and log records, so applications
 intercept framework telemetry through their own provider, processors and
 exporters alongside their own instrumentation. Runtime owns invocation-context
 propagation. Export and upload, including Cloud, follow the host SDK boundary,
@@ -1662,8 +1669,8 @@ to both bindings.
 | Layer | Verifies | Dependencies and scheduling |
 | --- | --- | --- |
 | Core unit tests | Individual transitions, validation, effects and negative cases | Synchronous calls with supplied inputs and time |
-| DST | Behavioral invariants across composed machines, failures, cancellation and event orderings | Real sans-I/O crates with fakes for providers, the worker, storage backends, media workers and MCP transports, under controlled time/scheduling |
-| Async I/O and adapter integration | The shared transport, provider clients, worker IPC and supervision, storage backends, media workers, telemetry delivery to the host SDK, serialization, bindings and RTC adapters | Real code against a controlled peer, real processes or the actual service |
+| DST | Behavioral invariants across composed machines, failures, cancellation and event orderings | Real sans-I/O crates with fakes for providers, the worker, the storage port (injecting every typed error) and MCP transports, under controlled time/scheduling |
+| Async I/O and adapter integration | The shared transport, provider clients, worker IPC and supervision, storage (real SQLite and a fake AgentDB server with injected faults), telemetry delivery to the host SDK, serialization, bindings and RTC adapters | Real code against a controlled peer, real processes or the actual service |
 | E2E | Complete user journeys through the deployed system | Real processes, bindings and transport; each test identifies which providers/services are live or scripted |
 
 A contract can be exercised at several layers. DST explores its possible
@@ -1751,9 +1758,9 @@ checked at the real boundary.
 ### Scheduling boundaries
 
 Cores receive events and time and retain no spawner or executor. The
-simulation covers `lk-agents-voice`, `lk-agents-core` (with its A2A module), the
-storage decisions and `lk-agents-media` with realistic fakes. Providers, the
-worker, storage backends, evaluation judges, media workers, the delegation client
+simulation covers `lk-agents-voice`, `lk-agents-core` (with its A2A module)
+and `lk-agents-media` with realistic fakes. Providers, the worker, storage
+(injecting every typed error), evaluation judges, the delegation client
 and MCP transports are fakes in the simulation and are
 tested on their own. Runtime adapters are outside it. They are verified by conformance tests through the real adapters
 with cancellation injected at every await point, stress tests (stalled
