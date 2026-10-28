@@ -250,9 +250,9 @@ history from it.
 
 One message is one task; the task id is the id of the stream a client
 resubscribes to. A message carrying a `taskId` continues that task while it
-is not terminal; a message without one is a new task in the same context,
-and closes a waiting task with `livekit/mergedInto`. Terminal tasks never
-change. A resend of a `messageId` returns the task it made.
+waits on a question; which task a message without one continues is in
+[a2a.md](a2a.md). Terminal tasks never change. A resend of a `messageId`
+returns the task it made.
 
 `GetTask`, `CancelTask` and `SubscribeToTask` find the thread from
 `contextId` in their params, beside the task `id`. A2A's task methods carry

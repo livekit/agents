@@ -72,6 +72,8 @@ class RunContext(Generic[Deps_T, State_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
         self._run = run
+        # the answer reference of the question this call answers, when the framework made it
+        self._answer_ref: str | None = None
 
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
         self._filler_schedulers: list[_FillerScheduler] = []

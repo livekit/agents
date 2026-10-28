@@ -156,7 +156,8 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
   as the reply. The next message in the thread answers it; see
   [human-in-the-loop.md](human-in-the-loop.md).
 - A message with the `taskId` of a terminal task fails with
-  `UnsupportedOperationError`: a follow-up is a new task.
+  `UnsupportedOperationError`, unless it is a resend: a follow-up is a new
+  task.
 
 The LiveKit extension, `https://livekit.io/a2a/ext/agents/v1`, adds
 typed chat items and these metadata keys, written `livekit/<name>` for

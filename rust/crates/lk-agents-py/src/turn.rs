@@ -205,6 +205,7 @@ fn context_to_py<'py>(py: Python<'py>, ctx: &TurnContext) -> PyResult<(Py<PyAny>
         "agent_stack": ctx.agent_stack,
         "caller_history": ctx.caller_history,
         "answer_tool": ctx.answer_tool,
+        "answer_ref": ctx.answer_ref,
     });
     let model = model(py, "storage_turn", "TurnContext", &record)?;
     let boundary = Py::new(py, PyBoundary { inner: ctx.boundary.clone() })?;

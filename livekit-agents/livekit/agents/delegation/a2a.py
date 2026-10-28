@@ -185,7 +185,9 @@ class A2ADelegate(Delegate, Toolset):
         else:
             assert ctx._run is not None
             history = ctx._run.chat_ctx
-        if session is not None and self._announce:
+        # the person's answer to the expert's question: it continues the expert's task
+        asked = ctx._answer_ref
+        if session is not None and self._announce and asked is None:
             await ctx.update(DISPATCHED)
         try:
             result = await self.run(
@@ -196,6 +198,7 @@ class A2ADelegate(Delegate, Toolset):
                 message_history=history,
                 usage=ctx.usage,
                 caller_lane=session.thread.agent_name if session and session.thread else None,
+                task_id=asked,
             )
         except DelegationFailed as e:
             raise ToolError(str(e) or "the delegation failed") from e
@@ -203,9 +206,11 @@ class A2ADelegate(Delegate, Toolset):
         record_delegation(ctx.function_call, result)
         if result.input_required:
             # the expert asked the person something: asked as it wrote it when it said so, and
-            # what they say next is this tool's next request, as they said it
+            # what they say next comes back here, as they said it, to continue its task
             verbatim = result.verbatim is not None
-            return InputRequired(result.input_required, tool=self._tool, verbatim=verbatim)
+            return InputRequired(
+                result.input_required, verbatim=verbatim, _answer_ref=result.task_id or None
+            )
         if result.verbatim is not None:
             # the person gets the answer as written, and the model does not word it
             return ToolResult(result.verbatim, verbatim=True, reply_required=False)
@@ -232,16 +237,20 @@ class A2ADelegate(Delegate, Toolset):
         message_history: ChatContext | Sequence[ChatItem] | None = None,
         usage: RunUsage | None = None,
         caller_lane: str | None = None,
+        task_id: str | None = None,
     ) -> DelegationResult:
-        """One request; ``caller_lane`` is the caller's lane of ``context_id``, which an expert
-        of this project may read. Inside a turn both default to the turn's. ``say`` takes the
-        expert's exact text, ``progress`` when it is not given; ``DelegationFailed`` when the
+        """One request, or with ``task_id`` the answer to the question that expert task asked,
+        which continues it; ``caller_lane`` is the caller's lane of ``context_id``, which an
+        expert of this project may read. Inside a turn both default to the turn's. ``say`` takes
+        the expert's exact text, ``progress`` when it is not given; ``DelegationFailed`` when the
         expert failed the task or never took it."""
         if context_id is None and (hooks := current_run_hooks()) is not None:
             context_id, caller_lane = hooks.thread_id, hooks.lane
         try:
             client = await self._connect()
-            reply = await self._send(client, prompt, context_id, message_history, caller_lane)
+            reply = await self._send(
+                client, prompt, context_id, message_history, caller_lane, task_id
+            )
         except A2AError as e:
             # unreachable, or refused: the caller's model hears why
             raise DelegationFailed(f"the expert did not take the request: {e}") from e
@@ -288,10 +297,11 @@ class A2ADelegate(Delegate, Toolset):
         context_id: str | None,
         message_history: ChatContext | Sequence[ChatItem] | None,
         caller_lane: str | None,
+        task_id: str | None,
     ) -> Reply:
         """The request as the card allows: the caller's session and lane, the delegation tag
         and, with no session to name, the conversation, all only when the expert offers the
-        extension."""
+        extension. An answer goes to the task that asked, alone."""
         from ..a2a.extension import CALLER_LANE, KIND, KIND_DELEGATION
 
         offers = client.offers_extension
@@ -320,8 +330,13 @@ class A2ADelegate(Delegate, Toolset):
         return await client.send(
             prompt,
             thread_id=shared or own,
+            task_id=task_id,
             metadata=metadata if offers else None,
-            chat_ctx=_conversation(message_history) if offers and shared is None else None,
+            chat_ctx=(
+                _conversation(message_history)
+                if offers and shared is None and task_id is None
+                else None
+            ),
         )
 
     def _cancel_in_background(self, task_id: str, context_id: str) -> None:

@@ -52,9 +52,9 @@ and code between two waits can be a [graph](graphs.md).
 
 ## Waiting on people and systems
 
-- `InputRequired(question, tool=)` is built: the question word for word,
-  the answer to the named tool. Planned around it: `timeout=`, and how the
-  question reaches the person outside a live call
+- `InputRequired(question)` is built: the answer is a turn of the task's
+  model. Planned around it: a tool that takes the answer, a timeout, and how
+  the question reaches the person outside a live call
   ([planned-channels.md](planned-channels.md)).
 - `Working(tool=, timeout=, message=)` waits on a system and delivers
   nothing; `message=` is what a client sees as the status.

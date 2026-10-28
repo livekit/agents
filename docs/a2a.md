@@ -92,13 +92,11 @@ The question is the turn's reply, as the status message; no model call
 writes it. The pending call stays in the history with a placeholder output,
 `waiting for the person's answer to: <question>`.
 
-The next message in the thread answers it: its text replaces the
-placeholder, and the model continues from the history, on whatever worker
-takes the message.
-
-- With the waiting task's `taskId`, the answer comes back on that task.
-- Without one, the answer is a new task, and the waiting task ends
-  `completed` with `livekit/mergedInto` naming it.
+The answer continues the waiting task, on whatever worker takes it: the
+same task and stream, with the message added to its history. A message with
+the task's `taskId` continues it, and so does the person's message with none
+(the oldest open question of the lane); a delegation with none, or with the
+`taskId` of a running task, is a new task.
 
 ```json
 {

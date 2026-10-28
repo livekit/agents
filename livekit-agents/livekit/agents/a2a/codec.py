@@ -574,6 +574,17 @@ def _status_update(
             verbatim=_all_verbatim(event.status.message.parts),
         )
 
+    if state == "input-required" and text:
+        # a question is the status message, whatever text streamed before it
+        return TaskUpdate(
+            state=state,
+            text=text,
+            task_id=ids.task_id,
+            context_id=ids.context_id,
+            metadata=metadata,
+            verbatim=_all_verbatim(event.status.message.parts),
+        )
+
     answer_text = answer.text()
     return TaskUpdate(
         state=state,

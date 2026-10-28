@@ -22,7 +22,14 @@ from ..llm import ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCall
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunResult
-from .protocol import StorageError, dump_state, history_of, item_to_payload, load_state
+from .protocol import (
+    TERMINAL_TASK_STATES,
+    StorageError,
+    dump_state,
+    history_of,
+    item_to_payload,
+    load_state,
+)
 from .resolve import AgentRegistry, Thread
 
 S = TypeVar("S", default=None)  # a door declared with no state: ``A2ASessionContext``
@@ -172,8 +179,15 @@ class TurnHost(Generic[S]):
             agent_stack=ctx.agent_stack,
             rebuild=self._agents.rebuild,
             answer_tool=ctx.answer_tool,
+            answer_ref=ctx.answer_ref,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
+            task_id=ctx.task_id,
+            open_tasks=frozenset(
+                r.id
+                for r in ctx.tasks
+                if r.id != ctx.task_id and r.status not in TERMINAL_TASK_STATES
+            ),
         )
 
         token = set_run_hooks(hooks)
@@ -235,7 +249,10 @@ class TurnHost(Generic[S]):
         pending = None
         if asked is not None and (call := asked.pending_call) is not None:
             pending = PendingCall(
-                name=call.name, call_id=call.call_id, answer_tool=asked._answer_tool
+                name=call.name,
+                call_id=call.call_id,
+                answer_tool=asked._answer_tool,
+                answer_ref=asked._answer_ref,
             )
         return HandlerOutput(
             output=output,
