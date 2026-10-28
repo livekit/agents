@@ -401,6 +401,50 @@ async def test_gateway_upstream_timeout_is_retryable_timeout() -> None:
     await llm_model.aclose()
 
 
+async def test_gateway_upstream_timeout_after_text_is_not_retried() -> None:
+    llm_model = _make_llm()
+    created, delta, _completed = _TEXT_FRAMES
+    stalled = {
+        "type": "gateway.error",
+        "code": "upstream_timeout",
+        "message": "upstream sent no event for 1m0s",
+    }
+    dials: list[float] = []
+
+    async def _connect(timeout: float) -> _ScriptedWs:
+        dials.append(timeout)
+        return _ScriptedWs([_CONNECTED, created, delta, stalled])
+
+    _transport(llm_model)._pool._connect_cb = _connect  # type: ignore[assignment]
+
+    stream = llm_model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=1))
+    text = ""
+    with pytest.raises(APITimeoutError) as exc_info:
+        async for chunk in stream:
+            text += chunk.delta.content or "" if chunk.delta else ""
+    await stream.aclose()
+
+    assert text == "hi"
+    assert exc_info.value.retryable is False
+    assert len(dials) == 1
+    await llm_model.aclose()
+
+
+async def test_ws_consumer_time_does_not_count_toward_idle_timeout() -> None:
+    llm_model = _make_llm()
+    _use_connection(llm_model, _ScriptedWs([_CONNECTED, *_TEXT_FRAMES]))
+    seen: list[str] = []
+
+    async for event in _transport(llm_model).generate_response(
+        {"type": "response.create"}, receive_timeout=0.1
+    ):
+        seen.append(event["type"])
+        await asyncio.sleep(0.15)
+
+    assert seen[-1] == "response.completed"
+    await llm_model.aclose()
+
+
 async def test_handshake_401_is_api_status_error_not_retryable() -> None:
     llm_model = _make_llm()
     _transport(llm_model)._session = _RefusingSession(401)  # type: ignore[assignment]
