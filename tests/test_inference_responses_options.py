@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 from yarl import URL
 
-from livekit.agents import llm as agents_llm
+from livekit.agents import llm as agents_llm, utils
 from livekit.agents.inference import responses as inference_responses
 from livekit.agents.inference.responses import LLM as ResponsesLLM
 from livekit.agents.types import APIConnectOptions
@@ -309,6 +309,72 @@ async def test_update_extra_kwargs_without_header_change_keeps_ws_pool(
     model.update_options(extra_kwargs={"max_output_tokens": 64})
 
     assert calls == []
+
+
+async def test_update_with_reassigned_caller_headers_invalidates_ws_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kw: dict[str, Any] = {"extra_headers": {"X-A": "1"}}
+    model = ResponsesLLM(
+        "openai/gpt-4.1",
+        base_url="https://gw.test/v1",
+        api_key="k",
+        api_secret="s",
+        extra_kwargs=kw,
+        use_websocket=True,
+    )
+    assert model._ws is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(model._ws._pool, "invalidate", lambda: calls.append(True))
+
+    kw["extra_headers"] = {"X-A": "2"}
+    model.update_options(extra_kwargs=kw)
+
+    assert calls == [True]
+
+
+async def test_update_with_mutated_caller_headers_invalidates_ws_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kw: dict[str, Any] = {"extra_headers": {"X-A": "1"}}
+    model = _make_ws_llm()
+    model.update_options(extra_kwargs=kw)
+    assert model._ws is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(model._ws._pool, "invalidate", lambda: calls.append(True))
+
+    kw["extra_headers"]["X-A"] = "2"
+    model.update_options(extra_kwargs=kw)
+
+    assert calls == [True]
+
+
+async def test_model_swap_prewarms_new_pool_when_prewarmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _make_ws_llm()
+    prewarmed: list[object] = []
+    monkeypatch.setattr(utils.ConnectionPool, "prewarm", lambda pool: prewarmed.append(pool))
+    model.prewarm()
+    await asyncio.sleep(0)
+
+    model.update_options(model="openai/gpt-4.1-mini")
+
+    assert model._ws is not None and prewarmed[-1] is model._ws._pool
+    await model.aclose()
+
+
+async def test_model_swap_skips_prewarm_when_never_prewarmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _make_ws_llm()
+    prewarmed: list[object] = []
+    monkeypatch.setattr(utils.ConnectionPool, "prewarm", lambda pool: prewarmed.append(pool))
+
+    model.update_options(model="openai/gpt-4.1-mini")
+
+    assert prewarmed == []
+    await model.aclose()
 
 
 async def test_update_model_rest_uses_new_model(monkeypatch: pytest.MonkeyPatch) -> None:
