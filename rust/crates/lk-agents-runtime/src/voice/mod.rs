@@ -2,6 +2,7 @@
 //! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
 //! performs every effect they return. A simulation owns the cores with its own executor instead.
 
+pub mod amd;
 pub mod audio;
 pub mod console;
 mod effects;

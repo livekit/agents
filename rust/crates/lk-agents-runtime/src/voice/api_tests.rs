@@ -112,7 +112,7 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let drain_ended = Arc::new(AtomicBool::new(false));
     let (saw, ended) = (Arc::clone(&saw_close), Arc::clone(&drain_ended));
     let opening = api
-        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     match ev {
@@ -190,6 +190,7 @@ async fn a_session_nobody_observes_keeps_no_journal() {
         .open(
             false,
             Box::new(Observing(Executor::default(), observed)),
+            None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
@@ -222,7 +223,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     let (room, fixed) = fake_room("agent-state");
     let api = room_only(fixed, None);
     let opening = api
-        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -261,7 +262,7 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
     let api = room_only(fake_room("session-api-test").1, Some(10.0));
     let (exits_tx, exits) = tokio::sync::mpsc::unbounded_channel();
     let opening = api
-        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {
@@ -527,7 +528,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
 /// A session opened over a host that answers every hook at once.
 async fn running(api: SessionApi) -> SessionApi {
     let opening = api
-        .open(false, Box::<Executor>::default(), move |mut runner: SessionRunner| {
+        .open(false, Box::<Executor>::default(), None, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(ev) = runner.next_host_event().await {
                     if let HostEvent::Hook(call) = ev {

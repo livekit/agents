@@ -31,6 +31,7 @@ use crate::{
     record::{Detail, Kind, Observed, Sink, Stamps},
 };
 
+pub mod amd;
 mod avatar;
 mod console;
 pub use console::{FakeCli, FakeConsolePort};

@@ -30,10 +30,7 @@ use fastrand::Rng;
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_voice::{
     agent_session::IoKind,
-    amd::{
-        classifier::MAX_EXTENSION_SECS,
-        detector::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL},
-    },
+    amd::classifier::{MAX_EXTENSION_SECS, POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL},
     events::SessionEvent,
     keyterm_detection::RECORD_KEYTERMS_TOOL,
     trace::{RealtimeStep, Step},

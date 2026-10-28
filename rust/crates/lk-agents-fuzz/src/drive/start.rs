@@ -320,7 +320,7 @@ impl Run {
             });
             api.probe(Probe { step, host_event });
         }
-        api.start(false, Box::new(super::executor::Handover::new(cores_tx)))
+        api.start(false, Box::new(super::executor::Handover::new(cores_tx)), fakes::amd::spawn)
             .expect("a new session starts")
             .await
             .expect("the session started");

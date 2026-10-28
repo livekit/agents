@@ -856,3 +856,98 @@ pub fn amd_constants() -> lk_agents_abi::voice::amd::AmdConstants {
         max_extension_secs: MAX_EXTENSION_SECS,
     }
 }
+
+/// The model tools used by answering-machine classification.
+pub const SAVE_PREDICTION_TOOL: &str = "save_prediction";
+pub const POSTPONE_TERMINATION_TOOL: &str = "postpone_termination";
+
+fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
+    lk_agents_abi::ToolSpec {
+        provider_tool: None,
+        name: SAVE_PREDICTION_TOOL.to_owned(),
+        description: "Save the prediction to the verdict.".to_owned(),
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "enum": AmdCategory::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+                },
+            },
+            "required": ["label"],
+        }),
+        flags: lk_agents_abi::ToolFlags::default(),
+    }
+}
+
+fn postpone_termination_spec() -> lk_agents_abi::ToolSpec {
+    lk_agents_abi::ToolSpec {
+        provider_tool: None,
+        name: POSTPONE_TERMINATION_TOOL.to_owned(),
+        description: "Postpone the termination of the classification task.\n\
+            Use when the transcript is ambiguous and more audio is expected.\n\n\
+            Args:\n    seconds: Additional seconds to wait (max 10)."
+            .to_owned(),
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "seconds": { "type": "number" } },
+            "required": ["seconds"],
+        }),
+        flags: lk_agents_abi::ToolFlags::default(),
+    }
+}
+
+/// The classifier's prompt, transcript and currently allowed tools form one request.
+pub fn classification_request(
+    prompt: &str,
+    tools_host: Option<lk_agents_abi::HostRef>,
+    wall: std::time::SystemTime,
+    request: &ClassifyRequest,
+) -> lk_agents_abi::ChatRequest {
+    use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, Role};
+    let chat_ctx = ChatContext::new(vec![
+        ChatItem::Message(ChatMessage::text("amd_system", Role::System, prompt, wall)),
+        ChatItem::Message(ChatMessage::text("amd_user", Role::User, &request.transcript, wall)),
+    ]);
+    let mut tools = vec![save_prediction_spec()];
+    if request.allow_postpone {
+        tools.push(postpone_termination_spec());
+    }
+    lk_agents_abi::ChatRequest {
+        chat_ctx,
+        tools,
+        tools_host,
+        tool_choice: Some(lk_agents_abi::ToolChoice::Required),
+        ..Default::default()
+    }
+}
+
+/// Decode the classifier's tool calls once, preserving order and ignoring malformed arguments.
+pub fn classification_verdicts(
+    calls: Vec<lk_agents_abi::FunctionToolCall>,
+    transcript: &str,
+) -> Vec<Verdict> {
+    #[derive(serde::Deserialize)]
+    struct Prediction {
+        label: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Postpone {
+        seconds: f64,
+    }
+    calls
+        .into_iter()
+        .filter_map(|call| match call.name.as_str() {
+            SAVE_PREDICTION_TOOL => {
+                let args: Prediction = serde_json::from_str(&call.arguments).ok()?;
+                let category = AmdCategory::from_wire(&args.label)?;
+                Some(Verdict::Llm { category, transcript: transcript.to_owned() })
+            }
+            POSTPONE_TERMINATION_TOOL => {
+                let args: Postpone = serde_json::from_str(&call.arguments).ok()?;
+                Some(Verdict::Postpone { seconds: args.seconds })
+            }
+            _ => None,
+        })
+        .collect()
+}

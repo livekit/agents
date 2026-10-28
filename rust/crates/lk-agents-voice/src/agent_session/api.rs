@@ -120,6 +120,7 @@ impl SessionApi {
         &self,
         capture_run: bool,
         mut executor: Box<dyn crate::agent_session::SessionExecutor>,
+        amd_factory: Option<crate::amd::AmdFactory>,
         drain: impl FnOnce(SessionRunner) -> lk_agents_abi::BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<
         impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
@@ -202,6 +203,7 @@ impl SessionApi {
                 chat_ctx,
                 peer,
                 amd: None,
+                amd_factory,
                 tasks,
                 drained: Some(drained),
                 speech_ids,
@@ -334,22 +336,13 @@ impl SessionApi {
     }
 
     /// `AMD._run`. One per session; the verdict comes back as `amd_result`.
-    pub fn attach_amd(&self, setup: crate::amd::detector::AmdSetup) -> Result<(), SessionRefused> {
+    pub fn attach_amd(&self, setup: crate::amd::AmdSetup) -> Result<(), SessionRefused> {
         self.running(|r| {
             if r.amd.is_some() {
                 r.peer.journal(Step::Core(CoreStep::PortFailure("amd: already attached")));
             } else {
-                r.amd = Some(crate::amd::detector::AmdSystem::spawn(r.peer.clone(), setup));
-            }
-            Ok(())
-        })
-    }
-
-    /// None attached or already closed: nothing raised.
-    fn amd_input(&self, input: crate::amd::classifier::In) -> Result<(), SessionRefused> {
-        self.running(|r| {
-            if let Some(handle) = &r.amd {
-                handle.input(input);
+                let spawn = r.amd_factory.ok_or(SessionRefused::NotStarted)?;
+                r.amd = Some(spawn(r.peer.clone(), setup));
             }
             Ok(())
         })
@@ -689,7 +682,8 @@ struct Running {
     chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
     peer: PeerHandle,
     /// One per session.
-    amd: Option<crate::amd::detector::AmdHandle>,
+    amd: Option<Arc<dyn lk_agents_abi::voice::amd::AmdPort>>,
+    amd_factory: Option<crate::amd::AmdFactory>,
     tasks: Vec<lk_agents_abi::AbortHandle>,
     /// Resolves when the host's drain has handed over the last event, so `close` handlers are
     /// queued before the close completes.

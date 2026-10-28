@@ -1,146 +1,71 @@
-use crate::agent_session::{
-    Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
-};
-use crate::amd::classifier::{
-    Amd, AmdConfig, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out, Start,
-    TranscriptSource, Verdict,
-};
-use crate::events::SessionEvent;
-use crate::trace::{
-    ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
-};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{
-    AMD_PROMPT, AmdCategory, AmdReason, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR,
-    TRACK_PUBLICATION_TIMEOUT,
+    AmdCategory, AmdReason, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
 };
 use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{
-    AudioFrame, ChatContext, ChatItem, ChatMessage, FunctionToolCall, HostRef, Llm, Role,
-    SpawnerExt, SpeechEvent, SpeechEventType, StreamSink, Stt, SttSink, SttSource, TimerSet, Ts,
+    AudioFrame, FunctionToolCall, HostRef, Llm, SpawnerExt, SpeechEvent, SpeechEventType,
+    StreamSink, Stt, SttSink, SttSource, TimerSet, Ts,
+};
+use lk_agents_voice::agent_session::{
+    Command, IvrCommand, Origin, PeerHandle, SpeechCommand, SystemTap, TurnCommand,
+};
+pub use lk_agents_voice::amd::AmdSetup;
+use lk_agents_voice::amd::classifier::{
+    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, Human, In, Out, Start, TranscriptSource,
+    Verdict,
+};
+use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{
+    ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
 };
 use std::fmt;
 use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// `save_prediction(label: AMDCategory)` (`classifier.save_prediction`).
-pub const SAVE_PREDICTION_TOOL: &str = "save_prediction";
-
-/// `classifier.postpone_termination`, offered while extensions remain.
-pub const POSTPONE_TERMINATION_TOOL: &str = "postpone_termination";
+pub use lk_agents_voice::amd::classifier::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL};
+use lk_agents_voice::amd::classifier::{classification_request, classification_verdicts};
 
 const LOG: &str = "livekit.agents";
-
-/// The leg table's peer row and the journal's name for it (`StreamOpened{"amd"}`, `ChannelEnded{"amd"}`).
 const TAP: &str = "amd";
-
-fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
-    lk_agents_abi::ToolSpec {
-        provider_tool: None,
-        name: SAVE_PREDICTION_TOOL.to_owned(),
-        description: "Save the prediction to the verdict.".to_owned(),
-        json_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "label": {
-                    "type": "string",
-                    "enum": AmdCategory::ALL.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
-                },
-            },
-            "required": ["label"],
-        }),
-        flags: lk_agents_abi::ToolFlags::default(),
-    }
-}
-
-fn postpone_termination_spec() -> lk_agents_abi::ToolSpec {
-    lk_agents_abi::ToolSpec {
-        provider_tool: None,
-        name: POSTPONE_TERMINATION_TOOL.to_owned(),
-        description: "Postpone the termination of the classification task.\n\
-            Use when the transcript is ambiguous and more audio is expected.\n\n\
-            Args:\n    seconds: Additional seconds to wait (max 10)."
-            .to_owned(),
-        json_schema: serde_json::json!({
-            "type": "object",
-            "properties": { "seconds": { "type": "number" } },
-            "required": ["seconds"],
-        }),
-        flags: lk_agents_abi::ToolFlags::default(),
-    }
-}
-
-pub struct AmdSetup {
-    pub config: AmdConfig,
-    /// `detection_options["prompt"]`, else the reference's [`AMD_PROMPT`].
-    pub prompt: String,
-    /// The classifier LLM: `AMD(llm=..)`, else the session's own (`detector.AMD._resolve_classifier`).
-    pub llm: Arc<dyn Llm>,
-    pub tools_host: Option<HostRef>,
-    /// `AMD(stt=..)`: AMD's own recogniser; `None` reads the session's finals.
-    pub stt: Option<Arc<dyn Stt>>,
-    /// The call's room, where the callee's answer is awaited; `None` for a session with no room
-    /// io (a console's), which starts listening at once.
-    pub room: Option<Arc<dyn RtcRoom>>,
-    /// `AMD(participant_identity=..)`: the one participant whose audio is awaited.
-    pub participant: Option<String>,
-}
-
-impl AmdSetup {
-    pub fn new(config: AmdConfig, llm: Arc<dyn Llm>) -> Self {
-        AmdSetup {
-            config,
-            prompt: AMD_PROMPT.to_owned(),
-            llm,
-            tools_host: None,
-            stt: None,
-            room: None,
-            participant: None,
-        }
-    }
-}
-
-impl fmt::Debug for AmdSetup {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AmdSetup")
-            .field("config", &self.config)
-            .field("llm", &self.llm.label())
-            .field("stt", &self.stt.as_ref().map(|s| s.label()))
-            .finish()
-    }
-}
 
 /// The host's end of the system: `Start`, `Verdict::Settle`, `Close`.
 #[derive(Clone)]
 pub struct AmdHandle {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     listening: Arc<AtomicBool>,
 }
 
-/// A gone system drops what it is sent.
 impl AmdHandle {
     pub fn input(&self, input: In) {
         let _ = self.tx.send(Msg::Input(input));
     }
 
-    /// `AMD.aclose()`: timers swept, request cancelled, hold released, tap cleared. Idempotent.
-    pub fn close(&self) {
-        let _ = self.tx.send(Msg::Input(In::Close));
-    }
-
-    /// `AMD.started`: the machine listens (the callee answered, no verdict out yet).
-    pub fn listening(&self) -> bool {
-        self.listening.load(Ordering::Relaxed)
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn detached() -> Self {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         AmdHandle { tx, listening: Arc::default() }
     }
+}
+
+impl lk_agents_abi::voice::amd::AmdPort for AmdHandle {
+    fn execute(&self) {
+        self.input(In::Execute);
+    }
+
+    fn close(&self) {
+        self.input(In::Close);
+    }
+
+    fn listening(&self) -> bool {
+        self.listening.load(Ordering::Relaxed)
+    }
+}
+
+/// Start one detector beside its session executor.
+pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> Arc<dyn lk_agents_abi::voice::amd::AmdPort> {
+    Arc::new(AmdSystem::spawn(peer, setup))
 }
 
 impl fmt::Debug for AmdHandle {
@@ -182,7 +107,6 @@ enum SttLeg {
     /// On the forwarder's `Amd` channel as `tap`, behind `gate`: frames flow while the machine
     /// listens.
     Installed {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         gate: Arc<AtomicBool>,
         tap: lk_agents_abi::resources::ResourceId,
     },
@@ -194,7 +118,7 @@ enum SttLeg {
 /// transcribed. `end_input` passes through.
 struct GatedSink {
     inner: Arc<dyn StreamSink<AudioFrame>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     open: Arc<AtomicBool>,
 }
 
@@ -214,7 +138,7 @@ impl StreamSink<AudioFrame> for GatedSink {
 
 pub struct AmdSystem {
     peer: PeerHandle,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     machine: Option<Amd>,
     timers: TimerSet<AmdTimer>,
@@ -226,14 +150,12 @@ pub struct AmdSystem {
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
     closed: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     /// The machine's [`Amd::listening`], for the host's `AMD.started`.
     listening: Arc<AtomicBool>,
 }
 
 impl AmdSystem {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `AMD._run`: holding authorization from now, subscribed to the feed, the tap opening and the
     /// callee awaited off the loop. Past the close request nothing is attached and the handle
     /// drops what it is sent.
@@ -265,7 +187,6 @@ impl AmdSystem {
         AmdHandle { tx, listening }
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     fn new(peer: PeerHandle, setup: AmdSetup, tx: tokio::sync::mpsc::UnboundedSender<Msg>) -> Self {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
@@ -294,15 +215,13 @@ impl AmdSystem {
         system
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The loop: a due deadline fires before same-instant items; ends at close or when the
     /// session's queue is gone.
     async fn run(
         mut self,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
         mut rx: tokio::sync::mpsc::UnboundedReceiver<SystemTap>,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
         mut msgs: tokio::sync::mpsc::UnboundedReceiver<Msg>,
     ) {
         let time = self.peer.time.clone();
@@ -487,33 +406,12 @@ impl AmdSystem {
         self.requests += 1;
         let n = self.requests;
         self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorName::Amd, req: n }));
-        let wall = self.peer.time.wall();
-        let chat_ctx = ChatContext::new(vec![
-            ChatItem::Message(ChatMessage::text(
-                "amd_system",
-                Role::System,
-                self.prompt.clone(),
-                wall,
-            )),
-            ChatItem::Message(ChatMessage::text(
-                "amd_user",
-                Role::User,
-                req.transcript.clone(),
-                wall,
-            )),
-        ]);
-        let mut tools = vec![save_prediction_spec()];
-        if req.allow_postpone {
-            tools.push(postpone_termination_spec());
-        }
-        let request = lk_agents_abi::ChatRequest {
-            chat_ctx,
-            tools,
-            tools_host: self.tools_host.clone(),
-            // Without `"required"` the model answers in prose and AMD always times out.
-            tool_choice: Some(lk_agents_abi::ToolChoice::Required),
-            ..Default::default()
-        };
+        let request = classification_request(
+            &self.prompt,
+            self.tools_host.clone(),
+            self.peer.time.wall(),
+            &req,
+        );
         let (cancel, cancelled) = tokio::sync::watch::channel(false);
         self.inflight = Some((n, cancel));
         let llm = Arc::clone(&self.llm);
@@ -558,33 +456,8 @@ impl AmdSystem {
             return;
         }
         self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorName::Amd, req }));
-        for call in calls {
-            let args: Option<serde_json::Value> = serde_json::from_str(&call.arguments).ok();
-            match call.name.as_str() {
-                SAVE_PREDICTION_TOOL => {
-                    let Some(category) = args
-                        .as_ref()
-                        .and_then(|a| a.get("label"))
-                        .and_then(|l| l.as_str())
-                        .and_then(AmdCategory::from_wire)
-                    else {
-                        continue;
-                    };
-                    self.step(
-                        now,
-                        In::Verdict(Verdict::Llm { category, transcript: transcript.clone() }),
-                    );
-                }
-                POSTPONE_TERMINATION_TOOL => {
-                    let Some(seconds) =
-                        args.as_ref().and_then(|a| a.get("seconds")).and_then(|s| s.as_f64())
-                    else {
-                        continue;
-                    };
-                    self.step(now, In::Verdict(Verdict::Postpone { seconds }));
-                }
-                _ => {}
-            }
+        for verdict in classification_verdicts(calls, &transcript) {
+            self.step(now, In::Verdict(verdict));
         }
     }
 
@@ -612,7 +485,6 @@ impl AmdSystem {
         });
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The tap's stream landed: into the gated row, drained onto this channel. Unwanted: closed
     /// unused; refused: the timers decide.
     fn on_tap_opened(&mut self, outcome: Result<(SttSink, SttSource), ProviderError>) {
@@ -691,7 +563,7 @@ impl AmdSystem {
 async fn await_callee(
     room: Option<Arc<dyn RtcRoom>>,
     participant: Option<String>,
-    time: crate::agent_session::Timebase,
+    time: lk_agents_voice::agent_session::Timebase,
 ) -> Callee {
     let Some(room) = room else {
         log::warn!(target: LOG,
@@ -726,14 +598,12 @@ async fn await_callee(
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
     peer: PeerHandle,
     mut source: SttSource,
     tap: lk_agents_abi::resources::ResourceId,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 ) {
     let mut closing = peer.closing.clone();
@@ -764,13 +634,11 @@ fn spawn_tap_drain(
     });
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The classification task. A cancelled run reports nothing. A native source may be abandoned
 /// mid-poll; a host stream may not, so the cancel waits for the chunk.
 async fn classify(
-    time: crate::agent_session::Timebase,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    time: lk_agents_voice::agent_session::Timebase,
+
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     llm: Arc<dyn Llm>,
     request: lk_agents_abi::ChatRequest,

@@ -254,3 +254,10 @@ mod category_tests {
         assert_eq!(AmdReason::from_wire("because"), None, "a settle needs a reason the wire knows");
     }
 }
+
+/// Runtime-owned answering-machine detector attached to a live session.
+pub trait AmdPort: Send + Sync {
+    fn execute(&self);
+    fn close(&self);
+    fn listening(&self) -> bool;
+}

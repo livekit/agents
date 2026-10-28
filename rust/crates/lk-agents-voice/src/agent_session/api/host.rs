@@ -383,6 +383,7 @@ impl SessionApi {
         &self,
         capture_run: bool,
         executor: Box<dyn crate::agent_session::SessionExecutor>,
+        amd_factory: crate::amd::AmdFactory,
     ) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         let events = self.host.events.clone();
@@ -395,7 +396,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         // The drain: one event per call, in driver order; a hook call handed to the host loop in
         // that order, then awaited on its own task.
-        let opening = self.open(capture_run, executor, move |mut runner: SessionRunner| {
+        let opening = self.open(capture_run, executor, Some(amd_factory), move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {
@@ -877,7 +878,7 @@ impl SessionApi {
     ) -> Result<(), CommandRefused> {
         let config = crate::amd::classifier::AmdConfig::resolve(&cfg)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        let setup = crate::amd::detector::AmdSetup {
+        let setup = crate::amd::AmdSetup {
             config,
             prompt: cfg.prompt.unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
             llm: llm_leg(llm, &self.conn.llm),
@@ -1308,7 +1309,12 @@ impl SessionApi {
     /// `machine-ivr` verdict holds the session until then.
     #[host(method)]
     pub fn amd_execute(&self) -> Result<(), SessionRefused> {
-        self.amd_input(crate::amd::classifier::In::Execute)
+        self.running(|r| {
+            if let Some(handle) = &r.amd {
+                handle.execute();
+            }
+            Ok(())
+        })
     }
 
     /// `AMD.aclose()`: the machine closed. Idempotent: a system already gone is a closed AMD.

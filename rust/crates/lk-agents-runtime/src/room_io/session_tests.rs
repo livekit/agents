@@ -79,6 +79,7 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     api.open(
         false,
         Box::new(crate::voice::Executor::default()),
+        None,
         move |mut runner: SessionRunner| {
             Box::pin(async move {
                 while let Some(event) = runner.next_host_event().await {
