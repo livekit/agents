@@ -42,7 +42,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 bytes = "1"
 url = "2"
 base64.workspace = true
-rand = "0.9"
 # Local storage: thread files, the registry and the response streams.
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 

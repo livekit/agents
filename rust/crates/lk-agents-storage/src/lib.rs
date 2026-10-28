@@ -78,19 +78,7 @@ pub trait Storage: Send + Sync {
     async fn close(&self);
 }
 
-/// `prefix` and twelve random hex digits, as the Python `utils.shortuuid`.
-pub fn shortuuid(prefix: &str) -> String {
-    use rand::RngCore;
-    use std::fmt::Write as _;
-    let mut bytes = [0u8; 6];
-    rand::rng().fill_bytes(&mut bytes);
-    let mut out = String::with_capacity(prefix.len() + 12);
-    out.push_str(prefix);
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
-}
+pub use lk_agents_net::strings::shortuuid;
 
 /// Wall time, Unix seconds.
 pub fn now_secs() -> f64 {
