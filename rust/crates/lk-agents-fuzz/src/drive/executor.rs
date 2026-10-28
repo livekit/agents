@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::fakes::audio::VideoForwarderParts;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, VideoInput};
@@ -28,7 +29,7 @@ use lk_agents_voice::agent_session::{
     PeerHandle, QueueOwner, ReplyTo, RequestId, SessionCores, SessionExecutor, SessionShared,
     SystemTap, Tx,
 };
-use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd, VideoForwarderParts};
+use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd};
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
@@ -211,13 +212,15 @@ impl Executor {
             eot,
             interruption,
             room_events: (room, room_io),
-            video: (video_parts, video_in),
+            video: video_in,
             shared,
             peer,
             storage,
         } = cores;
         // The thread's storage is the storage survey's subject: a voice run has none.
         assert!(storage.is_none(), "the voice simulation runs without thread storage");
+        let video_parts =
+            VideoForwarderParts { closing: shared.closing.subscribe(), queue: reports.clone() };
         let (frames_tx, frames) = mpsc::channel(AUDIO_QUEUE_FRAMES);
         let mut executor = Executor {
             driver,
@@ -830,20 +833,21 @@ impl Executor {
     /// Drains an activated stream into the queue.
     fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) = (shared.time.clone(), shared.closing.subscribe());
+        let (time, closing) =
+            (shared.time.clone(), crate::fakes::audio::closing(shared.closing.subscribe()));
         match stream {
             PendingLeg::Stt(mut source) => {
-                source.report_retries(lk_agents_voice::audio::report_to(self.reports.clone()));
-                lk_agents_voice::audio::spawn_drain(
+                source.report_retries(crate::fakes::audio::report_to(self.reports.clone()));
+                crate::fakes::audio::spawn_drain(
                     &shared.spawner,
                     time,
                     closing,
-                    lk_agents_voice::audio::tagged(sink, source),
+                    crate::fakes::audio::tagged(sink, source),
                     self.reports.clone(),
                     (channel, sink),
                 );
             }
-            PendingLeg::Vad(source) => lk_agents_voice::audio::spawn_drain(
+            PendingLeg::Vad(source) => crate::fakes::audio::spawn_drain(
                 &shared.spawner,
                 time,
                 closing,

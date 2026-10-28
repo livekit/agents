@@ -2,6 +2,7 @@
 //! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
 //! performs every effect they return. A simulation owns the cores with its own executor instead.
 
+pub mod audio;
 pub mod console;
 mod effects;
 mod legs;
@@ -58,7 +59,7 @@ pub struct Runtime {
         tokio::sync::mpsc::Sender<lk_agents_abi::llm::realtime::Event>,
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
-    video_parts: lk_agents_voice::audio::VideoForwarderParts,
+    video_parts: audio::VideoForwarderParts,
     video_forwarder: Option<AbortHandle>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
@@ -83,11 +84,15 @@ impl Runtime {
             eot,
             interruption,
             room_events: (room, room_io),
-            video: (video_parts, video_in),
+            video: video_in,
             shared,
             peer,
             storage,
         } = cores;
+        let video_parts = audio::VideoForwarderParts {
+            closing: shared.closing.subscribe(),
+            queue: reports.clone(),
+        };
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let mut runtime = Runtime {
             driver,

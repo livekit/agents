@@ -156,20 +156,21 @@ impl Runtime {
     /// Drains an activated stream into the queue.
     pub(super) fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) = (shared.time.clone(), shared.closing.subscribe());
+        let (time, closing) =
+            (shared.time.clone(), super::audio::closing(shared.closing.subscribe()));
         match stream {
             PendingLeg::Stt(mut source) => {
-                source.report_retries(lk_agents_voice::audio::report_to(self.reports.clone()));
-                lk_agents_voice::audio::spawn_drain(
+                source.report_retries(super::audio::report_to(self.reports.clone()));
+                super::audio::spawn_drain(
                     &shared.spawner,
                     time,
                     closing,
-                    lk_agents_voice::audio::tagged(sink, source),
+                    super::audio::tagged(sink, source),
                     self.reports.clone(),
                     (channel, sink),
                 );
             }
-            PendingLeg::Vad(source) => lk_agents_voice::audio::spawn_drain(
+            PendingLeg::Vad(source) => super::audio::spawn_drain(
                 &shared.spawner,
                 time,
                 closing,

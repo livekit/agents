@@ -43,9 +43,8 @@ pub struct SessionCores {
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
     pub room_events:
         (Option<Rx<RoomEvent>>, Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>),
-    /// The camera's forwarder parts and the camera read from the start.
-    pub video:
-        (crate::audio::VideoForwarderParts, Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>),
+    /// The camera the runtime reads from the start.
+    pub video: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     pub shared: Arc<SessionShared>,
     /// Where host events and taps go.
     pub peer: PeerHandle,
@@ -245,12 +244,6 @@ impl DriverBuilder {
         // The microphone, read by the runtime.
         let audio_in =
             self.audio_in.clone().map(|input| self.resources.register_audio_input(input));
-        // The camera, read by the executor: one task per source, replaced whole by `SetVideoInput`.
-        let video_parts = crate::audio::VideoForwarderParts {
-            closing: closing.subscribe(),
-            queue: queue.clone(),
-        };
-
         let resources = &self.resources;
         let llm = self.llm.clone().map(|l| resources.register_llm(l));
         let tts = self.tts.clone().map(|t| resources.register_tts(t));
@@ -374,7 +367,7 @@ impl DriverBuilder {
             eot,
             interruption,
             room_events: (self.room_events.take(), self.room_io_events.take()),
-            video: (video_parts, self.video_in.take()),
+            video: self.video_in.take(),
             shared,
             peer: peer.clone(),
             storage: self.storage.take(),

@@ -578,3 +578,5 @@ impl StreamSink<AudioFrame> for Forward {
         }
     }
 }
+
+pub mod audio;
