@@ -245,6 +245,17 @@ class SpeechStream(stt.SpeechStream):
         language: str,
         http_session: aiohttp.ClientSession,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "nabrah streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
         self._stt: STT = stt_instance
         self._language = LanguageCode(language)
@@ -289,7 +300,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             return await asyncio.wait_for(
                 self._session.ws_connect(self._stt._base_url),
-                self._conn_options.timeout,
+                self._conn_options.connect_timeout,
             )
         except (
             aiohttp.ClientConnectorError,
@@ -345,7 +356,7 @@ class SpeechStream(stt.SpeechStream):
                         return
 
             try:
-                await asyncio.wait_for(_await_ready(), self._conn_options.timeout)
+                await asyncio.wait_for(_await_ready(), self._conn_options.read_timeout)
             except asyncio.TimeoutError as e:
                 raise APIConnectionError("nabrah STT never sent ready") from e
 
