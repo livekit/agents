@@ -65,23 +65,23 @@ pub const VOICE: Boundary = Boundary {
 /// The A2A campaign (`tests/a2a_survey.rs`, `a2a` module).
 pub const A2A: Boundary = Boundary {
     cores: &["A2A task machine (lk_agents_core::a2a::task::TaskMachine: deduplication, arrival \
-         policy, claim, drain, commit, every typed storage failure) under every inbox policy, \
+         policy, claim, drain, the turn as separate steps (pending question, checkpoints, \
+         output, settlement), commit, every typed storage failure) under every inbox policy, \
          one operation at a time"],
     fakes: &[
-        "a2a::port: one lane in memory with the storage contract's semantics, injecting \
-         Unavailable, Uncertain before and after the commit applied, Rejected, LeaseLost, \
-         VersionConflict, NotFound, a refused statement and a cancelled handler",
+        "a2a::port: one lane in memory with the storage contract's semantics (arrival-ordered \
+         lease, waiter mark, acquire snapshots, conditional pickups and orphan failures, \
+         append-only concurrent history, resend under the fence), injecting Unavailable, \
+         Uncertain before and after the commit applied, Rejected, LeaseLost, VersionConflict, \
+         NotFound, a refused statement and a cancelled or failing handler",
+        "a2a::handler: checkpoints, a yield, a text answer, a tool's question, a raise",
         "the clients: out-of-order arrivals on three channels under door options mixing the \
-         policies, resends at once and after a failed answer or a dead worker, client cancels",
+         policies, resends at once and after a failed answer or a dead worker, client cancels, \
+         answers to questions with or without the waiting task's id",
     ],
-    transitional: &[
-        "the turn is one Ran completion: the port stages the batch completed without the \
-         outcome decisions (answer_pending, settle, interrupt yields), which only core unit \
-         tests and the runtime suites exercise",
-    ],
+    transitional: &[],
     outside: &[
-        "the runtime door's execution of the operations and the handler's turn (runtime \
-         a2a_turns and a2a_door suites); settle and answer_pending (core unit tests)",
+        "the runtime door's execution of the operations (runtime a2a_turns and a2a_door suites)",
         "lk-agents-storage's backends (real SQLite and a fake AgentDB server, its own suites)",
         "SubscribeToTask and resubscribe from a cursor: runtime door and response streams",
     ],

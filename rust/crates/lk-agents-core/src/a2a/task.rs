@@ -1,11 +1,13 @@
 //! One A2A message's task, from arrival to its answer (docs/internals/storage.md#the-unit-of-work):
 //! deduplication by `messageId`, the channel's arrival policy, the early `submitted` row, the
-//! lane claim, the drain of a batch inbox, the turn, its commit and every typed storage failure.
-//! Storage owns atomic admission and fencing; this machine decides which operation follows each
-//! outcome. The runtime executes one [`Operation`] at a time and feeds its typed result back.
+//! lane claim, the drain of a batch inbox, the turn ([`turn`]: the pending question, the handler's
+//! checkpoints and output, the settlement), its commit and every typed storage failure. Storage
+//! owns atomic admission and fencing; this machine decides which operation follows each outcome.
+//! The runtime executes one [`Operation`] at a time and feeds its typed result back.
 
 #[cfg(test)]
 mod tests;
+mod turn;
 
 use std::time::Duration;
 
@@ -20,7 +22,14 @@ use lk_agents_abi::storage::thread::{
 };
 use serde_json::Value;
 
-use crate::a2a::{Message, Policy, TurnOptions, python_reason, resolve_debounce, resolve_policy};
+use crate::a2a::{
+    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, Verdict,
+    python_reason, resolve_debounce, resolve_policy,
+};
+use lk_agents_abi::storage::RunUsage;
+use lk_agents_abi::storage::context::ContextScopeWrite;
+use lk_agents_abi::storage::thread::ItemRow;
+use turn::{Step, Turning};
 
 /// One completion belongs to exactly one issued operation.
 #[derive(Debug)]
@@ -81,13 +90,22 @@ pub enum Operation {
     RecoverOrphans {
         skip: Vec<String>,
     },
-    /// The handler's turn over `batch` in the open run: task rows and history staged, nothing
-    /// committed.
-    Run {
-        batch: Vec<Message>,
-        task_ids: Vec<String>,
-        interrupt: bool,
-    },
+    /// The pending question a turn answers, in the open run: the task `named` while it still
+    /// waits, else the lane's newest one.
+    ReadPending(Option<String>),
+    /// Rows by id: the response streams a drained batch's receipts carry.
+    ReadTasks(Vec<String>),
+    /// Applies history edits, task rows, journal entries and, once the turn settled, how it
+    /// ended to the open run; nothing is committed.
+    Stage(Box<Stage>),
+    /// Opens the handler's turn over the open run.
+    Handle(Box<Handle>),
+    /// Answers the handler's last checkpoint with the verdict, when it asked, then reads its
+    /// next checkpoint or its output.
+    Next(Option<Verdict>),
+    /// What a checkpoint reads: whether another holder waits for the lane, and whether a client
+    /// canceled one of the message's tasks (the answer, the receipt).
+    Checkpoint(Vec<String>),
     /// Commits the open run, reading `answer_task` back with the write.
     Commit {
         answer_task: Option<String>,
@@ -112,16 +130,74 @@ pub enum Operation {
     RunningTask,
 }
 
+/// What a turn stages into its open run.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Stage {
+    pub edits: Vec<HistoryEdit>,
+    pub transitions: Vec<TaskTransition>,
+    /// Journal entries: `(type, payload)`.
+    pub events: Vec<(String, Value)>,
+    /// How the run ends, once the turn settled.
+    pub end: Option<RunEnd>,
+}
+
+/// A settled turn's end: the run's outcome and what the handler leaves for the commit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunEnd {
+    pub outcome: RunOutcome,
+    pub reason: Option<String>,
+    /// The state after the handler; `None` keeps the loaded one.
+    pub state: Option<Value>,
+    pub scope_writes: Vec<ContextScopeWrite>,
+    pub usage: RunUsage,
+}
+
+/// What the handler is opened on, besides what the open run loaded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handle {
+    /// The batch as one user chat message.
+    pub message: ItemRow,
+    pub batch: Vec<Message>,
+    /// The task that carries the reply.
+    pub task_id: String,
+    /// The tool the message is handed to before the model runs.
+    pub answer_tool: Option<String>,
+}
+
+/// What the handler's stream says next.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HandlerEvent {
+    /// It asks whether to go on.
+    Checkpoint,
+    Output(Box<HandlerOutput>),
+}
+
 #[derive(Debug)]
 pub enum Completion {
     Task(Option<TaskRow>),
+    Tasks(Vec<TaskRow>),
     Submitted(bool),
-    Received { duplicate: Option<String>, leased: bool },
-    Opened { closed: bool, picked_up: bool },
+    Received {
+        duplicate: Option<String>,
+        leased: bool,
+    },
+    /// `history_end`: the latest `created_at` the run loaded, Unix seconds.
+    Opened {
+        closed: bool,
+        picked_up: bool,
+        history_end: f64,
+    },
     Inbox(Vec<InboxRow>),
     Picked(Option<TaskState>),
-    Ran { answer_task: String, output: Option<Value> },
-    Committed { task: Option<TaskRow>, run_id: String },
+    Event(HandlerEvent),
+    Checkpoint {
+        other_waiting: bool,
+        canceled: bool,
+    },
+    Committed {
+        task: Option<TaskRow>,
+        run_id: String,
+    },
     Released(bool),
     RunningTask(Option<String>),
     Done,
@@ -178,7 +254,6 @@ enum Phase {
     Closing(After),
     Pickup,
     Recover,
-    Run,
     Commit,
     Abandon { unavailable: bool },
     Resolve,
@@ -190,7 +265,6 @@ enum Phase {
     DrainPickup,
     DrainOrphan,
     DrainRecover,
-    DrainRun,
     DrainCommit,
     DrainAbandon { unavailable: bool },
     Release,
@@ -198,6 +272,7 @@ enum Phase {
     RecoveryFail,
     RecoveryOrphans,
     Refused,
+    Turn(Step),
     Finished,
 }
 
@@ -208,6 +283,11 @@ pub struct TaskMachine {
     lane: String,
     message: Message,
     task_id: String,
+    /// What the ids this machine mints are made from: its first task id, never reassigned.
+    ids: String,
+    minted: u64,
+    /// Unix seconds at `now` zero.
+    epoch: f64,
     stream: Option<StreamInfo>,
     policy: Policy,
     debounce: Duration,
@@ -215,7 +295,6 @@ pub struct TaskMachine {
     phase: Phase,
     sequence: u64,
     pending: Option<u64>,
-    run_sequence: u64,
     /// The task being answered and the output of this worker's turn.
     answer: Option<(String, Option<Value>)>,
     error: Option<StorageError>,
@@ -227,21 +306,29 @@ pub struct TaskMachine {
     index: usize,
     batch: Vec<Message>,
     task_ids: Vec<String>,
+    /// The latest `created_at` the open run loaded.
+    history_end: f64,
+    turn: Option<Turning>,
 }
 
 impl TaskMachine {
+    /// `epoch` is the Unix time, in seconds, at `now` zero.
     pub fn new(
         lane: String,
         message: Message,
         task_id: String,
         stream: Option<StreamInfo>,
         options: &TurnOptions,
+        epoch: f64,
     ) -> Self {
         let policy = resolve_policy(&options.policy, &message.channel);
         Self {
             lane,
             debounce: resolve_debounce(&options.debounce, &message.channel, policy),
             message,
+            ids: task_id.trim_start_matches("AST_").to_owned(),
+            minted: 0,
+            epoch,
             task_id,
             stream,
             policy,
@@ -249,7 +336,6 @@ impl TaskMachine {
             phase: Phase::New,
             sequence: 0,
             pending: None,
-            run_sequence: 0,
             answer: None,
             error: None,
             run_id: None,
@@ -259,7 +345,15 @@ impl TaskMachine {
             index: 0,
             batch: Vec::new(),
             task_ids: Vec::new(),
+            history_end: 0.0,
+            turn: None,
         }
+    }
+
+    /// A fresh id of `kind` (`item`, `msg`, `art`, a run's).
+    fn mint(&mut self, kind: &str) -> String {
+        self.minted += 1;
+        format!("{kind}_{}{}", self.ids, self.minted)
     }
 
     pub fn policy(&self) -> Policy {
@@ -412,8 +506,7 @@ impl TaskMachine {
     /// with `stale` this message's own `submitted` row.
     fn recovery_open(&mut self, stale: bool) -> Operation {
         self.phase = Phase::RecoveryOpen { stale };
-        self.run_sequence += 1;
-        let run_id = format!("{}_recover_{}", self.task_id, self.run_sequence);
+        let run_id = self.mint("recover");
         self.open(run_id, self.task_id.clone(), None)
     }
 
@@ -461,10 +554,16 @@ impl TaskMachine {
         completion: Completion,
         now: Duration,
     ) -> Result<Option<Operation>, Finish> {
+        if let Completion::Opened { history_end, .. } = completion {
+            self.history_end = history_end;
+        }
+        if let Phase::Turn(step) = self.phase {
+            return self.turn_step(step, completion, now);
+        }
         let operation = match (self.phase, completion) {
             (Phase::Receipt, Completion::Task(Some(row))) => {
                 self.task_id = row.task_id.clone();
-                if row.terminal() {
+                if answered(&row) {
                     return Err(Finish::Answer(Answer::row(row.task_id.clone(), Some(row), None)));
                 }
                 self.observe()
@@ -524,7 +623,7 @@ impl TaskMachine {
                 // a client canceled the task before its turn: nothing runs
                 self.close(After::Observe)
             }
-            (Phase::Open, Completion::Opened { picked_up: true, .. }) => self.recover(),
+            (Phase::Open, Completion::Opened { picked_up: true, .. }) => self.recover(now),
             (Phase::RejectSubmit, Completion::Submitted(true)) => {
                 self.phase = Phase::RejectAccepted;
                 Operation::Accepted(self.task_id.clone())
@@ -535,17 +634,8 @@ impl TaskMachine {
             }
             (Phase::RejectAccepted, Completion::Done) => self.next(Next::Pickup),
             (Phase::Pickup, Completion::Picked(None)) => self.close(After::Observe),
-            (Phase::Pickup, Completion::Picked(Some(_))) => self.recover(),
-            (Phase::Recover, Completion::Done) => self.run(),
-            (Phase::Run, Completion::Ran { answer_task, output }) => {
-                self.phase = Phase::Commit;
-                self.answer = Some((answer_task.clone(), output));
-                Operation::Commit {
-                    answer_task: Some(answer_task),
-                    keep_lease: false,
-                    drained_id: None,
-                }
-            }
+            (Phase::Pickup, Completion::Picked(Some(_))) => self.recover(now),
+            (Phase::Recover, Completion::Done) => self.single_turn(now),
             (Phase::Commit, Completion::Committed { task, run_id }) => {
                 let (task_id, output) = self.answer.take().unwrap_or_default();
                 return Err(Finish::Answer(Answer {
@@ -580,7 +670,7 @@ impl TaskMachine {
                 let answer = Answer::row(self.answering(), task, reason);
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
-            (Phase::Observe, Completion::Task(Some(row))) if row.terminal() => {
+            (Phase::Observe, Completion::Task(Some(row))) if answered(&row) => {
                 let answer = Answer::row(row.task_id.clone(), Some(row), Some("not-written"));
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
@@ -605,7 +695,7 @@ impl TaskMachine {
                 }
             }
             (Phase::Inbox, Completion::Inbox(rows)) => {
-                self.run_sequence += 1;
+                let run_id = self.mint("drain");
                 let last = rows.last().expect("nonempty inbox");
                 let task_id = last.task_id.clone();
                 let channel = Some(crate::a2a::channel_of(&last.message));
@@ -615,7 +705,7 @@ impl TaskMachine {
                 self.task_ids.clear();
                 self.phase = Phase::DrainOpen;
                 Operation::Open {
-                    run_id: format!("{}_drain_{}", self.task_id, self.run_sequence),
+                    run_id,
                     task_id,
                     channel,
                     exclusive: true,
@@ -656,14 +746,8 @@ impl TaskMachine {
                 self.drain_pickup()
             }
             (Phase::DrainRecover, Completion::Done) => {
-                self.phase = Phase::DrainRun;
-                Operation::Run {
-                    batch: self.batch.clone(),
-                    task_ids: self.task_ids.clone(),
-                    interrupt: false,
-                }
+                self.start_turn(self.batch.clone(), self.task_ids.clone(), true, now)
             }
-            (Phase::DrainRun, Completion::Ran { .. }) => self.drain_commit(),
             (Phase::DrainCommit, Completion::Committed { run_id, .. }) => {
                 self.run_id = Some(run_id);
                 self.phase = Phase::Release;
@@ -699,21 +783,17 @@ impl TaskMachine {
 
     /// Under the lease, a dead holder's `working` rows fail before the turn; a `concurrent` run
     /// holds no lease and fails nothing.
-    fn recover(&mut self) -> Operation {
+    fn recover(&mut self, now: Duration) -> Operation {
         self.phase = Phase::Recover;
         if self.policy == Policy::Concurrent {
-            return self.run();
+            return self.single_turn(now);
         }
         Operation::RecoverOrphans { skip: vec![self.task_id.clone()] }
     }
 
-    fn run(&mut self) -> Operation {
-        self.phase = Phase::Run;
-        Operation::Run {
-            batch: vec![self.message.clone()],
-            task_ids: vec![self.task_id.clone()],
-            interrupt: self.policy == Policy::Interrupt,
-        }
+    /// This message's own turn.
+    fn single_turn(&mut self, now: Duration) -> Operation {
+        self.start_turn(vec![self.message.clone()], vec![self.task_id.clone()], false, now)
     }
 
     fn arrive(&mut self) -> Operation {
@@ -749,7 +829,7 @@ impl TaskMachine {
             (Phase::DrainOpen | Phase::RecoveryOpen { .. }, StorageError::Rejected { .. }) => {
                 return Ok(self.poll(now));
             }
-            (Phase::Run | Phase::DrainRun, _) => {
+            (Phase::Turn(_), _) => {
                 let unavailable =
                     matches!(error, StorageError::Unavailable(_) | StorageError::LeaseLost(_));
                 let outcome = match error {
@@ -758,10 +838,11 @@ impl TaskMachine {
                 };
                 let reason = python_reason(&error);
                 self.error = Some(error);
-                self.phase = if self.phase == Phase::Run {
-                    Phase::Abandon { unavailable }
-                } else {
+                let drain = self.turn.take().is_some_and(|t| t.drain);
+                self.phase = if drain {
                     Phase::DrainAbandon { unavailable }
+                } else {
+                    Phase::Abandon { unavailable }
                 };
                 Operation::Abandon { outcome, reason }
             }
@@ -782,16 +863,19 @@ impl TaskMachine {
                 }
             }
             (Phase::Commit, StorageError::Uncertain(_)) => {
-                // a lost acknowledgment is not a failure: the task stays as it is while the
-                // resolver finds the run (decision 39)
+                // a lost acknowledgment is not a failure: the message's task stays as it is while
+                // the resolver finds the run (decision 39); once applied, it names its answer
+                self.answer = None;
                 self.phase = Phase::Resolve;
-                Operation::ResolveLater { task_id: self.answering() }
+                Operation::ResolveLater { task_id: self.task_id.clone() }
             }
             (Phase::Commit, _) => {
-                // a rejected save fails the task; its staged changes are absent
+                // a rejected save fails the message's own task; its staged changes are absent,
+                // so a question it answered still waits
+                self.answer = None;
                 self.phase = Phase::Answer { reason: Some(REASON_STORAGE_UNAVAILABLE) };
                 Operation::FailTask {
-                    task_id: self.answering(),
+                    task_id: self.task_id.clone(),
                     reason: REASON_STORAGE_UNAVAILABLE,
                 }
             }
@@ -799,6 +883,11 @@ impl TaskMachine {
         };
         Ok(Some(operation))
     }
+}
+
+/// Whether a turn answered the row: it ended, or it asks a question.
+fn answered(row: &TaskRow) -> bool {
+    row.terminal() || row.status == TaskState::InputRequired
 }
 
 /// How a step ends the machine.

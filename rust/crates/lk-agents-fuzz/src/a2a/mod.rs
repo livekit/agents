@@ -6,21 +6,27 @@
 //!
 //! Requests arrive out of order on three channels under door options the seed draws (the
 //! default map, one policy for every channel, or a map mixing them), workers die mid-request and
-//! their clients resend, other clients resend at once or cancel tasks. Faults stop after a
-//! window; the run then goes on until every live request is answered.
+//! their clients resend, other clients resend at once or cancel tasks, and a client asked a
+//! question answers it, continuing the waiting task or not. The handler's turn is several steps
+//! (the pending question, its checkpoints, its output, the settlement), each interleaved with
+//! other requests. Faults stop after a window; the run then goes on until every live request is
+//! answered.
 //!
-//! The rules ([`rules`]) hold over the whole run: a message is executed once; every request is
-//! answered unless its worker died; an error answer is one the client can act on; a terminal task
-//! never changes; a commit that applied is never answered as a failure (decision 39); every
-//! answer to one message names its task; every received inbox message is drained.
+//! The rules ([`rules`]) hold over the whole run: a message is executed once and answered by its
+//! own task or the one it was merged into; every request is answered unless its worker died; an
+//! error answer is one the client can act on; a terminal task never changes; a commit that
+//! applied is never answered as a failure (decision 39); every answer to one message names its
+//! task; every received inbox message is drained; at most one question waits on the lane; a
+//! commit leaves every terminal row it staged as staged, unless a client canceled it.
 
+mod handler;
 pub mod port;
 pub mod rules;
 
 use std::time::Duration;
 
 use fastrand::Rng;
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, TaskState};
 use lk_agents_core::a2a::task::{Answer, Effect, Event, Operation, TaskMachine};
 use lk_agents_core::a2a::{DebounceSpec, Message, Policy, PolicySpec, TurnOptions};
 
@@ -38,6 +44,8 @@ const POLICIES: [Policy; 5] =
 #[derive(Debug)]
 pub struct Request {
     pub message_id: String,
+    /// The task this message continues, by its `taskId`.
+    pub continues: Option<String>,
     channel: &'static str,
     pub policy: Policy,
     start: Duration,
@@ -81,17 +89,19 @@ fn options(rng: &mut Rng) -> TurnOptions {
 
 fn request(
     message_id: &str,
+    continues: Option<String>,
     channel: &'static str,
     start: Duration,
     opts: &TurnOptions,
     rng: &mut Rng,
 ) -> Request {
-    let wire = port::wire("hello", message_id, channel);
+    let wire = port::wire("hello", message_id, channel, continues.as_deref());
     let message = Message::from_a2a(&wire, start.as_secs_f64(), None).expect("a valid message");
     let task_id = format!("AST_{:08x}", rng.u32(..));
-    let machine = TaskMachine::new(port::LANE.into(), message, task_id, None, opts);
+    let machine = TaskMachine::new(port::LANE.into(), message, task_id, None, opts, 0.0);
     Request {
         message_id: message_id.into(),
+        continues,
         channel,
         policy: machine.policy(),
         start,
@@ -123,11 +133,11 @@ pub fn run(seed: u64, messages: usize) -> Record {
         let channel = CHANNELS[rng.usize(0..CHANNELS.len())];
         let start = Duration::from_millis(rng.u64(0..FAULT_WINDOW.as_millis() as u64 / 2));
         let id = format!("m{i}");
-        requests.push(request(&id, channel, start, &opts, &mut rng));
+        requests.push(request(&id, None, channel, start, &opts, &mut rng));
         if rng.u8(0..4) == 0 {
             // a resend at once, before the first answer
             let again = start + Duration::from_millis(rng.u64(0..800));
-            requests.push(request(&id, channel, again, &opts, &mut rng));
+            requests.push(request(&id, None, channel, again, &opts, &mut rng));
         }
     }
     let mut now = Duration::ZERO;
@@ -169,7 +179,11 @@ pub fn run(seed: u64, messages: usize) -> Record {
             r.started = true;
             r.machine.handle(Event::Start, now)
         } else if let Some((id, operation, since)) = r.pending.take() {
-            if faulty && matches!(operation, Operation::Run { .. }) && rng.u8(0..100) < kill_pct {
+            let mid_turn = matches!(
+                operation,
+                Operation::Handle(_) | Operation::Next(_) | Operation::Stage(_)
+            );
+            if faulty && mid_turn && rng.u8(0..100) < kill_pct {
                 r.killed = true;
                 Vec::new()
             } else {
@@ -209,10 +223,28 @@ pub fn run(seed: u64, messages: usize) -> Record {
         };
         if resend && requests.iter().filter(|o| o.message_id == requests[i].message_id).count() < 4
         {
-            let id = requests[i].message_id.clone();
-            let channel = requests[i].channel;
+            let r = &requests[i];
+            let (id, continues, channel) = (r.message_id.clone(), r.continues.clone(), r.channel);
             let again = now + Duration::from_millis(rng.u64(100..2000));
-            requests.push(request(&id, channel, again, &opts, &mut rng));
+            requests.push(request(&id, continues, channel, again, &opts, &mut rng));
+        }
+        // a client asked a question answers it, naming the waiting task or not
+        let asked = match &requests[i].answer {
+            Some(Ok(Answer { task: Some(row), .. })) if row.status == TaskState::InputRequired => {
+                Some(row.task_id.clone())
+            }
+            _ => None,
+        };
+        let reply = format!("{}_reply", requests[i].message_id);
+        if let Some(asked) = asked
+            && now < FAULT_WINDOW * 2
+            && rng.u8(0..10) < 8
+            && !requests.iter().any(|o| o.message_id == reply)
+        {
+            let channel = requests[i].channel;
+            let continues = rng.bool().then_some(asked);
+            let at = now + Duration::from_millis(rng.u64(50..1500));
+            requests.push(request(&reply, continues, channel, at, &opts, &mut rng));
         }
         now += Duration::from_millis(rng.u64(0..20));
     }

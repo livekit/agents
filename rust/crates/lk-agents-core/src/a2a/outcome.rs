@@ -1,7 +1,8 @@
 //! The decisions of one turn, given what storage loaded and what the handler returned: which
 //! task a message answers when it continues a pending question ([`answer_pending`]), whether a
-//! checkpoint yields ([`checkpoint_stop`]), and what each task row and the history become
-//! ([`settle`]). Ids and times are supplied by the caller.
+//! checkpoint yields ([`checkpoint_stop`]), and what each task row becomes and what the history
+//! gains ([`settle`]), as [`HistoryEdit`]s the run applies. Ids and times are supplied by the
+//! caller.
 
 use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::{Map, Value};
@@ -41,16 +42,12 @@ pub enum Stop {
 }
 
 /// A checkpoint's decision from what the lane holds: under `interrupt`, another holder waiting
-/// for the lane stops the turn; a canceled task stops it under every policy.
-pub fn checkpoint_stop(
-    interrupt: bool,
-    waiter: Option<&str>,
-    holder: &str,
-    status: Option<TaskState>,
-) -> Option<Stop> {
-    if interrupt && waiter.is_some_and(|w| !w.is_empty() && w != holder) {
+/// for the lane stops the turn; a client's cancel of the message's task stops it under every
+/// policy.
+pub fn checkpoint_stop(interrupt: bool, other_waiting: bool, canceled: bool) -> Option<Stop> {
+    if interrupt && other_waiting {
         Some(Stop::Interrupted)
-    } else if status == Some(TaskState::Canceled) {
+    } else if canceled {
         Some(Stop::ClientCanceled)
     } else {
         None
@@ -65,6 +62,53 @@ pub struct TaskTransition {
     pub patch: TaskPatch,
 }
 
+/// One change a turn makes to the lane's history.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HistoryEdit {
+    /// The item, by its `created_at`, unless an item with its id is there; `message_id` (the A2A
+    /// `messageId` it came from) is stamped on the stored item.
+    Add { item: ItemRow, message_id: Option<String> },
+    /// A pending call's answer: its placeholder output takes `output`'s text and time, else
+    /// `output` is added.
+    Answer { output: ItemRow },
+}
+
+impl HistoryEdit {
+    pub fn apply(self, history: &mut Vec<ItemRow>) {
+        match self {
+            HistoryEdit::Add { item, message_id } => {
+                let id = item.id.clone();
+                if !history.iter().any(|i| i.id == id) {
+                    insert_by_created_at(history, item);
+                }
+                if let Some(message_id) = message_id
+                    && let Some(stored) = history.iter_mut().find(|i| i.id == id)
+                {
+                    stored.message_id = Some(message_id);
+                }
+            }
+            HistoryEdit::Answer { output } => {
+                let Some(chat_item::Item::FunctionCallOutput(answer)) = output.kind() else {
+                    return;
+                };
+                let placeholder = history.iter_mut().rev().find_map(|i| match i.kind_mut() {
+                    Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == answer.call_id => {
+                        Some(o)
+                    }
+                    _ => None,
+                });
+                match placeholder {
+                    Some(o) => {
+                        o.output = answer.output.clone();
+                        o.created_at = answer.created_at;
+                    }
+                    None => insert_by_created_at(history, output),
+                }
+            }
+        }
+    }
+}
+
 /// Which task a message answers once a pending question was settled.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingAnswer {
@@ -73,15 +117,16 @@ pub struct PendingAnswer {
     /// The tool the answer is handed to before the model runs, when the question named one.
     pub answer_tool: Option<String>,
     pub transitions: Vec<TaskTransition>,
+    /// The call's output, when the question came from a conversation tool's call.
+    pub edit: Option<HistoryEdit>,
 }
 
 /// A conversation tool's pending `InputRequired`, if `pending` holds one: the last message is
-/// the call's output (replacing the placeholder the run recorded, else inserted as item
-/// `item_id`). Continuing the waiting task (`taskId`) makes it the answer, working again with the
-/// message appended to its history, and merges the row the message came in under into it;
-/// otherwise the waiting task completes merged into this one.
+/// the call's output (replacing the placeholder the run recorded, else added as item `item_id`).
+/// Continuing the waiting task (`taskId`) makes it the answer, working again with the message
+/// appended to its history, and merges the row the message came in under into it; otherwise the
+/// waiting task completes merged into this one.
 pub fn answer_pending(
-    history: &mut Vec<ItemRow>,
     pending: Option<&TaskRow>,
     last: &Message,
     received_task: &str,
@@ -92,6 +137,7 @@ pub fn answer_pending(
         answer_task: received_task.to_owned(),
         answer_tool: None,
         transitions: Vec::new(),
+        edit: None,
     };
     let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
     let Some(pending) = pending else { return out };
@@ -99,29 +145,16 @@ pub fn answer_pending(
         return out;
     };
     out.answer_tool = nonempty(&ask.answer_tool);
-    if let Some(call_id) = nonempty(&ask.call_id) {
-        let placeholder = history.iter_mut().rev().find_map(|i| match i.kind_mut() {
-            Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == call_id => Some(o),
-            _ => None,
-        });
-        match placeholder {
-            Some(o) => {
-                o.output = last.text();
-                o.created_at = Some(timestamp(now - 1e-6));
-            }
-            None => {
-                let item = ItemRow::new(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
-                    id: item_id,
-                    name: nonempty(&ask.tool).unwrap_or_default(),
-                    call_id,
-                    output: last.text(),
-                    is_error: false,
-                    created_at: Some(timestamp(now - 1e-6)),
-                }));
-                insert_by_created_at(history, item);
-            }
-        }
-    }
+    out.edit = nonempty(&ask.call_id).map(|call_id| HistoryEdit::Answer {
+        output: ItemRow::new(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
+            id: item_id,
+            name: nonempty(&ask.tool).unwrap_or_default(),
+            call_id,
+            output: last.text(),
+            is_error: false,
+            created_at: Some(timestamp(now - 1e-6)),
+        })),
+    });
     if last.task_id.as_deref() == Some(pending.task_id.as_str()) {
         out.answer_task = pending.task_id.clone();
         out.transitions.push(TaskTransition {
@@ -165,6 +198,7 @@ pub struct TurnIds {
 /// What a turn settled: every row it writes, how the run ends and the reply.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settlement {
+    pub edits: Vec<HistoryEdit>,
     pub transitions: Vec<TaskTransition>,
     pub outcome: RunOutcome,
     pub reason: Option<String>,
@@ -186,37 +220,35 @@ pub struct Settle<'a> {
     pub stop: Option<Stop>,
     /// The answer row was already canceled by a client when the turn yielded.
     pub answer_canceled: bool,
+    /// A question becomes the lane's pending one, the next message's to answer; not under a run
+    /// without the lane's lease, which no lease orders against the lane's other turns.
+    pub lane_question: bool,
     /// Unix seconds, after everything loaded.
     pub now: f64,
     pub ids: TurnIds,
 }
 
-/// The turn's end: the runs' new items (or the message and a text answer) into `history`, then
+/// The turn's end: the runs' new items (or the message and a text answer) for the history, then
 /// the rows: a client cancel leaves the answer row as the client wrote it; a raise fails it; an
 /// interrupt cancels it; a question waits; otherwise it completes with the answer as an artifact.
 /// Every earlier message of a batch completes merged into the answer.
-pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, StorageError> {
+pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     let out = s.out;
     let last = s.batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
+    let mut edits = Vec::new();
     if !out.new_items.is_empty() {
         for payload in &out.new_items {
             let kind = payload.item.clone().ok_or_else(|| {
                 StorageError::Invalid("the handler returned an empty chat item".into())
             })?;
             let user = matches!(&kind, chat_item::Item::Message(m) if m.role() == ChatRole::User);
-            let item = ItemRow::new(kind);
-            let id = item.id.clone();
-            if !history.iter().any(|i| i.id == id) {
-                insert_by_created_at(history, item);
-            }
-            if user && let Some(stored) = history.iter_mut().find(|i| i.id == id) {
-                // the A2A `messageId` it came from: the idempotency key on `items`
-                stored.message_id = Some(last.message_id.clone());
-            }
+            // a user item carries the A2A `messageId` it came from: the idempotency key on `items`
+            let message_id = user.then(|| last.message_id.clone());
+            edits.push(HistoryEdit::Add { item: ItemRow::new(kind), message_id });
         }
     } else {
         let user = ItemRow { message_id: Some(last.message_id.clone()), ..s.user_message };
-        insert_by_created_at(history, user);
+        edits.push(HistoryEdit::Add { item: user, message_id: None });
         if let Some(text) = out.output.as_ref().and_then(Value::as_str)
             && !text.is_empty()
             && out.error.is_none()
@@ -228,10 +260,11 @@ pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, S
                 s.now + 1e-6,
                 s.ids.assistant_item,
             );
-            insert_by_created_at(history, item);
+            edits.push(HistoryEdit::Add { item, message_id: None });
         }
     }
     let mut settled = Settlement {
+        edits,
         transitions: Vec::new(),
         outcome: RunOutcome::Completed,
         reason: None,
@@ -309,7 +342,11 @@ pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, S
             status: TaskState::InputRequired,
             patch: TaskPatch {
                 metadata,
-                ..TaskPatch { ask: asked.ask, status_message: asked.status_message, ..base }
+                ..TaskPatch {
+                    ask: asked.ask.filter(|_| s.lane_question),
+                    status_message: asked.status_message,
+                    ..base
+                }
             },
         });
         settled.outcome = RunOutcome::InputRequired;
@@ -484,21 +521,18 @@ mod tests {
     fn settled(out: HandlerOutput, stop: Option<Stop>, answer_canceled: bool) -> Settlement {
         let batch = [msg("m1", "where"), msg("m2", "are you")];
         let task_ids = ["AST_1".to_owned(), "AST_2".to_owned()];
-        let mut history = Vec::new();
-        settle(
-            &mut history,
-            Settle {
-                batch: &batch,
-                task_ids: &task_ids,
-                answer_task: "AST_2",
-                user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
-                out: &out,
-                stop,
-                answer_canceled,
-                now: 2.0,
-                ids: ids(),
-            },
-        )
+        settle(Settle {
+            batch: &batch,
+            task_ids: &task_ids,
+            answer_task: "AST_2",
+            user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+            out: &out,
+            stop,
+            answer_canceled,
+            lane_question: true,
+            now: 2.0,
+            ids: ids(),
+        })
         .unwrap()
     }
 
@@ -508,12 +542,11 @@ mod tests {
 
     #[test]
     fn a_checkpoint_yields_to_a_waiter_under_interrupt_and_to_a_client_cancel_always() {
-        let stop = |i, w, s| checkpoint_stop(i, w, "me", s);
-        assert_eq!(stop(true, Some("other"), None), Some(Stop::Interrupted));
-        assert_eq!(stop(true, Some("me"), None), None, "its own waiter mark");
-        assert_eq!(stop(false, Some("other"), None), None, "queue does not yield to a waiter");
-        assert_eq!(stop(false, None, Some(TaskState::Canceled)), Some(Stop::ClientCanceled));
-        assert_eq!(stop(true, None, Some(TaskState::Working)), None);
+        let stop = checkpoint_stop;
+        assert_eq!(stop(true, true, false), Some(Stop::Interrupted));
+        assert_eq!(stop(false, true, false), None, "queue does not yield to a waiter");
+        assert_eq!(stop(false, false, true), Some(Stop::ClientCanceled));
+        assert_eq!(stop(true, false, false), None);
     }
 
     #[test]
@@ -562,14 +595,7 @@ mod tests {
         wire.message_id = "answer".into();
         wire.task_id = Some("AST_waiting".into());
         let message = Message::from_a2a(&wire, 0.0, None).unwrap();
-        let answer = answer_pending(
-            &mut Vec::new(),
-            Some(&waiting),
-            &message,
-            "AST_receipt",
-            0.0,
-            "item".into(),
-        );
+        let answer = answer_pending(Some(&waiting), &message, "AST_receipt", 0.0, "item".into());
         assert_eq!(answer.answer_task, "AST_waiting");
         assert_eq!(answer.transitions[0].task_id, "AST_receipt");
     }
@@ -608,26 +634,22 @@ mod tests {
             let i = rows.iter().position(|r| r.task_id == t.task_id).unwrap();
             rows[i] = merge_write(&t.task_id, Some(&rows[i]), t.status, t.patch).unwrap();
         };
-        let mut history = Vec::new();
-        let pending =
-            answer_pending(&mut history, Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
+        let pending = answer_pending(Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
         pending.transitions.into_iter().for_each(&mut write);
         let out = HandlerOutput { output: Some(json!("booked")), ..HandlerOutput::default() };
         let batch = [answer.clone()];
-        let settled = settle(
-            &mut history,
-            Settle {
-                batch: &batch,
-                task_ids: &["AST_receipt".to_owned()],
-                answer_task: &pending.answer_task,
-                user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
-                out: &out,
-                stop: None,
-                answer_canceled: false,
-                now: 2.0,
-                ids: ids(),
-            },
-        )
+        let settled = settle(Settle {
+            batch: &batch,
+            task_ids: &["AST_receipt".to_owned()],
+            answer_task: &pending.answer_task,
+            user_message: crate::a2a::batch_to_chat_message(&batch, 2.0, "item_u".into()),
+            out: &out,
+            stop: None,
+            answer_canceled: false,
+            lane_question: true,
+            now: 2.0,
+            ids: ids(),
+        })
         .unwrap();
         settled.transitions.into_iter().for_each(&mut write);
         let ids: Vec<_> = rows.iter().map(|r| r.message_id.as_deref()).collect();

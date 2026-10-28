@@ -1,7 +1,8 @@
 //! The A2A text door's turns: [`Turn::run`] takes one incoming message to its answer by executing
 //! the operations of `lk_agents_core::a2a::task::TaskMachine` against storage and the host's
 //! handler, and feeding each typed result back. Every decision (deduplication, arrival policy,
-//! claim, drain, commit and failure outcomes) is the machine's; this file only executes.
+//! claim, drain, the pending question, checkpoints, settlement, commit and failure outcomes) is
+//! the machine's; this file only executes.
 
 pub mod door;
 
@@ -11,12 +12,13 @@ use serde_json::Value;
 use tokio_util::task::TaskTracker;
 
 use lk_agents_abi::storage::StreamInfo;
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_core::a2a::task::{Answer, Completion, Effect, Event, Operation, TaskMachine};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
+use lk_agents_core::a2a::task::{
+    Answer, Completion, Effect, Event, HandlerEvent, Operation, TaskMachine,
+};
 use lk_agents_core::a2a::{
-    HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost, TurnIds,
-    TurnOptions, TurnResult, Verdict, answer_pending, batch_to_chat_message, caller_history_of,
-    checkpoint_stop, failed_message, host_error, resolve_policy, result_for, settle,
+    HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
+    Verdict, caller_history_of, failed_message, host_error, resolve_policy, result_for,
     unpersisted_failed,
 };
 use lk_agents_storage::db::{Receive, ReceiveInput};
@@ -40,11 +42,16 @@ const TASKS_IN_CONTEXT: i64 = 50;
 /// How many runs a refusal reads to name the running task.
 const RUNS_FOR_REJECT: usize = 50;
 
-/// One message's live resources while its machine runs: the lane, the open run, a kept lease.
+/// The handler's turn: its checkpoint verdicts in, its events out.
+type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
+
+/// One message's live resources while its machine runs: the lane, the open run, a kept lease,
+/// the handler's stream.
 struct Call {
     lane: Lane,
     run: Option<Run>,
     lease: Option<Lease>,
+    handler: Option<Handler>,
     /// A delegating caller's conversation, when the message carried one.
     caller_history: Option<Value>,
 }
@@ -53,12 +60,6 @@ impl Call {
     fn run(&mut self) -> Result<&mut Run, StorageError> {
         self.run.as_mut().ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))
     }
-}
-
-/// What a turn leaves for the commit: the task that carries the reply, and the reply.
-struct Outcome {
-    task_id: String,
-    output: Option<Value>,
 }
 
 /// One text door's turns: its lane, its options, its host.
@@ -161,7 +162,9 @@ impl Turn {
     ) -> Result<TurnResult, StorageError> {
         // the delegation's `chat_ctx` part, which `Message::from_a2a` strips
         let caller_history = caller_history_of(&message);
-        let msg = Message::from_a2a(&message, now_secs(), None)?;
+        let epoch = tokio::time::Instant::now();
+        let wall = now_secs();
+        let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
         let mut machine = TaskMachine::new(
             self.lane.clone(),
@@ -169,15 +172,18 @@ impl Turn {
             task_id,
             self.stream.clone(),
             &self.opts,
+            wall,
         );
-        let mut call =
-            Call { lane: self.thread.lane(&self.lane), run: None, lease: None, caller_history };
-        let epoch = tokio::time::Instant::now();
+        let lane = self.thread.lane(&self.lane);
+        let mut call = Call { lane, run: None, lease: None, handler: None, caller_history };
         let mut effects = machine.handle(Event::Start, epoch.elapsed());
         loop {
             match effects.pop() {
                 Some(Effect::Execute { id, operation }) => {
                     let result = self.execute(&mut call, &machine, operation).await;
+                    if result.is_err() {
+                        self.close_handler(&mut call).await;
+                    }
                     effects = machine.handle(Event::Completed { id, result }, epoch.elapsed());
                 }
                 Some(Effect::Finished(answer)) => {
@@ -301,7 +307,12 @@ impl Turn {
                     Some(lease) => call.lane.resume(options, lease).await?,
                     None => call.lane.open(options).await?,
                 };
-                let opened = Completion::Opened { closed: run.closed, picked_up: run.picked_up };
+                let history_end = run.history.iter().map(ItemRow::created_at).fold(0.0, f64::max);
+                let opened = Completion::Opened {
+                    closed: run.closed,
+                    picked_up: run.picked_up,
+                    history_end,
+                };
                 call.run = Some(run);
                 opened
             }
@@ -325,15 +336,78 @@ impl Turn {
                 }
                 Completion::Done
             }
-            Operation::Run { batch, task_ids, interrupt } => {
-                let mut run = call
-                    .run
-                    .take()
-                    .ok_or_else(|| StorageError::Invalid("no A2A run is open".into()))?;
-                let outcome = self.turn(call, &mut run, &batch, &task_ids, interrupt).await;
-                call.run = Some(run);
-                let outcome = outcome?;
-                Completion::Ran { answer_task: outcome.task_id, output: outcome.output }
+            Operation::ReadPending(named) => {
+                Completion::Task(call.run()?.tasks.pending_ask(named.as_deref()).await?)
+            }
+            Operation::ReadTasks(task_ids) => {
+                let mut rows = Vec::new();
+                for task_id in task_ids {
+                    rows.extend(call.lane.task(&task_id).await?);
+                }
+                Completion::Tasks(rows)
+            }
+            Operation::Stage(staged) => {
+                let run = call.run()?;
+                for edit in staged.edits {
+                    edit.apply(&mut run.history);
+                }
+                for t in staged.transitions {
+                    run.tasks.write(&t.task_id, t.status, t.patch).await?;
+                }
+                for (ty, payload) in staged.events {
+                    run.events.append(&ty, payload);
+                }
+                if let Some(end) = staged.end {
+                    if end.state.is_some() {
+                        run.state = end.state;
+                    }
+                    run.scope_writes = end.scope_writes;
+                    run.usage.add(&end.usage);
+                    run.outcome = end.outcome;
+                    run.reason = end.reason;
+                }
+                Completion::Done
+            }
+            Operation::Handle(handle) => {
+                let lane = call.lane.name().to_owned();
+                let caller_history = call.caller_history.clone();
+                let run = call.run()?;
+                let ctx = TurnContext {
+                    thread_id: self.thread.id().to_owned(),
+                    context_scope_id: format!("root:{lane}"),
+                    lane,
+                    message: handle.message.payload,
+                    batch: handle.batch,
+                    history: run.history.clone(),
+                    state: run.state.clone(),
+                    context_scopes: run.context_scopes.clone(),
+                    read_only: run.lease().is_none(),
+                    task_id: handle.task_id,
+                    tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
+                    caller_history,
+                    answer_tool: handle.answer_tool,
+                };
+                let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx)?;
+                host_ctx.host_context = self.host_context.clone();
+                call.handler = Some(self.host.handle(&host_ctx).await.map_err(host_error)?);
+                Completion::Done
+            }
+            Operation::Next(verdict) => {
+                let event = self.next_event(call, verdict).await?;
+                if !matches!(event, HandlerEvent::Checkpoint) {
+                    self.close_handler(call).await;
+                }
+                Completion::Event(event)
+            }
+            Operation::Checkpoint(task_ids) => {
+                let holder = call.run()?.holder.clone();
+                let (mut other_waiting, mut canceled) = (false, false);
+                for task_id in &task_ids {
+                    let (waiter, status) = call.lane.db().checkpoint(task_id).await?;
+                    other_waiting |= waiter.is_some_and(|w| !w.is_empty() && w != holder);
+                    canceled |= status == Some(TaskState::Canceled);
+                }
+                Completion::Checkpoint { other_waiting, canceled }
             }
             Operation::Commit { answer_task, keep_lease, drained_id } => {
                 let run = call.run()?;
@@ -353,6 +427,7 @@ impl Turn {
                 Completion::Committed { task: committed.task, run_id }
             }
             Operation::Abandon { outcome, reason } => {
+                self.close_handler(call).await;
                 if let Some(mut run) = call.run.take() {
                     run.abandon(outcome, reason).await?;
                 }
@@ -410,164 +485,32 @@ impl Turn {
         });
     }
 
-    async fn turn(
+    /// Answers the handler's last checkpoint, then reads its next checkpoint or its output; a
+    /// lost lease ends the read with `LeaseLost`.
+    async fn next_event(
         &self,
-        call: &Call,
-        run: &mut Run,
-        batch: &[Message],
-        task_ids: &[String],
-        interrupt: bool,
-    ) -> Result<Outcome, StorageError> {
-        let last = batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
-        let received = task_ids
-            .last()
-            .ok_or_else(|| StorageError::Invalid("a batch without task ids".into()))?;
-
-        // what this turn adds goes after everything loaded, whatever the messages' own times
-        let after = run.history.iter().map(ItemRow::created_at).fold(0.0, f64::max);
-        let mut now = now_secs();
-        if after >= now {
-            now = after + 2e-6;
+        call: &mut Call,
+        verdict: Option<Verdict>,
+    ) -> Result<HandlerEvent, StorageError> {
+        let lease = call.run.as_ref().and_then(Run::lease).cloned();
+        let (verdicts, events) = call
+            .handler
+            .as_mut()
+            .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
+        if let Some(verdict) = verdict {
+            verdicts.push(verdict).map_err(host_error)?;
         }
-
-        let pending = run.tasks.pending_ask(last.task_id.as_deref()).await?;
-        let pending = answer_pending(
-            &mut run.history,
-            pending.as_ref(),
-            last,
-            received,
-            now,
-            shortuuid("item_"),
-        );
-        for t in pending.transitions {
-            run.tasks.write(&t.task_id, t.status, t.patch).await?;
-        }
-        let answer_task = pending.answer_task;
-        let mut streams = Vec::new();
-        for task_id in task_ids {
-            if let Some(task) = call.lane.task(task_id).await? {
-                for stream in task.internal.into_iter().flat_map(|internal| internal.streams) {
-                    if !streams.contains(&stream) {
-                        streams.push(stream);
-                    }
-                }
-            }
-        }
-        if !streams.is_empty() {
-            run.tasks
-                .write(
-                    &answer_task,
-                    TaskState::Working,
-                    lk_agents_storage::run::TaskPatch {
-                        streams: Some(streams),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-        }
-
-        let user_message = batch_to_chat_message(batch, now, shortuuid("item_"));
-        let turn_ctx = TurnContext {
-            thread_id: self.thread.id().to_owned(),
-            lane: call.lane.name().to_owned(),
-            message: user_message.payload.clone(),
-            batch: batch.to_vec(),
-            history: run.history.clone(),
-            state: run.state.clone(),
-            context_scope_id: format!("root:{}", call.lane.name()),
-            context_scopes: run.context_scopes.clone(),
-            read_only: run.lease().is_none(),
-            task_id: answer_task.clone(),
-            tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
-            caller_history: call.caller_history.clone(),
-            answer_tool: pending.answer_tool,
-        };
-        let (out, stop) = self.drive(&turn_ctx, run, interrupt).await?;
-        if let Some(err) = &out.error {
-            log::error!(target: "livekit.agents", lane = call.lane.name(), taskId = answer_task.as_str(); "the a2a_session handler raised; the task fails: {err}");
-        }
-        if out.state.is_some() {
-            run.state = out.state.clone();
-        }
-        run.scope_writes = out.scope_writes.clone();
-        run.usage.add(&out.usage);
-        let answer_canceled = (stop.is_some() || out.interrupted)
-            && call
-                .lane
-                .task(&answer_task)
-                .await?
-                .is_some_and(|row| row.status == TaskState::Canceled);
-        let settled = settle(
-            &mut run.history,
-            Settle {
-                batch,
-                task_ids,
-                answer_task: &answer_task,
-                user_message,
-                out: &out,
-                stop,
-                answer_canceled,
-                now,
-                ids: TurnIds {
-                    assistant_item: shortuuid("item_"),
-                    status_message: shortuuid("msg_"),
-                    artifact: shortuuid("art_"),
-                },
-            },
-        )?;
-        for (ty, payload) in settled.events {
-            run.events.append(&ty, payload);
-        }
-        for t in settled.transitions {
-            run.tasks.write(&t.task_id, t.status, t.patch).await?;
-        }
-        run.outcome = settled.outcome;
-        run.reason = settled.reason;
-        Ok(Outcome { task_id: answer_task, output: settled.output })
-    }
-
-    /// The host's stream to its output: each checkpoint answered `yield` once the turn should stop
-    /// (a newer message waiting under `interrupt`, a client's `tasks/cancel`), else `continue`. A
-    /// lost lease ends it with `Unavailable`; the stream is closed either way.
-    async fn drive(
-        &self,
-        ctx: &TurnContext,
-        run: &Run,
-        interrupt: bool,
-    ) -> Result<(HandlerOutput, Option<Stop>), StorageError> {
-        let task_id = ctx.task_id.as_str();
-        let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx.clone())?;
-        host_ctx.host_context = self.host_context.clone();
-        let (verdicts, mut events) = self.host.handle(&host_ctx).await.map_err(host_error)?;
-        let lane = self.thread.lane(&self.lane);
-        let mut stop = None;
         let read = async {
             loop {
                 match events.next().await.map_err(host_error)? {
-                    Some(TurnEvent::Checkpoint) => {
-                        // a lost lease cannot commit anyway: nothing yields to anyone
-                        if stop.is_none() && !run.lease().is_some_and(Lease::is_lost) {
-                            let (waiter, status) = lane.db().checkpoint(task_id).await?;
-                            stop =
-                                checkpoint_stop(interrupt, waiter.as_deref(), &run.holder, status);
-                            match stop {
-                                Some(Stop::Interrupted) => {
-                                    log::info!(target: "livekit.agents", lane = self.lane.as_str(); "yielding the lane to a newer message")
-                                }
-                                Some(Stop::ClientCanceled) => {
-                                    log::info!(target: "livekit.agents", lane = self.lane.as_str(); "the task was canceled by a client; yielding")
-                                }
-                                None => {}
-                            }
-                        }
-                        let verdict =
-                            if stop.is_some() { Verdict::Yield } else { Verdict::Continue };
-                        verdicts.push(verdict).map_err(host_error)?;
-                    }
+                    Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
                     Some(TurnEvent::Progress { .. } | TurnEvent::Token { .. }) => {}
                     Some(TurnEvent::Output { output }) => {
                         let out = HandlerOutput::try_from(output)?;
-                        return Ok(out);
+                        if let Some(err) = &out.error {
+                            log::error!(target: "livekit.agents", lane = self.lane.as_str(); "the a2a_session handler raised; the task fails: {err}");
+                        }
+                        return Ok(HandlerEvent::Output(Box::new(out)));
                     }
                     None => {
                         return Err(StorageError::Invalid(
@@ -577,17 +520,21 @@ impl Turn {
                 }
             }
         };
-        let out = match run.lease() {
+        match lease {
             Some(lease) => tokio::select! {
-                out = read => out,
+                event = read => event,
                 e = lease.lost() => Err(e),
             },
             None => read.await,
-        };
+        }
+    }
+
+    /// Closes the handler's stream, if one is open, within the host teardown bound.
+    async fn close_handler(&self, call: &mut Call) {
+        let Some((_, events)) = call.handler.take() else { return };
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         if events.close(deadline).await == Closed::TimedOut {
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id; "the handler's stream did not close within its deadline; its host task is still running");
+            log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler's stream did not close within its deadline; its host task is still running");
         }
-        out.map(|out| (out, stop))
     }
 }

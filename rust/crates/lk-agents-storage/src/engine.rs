@@ -1046,31 +1046,28 @@ impl Tasks {
             .find(|r| r.internal.as_ref().is_some_and(|i| i.ask.is_some())))
     }
 
-    /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
+    /// Insert or update one row; what the patch leaves `None` keeps the existing row's value. A
+    /// stored row that is already terminal (a client canceled it mid-turn) stays as it is, as the
+    /// commit would leave it; rewriting this run's own terminal write is refused.
     pub async fn write(
         &mut self,
         task_id: &str,
         status: TaskState,
         patch: TaskPatch,
-    ) -> Result<&TaskWrite, StorageError> {
+    ) -> Result<(), StorageError> {
         let base = match self.writes.iter().find(|w| w.task_id == task_id) {
             Some(w) => Some(w.clone()),
-            None => self
-                .find(|r| r.task_id == task_id, self.lane.task(task_id))
-                .await?
-                .map(TaskWrite::from),
+            None => match self.find(|r| r.task_id == task_id, self.lane.task(task_id)).await? {
+                Some(row) if row.terminal() => return Ok(()),
+                row => row.map(TaskWrite::from),
+            },
         };
         let write = run::merge_write(task_id, base.as_ref(), status, patch)?;
         match self.writes.iter().position(|w| w.task_id == task_id) {
-            Some(i) => {
-                self.writes[i] = write;
-                Ok(&self.writes[i])
-            }
-            None => {
-                self.writes.push(write);
-                Ok(self.writes.last().expect("just pushed"))
-            }
+            Some(i) => self.writes[i] = write,
+            None => self.writes.push(write),
         }
+        Ok(())
     }
 
     /// `input-required`: the question is the status message, `ask` the pending transition.

@@ -4,8 +4,14 @@ use super::*;
 use crate::a2a::{DebounceSpec, PolicySpec};
 
 fn machine(policy: Policy) -> TaskMachine {
+    continuing(policy, None)
+}
+
+/// A machine for message `m`, continuing `target` when given.
+fn continuing(policy: Policy, target: Option<&str>) -> TaskMachine {
     let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("answer")]);
     wire.message_id = "m".into();
+    wire.task_id = target.map(str::to_owned);
     TaskMachine::new(
         "lane".into(),
         Message::from_a2a(&wire, 0.0, None).unwrap(),
@@ -16,7 +22,51 @@ fn machine(policy: Policy) -> TaskMachine {
             debounce: DebounceSpec::All(Duration::ZERO),
             wait_timeout: Some(Duration::from_secs(2)),
         },
+        0.0,
     )
+}
+
+fn opened(closed: bool, picked_up: bool) -> Completion {
+    Completion::Opened { closed, picked_up, history_end: 0.0 }
+}
+
+/// Drives `m`, its orphans just recovered, through a turn whose pending question is `pending` and
+/// whose handler answers `output` at once: the operation after the settlement.
+fn turn(m: &mut TaskMachine, pending: Option<TaskRow>, output: HandlerOutput) -> Operation {
+    m.phase = Phase::Recover;
+    m.pending = Some(1);
+    let mut op = step(m, Completion::Done);
+    loop {
+        op = match op {
+            Operation::ReadPending(_) => step(m, Completion::Task(pending.clone())),
+            Operation::Stage(staged) if staged.end.is_some() => return step(m, Completion::Done),
+            Operation::Stage(_) | Operation::Handle(_) => step(m, Completion::Done),
+            Operation::Next(_) => {
+                step(m, Completion::Event(HandlerEvent::Output(Box::new(output.clone()))))
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+fn answered(text: &str) -> HandlerOutput {
+    HandlerOutput { output: Some(text.into()), ..HandlerOutput::default() }
+}
+
+/// `waiting`, asking a question of a conversation tool's call.
+fn question() -> TaskRow {
+    let mut row =
+        TaskWrite { task_id: "waiting".into(), ..row(TaskState::InputRequired).into() }.row("lane");
+    row.message_id = Some("asked".into());
+    row.internal = Some(TaskInternal {
+        ask: Some(lk_agents_abi::storage::Ask {
+            question: "which day?".into(),
+            call_id: Some("call_1".into()),
+            ..Default::default()
+        }),
+        streams: Vec::new(),
+    });
+    row
 }
 
 fn at(m: &mut TaskMachine, now: Duration, result: Result<Completion, StorageError>) -> Vec<Effect> {
@@ -44,10 +94,7 @@ fn reject_resend_observes_the_original_task_after_a_lost_submit_race() {
     let mut m = machine(Policy::Reject);
     m.handle(Event::Start, Duration::ZERO);
     assert!(matches!(step(&mut m, Completion::Task(None)), Operation::Open { wait: false, .. }));
-    assert!(matches!(
-        step(&mut m, Completion::Opened { closed: false, picked_up: false }),
-        Operation::Submit(_)
-    ));
+    assert!(matches!(step(&mut m, opened(false, false)), Operation::Submit(_)));
     assert!(matches!(step(&mut m, Completion::Submitted(false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::FindReceipt(id) if id == "m"));
 }
@@ -62,10 +109,7 @@ fn concurrent_handler_waits_for_a_conditional_task_claim() {
         step(&mut m, Completion::Done),
         Operation::Open { exclusive: false, pickup: true, .. }
     ));
-    assert!(matches!(
-        step(&mut m, Completion::Opened { closed: false, picked_up: false }),
-        Operation::CloseRun
-    ));
+    assert!(matches!(step(&mut m, opened(false, false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
 }
 
@@ -88,16 +132,16 @@ fn batch_preserves_the_callers_continuation_target() {
         step(&mut m, Completion::Picked(Some(TaskState::Submitted))),
         Operation::RecoverOrphans { .. }
     ));
-    let Operation::Run { batch, task_ids, .. } = step(&mut m, Completion::Done) else { panic!() };
-    assert_eq!(batch[0].task_id.as_deref(), Some("waiting"));
-    assert_eq!(task_ids, ["receipt"]);
+    let pending = step(&mut m, Completion::Done);
+    assert_eq!(pending, Operation::ReadPending(Some("waiting".into())));
 }
 
 #[test]
 fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Run;
+    m.phase = Phase::Recover;
     m.pending = Some(4);
+    assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
     let abandon =
         operation(at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("offline".into()))));
     assert!(matches!(abandon, Operation::Abandon { outcome: RunOutcome::Failed, .. }));
@@ -108,10 +152,7 @@ fn storage_failure_in_the_turn_abandons_the_run_and_fails_the_receipt() {
 #[test]
 fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
     let mut m = machine(Policy::Queue);
-    m.phase = Phase::Run;
-    m.pending = Some(1);
-    let commit =
-        step(&mut m, Completion::Ran { answer_task: "receipt".into(), output: Some("hi".into()) });
+    let commit = turn(&mut m, None, answered("hi"));
     assert!(matches!(commit, Operation::Commit { answer_task: Some(_), .. }));
     let resolve =
         operation(at(&mut m, Duration::ZERO, Err(StorageError::Uncertain("lost".into()))));
@@ -173,22 +214,22 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     ));
     let mut now = Duration::ZERO;
     let mut effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
-    let mut opened = false;
+    let mut reopened = false;
     for _ in 0..64 {
         assert!(effects.is_empty(), "{effects:?}");
         now = m.wake_at().expect("polling");
         let next = operation(m.handle(Event::Wake, now));
         if let Operation::Open { wait: false, .. } = next {
-            opened = true;
+            reopened = true;
             break;
         }
         assert!(matches!(next, Operation::ReadTask(_)));
         effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
     }
-    assert!(opened, "the stale submitted task was watched forever");
+    assert!(reopened, "the stale submitted task was watched forever");
     assert!(now >= Duration::from_secs(2), "not before the wait ran out");
     assert!(matches!(
-        step(&mut m, Completion::Opened { closed: false, picked_up: false }),
+        step(&mut m, opened(false, false)),
         Operation::FailTask { reason: REASON_WORKER_LOST, .. }
     ));
     assert!(matches!(step(&mut m, Completion::Done), Operation::RecoverOrphans { .. }));
@@ -267,13 +308,83 @@ fn a_concurrent_message_canceled_before_its_turn_does_not_run() {
     let mut m = machine(Policy::Concurrent);
     m.phase = Phase::Open;
     m.pending = Some(1);
-    assert!(matches!(
-        step(&mut m, Completion::Opened { closed: false, picked_up: false }),
-        Operation::CloseRun
-    ));
+    assert!(matches!(step(&mut m, opened(false, false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
 }
 
 fn row_of(status: TaskState) -> TaskRow {
     row(status)
+}
+
+/// A2A_SEED=154 239 (message_executes_once, Continuation): a continuation whose commit was
+/// rejected was answered by the task it continued while its own receipt stayed `working`, later
+/// failing worker-lost on its own. The rejected save fails the message's own task, the answer
+/// names it, and the question it tried to answer stays pending.
+#[test]
+fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
+    for error in [
+        StorageError::VersionConflict { lane: "lane".into(), expected: 1 },
+        StorageError::Invalid("sqlite: disk I/O error".into()),
+    ] {
+        let mut m = continuing(Policy::Queue, Some("waiting"));
+        let commit = turn(&mut m, Some(question()), answered("Tuesday"));
+        assert!(matches!(commit, Operation::Commit { answer_task: Some(t), .. } if t == "waiting"));
+        let fail = operation(at(&mut m, Duration::ZERO, Err(error)));
+        assert!(
+            matches!(&fail, Operation::FailTask { task_id, reason: REASON_STORAGE_UNAVAILABLE }
+                if task_id == "receipt"),
+            "{fail:?}"
+        );
+        assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
+        let effects =
+            at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row(TaskState::Failed)))));
+        let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+        assert_eq!(answer.task_id, "receipt");
+    }
+}
+
+/// A2A_SEED=68 88 130 (one_question_pending, Lane): a reply naming a question that a turn ahead
+/// already merged found no pending question and asked its own beside the newer one still waiting.
+/// The reply answers the question waiting now.
+#[test]
+fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
+    let mut m = continuing(Policy::Queue, Some("merged"));
+    m.phase = Phase::Recover;
+    m.pending = Some(1);
+    assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(Some("merged".into())));
+    assert_eq!(step(&mut m, Completion::Task(None)), Operation::ReadPending(None));
+    let Operation::Stage(staged) = step(&mut m, Completion::Task(Some(question()))) else {
+        panic!("the waiting question is settled before the handler")
+    };
+    let waiting = staged.transitions.iter().find(|t| t.task_id == "waiting").expect("settled");
+    assert_eq!(waiting.status, TaskState::Completed);
+    assert!(matches!(&staged.edits[..], [crate::a2a::HistoryEdit::Answer { .. }]));
+}
+
+/// A2A_SEED=181 350 616 (commit_is_what_the_run_staged, Concurrent): overlapping concurrent turns
+/// both claimed one pending question with no lease to make the claim exclusive; the second's
+/// terminal write was dropped and its client answered the first's outcome. A concurrent turn
+/// answers on its own task and leaves the question to the lane's exclusive turns.
+#[test]
+fn a_concurrent_turn_leaves_a_pending_question_alone() {
+    let mut m = continuing(Policy::Concurrent, Some("waiting"));
+    m.phase = Phase::Recover;
+    m.pending = Some(1);
+    let Operation::Handle(handle) = step(&mut m, Completion::Done) else {
+        panic!("a concurrent turn reads no pending question")
+    };
+    assert_eq!(handle.task_id, "receipt");
+}
+
+/// A2A_SEED=2 (request_answered_once, Inbox): a batch message whose drained turn asked a question
+/// was watched forever: only a terminal row answered the request. A question is the turn's answer.
+#[test]
+fn a_watched_task_that_asks_a_question_is_answered() {
+    let mut m = machine(Policy::Batch);
+    m.phase = Phase::Observe;
+    m.pending = Some(1);
+    let effects =
+        at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row(TaskState::InputRequired)))));
+    let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+    assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::InputRequired));
 }

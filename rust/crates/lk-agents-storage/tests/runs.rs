@@ -4,11 +4,11 @@
 
 use std::time::{Duration, Instant};
 
-use lk_agents_storage::{CommitOptions, RunOptions, Thread};
 use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
 use lk_agents_storage::schema::TaskData;
 use lk_agents_storage::testing::{Backend, Fixture};
+use lk_agents_storage::{CommitOptions, RunOptions, Thread};
 
 use livekit_protocol::agent::chat_context::chat_item;
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
@@ -355,6 +355,37 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
+/// A2A_SEED=50 60 267 (answer_is_an_outcome, Concurrent): a concurrent run reads its rows live, so
+/// a client's cancel mid-turn is the base of its write. The write keeps the client's row, as the
+/// commit would, instead of refusing the whole turn.
+async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s1 = fx.thread("w1").await;
+    let s2 = fx.thread("w2").await;
+    let lane = s1.lane(LANE);
+    lane.open(RunOptions::new("r0", "AST_0"))
+        .await
+        .unwrap()
+        .commit(Default::default())
+        .await
+        .unwrap();
+    lane.db().submit(&submitted("AST_1")).await.unwrap();
+    let opts = RunOptions { exclusive: false, pickup: true, ..RunOptions::new("r1", "AST_1") };
+    let mut run = lane.open(opts).await.unwrap();
+    assert!(run.picked_up);
+    s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
+
+    run.history.push(message("i1", ChatRole::User, "hi"));
+    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    let committed = run
+        .commit(CommitOptions { answer_task: Some("AST_1".into()), ..CommitOptions::default() })
+        .await
+        .unwrap();
+    assert_eq!(committed.task.expect("read back").status, TaskState::Canceled);
+    assert_eq!(lane.history().await.unwrap().len(), 1, "the rest of the turn landed");
+    fx.cleanup(&[&s1, &s2]).await;
+}
+
 /// I-5: a run dropped without commit or abandon stops renewing: its lease lapses within the TTL
 /// and another holder takes the lane.
 async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
@@ -583,6 +614,7 @@ lk_agents_storage::contract!(
     a_dropped_run_stops_renewing_and_its_lease_lapses,
     a_cancel_never_overwrites_a_terminal_task,
     a_commit_never_overwrites_a_canceled_task,
+    a_concurrent_write_keeps_a_row_canceled_mid_turn,
     the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit,
     a_run_that_aborts_writes_run_ended_and_nothing_else,
     a_committed_run_id_yields_a_closed_run,
@@ -613,7 +645,8 @@ async fn run_ended_count(s: &Thread) -> usize {
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() {
-    let (fx, s, committed) = commit_through(lk_agents_storage::testing::CommitFault::LoseAckAfter).await;
+    let (fx, s, committed) =
+        commit_through(lk_agents_storage::testing::CommitFault::LoseAckAfter).await;
     assert_eq!(committed.unwrap(), 1, "the original run's commit, not a failure");
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(s.lane(LANE).task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
@@ -623,7 +656,8 @@ async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() 
 
 #[tokio::test]
 async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
-    let (fx, s, committed) = commit_through(lk_agents_storage::testing::CommitFault::LoseAckBefore).await;
+    let (fx, s, committed) =
+        commit_through(lk_agents_storage::testing::CommitFault::LoseAckBefore).await;
     assert_eq!(committed.unwrap(), 1);
     assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
     assert_eq!(run_ended_count(&s).await, 1);

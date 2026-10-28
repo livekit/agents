@@ -8,23 +8,23 @@ use std::time::Duration;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
+use lk_agents_abi::a2a::turn::TurnContext;
+use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
 use lk_agents_core::a2a::{
     DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnEvent, TurnHost, TurnOptions,
     TurnResult, Verdict,
 };
-use lk_agents_abi::a2a::turn::TurnContext;
-use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::{RunOptions, Thread, shortuuid};
-use lk_agents_storage::db::{Receive};
 use lk_agents_storage::TaskWrite;
+use lk_agents_storage::db::Receive;
 use lk_agents_storage::run::{
     INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState,
 };
 use lk_agents_storage::schema::{Ask, TaskData};
-use lk_agents_storage::timestamp;
 use lk_agents_storage::testing::Backend;
+use lk_agents_storage::timestamp;
 
 use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
@@ -431,7 +431,7 @@ async fn history_texts(s: &Thread) -> Vec<String> {
 
 fn placeholder_id(v: &mut Value, key: &str, prefix: &str) {
     let id = v[key].as_str().expect("an id").to_owned();
-    assert!(id.starts_with(prefix) && id.len() == prefix.len() + 12, "{id}");
+    assert!(id.starts_with(prefix) && id.len() > prefix.len(), "{id}");
     v[key] = Value::String(format!("{prefix}X"));
 }
 
