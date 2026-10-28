@@ -201,9 +201,11 @@ class LLM(llm.LLM):
         await super().aclose()
         if self._ws is not None:
             await self._ws.aclose()
-        for ws in self._retired_ws:
-            await ws.aclose()
+        # clear before awaiting: a turn finishing mid-close then finds its transport
+        # already gone instead of mutating the set or closing it twice
+        retired = list(self._retired_ws)
         self._retired_ws.clear()
+        await asyncio.gather(*(ws.aclose() for ws in retired), return_exceptions=True)
         if self._ws_close_tasks:
             await asyncio.gather(*self._ws_close_tasks, return_exceptions=True)
         if self._client is not None:
