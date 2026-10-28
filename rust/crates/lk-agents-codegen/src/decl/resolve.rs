@@ -146,15 +146,30 @@ impl Resolver<'_> {
     fn assoc_type(&self, t: &syn::TraitItemType) -> Result<Assoc, String> {
         let at = format!("{}::{}", self.at, t.ident);
         let entries = voc::read(&t.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["source"])?;
-        let source = voc::find(&entries, "source").ok_or_else(|| format!("{at}: an associated type declares its kind: #[host(source(item = T, class = \"X\"))]"))?;
-        voc::only(&at, &source.nested, &["item", "class"])?;
-        let item = voc::rust(&at, &source.nested, "item")?
-            .ok_or_else(|| format!("{at}: source(item = T) is what it yields"))?;
-        let class = voc::text(&at, &source.nested, "class")?
-            .ok_or_else(|| format!("{at}: source(class = \"X\") is its stream class"))?;
-        let item = self.ty(&item, &at)?;
-        Ok(Assoc { rust_name: t.ident.to_string(), ty: Ty::Source { item: Box::new(item), class } })
+        voc::only(&at, &entries, &["source", "handle"])?;
+        let ty = match (voc::find(&entries, "source"), voc::find(&entries, "handle")) {
+            (Some(source), None) => {
+                voc::only(&at, &source.nested, &["item", "class"])?;
+                let item = voc::rust(&at, &source.nested, "item")?
+                    .ok_or_else(|| format!("{at}: source(item = T) is what it yields"))?;
+                let class = voc::text(&at, &source.nested, "class")?
+                    .ok_or_else(|| format!("{at}: source(class = \"X\") is its stream class"))?;
+                Ty::Source { item: Box::new(self.ty(&item, &at)?), class }
+            }
+            (None, Some(handle)) => {
+                voc::only(&at, &handle.nested, &["class"])?;
+                let class = voc::text(&at, &handle.nested, "class")?.ok_or_else(|| {
+                    format!("{at}: handle(class = \"X\") is the shell's class `crate::handles::X`")
+                })?;
+                Ty::Handle { assoc: t.ident.to_string(), class }
+            }
+            _ => {
+                return Err(format!(
+                    "{at}: an associated type declares its kind: #[host(source(item = T, class = \"X\"))] or #[host(handle(class = \"X\"))]"
+                ));
+            }
+        };
+        Ok(Assoc { rust_name: t.ident.to_string(), ty })
     }
 
     fn method(&self, f: &syn::TraitItemFn) -> Result<Method, String> {
@@ -927,7 +942,7 @@ fn literal_default(at: &str, entries: &[Entry]) -> Result<Option<Literal>, Strin
 /// (no class, proxy or source).
 fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Result<(), String> {
     match ty {
-        Ty::This | Ty::Proxy { .. } | Ty::Source { .. } | Ty::Unit | Ty::Tuple(_) => {
+        Ty::This | Ty::Proxy { .. } | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit | Ty::Tuple(_) => {
             return Err(format!("{at}: `{}` is not a record field", ty.rust()));
         }
         _ => {}
@@ -1006,7 +1021,7 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
         )),
         Ty::Optional(t) | Ty::List(t) => check_input(at, t),
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This | Ty::Source { .. } | Ty::Unit => {
+        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit => {
             Err(format!("{at}: `{}` is not an input", ty.rust()))
         }
         _ => Ok(()),

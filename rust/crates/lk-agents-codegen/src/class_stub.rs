@@ -213,6 +213,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             }
         }
         Ty::Source { class, .. } => class.clone(),
+        Ty::Handle { class, .. } => {
+            imports.add(".._core", class);
+            class.clone()
+        }
     }
 }
 

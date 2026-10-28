@@ -285,6 +285,13 @@ pub enum Ty {
         item: Box<Ty>,
         class: String,
     },
+    /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
+    /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's
+    /// type). Output only.
+    Handle {
+        assoc: String,
+        class: String,
+    },
 }
 
 /// What the host holds a record as.
@@ -348,6 +355,7 @@ impl Ty {
             Ty::Record(r) => r.rust.clone(),
             Ty::This => "Self".into(),
             Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),
+            Ty::Handle { assoc, .. } => format!("Self::{assoc}"),
             Ty::Source { item, .. } => {
                 format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())
             }

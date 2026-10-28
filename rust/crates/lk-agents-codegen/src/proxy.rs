@@ -111,7 +111,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{v})?"),
         Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{v})?.into_any()"),
-        Ty::Unit | Ty::This | Ty::Proxy { .. } | Ty::Source { .. } => {
+        Ty::Unit | Ty::This | Ty::Proxy { .. } | Ty::Source { .. } | Ty::Handle { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));
         }
         Ty::Optional(t) | Ty::List(t) if matches!(**t, Ty::Json | Ty::JsonObject) => {

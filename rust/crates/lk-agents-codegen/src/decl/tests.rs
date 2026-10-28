@@ -127,6 +127,29 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
     assert_eq!(c.methods[3].kind, MethodKind::Await);
 }
 
+// Catches: an implementation's own object (a handle) taken as an input, or handed out as
+// anything but the shell's class built from it.
+#[test]
+fn a_handle_is_handed_out_as_the_shells_class_and_never_taken_in() {
+    let decls = read(&class(
+        r#"
+        #[host(handle(class = "Thread"))]
+        type Thread;
+        #[host(await)] async fn open(&self, id: String) -> Res<Self::Thread>;
+        "#,
+    ))
+    .expect("resolves");
+    let open = &decls.classes[0].methods[0];
+    assert_eq!(open.ret.ok, Ty::Handle { assoc: "Thread".into(), class: "Thread".into() });
+    let adapter = crate::adapter::emit(&decls).unwrap();
+    let text = adapter.iter().map(|o| o.text.as_str()).collect::<String>();
+    assert!(text.contains("crate::handles::Thread::from("), "{text}");
+    let err = refuse(
+        r#"#[host(handle(class = "Thread"))] type Thread; #[host(call)] fn close(&self, t: Self::Thread);"#,
+    );
+    assert!(err.contains("is not an input"), "{err}");
+}
+
 // Catches: a type accepted for what its last segment spells. `Value` here is the crate's own
 // undeclared type, not `serde_json::Value`, and `Duration` has no declared unit.
 #[test]

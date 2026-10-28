@@ -345,6 +345,9 @@ fn output(at: &str, c: &Class, ty: &Ty) -> Result<(String, String), String> {
             "Bound<'py, PyAny>".into(),
             "::lk_agents_abi::python::extra_to_py({py}, &{})?.into_any()".into(),
         ),
+        Ty::Handle { class, .. } => {
+            (format!("crate::handles::{class}"), format!("crate::handles::{class}::from({{}})"))
+        }
         Ty::Source { class, .. } => (
             class.clone(),
             format!(

@@ -10,6 +10,7 @@
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too) |
 //! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |
+//! | associated type | `handle(class = "X")` | an implementation's own object, handed out (never taken in) as the registration shell's class `crate::handles::X`, built `From` it |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
 //! | trait method | `call` | a synchronous call on `&self` |
 //! | trait method | `await` | an `async fn` on `&self`, awaited by the host |
