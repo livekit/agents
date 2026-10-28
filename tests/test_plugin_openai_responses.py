@@ -394,7 +394,11 @@ class _ReplayResponsesWS:
         self.attempts = 0
 
     def generate_response(  # noqa: ANN201
-        self, payload: dict, *, receive_timeout: float | None = None
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
     ):
         self.attempts += 1
 
@@ -495,7 +499,11 @@ class _StallingResponsesWS:
         self.attempts = 0
 
     def generate_response(  # noqa: ANN201
-        self, payload: dict, *, receive_timeout: float | None = None
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
     ):
         self.attempts += 1
         frames = self._frames
@@ -562,7 +570,11 @@ class _UsageResponsesWS:
         self.receive_timeouts: list[float | None] = []
 
     def generate_response(  # noqa: ANN201
-        self, payload: dict, *, receive_timeout: float | None = None
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
     ):
         self.receive_timeouts.append(receive_timeout)
         frames = self._frames
