@@ -970,3 +970,32 @@ fn a_default_factory_field_is_stamped_by_the_host() {
         "{shell}"
     );
 }
+
+// Catches: a `_core` call whose context is captured later than its entry (or not at all), a
+// captured context surfacing as a host parameter, or a proxy passing what it runs in to the host.
+#[test]
+fn a_call_context_is_captured_at_entry_and_never_crosses() {
+    use crate::decl::tests::{proxy, read};
+    let decls = read(&format!(
+        "{}\nuse crate::invoke::CallContext;\n#[crate::host(class(name = \"Session\"))]\npub trait Session: Sized {{\n    #[host(new)] fn new() -> Self;\n    #[host(await)] async fn say(&self, text: String, #[host(context)] cx: CallContext) -> Result<(), HostError>;\n}}",
+        proxy("#[host(await)] async fn listen(&self, #[host(context)] cx: &crate::invoke::CallContext, text: String) -> Result<(), HostError>;")
+    ))
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        llm.contains("#[pyo3(signature = (text))]")
+            && llm.contains("let cx = crate::host::entered();\n        let this =")
+            && llm.contains("::say(&this, text, cx)"),
+        "{llm}"
+    );
+    assert!(
+        llm.contains("\"Callbacks.listen\", cx, &[], ")
+            && llm.contains("let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [")
+            && !llm.contains("cx_arg"),
+        "{llm}"
+    );
+    let stubs = crate::class_stub::emit(&decls).expect("stubs");
+    let stub = stubs.iter().map(|s| s.out.text.as_str()).collect::<String>();
+    assert!(stub.contains("async def say(self, text: str) -> None"), "{stub}");
+}

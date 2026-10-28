@@ -218,12 +218,17 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     {
         s.push_str(&format!("{ind}#[pyo3(name = \"{}\")]\n", m.name));
     }
-    if !m.params.is_empty() {
+    if m.params.iter().any(|p| p.ty != Ty::CallContext) {
         s.push_str(&format!("{ind}#[pyo3(signature = ({}))]\n", signature(&m.params)));
     }
     let mut args = Vec::new();
     let mut prelude = String::new();
     for p in &m.params {
+        // Captured synchronously at the call's entry, before any native work is scheduled.
+        if p.ty == Ty::CallContext {
+            prelude.push_str(&format!("{ind}    let {} = crate::host::entered();\n", p.name));
+            continue;
+        }
         let (ty, convert) = input(&at, p)?;
         let extraction = if native(&p.ty) && contains_number(&p.ty) {
             format!("#[pyo3(from_py_with = {})] ", extractor_name(c, m, p))
@@ -386,7 +391,7 @@ fn source_class(name: &str, item: &Ty) -> Result<String, String> {
 fn signature(params: &[Param]) -> String {
     let mut parts = Vec::new();
     let mut star = false;
-    for p in params {
+    for p in params.iter().filter(|p| p.ty != Ty::CallContext) {
         if p.kw_only && !star {
             parts.push("*".to_owned());
             star = true;

@@ -240,6 +240,13 @@ impl HostEntry for Entry {
     }
 }
 
+/// The [`CallContext`](lk_agents_abi::invoke::CallContext) of a `_core` call, captured at its
+/// entry: the running loop and a copy of the caller's context, none outside a running loop.
+pub fn entered() -> lk_agents_abi::invoke::CallContext {
+    let host_context = Python::attach(|py| capture_context(py).ok());
+    lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
+}
+
 /// `class(*args, **kwargs)` in place, under the GIL the caller holds: a framework model, a view
 /// over a host object, an enum member. What generated conversions build host values with.
 pub fn construct<'py, A>(

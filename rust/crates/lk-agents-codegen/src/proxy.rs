@@ -162,7 +162,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // Owned copies move into the call, which runs on the host's loop.
     let mut moved = String::new();
     let mut args = Vec::new();
-    for q in &m.params {
+    // A `CallContext` is what the call runs in, never an argument.
+    for q in m.params.iter().filter(|q| q.ty != Ty::CallContext) {
         moved.push_str(&format!("        let {}_arg = {};\n", q.name, owned(q)));
         let value = to_host(&format!("{}_arg", q.name), &q.ty, &at)?;
         if m.kind == ProxyCall::Notify && matches!(q.ty, Ty::Error(_)) {

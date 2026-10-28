@@ -191,7 +191,7 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         vec!["self".to_owned()]
     };
     let mut star = false;
-    for p in &m.params {
+    for p in m.params.iter().filter(|p| p.ty != Ty::CallContext) {
         if p.kw_only && !star {
             params.push("*".into());
             star = true;
@@ -257,6 +257,8 @@ enum Dir {
 fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
+        // Hidden from the host's signature: the binding captures it.
+        Ty::CallContext => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Duration => "float".into(),

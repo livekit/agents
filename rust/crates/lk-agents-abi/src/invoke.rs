@@ -33,6 +33,32 @@ impl std::fmt::Display for Scope {
     }
 }
 
+/// What a framework call runs in: the host context captured at its entry (a `_core` method's
+/// binding captures it before scheduling native work) and the framework scopes it holds. Calls it
+/// leads to carry it explicitly; Tokio tasks and threads never inherit it.
+#[derive(Debug, Clone, Default)]
+pub struct CallContext {
+    pub host_context: Option<HostRef>,
+    pub job: Option<String>,
+    pub session: Option<String>,
+    pub speech: Option<String>,
+}
+
+impl crate::agent::HostContext for CallContext {
+    fn host_context(&self) -> Option<&HostRef> {
+        self.host_context.as_ref()
+    }
+
+    fn holds(&self, scope: Scope) -> bool {
+        match scope {
+            Scope::Job => self.job.is_some(),
+            Scope::Agent => self.session.is_some(),
+            Scope::Speech => self.speech.is_some(),
+            Scope::ToolCall | Scope::Approval => false,
+        }
+    }
+}
+
 /// A host call refused before its host is entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {

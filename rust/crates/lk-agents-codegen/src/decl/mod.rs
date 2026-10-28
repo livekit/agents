@@ -403,6 +403,10 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     /// A `#[derive(Host)]` record, crossing by its generated conversions.
     Record(Record),
+    /// `lk_agents_abi::invoke::CallContext`, a `#[host(context)]` parameter: what a call runs in.
+    /// Never crosses: a class method's binding captures it at the call's entry (hidden from the
+    /// host's signature); a proxy call runs in it and does not pass it.
+    CallContext,
     /// The declaring class itself (`Self`).
     This,
     /// `Arc<dyn Trait>` of a `#[host(proxy)]` trait: a native class as itself, any other host
@@ -515,6 +519,7 @@ impl Ty {
     pub fn rust(&self) -> String {
         match self {
             Ty::Unit => "()".into(),
+            Ty::CallContext => "::lk_agents_abi::invoke::CallContext".into(),
             Ty::Bool => "bool".into(),
             Ty::Int(i) => i.rust().into(),
             Ty::Float => "f64".into(),

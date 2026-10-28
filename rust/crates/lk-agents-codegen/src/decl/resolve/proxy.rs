@@ -145,6 +145,17 @@ impl Resolver<'_> {
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
                 return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
+            if context == Some(params.len()) && call_context(&pt.ty) {
+                let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
+                params.push(Param {
+                    name,
+                    ty: Ty::CallContext,
+                    by_ref,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             let (by_ref, ty) = match &*pt.ty {
                 syn::Type::Reference(r) if r.mutability.is_none() => {
                     (true, self.borrowed(&r.elem, &pat)?)

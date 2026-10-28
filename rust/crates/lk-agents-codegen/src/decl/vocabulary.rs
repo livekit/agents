@@ -14,6 +14,7 @@
 //! | proxy method | `bind(wrap = T)` | `bind`, the copy handed out as `T::bound(copy, x, clock)`: a native wrapper the core runs around the host object (a host STT's retry loop) |
 //! | proxy trait | `: Any + Send + Sync` | a proxy of it passed to another proxy's host call (`Arc<dyn X>`, optional or not) is handed back as the host object it was taken from (before any `view`); a native implementation is refused there |
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too); a call without one runs in the context the proxy captured when it was taken (the host's running loop and a copy of its context) |
+//! | proxy or class parameter | `context` on a `CallContext` | what the call runs in (`lk_agents_abi::invoke::CallContext`), never crossing: a class method's binding captures it at the call's entry (`crate::host::entered()`), hidden from the host's signature; a proxy call runs in it without passing it |
 //! | proxy method | `requires(tool_call, ..)` | scopes (`job`, `agent`, `speech`, `tool_call`, `approval`) the awaited or notify call's `context` parameter must hold; without one the runtime refuses the call before the host is entered, with the declared error |
 //! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |

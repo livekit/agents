@@ -177,8 +177,24 @@ impl Resolver<'_> {
             };
             let pat = format!("{at}({})", ident.ident);
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["kw", "default"])?;
+            voc::only(&pat, &entries, &["kw", "default", "context"])?;
             kw_only |= voc::find(&entries, "kw").is_some();
+            if voc::find(&entries, "context").is_some() {
+                let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
+                if !call_context(&pt.ty) || params.iter().any(|p: &Param| p.ty == Ty::CallContext) {
+                    return Err(format!(
+                        "{pat}: a method's one #[host(context)] parameter is `CallContext`, captured at the call's entry"
+                    ));
+                }
+                params.push(Param {
+                    name: ident.ident.to_string(),
+                    ty: Ty::CallContext,
+                    by_ref,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             let (by_ref, ty) = match &*pt.ty {
                 syn::Type::Reference(r) if r.mutability.is_none() => {
                     (true, self.borrowed(&r.elem, &pat)?)
@@ -195,7 +211,7 @@ impl Resolver<'_> {
                 Some(_) => return Err(format!("{pat}: `default` is a literal")),
             };
             check_default(&pat, &ty, default.as_ref())?;
-            if params.last().is_some_and(|p: &Param| {
+            if params.iter().rfind(|p: &&Param| p.ty != Ty::CallContext).is_some_and(|p| {
                 (p.default.is_some() || matches!(p.ty, Ty::Maybe(_))) && !p.kw_only
             }) && default.is_none()
                 && !matches!(ty, Ty::Maybe(_))
@@ -951,4 +967,13 @@ pub fn doc(attrs: &[syn::Attribute]) -> Vec<String> {
         lines.pop();
     }
     lines
+}
+
+/// `CallContext` or `&CallContext` (`lk_agents_abi::invoke::CallContext`): what a call runs in.
+pub(super) fn call_context(ty: &syn::Type) -> bool {
+    let ty = match ty {
+        syn::Type::Reference(r) => &*r.elem,
+        t => t,
+    };
+    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "CallContext"))
 }
