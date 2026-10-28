@@ -22,7 +22,6 @@ from typing_extensions import Self
 from livekit import rtc
 
 from .. import _bindings, _core
-from .._exceptions import APIError
 from ..llm.chat_context import ChatRole
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
@@ -247,9 +246,6 @@ class LLM(
     def _core_prewarm(self) -> None:
         self.prewarm()
 
-    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        return _LLMConn(self, APIConnectOptions(**conn))
-
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 
@@ -271,20 +267,6 @@ class LLM(
         )
         out._core_attempts.core = True
         return out
-
-
-class _LLMConn:
-    """``LLM`` as the framework holds it under one ``conn_options``."""
-
-    def __init__(self, provider: LLM, conn: APIConnectOptions) -> None:
-        self._provider = provider
-        self._conn = conn
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._provider, name)
-
-    async def _core_chat(self, req: _core.ChatRequest) -> LLMStream:
-        return await self._provider._core_chat(req, self._conn)
 
 
 class _LLMEventChannel(aio.Chan[ChatChunk]):
@@ -318,7 +300,6 @@ class LLMStream(ABC):
         self._tools = tools
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
-        self._retry_on_chunk_sent = True
         self._metrics = _core.LlmMetricState(time.perf_counter())
         self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
@@ -329,15 +310,11 @@ class LLMStream(ABC):
 
     async def _attempt(self) -> None:
         self._metrics = _core.LlmMetricState(time.perf_counter())
-        try:
-            await self._run()
-        except APIError as e:
-            if not self._retry_on_chunk_sent and self._event_ch.output_sent:
-                e.retryable = False
-            raise
+        await self._run()
 
     async def _main_task(self) -> None:
-        await self._core_attempts.run(self._attempt)
+        # a failure after output reached the reader is final: the core never retries it
+        await self._core_attempts.run(self._attempt, produced=lambda: self._event_ch.output_sent)
         record = self._metrics.finish(
             time.perf_counter(), False, _bindings.metrics_context(self._llm)
         )

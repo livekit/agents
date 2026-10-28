@@ -793,16 +793,16 @@ fn a_provider_method_without_a_python_role_is_refused() {
 #[test]
 fn every_provider_method_gets_its_core_surface() {
     let out = generate_provider(&PROVIDER.replace("MARKER", "")).expect("generates");
-    for core in ["_core_label", "_core_capabilities", "_core_with_conn_options", "_core_ask"] {
-        assert!(out.contains(&format!("def {core}(self")), "{core}: {out}");
-    }
     // Wrapping aside.
     let flat = out.split_whitespace().collect::<Vec<_>>().join(" ").replace("( ", "(");
+    for core in ["_core_label", "_core_capabilities", "_core_ask"] {
+        assert!(flat.contains(&format!("def {core}(self")), "{core}: {out}");
+    }
+    // Without a retry wrapper the declared proxy binds `conn_options` itself: no view.
+    assert!(!out.contains("_core_with_conn_options") && !out.contains("class _PConn"), "{out}");
     for want in [
         "async def _ask_impl(self, text: str, *, language: NotGivenOr[str] = NOT_GIVEN, conn_options: APIConnectOptions ) -> Caps: ...",
         "return await self.ask(text, language=NOT_GIVEN if language is None else language, conn_options=conn )",
-        "return _PConn(self, APIConnectOptions(**conn))",
-        "return await self._provider._core_ask(text, language, self._conn)",
         "P.__module__ = \"livekit.agents.m\"",
     ] {
         assert!(flat.contains(want), "{want}: {out}");

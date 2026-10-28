@@ -253,6 +253,13 @@ impl Writer<'_> {
         self.p.methods.iter().find(|m| matches!(m.role, Role::Conn { .. }))
     }
 
+    /// A `conn` with a core retry wrapper takes the provider as a view under one `conn_options`
+    /// (`_core_with_conn_options`, `_<Class>Conn`); without one the declared proxy binds the
+    /// options itself and passes them to each awaited `_core_` call.
+    fn conn_view_needed(&self) -> bool {
+        self.p.methods.iter().any(|m| matches!(m.role, Role::Conn { retry: Some(_) }))
+    }
+
     /// The methods a `conn_options` reaches: every awaited one, on a provider with a `conn`.
     fn carries_conn(&self, m: &ProviderMethod) -> bool {
         m.is_async && self.conn().is_some()
@@ -361,7 +368,7 @@ impl Writer<'_> {
             ));
         }
         self.paths.push((class.clone(), p.path.clone()));
-        if self.conn().is_some() {
+        if self.conn_view_needed() {
             b.push_str("\n\n");
             self.conn_view(&mut b)?;
         }
@@ -625,6 +632,9 @@ impl Writer<'_> {
 
     /// One method's `_core_` surface.
     fn core(&mut self, b: &mut String, m: &ProviderMethod) -> Result<(), String> {
+        if matches!(m.role, Role::Conn { retry: None }) {
+            return Ok(());
+        }
         let def = if m.is_async { "async def" } else { "def" };
         let mut params = Vec::new();
         for p in &m.params {
@@ -1053,8 +1063,8 @@ impl Writer<'_> {
         Ok(b)
     }
 
-    /// `stream(kind = "chat")`: one completion's chunks, a failure after output marked final
-    /// unless the stream retries on sent chunks.
+    /// `stream(kind = "chat")`: one completion's chunks; a failure after output reached the
+    /// reader is final (the core never retries produced output).
     fn chat_stream(&mut self, s: &StreamClass) -> Result<String, String> {
         for (m, n) in [
             ("", "asyncio"),
@@ -1065,7 +1075,6 @@ impl Writer<'_> {
             ("typing", "Any"),
             ("..", "_bindings"),
             ("..", "_core"),
-            (".._exceptions", "APIError"),
             ("..types", "APIConnectOptions"),
             ("..utils", "aio"),
             ("?..llm.chat_context", "ChatContext"),
@@ -1667,7 +1676,6 @@ const CHAT: &str = r#"
         self._tools = tools
         self._conn_options = conn_options
         self._event_ch = _{Provider}EventChannel()
-        self._retry_on_chunk_sent = True
         self._metrics = _core.LlmMetricState(time.perf_counter())
         self._core_attempts = _bindings.Attempts("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
@@ -1678,15 +1686,11 @@ const CHAT: &str = r#"
 
     async def _attempt(self) -> None:
         self._metrics = _core.LlmMetricState(time.perf_counter())
-        try:
-            await self._run()
-        except APIError as e:
-            if not self._retry_on_chunk_sent and self._event_ch.output_sent:
-                e.retryable = False
-            raise
+        await self._run()
 
     async def _main_task(self) -> None:
-        await self._core_attempts.run(self._attempt)
+        # a failure after output reached the reader is final: the core never retries it
+        await self._core_attempts.run(self._attempt, produced=lambda: self._event_ch.output_sent)
         record = self._metrics.finish(
             time.perf_counter(), False, _bindings.metrics_context(self._llm)
         )

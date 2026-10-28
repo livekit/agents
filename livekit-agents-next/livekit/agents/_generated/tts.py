@@ -267,9 +267,6 @@ class TTS(
     def _core_set_expressive(self, enabled: bool) -> None:
         self._set_expressive(enabled)
 
-    def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        return _TTSConn(self, APIConnectOptions(**conn))
-
     def _core_failed(self, error: Exception, recoverable: bool) -> None:
         self._emit_error(error, recoverable)
 
@@ -286,23 +283,6 @@ class TTS(
         out = self.stream(conn_options=conn)
         out._core_attempts.core = True
         return out
-
-
-class _TTSConn:
-    """``TTS`` as the framework holds it under one ``conn_options``."""
-
-    def __init__(self, provider: TTS, conn: APIConnectOptions) -> None:
-        self._provider = provider
-        self._conn = conn
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._provider, name)
-
-    async def _core_synthesize(self, text: str) -> ChunkedStream:
-        return await self._provider._core_synthesize(text, self._conn)
-
-    async def _core_stream(self) -> SynthesizeStream:
-        return await self._provider._core_stream(self._conn)
 
 
 class ChunkedStream(ABC):
