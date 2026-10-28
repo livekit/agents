@@ -567,7 +567,8 @@ class SpeechStream(stt.RecognizeStream):
             done, _ = await asyncio.wait([producer, consumer], return_when=asyncio.FIRST_COMPLETED)
             if producer in done:
                 await producer
-                await asyncio.wait_for(consumer, self._conn_options.total_timeout)
+                # Finite input: the VAD's last results are a response the stream is waiting on.
+                await asyncio.wait_for(consumer, self._conn_options.read_timeout)
             else:
                 # Live input may remain open indefinitely; surface the consumer's error now.
                 await consumer
