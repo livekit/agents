@@ -51,6 +51,7 @@ class PrismGenerationCreatedEvent(llm.GenerationCreatedEvent):
     input_item_ids: tuple[str, ...] = ()
     settings_revision: int | None = None
     provider_request_id: str | None = None
+    instruction_item_id: str | None = None
 
 
 @dataclass
@@ -157,6 +158,12 @@ class RealtimeModel(
             raise llm.RealtimeError("Prism session is not open")
         return await self._session.get_history()
 
+    async def delete_instruction_item(self, item_id: str) -> None:
+        """Remove a saved nudge instruction after its reply ends."""
+        if self._session is None:
+            raise llm.RealtimeError("Prism session is not open")
+        await self._session.delete_instruction_item(item_id)
+
     @property
     def model(self) -> str:
         return "prism"
@@ -243,6 +250,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._tool_policy_floor = 0
         self._transcript_deltas: dict[str, str] = {}
         self._history: PrismHistory | None = None
+        self._instruction_lock = asyncio.Lock()
+        self._instruction_items: OrderedDict[str, tuple[str, bool]] = OrderedDict()
         self._spawn(self._connect())
 
     def _sdk_tools(
@@ -406,6 +415,25 @@ class RealtimeSession(llm.RealtimeSession):
         except r.RimeRealtimeError as error:
             raise PrismError(error.fault) from error
 
+    async def delete_instruction_item(self, item_id: str) -> None:
+        """Delete an instruction observed in this session without changing LiveKit history."""
+        await asyncio.shield(self._initialized)
+        sdk = self._require()
+        assert self._history is not None
+        async with self._instruction_lock:
+            state = self._instruction_items.get(item_id)
+            if state is None:
+                raise RimeInputError("Unknown saved Prism instruction item")
+            if not state[1]:
+                raise RimeInputError("Cannot delete a saved instruction before its reply ends")
+            await self._history.wait_for_updates()
+            try:
+                await sdk.delete_item(item_id)
+            except r.RimeRealtimeError as error:
+                raise PrismError(error.fault) from error
+            if self._instruction_items.get(item_id) == state:
+                del self._instruction_items[item_id]
+
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
         await asyncio.shield(self._initialized)
 
@@ -532,6 +560,7 @@ class RealtimeSession(llm.RealtimeSession):
         instructions: NotGivenOr[str] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+        metadata: Mapping[str, str] | None = None,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
@@ -544,6 +573,7 @@ class RealtimeSession(llm.RealtimeSession):
                 parent,
                 report,
                 self._tool_choice == "none",
+                dict(metadata) if metadata is not None else None,
             ),
             request=True,
         )
@@ -554,6 +584,7 @@ class RealtimeSession(llm.RealtimeSession):
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
         disable_tools: bool,
+        metadata: dict[str, str] | None,
     ) -> llm.GenerationCreatedEvent:
         await asyncio.shield(self._initialized)
         # Do not hold the history lock during admission: a pending tool result
@@ -563,7 +594,7 @@ class RealtimeSession(llm.RealtimeSession):
         await self._history.wait_for_updates()
         try:
             if not disable_tools:
-                return await self._request_reply(instruction, parent, report)
+                return await self._request_reply(instruction, parent, report, metadata)
             async with self._settings_lock:
                 sdk = self._require()
                 restore = self._sdk_tools(self._tool_list, self._tool_fillers)
@@ -580,7 +611,7 @@ class RealtimeSession(llm.RealtimeSession):
                     # Shield admission through response creation. Restoring the tools
                     # before an accepted late response starts changes its settings.
                     task = self._spawn(
-                        self._request_reply(instruction, parent, report), request=True
+                        self._request_reply(instruction, parent, report, metadata), request=True
                     )
                     try:
                         return await asyncio.shield(task)
@@ -612,15 +643,16 @@ class RealtimeSession(llm.RealtimeSession):
         instruction: str | None,
         parent: r.ResponseRef | None,
         report: r.ToolCallRef | None,
+        metadata: dict[str, str] | None,
     ) -> llm.GenerationCreatedEvent:
         sdk = self._require()
         ref: r.ResponseRef | None = None
         try:
             if instruction is not None:
-                ref = await sdk.request_reply(instruction=instruction)
+                ref = await sdk.request_reply(instruction=instruction, metadata=metadata)
             elif parent is not None:
                 try:
-                    ref = await sdk.continue_reply(parent)
+                    ref = await sdk.continue_reply(parent, metadata=metadata)
                 except (RimeInputError, r.RimeRealtimeError) as error:
                     if isinstance(error, r.RimeRealtimeError) and (
                         error.fault.scope != "event"
@@ -631,9 +663,9 @@ class RealtimeSession(llm.RealtimeSession):
                     call = self._history.last_call(parent)
                     if call is None:
                         raise
-                    ref = await sdk.request_reply(tool_call=call)
+                    ref = await sdk.request_reply(tool_call=call, metadata=metadata)
             else:
-                ref = await sdk.request_reply(tool_call=report)
+                ref = await sdk.request_reply(tool_call=report, metadata=metadata)
             async with self._generation_ready:
                 await self._generation_ready.wait_for(
                     lambda: ref.response_id in self._generations or self._failure is not None
@@ -811,6 +843,7 @@ class RealtimeSession(llm.RealtimeSession):
                 input_item_ids=payload.input_item_ids,
                 settings_revision=payload.settings_revision,
                 provider_request_id=self._require().info.request_id,
+                instruction_item_id=payload.instruction_item_id,
             )
             self._generations[payload.response.response_id] = _Generation(
                 payload.response,
@@ -825,6 +858,14 @@ class RealtimeSession(llm.RealtimeSession):
                     else self._suppress_tools
                 ),
             )
+            if payload.instruction_item_id is not None:
+                self._instruction_items.pop(payload.instruction_item_id, None)
+                if len(self._instruction_items) >= 128:
+                    self._instruction_items.popitem(last=False)
+                self._instruction_items[payload.instruction_item_id] = (
+                    payload.response.response_id,
+                    False,
+                )
             self._latest = self._active = payload.response
             self._parent = self._report = None
             self._model.emit("generation_created", created)
@@ -887,6 +928,13 @@ class RealtimeSession(llm.RealtimeSession):
             call = self._history.record_tool_call(payload)
             self._generations[payload.call.response_id].functions.send_nowait(call)
         elif isinstance(payload, r.ResponseEnded):
+            instruction_item_id = self._generations[
+                payload.response.response_id
+            ].event.instruction_item_id
+            if instruction_item_id is not None:
+                state = self._instruction_items.get(instruction_item_id)
+                if state is not None and state[0] == payload.response.response_id:
+                    self._instruction_items[instruction_item_id] = (state[0], True)
             self._end(self._generations[payload.response.response_id])
             if self._active == payload.response:
                 self._active = None

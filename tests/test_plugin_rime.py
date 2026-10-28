@@ -4105,6 +4105,38 @@ class TestRealtime:
             assert generations[0].provider_request_id == "diagnostics"
             assert generations[0].settings_revision == peer.revision
 
+    async def test_reply_labels_and_saved_instruction_deletion(self):
+        async with peer_model(response_metadata={"call": "shared"}) as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="Help")
+            labels = {"call": "this-reply", "step": "2"}
+            pending = session.generate_reply(instructions="Check in", metadata=labels)
+            labels["step"] = "changed"
+            request = await peer.next()
+            assert request["response"]["metadata"] == {
+                "prism_cause": "proactive",
+                "call": "this-reply",
+                "step": "2",
+            }
+            request["response"]["metadata"]["prism_instruction_item_id"] = "saved-instruction"
+            peer.server_items.append(
+                {"id": "saved-instruction", "type": "message", "role": "user", "text": "Check in"}
+            )
+            response_id = await peer.start(request)
+            created = await pending
+            assert created.instruction_item_id == "saved-instruction"
+            with pytest.raises(RimeInputError, match="before its reply ends"):
+                await model.delete_instruction_item(created.instruction_item_id)
+            await peer.message(response_id)
+            await peer.end(response_id)
+            await wait_until(lambda: session._generations[response_id].ended)
+            session._generations.pop(response_id)
+            await model.delete_instruction_item(created.instruction_item_id)
+            assert peer.history_operations[-1]["item_id"] == "saved-instruction"
+            assert all(item["id"] != "saved-instruction" for item in peer.server_items)
+            with pytest.raises(RimeInputError, match="Unknown saved"):
+                await model.delete_instruction_item("saved-instruction")
+
     @pytest.mark.parametrize(
         "code,retryable",
         [

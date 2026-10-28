@@ -133,7 +133,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a24`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a25`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -241,6 +241,10 @@ Updates wait for Prism acknowledgments. Handoff uses the normal LiveKit sequence
 instructions, history, and tools are separate updates. There is no atomic handoff.
 Use `await model.update_session(voice="...")` for the voice or
 `await model.update_session(response_metadata={"step": "2"})` for response labels.
+For one explicit reply on a direct Prism `RealtimeSession`, call
+`await session.generate_reply(instructions="Check in", metadata={"step": "3"})`.
+The per-reply labels replace matching session labels. Replies that Prism starts from
+caller speech use session labels.
 `model.session_info` reports acknowledged settings and the provider request ID.
 When one call changes both settings and response labels, it sends two separate
 requests. If the label update fails, the earlier accepted settings remain applied
@@ -268,6 +272,12 @@ ends the session. Standard fallback replays the current agent context, which can
 already contain the requested edit even when Prism rejected it.
 `await model.get_history()` returns completed server items. Running replies may
 be absent from that snapshot.
+`PrismGenerationCreatedEvent.instruction_item_id` names a saved instruction from
+an explicit reply. After that reply ends, call
+`await model.delete_instruction_item(event.instruction_item_id)` to remove it from
+later Prism history. This method accepts only saved instruction IDs observed in
+the current session while they remain among the last 128 saved instruction IDs
+that the adapter observed. It does not change LiveKit's local chat history.
 
 Set `truncation="auto"`, `truncation="disabled"`, or
 `truncation=RetentionRatio(0.9)` at construction or through `model.update_session()`.
@@ -293,12 +303,14 @@ the plugin does not add its own history rollback or startup failover logic.
 
 The model emits `session_updated`, `generation_created`, and `speech_stopped`.
 `PrismGenerationCreatedEvent` includes response labels, input item IDs when
-provided, the settings revision, and the provider request ID.
+provided, the settings revision, the provider request ID, and an optional saved
+instruction item ID.
 `PrismSpeechStoppedEvent` includes the speech end reason. Interim and final input
 transcripts use LiveKit's standard transcription events.
 
 The model also emits SDK `ItemTruncated` payloads as `item_truncated` and
-`ResponseEnded` payloads as `response_ended`. Available retained text updates
+`ResponseEnded` payloads as `response_ended`. `ResponseEnded.usage` has token
+counts when Prism reports them. Available retained text updates
 the plugin's history only while the server item ID still matches. `kept_text=None`
 means unavailable; an empty string means no words remain. This text describes
 server history, not necessarily what was heard, and does not replace LiveKit's
