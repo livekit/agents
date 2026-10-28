@@ -154,9 +154,7 @@ pub fn metadata_to_wire(metadata: MessageMetadata) -> Result<Map<String, Value>,
             "interruptionReason",
         ]
         .iter()
-        .any(|field| {
-            key == &format!("{EXTENSION_URI}/{field}") || key == &format!("livekit/{field}")
-        })
+        .any(|field| key == &format!("{EXTENSION_URI}/{field}"))
     }) {
         return Err(AgentClientError::InvalidInput(
             "application metadata cannot define typed LiveKit keys".into(),
