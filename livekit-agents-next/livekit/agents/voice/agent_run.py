@@ -196,7 +196,12 @@ class _TextRun(Generic[Context_T]):
         """Releases this run's toolsets once it settled, completed, failed or cancelled."""
         toolsets, self._toolsets = self._toolsets, []
         try:
-            await asyncio.gather(*(t._release() for t in toolsets))
+            results = await asyncio.gather(
+                *(t._release() for t in toolsets), return_exceptions=True
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
         finally:
             try:
                 store, self._store = self._store, None

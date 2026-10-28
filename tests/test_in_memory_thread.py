@@ -155,3 +155,36 @@ async def test_toolset_setup_failure_releases_each_owned_resource_once(
         await agent.run("start")
     assert events == ["setup:ready", "setup:refused", "close:ready"]
     assert len(stores) == len(storages) == 1
+
+
+async def test_failing_toolset_release_waits_for_siblings_before_closing_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    close_storage = Storage.aclose
+
+    async def record_storage_close(storage: Storage) -> None:
+        events.append("storage closed")
+        await close_storage(storage)
+
+    monkeypatch.setattr(Storage, "aclose", record_storage_close)
+
+    class Release(Toolset):
+        async def aclose(self) -> None:
+            if self.id == "failed":
+                raise ValueError("release failed")
+            await asyncio.sleep(0.01)
+            events.append("sibling released")
+
+    agent = Agent(
+        instructions="Help",
+        tools=[Release(id="failed"), Release(id="delayed")],
+        llm=FakeLLM(
+            fake_responses=[FakeLLMResponse(input="hi", content="Hello", ttft=0, duration=0)]
+        ),
+    )
+    with pytest.raises(ValueError, match="release failed"):
+        await agent.run("hi")
+    # Let delayed releases settle before asserting, keeping a failing regression hermetic.
+    await asyncio.sleep(0.02)
+    assert events == ["sibling released", "storage closed"]
