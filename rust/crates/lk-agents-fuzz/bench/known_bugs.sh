@@ -117,6 +117,9 @@ fi
 rsync -r --links --checksum --from0 --files-from="$files" "$source" "$tree/"
 (cd "$tree" && find rust -path rust/target -prune -o \( -type f -o -type l \) -print | sort) \
     | comm -23 - <(tr '\0' '\n' < "$files" | sort) | (cd "$tree" && xargs rm -f)
+# and the directories they leave empty (a crate directory without its manifest breaks the
+# workspace's `crates/*`).
+find "$tree/rust/crates" -type d -empty -delete
 export CARGO_TARGET_DIR="$home/target"
 
 # `git apply` on the copy, which is no repository: paths are taken from the copy's root.
