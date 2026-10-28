@@ -60,7 +60,12 @@ def _dispatch(server: AgentServer, args: argparse.Namespace) -> None:
     from .cli.cli import _run_tcp_console, _run_worker
 
     if args.command == "console":
-        _run_tcp_console(server=server, connect_addr=args.connect_addr, record=args.record)
+        _run_tcp_console(
+            server=server,
+            connect_addr=args.connect_addr,
+            record=args.record,
+            log_level=args.log_level,
+        )
     elif args.command == "start":
         _run_worker(
             server=server,
@@ -125,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     console_p.add_argument("entrypoint", nargs="?")
     console_p.add_argument("--connect-addr", required=True)
     console_p.add_argument("--record", action="store_true", default=False)
+    console_p.add_argument("--log-level", default="DEBUG")
 
     args = parser.parse_args(argv)
 
