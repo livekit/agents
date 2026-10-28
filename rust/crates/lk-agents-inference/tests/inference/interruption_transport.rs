@@ -11,17 +11,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
+use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::RealClock;
+use lk_agents_inference::headers::HEADER_SESSION_ID;
 use lk_agents_inference::interruption::{
-    AdaptiveInterruptionDetector, AUDIO_PREFIX_DURATION, ConnectionConfig, DETECTION_INTERVAL,
+    AUDIO_PREFIX_DURATION, AdaptiveInterruptionDetector, ConnectionConfig, DETECTION_INTERVAL,
     DetectorEvent, InputEvent, InterruptionOptions, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
     REMOTE_INFERENCE_TIMEOUT, StreamClosed,
 };
-use lk_agents_abi::ApiConnectOptions;
 use support::within;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use lk_agents_inference::headers::HEADER_SESSION_ID;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 
@@ -54,12 +54,18 @@ async fn recording_gateway() -> (u16, mpsc::UnboundedReceiver<(String, String)>)
             tokio::spawn(async move {
                 let mut session_id = String::new();
                 let record = |req: &Request, resp| {
-                    session_id = req.headers().get(HEADER_SESSION_ID).map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+                    session_id = req
+                        .headers()
+                        .get(HEADER_SESSION_ID)
+                        .map(|v| v.to_str().unwrap().to_owned())
+                        .unwrap_or_default();
                     Ok(resp)
                 };
-                let Ok(mut ws) =
-                    within("the websocket handshake", tokio_tungstenite::accept_hdr_async(stream, record))
-                        .await
+                let Ok(mut ws) = within(
+                    "the websocket handshake",
+                    tokio_tungstenite::accept_hdr_async(stream, record),
+                )
+                .await
                 else {
                     return;
                 };
@@ -136,8 +142,7 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
     assert_eq!(third, second, "a bare reconnect must re-send the current settings");
 }
 
-// Catches: the retry counter never advancing. `retry::decide` is pure and tested, but it is only
-// correct if the driver increments `num_retries` -- leave that out and a gateway that is simply
+// Catches: the driver failing to advance the shared policy's retry counter. A gateway that is
 // down produces an infinite reconnect loop that never reports anything, which is indistinguishable
 // from "interruption is enabled and quiet". Also catches `emit_error` being dropped: the two
 // recoverable errors before the fatal one are the only warning a user gets.

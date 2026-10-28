@@ -13,8 +13,9 @@ use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::InterruptionMetrics;
 use lk_agents_abi::turn::detector::ReqId;
-use lk_agents_abi::types::retry::{self, RequestKind, RetryDecision};
+use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{Clock, HostRef};
+use lk_agents_net::attempts::RequestPolicy;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -468,40 +469,31 @@ async fn main_task_inner(
     ctx: &StreamContext,
     mut input_rx: mpsc::Receiver<QueuedInput>,
 ) -> Result<(), ApiError> {
+    let policy = RequestPolicy::from_options(&ctx.config.conn_options);
     let mut num_retries = 0u32;
     loop {
         let err = match run(ctx, &mut input_rx).await {
             Ok(()) => return Ok(()),
             Err(e) => e,
         };
-        // `_main_task`'s ladder (`inference/interruption.py:462`): every arm emits an error event
-        // first; `recoverable` differs (#5727). `max_retry = 0` re-raises the real error.
-        match retry::decide(
-            RequestKind::Interruption,
-            &ctx.config.conn_options,
-            num_retries,
-            err.error.retryable,
-            None,
-            false,
-        ) {
-            RetryDecision::Stop | RetryDecision::Raise => {
-                ctx.emit_error(err.request, err.error.clone(), false);
-                return Err(err.error);
+        if let Some(delay) = policy.retry_delay(num_retries, err.error.retryable) {
+            ctx.emit_error(err.request, err.error, true);
+            let resume = ctx.clock.now().saturating_add(delay);
+            if let Err(error) = while_input_open(ctx, ctx.clock.wait_until(resume)).await {
+                ctx.emit_error(error.request, error.error.clone(), false);
+                return Err(error.error);
             }
-            RetryDecision::Exhausted(message) => {
-                ctx.emit_error(err.request, err.error, false);
-                return Err(ApiError::connection(Some(message)));
-            }
-            RetryDecision::Retry(after) => {
-                ctx.emit_error(err.request, err.error, true);
-                // On the session's clock.
-                let resume = ctx.clock.now().saturating_add(Duration::from_secs_f64(after));
-                if let Err(error) = while_input_open(ctx, ctx.clock.wait_until(resume)).await {
-                    ctx.emit_error(error.request, error.error.clone(), false);
-                    return Err(error.error);
-                }
-                num_retries += 1;
-            }
+            num_retries += 1;
+        } else {
+            ctx.emit_error(err.request, err.error.clone(), false);
+            return match RequestKind::Interruption.terminal_failure(
+                &err.error,
+                ctx.config.conn_options.max_retry,
+                num_retries,
+            ) {
+                RetryDecision::Exhausted(message) => Err(ApiError::connection(Some(message))),
+                _ => Err(err.error),
+            };
         }
     }
 }

@@ -1,5 +1,5 @@
 //! `_connect_ws`'s exception mapping and the stream's failure errors, as pure functions. The retry
-//! ladder is `lk_agents_abi::types::retry::decide(RequestKind::Interruption, ..)`.
+//! allowance and backoff come from `lk_agents_net::attempts::RequestPolicy`.
 
 use lk_agents_abi::errors::ApiError;
 

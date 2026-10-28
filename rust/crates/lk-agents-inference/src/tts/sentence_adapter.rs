@@ -144,6 +144,9 @@ impl Tts for StreamAdapter {
         self.tts.synthesize(text).await
     }
     async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
+        self.budget
+            .validate()
+            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
         let (tx, rx) = mpsc::unbounded_channel();
         // Snapshotted now, while the framework holds it fixed for this synthesis.
@@ -442,27 +445,22 @@ impl AdapterSource {
     /// `Ok` once the wait before the sentence's next attempt is over, and that attempt opened; the
     /// failure, final, when the sentence's budget is spent or it may not be retried.
     async fn retry_sentence(&mut self, error: ProviderError) -> Result<(), ProviderError> {
-        use lk_agents_abi::types::retry::{RequestKind, RetryDecision, decide};
         let Some((_, retries)) = self.sentence.as_mut() else { return Err(error) };
-        let decision = match error.api_kind() {
-            None => RetryDecision::Raise,
-            Some(_) => decide(
-                RequestKind::TtsBatch,
-                &self.budget,
-                *retries,
-                error.retryable(),
-                error.status_code(),
-                self.sentence_audio,
-            ),
+        let eligible = error.api_kind().is_some()
+            && error.retryable()
+            && error.status_code() != Some(499)
+            && !self.sentence_audio;
+        let policy = lk_agents_net::attempts::RequestPolicy::from_options(&self.budget);
+        let Some(wait) = policy.retry_delay(*retries, eligible) else {
+            return Err(error.into_final());
         };
-        let RetryDecision::Retry(delay) = decision else { return Err(error.into_final()) };
+        let delay = wait.as_secs_f64();
         *retries += 1;
         log::warn!(
             target: "livekit.agents",
             "{}: failed to synthesize speech: {error}, retrying in {delay}s (attempt {retries})",
             self.tts.label()
         );
-        let wait = std::time::Duration::from_secs_f64(delay.max(0.0));
         if let Some(report) = &self.report {
             report(error.clone(), *retries, wait);
         }

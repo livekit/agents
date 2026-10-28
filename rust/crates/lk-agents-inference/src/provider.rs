@@ -259,6 +259,40 @@ mod tests {
         seconds * 1_000_000_000
     }
 
+    // Replay eligibility belongs to the provider boundary, including delivered audio and 499.
+    #[test]
+    fn delivered_output_blocks_replay_except_for_recognition_and_499_stops_synthesis() {
+        for kind in [
+            RequestKind::Llm,
+            RequestKind::SttBatch,
+            RequestKind::SttStream,
+            RequestKind::TtsBatch,
+            RequestKind::TtsStream,
+            RequestKind::Interruption,
+            RequestKind::Avatar,
+        ] {
+            let mut operation =
+                ProviderAttempts::new(kind, ApiConnectOptions::default(), 0).unwrap();
+            assert_eq!(operation.ready(0), Ok(true));
+            let decision = operation.failure(ApiError::connection(None).into(), true, 0).unwrap();
+            assert_eq!(
+                decision,
+                if kind == RequestKind::SttStream {
+                    RetryDecision::Retry(0.1)
+                } else {
+                    RetryDecision::Raise
+                }
+            );
+        }
+        for kind in [RequestKind::Llm, RequestKind::TtsBatch, RequestKind::TtsStream] {
+            let mut operation =
+                ProviderAttempts::new(kind, ApiConnectOptions::default(), 0).unwrap();
+            operation.ready(0).unwrap();
+            let cancelled = ApiError { status_code: Some(499), ..ApiError::connection(None) };
+            assert_eq!(operation.failure(cancelled.into(), false, 0).unwrap(), RetryDecision::Stop);
+        }
+    }
+
     #[test]
     fn recognition_is_passive_until_a_dequeued_flush_and_final_transcript_clears_the_wait() {
         let options =

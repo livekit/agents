@@ -43,6 +43,18 @@ pub struct RequestPolicy {
 }
 
 impl RequestPolicy {
+    /// The shared retry allowance and delay; the owner supplies whether replay is eligible.
+    pub fn retry_delay(&self, retries: u32, retryable: bool) -> Option<Duration> {
+        if !retryable || retries >= self.max_retry {
+            return None;
+        }
+        Some(if retries == 0 {
+            Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
+        } else {
+            self.retry_interval
+        })
+    }
+
     /// The phase limits of validated options; `pool_timeout` bounds no wait of this transport and
     /// the legacy `timeout` is not read.
     pub fn from_options(options: &ApiConnectOptions) -> Self {
@@ -454,13 +466,8 @@ impl Attempts {
         steps: &mut Vec<AttemptStep>,
     ) {
         let retryable = error.retryable && !self.replay_unsafe;
-        if retryable && self.failures < self.policy.max_retry {
-            let delay = if self.failures == 0 {
-                Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
-            } else {
-                self.policy.retry_interval
-            }
-            .max(at_least);
+        if let Some(delay) = self.policy.retry_delay(self.failures, retryable) {
+            let delay = delay.max(at_least);
             self.failures += 1;
             self.phase = Phase::Waiting { attempt: attempt + 1, at: now.saturating_add(delay) };
             steps.push(AttemptStep::Retry { attempt, error });
