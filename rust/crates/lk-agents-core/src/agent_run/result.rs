@@ -40,10 +40,16 @@ pub struct RunResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunOutcome {
-    Completed { output: Output },
+    Completed {
+        output: Output,
+    },
     /// `answer_tool` takes the person's next message as its first string parameter
     /// (`InputRequired(tool=)`); the next invocation is told so.
-    InputRequired { question: String, verbatim: bool, answer_tool: Option<String> },
+    InputRequired {
+        question: String,
+        verbatim: bool,
+        answer_tool: Option<String>,
+    },
 }
 
 /// The accepted output of a completed invocation.
@@ -76,9 +82,14 @@ pub enum RunError {
     /// A host callback the invocation depends on (instructions, output validation) failed.
     Host(String),
     /// The model kept calling `tool` wrongly past its retry budget.
-    ToolRetriesExceeded { tool: String, retries: u32 },
+    ToolRetriesExceeded {
+        tool: String,
+        retries: u32,
+    },
     /// The model kept producing rejected final output past its retry budget.
-    OutputRetriesExceeded { retries: u32 },
+    OutputRetriesExceeded {
+        retries: u32,
+    },
 }
 
 impl std::fmt::Display for RunError {
@@ -104,13 +115,32 @@ impl std::error::Error for RunError {}
 /// envelope (sequence, agent name, invocation and frame ids).
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
-    TextDelta { message_id: String, delta: String },
-    TextEnd { message_id: String, interrupted: bool },
+    TextDelta {
+        message_id: String,
+        delta: String,
+    },
+    TextEnd {
+        message_id: String,
+        interrupted: bool,
+    },
     /// A call whose arguments validated, with those arguments.
-    ToolCall { call_id: String, tool_name: String, arguments: Value },
-    ToolResult { call_id: String, tool_name: String, status: ToolResultStatus, output: String },
+    ToolCall {
+        call_id: String,
+        tool_name: String,
+        arguments: Value,
+    },
+    ToolResult {
+        call_id: String,
+        tool_name: String,
+        status: ToolResultStatus,
+        output: String,
+    },
     /// `ctx.update(text)`.
-    Progress { call_id: String, tool_name: String, message: String },
+    Progress {
+        call_id: String,
+        tool_name: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

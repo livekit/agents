@@ -34,7 +34,14 @@ pub(super) struct Response {
 
 impl ModelStep {
     pub(super) fn new(request: RequestId, purpose: Purpose, message_id: String) -> Self {
-        ModelStep { request, purpose, message_id, text: String::new(), calls: Vec::new(), usage: None }
+        ModelStep {
+            request,
+            purpose,
+            message_id,
+            text: String::new(),
+            calls: Vec::new(),
+            usage: None,
+        }
     }
 
     /// Takes one chunk; the text it adds, to stream as it arrives.

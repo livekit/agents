@@ -81,15 +81,18 @@ pub(super) struct Driver {
 
 impl Driver {
     pub(super) fn new(agent: Agent, message: &str, history: Vec<ChatItem>) -> Driver {
-        Driver::with_input(agent, RunInput {
-            invocation_id: "run_1".into(),
-            message: user("msg_1", message),
-            history,
-            answer_tool: None,
-            delegated: false,
-            wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
-            cleanup_timeout: Duration::from_secs(5),
-        })
+        Driver::with_input(
+            agent,
+            RunInput {
+                invocation_id: "run_1".into(),
+                message: user("msg_1", message),
+                history,
+                answer_tool: None,
+                delegated: false,
+                wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
+                cleanup_timeout: Duration::from_secs(5),
+            },
+        )
     }
 
     pub(super) fn with_input(agent: Agent, input: RunInput) -> Driver {
@@ -153,7 +156,8 @@ impl Driver {
                 extra: None,
             })
             .collect();
-        let usage = CompletionUsage { prompt_tokens: 10, completion_tokens: 3, ..Default::default() };
+        let usage =
+            CompletionUsage { prompt_tokens: 10, completion_tokens: 3, ..Default::default() };
         self.send(Event::LlmChunk { request, chunk: chunk(None, calls, Some(usage)) });
         self.send(Event::LlmEnded { request })
     }
@@ -184,7 +188,11 @@ impl Driver {
     /// The host prepares the call with `identity` as its validated arguments.
     pub(super) fn prepared(&mut self, call: CallId, identity: Value) -> Vec<Effect> {
         let prepared = ResourceId(1000 + call.0);
-        self.send(Event::ToolPrepared { call, prepared, identity: ArgumentIdentity::Json(identity) })
+        self.send(Event::ToolPrepared {
+            call,
+            prepared,
+            identity: ArgumentIdentity::Json(identity),
+        })
     }
 
     /// Prepares every pending call with its arguments as sent, then settles each body with
@@ -221,10 +229,19 @@ impl Driver {
     }
 }
 
-pub(super) fn chunk(text: Option<&str>, tool_calls: Vec<FunctionToolCall>, usage: Option<CompletionUsage>) -> LlmChunk {
+pub(super) fn chunk(
+    text: Option<&str>,
+    tool_calls: Vec<FunctionToolCall>,
+    usage: Option<CompletionUsage>,
+) -> LlmChunk {
     LlmChunk {
         id: "chunk".into(),
-        delta: Some(ChoiceDelta { role: Some(Role::Assistant), content: text.map(Into::into), tool_calls, extra: None }),
+        delta: Some(ChoiceDelta {
+            role: Some(Role::Assistant),
+            content: text.map(Into::into),
+            tool_calls,
+            extra: None,
+        }),
         usage,
         flush: false,
         node_text: false,
@@ -240,7 +257,9 @@ pub(super) fn transcript(items: &[ChatItem]) -> Vec<(String, String)> {
     items
         .iter()
         .map(|item| match item {
-            ChatItem::Message(m) => (format!("{:?}", m.role).to_lowercase(), m.raw_text_content().unwrap_or_default()),
+            ChatItem::Message(m) => {
+                (format!("{:?}", m.role).to_lowercase(), m.raw_text_content().unwrap_or_default())
+            }
             ChatItem::FunctionCall(c) => ("call".into(), format!("{}({})", c.name, c.arguments)),
             ChatItem::FunctionCallOutput(o) => ("output".into(), o.output.clone()),
             other => ("other".into(), other.id().to_owned()),

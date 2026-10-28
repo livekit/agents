@@ -45,7 +45,12 @@ pub fn plan_request(snapshot: RequestSnapshot<'_>) -> PlannedRequest {
     items.extend(model_view(snapshot.history));
     if let Some(text) = snapshot.turn_instructions {
         let id = format!("{INSTRUCTIONS_MESSAGE_ID}.turn");
-        items.push(ChatItem::Message(ChatMessage::text(id, Role::System, text, snapshot.created_at)));
+        items.push(ChatItem::Message(ChatMessage::text(
+            id,
+            Role::System,
+            text,
+            snapshot.created_at,
+        )));
     }
     let tools = snapshot
         .tools
@@ -67,7 +72,8 @@ pub fn model_view(history: &[ChatItem]) -> Vec<ChatItem> {
         history.iter().find_map(|i| match i {
             ChatItem::FunctionCall(c)
                 if c.call_id == call_id
-                    && approval::mark(c) == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
+                    && approval::mark(c)
+                        == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
             {
                 Some(c.name.as_str())
             }
@@ -94,4 +100,52 @@ pub fn model_view(history: &[ChatItem]) -> Vec<ChatItem> {
             _ => item.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use lk_agents_abi::llm::llm::ToolFlags;
+    use serde_json::json;
+
+    use super::*;
+
+    // Catches (decision 42): `IGNORE_ON_ENTER` withholding a tool outside `on_enter`, or offering it
+    // inside; stored instructions reaching the model twice.
+    #[test]
+    fn ignore_on_enter_tools_are_withheld_only_inside_on_enter() {
+        let tool = |name: &str, ignore_on_enter| ToolSpec {
+            name: name.into(),
+            description: String::new(),
+            json_schema: json!({"type": "object"}),
+            flags: ToolFlags { ignore_on_enter },
+        };
+        let tools = [tool("lookup", false), tool("collect_dob", true)];
+        let stale = ChatItem::Message(ChatMessage::text(
+            INSTRUCTIONS_MESSAGE_ID,
+            Role::System,
+            "old",
+            SystemTime::UNIX_EPOCH,
+        ));
+        let history = [stale];
+        let plan = |on_enter| {
+            plan_request(RequestSnapshot {
+                history: &history,
+                instructions: "new",
+                tools: &tools,
+                on_enter,
+                turn_instructions: None,
+                created_at: SystemTime::UNIX_EPOCH,
+            })
+        };
+        let names = |p: &PlannedRequest| p.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&plan(false)), ["lookup", "collect_dob"]);
+        assert_eq!(names(&plan(true)), ["lookup"]);
+        let texts: Vec<_> = plan(false)
+            .chat_ctx
+            .items
+            .iter()
+            .map(|i| i.as_message().and_then(|m| m.raw_text_content()))
+            .collect();
+        assert_eq!(texts, [Some("new".to_owned())]);
+    }
 }

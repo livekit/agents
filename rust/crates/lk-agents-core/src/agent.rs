@@ -79,10 +79,16 @@ impl Default for Retries {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentError {
     /// A raw-schema tool has no signature to bind validated arguments to.
-    ApprovalOnRawSchema { tool: String },
-    DuplicateTool { tool: String },
+    ApprovalOnRawSchema {
+        tool: String,
+    },
+    DuplicateTool {
+        tool: String,
+    },
     /// The name the structured output is offered under.
-    ReservedToolName { tool: String },
+    ReservedToolName {
+        tool: String,
+    },
 }
 
 impl std::fmt::Display for AgentError {

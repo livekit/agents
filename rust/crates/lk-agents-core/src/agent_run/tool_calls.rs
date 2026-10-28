@@ -52,12 +52,23 @@ struct Call {
 #[derive(Debug)]
 enum Phase {
     /// The host binds and validates the arguments.
-    Preparing { confirmed: bool },
+    Preparing {
+        confirmed: bool,
+    },
     /// Prepared; waits until every earlier call of the same tool is decided.
-    Admitting { prepared: ResourceId, identity: ArgumentIdentity, confirmed: bool },
+    Admitting {
+        prepared: ResourceId,
+        identity: ArgumentIdentity,
+        confirmed: bool,
+    },
     /// The application's read-back function runs.
-    ReadingBack { prepared: ResourceId, identity: ArgumentIdentity },
-    Running { identity: String },
+    ReadingBack {
+        prepared: ResourceId,
+        identity: ArgumentIdentity,
+    },
+    Running {
+        identity: String,
+    },
     /// A `final_result` candidate the parent validates.
     Validating,
     Settled(Settled),
@@ -99,7 +110,8 @@ impl ToolCalls {
             let phase = if item.name == FINAL_RESULT_TOOL
                 && matches!(agent.output, OutputSpec::Structured { .. })
             {
-                finals.push(FinalCandidate { call: id, value: final_value(agent, &item.arguments) });
+                finals
+                    .push(FinalCandidate { call: id, value: final_value(agent, &item.arguments) });
                 Phase::Validating
             } else {
                 start(id, &item, agent, fx)
@@ -191,14 +203,21 @@ impl ToolCalls {
     }
 
     /// The parent's verdict on a `final_result` candidate: `None` accepted.
-    pub(super) fn final_settled(&mut self, id: CallId, rejection: Option<String>, fx: &mut Vec<Effect>) {
+    pub(super) fn final_settled(
+        &mut self,
+        id: CallId,
+        rejection: Option<String>,
+        fx: &mut Vec<Effect>,
+    ) {
         let Some(call) = self.call_mut(id) else { return };
         if !matches!(call.phase, Phase::Validating) {
             return;
         }
         let outcome = match rejection {
             None => value_outcome("final result recorded"),
-            Some(reason) => ToolOutcome::ToolError(format!("invalid {FINAL_RESULT_TOOL}: {reason}")),
+            Some(reason) => {
+                ToolOutcome::ToolError(format!("invalid {FINAL_RESULT_TOOL}: {reason}"))
+            }
         };
         settle(call, outcome, false, fx);
     }
@@ -253,7 +272,9 @@ impl ToolCalls {
                 c.item.name == name
                     && matches!(
                         c.phase,
-                        Phase::Preparing { .. } | Phase::Admitting { .. } | Phase::ReadingBack { .. }
+                        Phase::Preparing { .. }
+                            | Phase::Admitting { .. }
+                            | Phase::ReadingBack { .. }
                     )
             });
             if undecided {
@@ -273,7 +294,8 @@ impl ToolCalls {
         if let Some(read_back) = tool.needs_approval {
             // The history and this step's earlier decisions, the read-backs' answers included.
             let mut decided: Vec<ChatItem> = history.to_vec();
-            decided.extend(self.calls[..index].iter().map(|c| ChatItem::FunctionCall(c.item.clone())));
+            decided
+                .extend(self.calls[..index].iter().map(|c| ChatItem::FunctionCall(c.item.clone())));
             let call = &mut self.calls[index];
             if approval::granted(&decided, &call.item.name, &canonical) {
                 approval::set_mark(&mut call.item, Approval::Granted, &canonical);
@@ -362,7 +384,9 @@ fn start(id: CallId, item: &FunctionCall, agent: &Agent, fx: &mut Vec<Effect>) -
     }
     let mut arguments = parsed.arguments;
     let confirmed = match tool.on_duplicate {
-        DuplicateMode::Confirm => arguments.remove(CONFIRM_DUPLICATE_PARAM).is_some_and(|v| truthy(&v)),
+        DuplicateMode::Confirm => {
+            arguments.remove(CONFIRM_DUPLICATE_PARAM).is_some_and(|v| truthy(&v))
+        }
         _ => false,
     };
     if !tool.raw_schema {

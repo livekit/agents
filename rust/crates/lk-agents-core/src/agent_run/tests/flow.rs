@@ -7,9 +7,13 @@ use super::*;
 // per request.
 #[test]
 fn a_tool_runs_and_the_model_continues_from_its_output() {
-    let mut d = Driver::new(text_agent(vec![string_tool("find_slot", "day")]), "Book me Monday", vec![]);
+    let mut d =
+        Driver::new(text_agent(vec![string_tool("find_slot", "day")]), "Book me Monday", vec![]);
     let (_, ctx, tools) = d.request();
-    assert_eq!(transcript(&ctx.items), pairs(&[("system", "Book appointments."), ("user", "Book me Monday")]));
+    assert_eq!(
+        transcript(&ctx.items),
+        pairs(&[("system", "Book appointments."), ("user", "Book me Monday")])
+    );
     assert_eq!(tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["find_slot"]);
 
     d.reply("Let me look.", &[("find_slot", json!({"day": "Monday"}))]);
@@ -26,11 +30,17 @@ fn a_tool_runs_and_the_model_continues_from_its_output() {
 
     d.reply("Monday 9:00 is free.", &[]);
     let result = d.result();
-    assert_eq!(result.outcome, RunOutcome::Completed { output: Output::Text("Monday 9:00 is free.".into()) });
+    assert_eq!(
+        result.outcome,
+        RunOutcome::Completed { output: Output::Text("Monday 9:00 is free.".into()) }
+    );
     assert_eq!(transcript(&result.new_messages)[0], ("user".into(), "Book me Monday".into()));
     assert_eq!(result.new_messages.len(), 5);
     assert_eq!(result.all_messages, result.new_messages);
-    assert_eq!(result.usage, RunUsage { requests: 2, input_tokens: 20, output_tokens: 6, tool_calls: 1 });
+    assert_eq!(
+        result.usage,
+        RunUsage { requests: 2, input_tokens: 20, output_tokens: 6, tool_calls: 1 }
+    );
 }
 
 // Catches: text withheld until the response ends (no incremental output), or a step's text
@@ -40,7 +50,9 @@ fn text_streams_as_it_arrives_before_the_model_ends() {
     let mut d = Driver::new(text_agent(vec![]), "hi", vec![]);
     let (request, _, _) = d.request();
     let fx = d.send(Event::LlmChunk { request, chunk: chunk(Some("Hel"), vec![], None) });
-    assert!(matches!(&fx[..], [Effect::Emit(StreamEvent::TextDelta { delta, .. })] if delta == "Hel"));
+    assert!(
+        matches!(&fx[..], [Effect::Emit(StreamEvent::TextDelta { delta, .. })] if delta == "Hel")
+    );
     assert!(d.finished().is_none());
     d.send(Event::LlmChunk { request, chunk: chunk(Some("lo"), vec![], None) });
     let fx = d.send(Event::LlmEnded { request });
@@ -53,7 +65,11 @@ fn text_streams_as_it_arrives_before_the_model_ends() {
 #[test]
 fn identical_inputs_replay_identically() {
     let play = || {
-        let mut d = Driver::new(text_agent(vec![string_tool("a", "x"), string_tool("b", "y")]), "go", vec![]);
+        let mut d = Driver::new(
+            text_agent(vec![string_tool("a", "x"), string_tool("b", "y")]),
+            "go",
+            vec![],
+        );
         d.reply("", &[("b", json!({"y": "2"})), ("a", json!({"x": "1"}))]);
         d.run_tools(value);
         d.reply("done", &[]);
@@ -66,9 +82,15 @@ fn identical_inputs_replay_identically() {
 // model again.
 #[test]
 fn a_tool_that_asks_for_no_reply_ends_the_turn() {
-    let mut d = Driver::new(text_agent(vec![string_tool("send_dtmf", "digits")]), "press 1", vec![]);
+    let mut d =
+        Driver::new(text_agent(vec![string_tool("send_dtmf", "digits")]), "press 1", vec![]);
     d.reply("", &[("send_dtmf", json!({"digits": "1"}))]);
-    d.run_tools(|_| ToolOutcome::Value { text: "sent".into(), reply_required: false, verbatim: false, more: None });
+    d.run_tools(|_| ToolOutcome::Value {
+        text: "sent".into(),
+        reply_required: false,
+        verbatim: false,
+        more: None,
+    });
     assert_eq!(d.requests(), 1);
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Nothing });
 }
@@ -80,16 +102,32 @@ fn stop_response_and_verbatim_results_end_or_lead_the_turn() {
     let mut d = Driver::new(text_agent(vec![string_tool("stop", "x")]), "stop", vec![]);
     d.reply("", &[("stop", json!({"x": "1"}))]);
     d.run_tools(|_| ToolOutcome::StopResponse);
-    assert_eq!((d.requests(), &d.result().outcome), (1, &RunOutcome::Completed { output: Output::Nothing }));
+    assert_eq!(
+        (d.requests(), &d.result().outcome),
+        (1, &RunOutcome::Completed { output: Output::Nothing })
+    );
 
     let mut d = Driver::new(text_agent(vec![string_tool("code", "x")]), "my code?", vec![]);
     d.reply("", &[("code", json!({"x": "1"}))]);
-    d.run_tools(|_| ToolOutcome::Value { text: "Your code is 1234.".into(), reply_required: true, verbatim: true, more: None });
+    d.run_tools(|_| ToolOutcome::Value {
+        text: "Your code is 1234.".into(),
+        reply_required: true,
+        verbatim: true,
+        more: None,
+    });
     let (_, ctx, _) = d.request();
-    assert_eq!(ctx.items.last().map(|i| transcript(std::slice::from_ref(i))[0].1.clone()).unwrap(), "delivered to the person as written: Your code is 1234.");
+    assert_eq!(
+        ctx.items.last().map(|i| transcript(std::slice::from_ref(i))[0].1.clone()).unwrap(),
+        "delivered to the person as written: Your code is 1234."
+    );
     d.reply("Anything else?", &[]);
     let result = d.result();
-    assert_eq!(result.outcome, RunOutcome::Completed { output: Output::Text("Your code is 1234.\n\nAnything else?".into()) });
+    assert_eq!(
+        result.outcome,
+        RunOutcome::Completed {
+            output: Output::Text("Your code is 1234.\n\nAnything else?".into())
+        }
+    );
     assert_eq!(result.verbatim.as_deref(), Some("Your code is 1234."));
 }
 
@@ -105,7 +143,10 @@ fn model_retry_is_feedback_within_the_tool_retry_budget() {
 
     d.reply("", &[("book", json!({"day": "never"}))]);
     d.run_tools(|_| ToolOutcome::ModelRetry("use a weekday".into()));
-    assert_eq!(d.finished(), Some(&Err(RunError::ToolRetriesExceeded { tool: "book".into(), retries: 1 })));
+    assert_eq!(
+        d.finished(),
+        Some(&Err(RunError::ToolRetriesExceeded { tool: "book".into(), retries: 1 }))
+    );
 }
 
 // Catches: invalid arguments running the body, or an unknown tool failing the run instead of
@@ -118,15 +159,26 @@ fn invalid_arguments_and_unknown_tools_are_feedback_and_never_run_a_body() {
     d.send(Event::ToolPrepareFailed { call, error: "day: Input should be a valid string".into() });
     assert!(d.executes().is_empty());
     let (_, ctx, _) = d.request();
-    let outputs: Vec<_> = transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
-    assert_eq!(outputs, pairs(&[("output", "day: Input should be a valid string"), ("output", "unknown tool `cancel`")]));
+    let outputs: Vec<_> =
+        transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
+    assert_eq!(
+        outputs,
+        pairs(&[
+            ("output", "day: Input should be a valid string"),
+            ("output", "unknown tool `cancel`")
+        ])
+    );
 }
 
 // Catches: a non-object output schema offered unwrapped, its value not unwrapped, an accepted
 // candidate not settling the run, or a rejected one not fed back.
 #[test]
 fn structured_output_is_accepted_through_final_result() {
-    let mut d = Driver::new(agent(vec![], OutputSpec::Structured { schema: json!({"type": "integer"}) }), "count", vec![]);
+    let mut d = Driver::new(
+        agent(vec![], OutputSpec::Structured { schema: json!({"type": "integer"}) }),
+        "count",
+        vec![],
+    );
     let (_, _, tools) = d.request();
     assert_eq!(tools[0].name, "final_result");
     assert_eq!(tools[0].json_schema["properties"]["result"], json!({"type": "integer"}));
@@ -139,7 +191,10 @@ fn structured_output_is_accepted_through_final_result() {
         }
         _ => None,
     });
-    d.send(Event::OutputValidated { validation: validation.unwrap(), verdict: OutputVerdict::Retry("must be even".into()) });
+    d.send(Event::OutputValidated {
+        validation: validation.unwrap(),
+        verdict: OutputVerdict::Retry("must be even".into()),
+    });
     let (_, ctx, _) = d.request();
     assert_eq!(transcript(&ctx.items).last().unwrap().1, "invalid final_result: must be even");
 
@@ -148,8 +203,14 @@ fn structured_output_is_accepted_through_final_result() {
         Effect::OutputValidate { validation, .. } => Some(*validation),
         _ => None,
     });
-    d.send(Event::OutputValidated { validation: validation.unwrap(), verdict: OutputVerdict::Accepted { text: None } });
-    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Validated(validation.unwrap()) });
+    d.send(Event::OutputValidated {
+        validation: validation.unwrap(),
+        verdict: OutputVerdict::Accepted { text: None },
+    });
+    assert_eq!(
+        d.result().outcome,
+        RunOutcome::Completed { output: Output::Validated(validation.unwrap()) }
+    );
 }
 
 // Catches (c7 defect 4): an output validator's replacement value discarded.
@@ -161,7 +222,10 @@ fn a_validator_replacement_is_the_accepted_output() {
         Effect::OutputValidate { validation, .. } => Some(*validation),
         _ => None,
     });
-    d.send(Event::OutputValidated { validation: validation.unwrap(), verdict: OutputVerdict::Accepted { text: Some("Hello!".into()) } });
+    d.send(Event::OutputValidated {
+        validation: validation.unwrap(),
+        verdict: OutputVerdict::Accepted { text: Some("Hello!".into()) },
+    });
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Hello!".into()) });
 }
 
@@ -169,12 +233,20 @@ fn a_validator_replacement_is_the_accepted_output() {
 // question being worded twice.
 #[test]
 fn text_where_a_typed_output_is_expected_asks_the_person() {
-    let mut d = Driver::new(agent(vec![], OutputSpec::Structured { schema: json!({"type": "object"}) }), "book", vec![]);
+    let mut d = Driver::new(
+        agent(vec![], OutputSpec::Structured { schema: json!({"type": "object"}) }),
+        "book",
+        vec![],
+    );
     d.reply("Which day works for you?", &[]);
     assert_eq!(d.requests(), 1);
     assert_eq!(
         d.result().outcome,
-        RunOutcome::InputRequired { question: "Which day works for you?".into(), verbatim: false, answer_tool: None }
+        RunOutcome::InputRequired {
+            question: "Which day works for you?".into(),
+            verbatim: false,
+            answer_tool: None
+        }
     );
 }
 
@@ -182,20 +254,33 @@ fn text_where_a_typed_output_is_expected_asks_the_person() {
 // or the worded question missing from the history.
 #[test]
 fn a_tool_question_is_worded_by_the_facing_agent_only() {
-    let ask = |_: &str| ToolOutcome::InputRequired { question: "photo of the damage".into(), verbatim: false, tool: None };
+    let ask = |_: &str| ToolOutcome::InputRequired {
+        question: "photo of the damage".into(),
+        verbatim: false,
+        tool: None,
+    };
     let mut d = Driver::new(text_agent(vec![string_tool("photo", "x")]), "claim", vec![]);
     d.reply("", &[("photo", json!({"x": "1"}))]);
     d.run_tools(ask);
     let (_, ctx, tools) = d.request();
     assert!(tools.is_empty());
-    assert!(transcript(&ctx.items).last().unwrap().1.ends_with("nothing else: photo of the damage"));
+    assert!(
+        transcript(&ctx.items).last().unwrap().1.ends_with("nothing else: photo of the damage")
+    );
     d.reply("Could you send a photo of the damage?", &[]);
     let result = d.result();
     assert_eq!(
         result.outcome,
-        RunOutcome::InputRequired { question: "Could you send a photo of the damage?".into(), verbatim: false, answer_tool: None }
+        RunOutcome::InputRequired {
+            question: "Could you send a photo of the damage?".into(),
+            verbatim: false,
+            answer_tool: None
+        }
     );
-    assert_eq!(transcript(&result.all_messages).last().unwrap().1, "Could you send a photo of the damage?");
+    assert_eq!(
+        transcript(&result.all_messages).last().unwrap().1,
+        "Could you send a photo of the damage?"
+    );
 
     let mut input = Driver::new(text_agent(vec![]), "x", vec![]).run.input.clone();
     input.delegated = true;
@@ -204,17 +289,24 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     d.reply("", &[("photo", json!({"x": "1"}))]);
     d.run_tools(ask);
     assert_eq!(d.requests(), 1);
-    assert!(matches!(&d.result().outcome, RunOutcome::InputRequired { question, .. } if question == "photo of the damage"));
+    assert!(
+        matches!(&d.result().outcome, RunOutcome::InputRequired { question, .. } if question == "photo of the damage")
+    );
 }
 
 // Catches: `InputRequired(tool=)`'s answer going to the model instead of the named tool, or the
 // waiting placeholder left in the history once answered.
 #[test]
 fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
-    let tools = || vec![string_tool("ask_expert", "question"), string_tool("reply_expert", "answer")];
+    let tools =
+        || vec![string_tool("ask_expert", "question"), string_tool("reply_expert", "answer")];
     let mut d = Driver::new(text_agent(tools()), "is it covered?", vec![]);
     d.reply("", &[("ask_expert", json!({"question": "covered?"}))]);
-    d.run_tools(|_| ToolOutcome::InputRequired { question: "Which policy?".into(), verbatim: true, tool: Some("reply_expert".into()) });
+    d.run_tools(|_| ToolOutcome::InputRequired {
+        question: "Which policy?".into(),
+        verbatim: true,
+        tool: Some("reply_expert".into()),
+    });
     let first = d.result().clone();
     let RunOutcome::InputRequired { answer_tool, .. } = &first.outcome else { panic!() };
     assert_eq!(answer_tool.as_deref(), Some("reply_expert"));
@@ -228,7 +320,8 @@ fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
     assert_eq!(d.prepares()[0].1, Map::from_iter([("answer".to_owned(), json!("Gold plan"))]));
     d.run_tools(|_| value("covered"));
     let (_, ctx, _) = d.request();
-    let outputs: Vec<_> = transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
+    let outputs: Vec<_> =
+        transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
     assert_eq!(outputs, pairs(&[("output", "Gold plan"), ("output", "covered")]));
 }
 
@@ -257,7 +350,10 @@ fn dynamic_instructions_are_rendered_before_every_request() {
             _ => None,
         });
         assert_eq!(d.requests(), n);
-        d.send(Event::InstructionsRendered { render: render.unwrap(), result: Ok(rendered.into()) });
+        d.send(Event::InstructionsRendered {
+            render: render.unwrap(),
+            result: Ok(rendered.into()),
+        });
         let (_, ctx, _) = d.request();
         assert_eq!(transcript(&ctx.items)[0].1, format!("Book appointments.\n\n{rendered}"));
         if n == 0 {

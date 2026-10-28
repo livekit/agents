@@ -80,8 +80,11 @@ mod tests {
             verbatim: false,
             more: None,
         };
-        let ask =
-            ToolOutcome::InputRequired { question: "Which day?".into(), verbatim: false, tool: None };
+        let ask = ToolOutcome::InputRequired {
+            question: "Which day?".into(),
+            verbatim: false,
+            tool: None,
+        };
         let cases: &[(ToolOutcome, (&str, bool, bool))] = &[
             (value("12C", true), ("12C", false, true)),
             (value("sent DTMF 1", false), ("sent DTMF 1", false, false)),

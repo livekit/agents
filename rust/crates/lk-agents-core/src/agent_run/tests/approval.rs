@@ -45,7 +45,8 @@ fn question(d: &Driver) -> String {
 #[test]
 fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
     let validated = json!({"date": "Monday", "notify": true});
-    let first = turn(vec![], "cancel monday", json!({"date": "Monday", "notify": true}), validated.clone());
+    let first =
+        turn(vec![], "cancel monday", json!({"date": "Monday", "notify": true}), validated.clone());
     assert!(first.executes().is_empty(), "the body ran before approval");
     assert_eq!(
         question(&first),
@@ -58,10 +59,14 @@ fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
     // The person answers; the model repeats the call with strict mode's `null` for the default.
     let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
     let (_, ctx, _) = second.request();
-    let outputs: Vec<_> = ctx.items.iter().filter_map(|i| match i {
-        ChatItem::FunctionCallOutput(o) => Some(o.output.clone()),
-        _ => None,
-    }).collect();
+    let outputs: Vec<_> = ctx
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            ChatItem::FunctionCallOutput(o) => Some(o.output.clone()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(outputs, [approval::answered_text("cancel_appointment", "yes")]);
     second.reply("", &[("cancel_appointment", json!({"date": "Monday", "notify": null}))]);
     let (call, arguments) = second.prepares()[0].clone();
@@ -85,7 +90,12 @@ fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
 // identity is the validated value, not the model's JSON).
 #[test]
 fn changed_validated_arguments_need_a_fresh_approval() {
-    let first = turn(vec![], "cancel monday", json!({"date": "Monday"}), json!({"date": "2026-11-02", "notify": true}));
+    let first = turn(
+        vec![],
+        "cancel monday",
+        json!({"date": "Monday"}),
+        json!({"date": "2026-11-02", "notify": true}),
+    );
     let history = first.result().all_messages.clone();
     let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
     second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
@@ -102,8 +112,15 @@ fn changed_validated_arguments_need_a_fresh_approval() {
 fn one_answer_grants_one_repeat_within_a_step() {
     let validated = json!({"date": "Monday", "notify": true});
     let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
-    let mut d = Driver::new(text_agent(vec![cancel_tool()]), "yes", first.result().all_messages.clone());
-    d.reply("", &[("cancel_appointment", json!({"date": "Monday"})), ("cancel_appointment", json!({"date": "Monday"}))]);
+    let mut d =
+        Driver::new(text_agent(vec![cancel_tool()]), "yes", first.result().all_messages.clone());
+    d.reply(
+        "",
+        &[
+            ("cancel_appointment", json!({"date": "Monday"})),
+            ("cancel_appointment", json!({"date": "Monday"})),
+        ],
+    );
     let calls = d.prepares();
     d.prepared(calls[1].0, validated.clone());
     assert!(d.executes().is_empty(), "the second waits for the first's decision");

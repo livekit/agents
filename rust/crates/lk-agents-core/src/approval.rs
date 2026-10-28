@@ -151,8 +151,10 @@ fn python_literal(value: &Value) -> String {
             format!("[{}]", values.iter().map(python_literal).collect::<Vec<_>>().join(", "))
         }
         Value::Object(map) => {
-            let entries: Vec<String> =
-                map.iter().map(|(k, v)| format!("{}: {}", python_repr(k), python_literal(v))).collect();
+            let entries: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", python_repr(k), python_literal(v)))
+                .collect();
             format!("{{{}}}", entries.join(", "))
         }
     }
@@ -173,7 +175,9 @@ pub fn python_repr(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -189,8 +193,10 @@ mod tests {
     // Catches: an identity that depends on the order the host serialised the validated fields.
     #[test]
     fn identity_ignores_key_order_at_every_depth() {
-        let a = ArgumentIdentity::Json(json!({"b": 1, "a": {"y": [1, {"d": 1, "c": 2}], "x": "s"}}));
-        let b = ArgumentIdentity::Json(json!({"a": {"x": "s", "y": [1, {"c": 2, "d": 1}]}, "b": 1}));
+        let a =
+            ArgumentIdentity::Json(json!({"b": 1, "a": {"y": [1, {"d": 1, "c": 2}], "x": "s"}}));
+        let b =
+            ArgumentIdentity::Json(json!({"a": {"x": "s", "y": [1, {"c": 2, "d": 1}]}, "b": 1}));
         assert_eq!(a.canonical(), b.canonical());
         assert_ne!(a.canonical(), ArgumentIdentity::Fingerprint(a.canonical()).canonical());
     }
@@ -199,7 +205,8 @@ mod tests {
     // values the person recognises.
     #[test]
     fn read_back_names_the_action_and_the_validated_arguments() {
-        let identity = ArgumentIdentity::Json(json!({"date": "Monday", "count": 5, "notify": true}));
+        let identity =
+            ArgumentIdentity::Json(json!({"date": "Monday", "count": 5, "notify": true}));
         assert_eq!(
             read_back("Cancel the patient's appointment on a date. Then notify.", &identity),
             "Please confirm: Cancel the patient's appointment on a date (date='Monday', count=5, \

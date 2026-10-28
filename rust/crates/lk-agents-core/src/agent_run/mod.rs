@@ -67,7 +67,10 @@ pub struct RunInput {
 pub enum ReadBackAnswer {
     Question(String),
     /// A detail is missing before there is anything to approve.
-    InputRequired { question: String, verbatim: bool },
+    InputRequired {
+        question: String,
+        verbatim: bool,
+    },
 }
 
 /// The host's verdict on an output candidate.
@@ -93,20 +96,53 @@ pub enum OutputCandidate {
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
-    InstructionsRendered { render: RenderId, result: Result<String, String> },
-    LlmChunk { request: RequestId, chunk: LlmChunk },
-    LlmEnded { request: RequestId },
-    LlmFailed { request: RequestId, error: String },
+    InstructionsRendered {
+        render: RenderId,
+        result: Result<String, String>,
+    },
+    LlmChunk {
+        request: RequestId,
+        chunk: LlmChunk,
+    },
+    LlmEnded {
+        request: RequestId,
+    },
+    LlmFailed {
+        request: RequestId,
+        error: String,
+    },
     /// The host bound and validated the arguments; `prepared` holds them for the body.
-    ToolPrepared { call: CallId, prepared: ResourceId, identity: ArgumentIdentity },
+    ToolPrepared {
+        call: CallId,
+        prepared: ResourceId,
+        identity: ArgumentIdentity,
+    },
     /// Validation or binding failed: feedback for the model.
-    ToolPrepareFailed { call: CallId, error: String },
-    ReadBackRendered { call: CallId, result: Result<ReadBackAnswer, String> },
+    ToolPrepareFailed {
+        call: CallId,
+        error: String,
+    },
+    ReadBackRendered {
+        call: CallId,
+        result: Result<ReadBackAnswer, String>,
+    },
     /// `ctx.update(text)`.
-    ToolProgress { call: CallId, message: String },
-    ToolSettled { call: CallId, outcome: ToolOutcome },
-    ToolLaunchFailed { call: CallId, error: String },
-    OutputValidated { validation: ValidationId, verdict: OutputVerdict },
+    ToolProgress {
+        call: CallId,
+        message: String,
+    },
+    ToolSettled {
+        call: CallId,
+        outcome: ToolOutcome,
+    },
+    ToolLaunchFailed {
+        call: CallId,
+        error: String,
+    },
+    OutputValidated {
+        validation: ValidationId,
+        verdict: OutputVerdict,
+    },
     Cancel,
     /// The deadline from `wake_at()` is due.
     Wake,
@@ -116,27 +152,65 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Render the `@agent.instructions` functions.
-    InstructionsRender { render: RenderId },
-    InstructionsCancel { render: RenderId },
-    LlmRequestStart { request: RequestId, llm: ResourceId, chat_ctx: ChatContext, tools: Vec<ToolSpec> },
-    LlmRequestCancel { request: RequestId },
+    InstructionsRender {
+        render: RenderId,
+    },
+    InstructionsCancel {
+        render: RenderId,
+    },
+    LlmRequestStart {
+        request: RequestId,
+        llm: ResourceId,
+        chat_ctx: ChatContext,
+        tools: Vec<ToolSpec>,
+    },
+    LlmRequestCancel {
+        request: RequestId,
+    },
     /// Bind and validate the arguments in the call's invocation scope.
-    ToolPrepare { call: CallId, arguments: Map<String, Value>, function_call: FunctionCall },
+    ToolPrepare {
+        call: CallId,
+        arguments: Map<String, Value>,
+        function_call: FunctionCall,
+    },
     /// Run the tool's read-back function on the prepared arguments.
-    ReadBackRender { call: CallId, tool: String, prepared: ResourceId },
+    ReadBackRender {
+        call: CallId,
+        tool: String,
+        prepared: ResourceId,
+    },
     /// Run the body with the prepared arguments; `function_call` carries its approval marks.
-    ToolExecute { call: CallId, prepared: ResourceId, function_call: FunctionCall },
+    ToolExecute {
+        call: CallId,
+        prepared: ResourceId,
+        function_call: FunctionCall,
+    },
     /// Cancel whatever host work the call has in flight.
-    ToolCancel { call: CallId },
+    ToolCancel {
+        call: CallId,
+    },
     /// Prepared arguments no body will run with.
-    ToolArgumentsRelease { prepared: ResourceId },
-    OutputValidate { validation: ValidationId, candidate: OutputCandidate },
-    OutputValidateCancel { validation: ValidationId },
+    ToolArgumentsRelease {
+        prepared: ResourceId,
+    },
+    OutputValidate {
+        validation: ValidationId,
+        candidate: OutputCandidate,
+    },
+    OutputValidateCancel {
+        validation: ValidationId,
+    },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.
-    ArgumentsRepaired { call_id: String, error: String, repaired: Value },
+    ArgumentsRepaired {
+        call_id: String,
+        error: String,
+        repaired: Value,
+    },
     /// Cancelled work did not settle by its deadline; the runtime still owns it.
-    IncompleteCleanup { pending: Vec<String> },
+    IncompleteCleanup {
+        pending: Vec<String>,
+    },
     /// The invocation settled; no later effect follows.
     Finished(Result<RunResult, RunError>),
 }
@@ -172,9 +246,16 @@ enum Phase {
     Rendering(RenderId),
     Requesting(ModelStep),
     Acting(Acting),
-    ValidatingText { validation: ValidationId, text: String },
+    ValidatingText {
+        validation: ValidationId,
+        text: String,
+    },
     /// Settling cancelled work after `error`.
-    Aborting { error: RunError, deadline: Ts, owed: Owed },
+    Aborting {
+        error: RunError,
+        deadline: Ts,
+        owed: Owed,
+    },
     Done,
 }
 
@@ -197,7 +278,10 @@ struct Owed {
 
 impl Owed {
     fn is_empty(&self) -> bool {
-        self.request.is_none() && self.render.is_none() && self.calls.is_empty() && self.validations.is_empty()
+        self.request.is_none()
+            && self.render.is_none()
+            && self.calls.is_empty()
+            && self.validations.is_empty()
     }
 
     fn describe(&self) -> Vec<String> {
@@ -267,7 +351,8 @@ impl AgentRun {
             Event::LlmFailed { request, error } => {
                 if matches!(&self.phase, Phase::Requesting(s) if s.request == request) {
                     // The provider already recovered what it could; nothing is outstanding.
-                    let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle) else {
+                    let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle)
+                    else {
                         unreachable!()
                     };
                     end_text(&step, true, &mut fx);
@@ -276,7 +361,14 @@ impl AgentRun {
             }
             Event::ToolPrepared { call, prepared, identity } => {
                 let held = match &mut self.phase {
-                    Phase::Acting(a) => a.calls.prepared(call, prepared, identity, &self.agent, &self.history, &mut fx),
+                    Phase::Acting(a) => a.calls.prepared(
+                        call,
+                        prepared,
+                        identity,
+                        &self.agent,
+                        &self.history,
+                        &mut fx,
+                    ),
                     _ => false,
                 };
                 if !held {
@@ -313,7 +405,9 @@ impl AgentRun {
                 }
                 self.step_settled(now, &mut fx);
             }
-            Event::OutputValidated { validation, verdict } => self.validated(validation, verdict, now, &mut fx),
+            Event::OutputValidated { validation, verdict } => {
+                self.validated(validation, verdict, now, &mut fx)
+            }
         }
         fx
     }
@@ -387,7 +481,13 @@ impl AgentRun {
         }
     }
 
-    fn request(&mut self, purpose: Purpose, dynamic: Option<String>, now: Ts, fx: &mut Vec<Effect>) {
+    fn request(
+        &mut self,
+        purpose: Purpose,
+        dynamic: Option<String>,
+        now: Ts,
+        fx: &mut Vec<Effect>,
+    ) {
         let Some(llm) = self.agent.llm.as_ref().map(|l| l.id) else {
             return self.finish(Err(RunError::NoModel), fx);
         };
@@ -412,7 +512,12 @@ impl AgentRun {
         let request = RequestId(self.mint());
         let message_id = self.item_id();
         self.usage.requests += 1;
-        fx.push(Effect::LlmRequestStart { request, llm, chat_ctx: planned.chat_ctx, tools: planned.tools });
+        fx.push(Effect::LlmRequestStart {
+            request,
+            llm,
+            chat_ctx: planned.chat_ctx,
+            tools: planned.tools,
+        });
         self.phase = Phase::Requesting(ModelStep::new(request, purpose, message_id));
     }
 
@@ -420,7 +525,9 @@ impl AgentRun {
         if !matches!(&self.phase, Phase::Requesting(s) if s.request == request) {
             return;
         }
-        let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle) else { unreachable!() };
+        let Phase::Requesting(step) = std::mem::replace(&mut self.phase, Phase::Idle) else {
+            unreachable!()
+        };
         end_text(&step, false, fx);
         let (message_id, purpose) = (step.message_id.clone(), step.purpose.clone());
         let response = step.end();
@@ -434,7 +541,15 @@ impl AgentRun {
             return self.asked(Ask { question, ..ask }, Some(message_id), now, fx);
         }
         if !response.text.is_empty() {
-            self.record(ChatMessage::text(message_id.clone(), Role::Assistant, &response.text, self.stamp(now)).into());
+            self.record(
+                ChatMessage::text(
+                    message_id.clone(),
+                    Role::Assistant,
+                    &response.text,
+                    self.stamp(now),
+                )
+                .into(),
+            );
         }
         if response.calls.is_empty() {
             return self.text_output(response.text, now, fx);
@@ -465,7 +580,10 @@ impl AgentRun {
             match value {
                 Ok(value) => {
                     let validation = ValidationId(self.mint());
-                    fx.push(Effect::OutputValidate { validation, candidate: OutputCandidate::Value(value) });
+                    fx.push(Effect::OutputValidate {
+                        validation,
+                        candidate: OutputCandidate::Value(value),
+                    });
                     acting.finals.insert(validation, call);
                 }
                 Err(reason) => acting.calls.final_settled(call, Some(reason), fx),
@@ -486,14 +604,23 @@ impl AgentRun {
             }
             OutputSpec::Text { validated: true } => {
                 let validation = ValidationId(self.mint());
-                fx.push(Effect::OutputValidate { validation, candidate: OutputCandidate::Text(text.clone()) });
+                fx.push(Effect::OutputValidate {
+                    validation,
+                    candidate: OutputCandidate::Text(text.clone()),
+                });
                 self.phase = Phase::ValidatingText { validation, text };
             }
             OutputSpec::Text { validated: false } => self.complete(Output::Text(text), fx),
         }
     }
 
-    fn validated(&mut self, validation: ValidationId, verdict: OutputVerdict, now: Ts, fx: &mut Vec<Effect>) {
+    fn validated(
+        &mut self,
+        validation: ValidationId,
+        verdict: OutputVerdict,
+        now: Ts,
+        fx: &mut Vec<Effect>,
+    ) {
         if let OutputVerdict::Failed(error) = verdict {
             let ours = match &self.phase {
                 Phase::ValidatingText { validation: v, .. } => *v == validation,
@@ -515,7 +642,9 @@ impl AgentRun {
                     OutputVerdict::Accepted { text: replaced } => {
                         self.complete(Output::Text(replaced.unwrap_or(text)), fx)
                     }
-                    OutputVerdict::Retry(reason) => self.retry_output(format!("{RETRY_PROMPT}{reason}"), now, fx),
+                    OutputVerdict::Retry(reason) => {
+                        self.retry_output(format!("{RETRY_PROMPT}{reason}"), now, fx)
+                    }
                     OutputVerdict::Failed(_) => unreachable!(),
                 }
             }
@@ -539,17 +668,22 @@ impl AgentRun {
     /// Once every call of the step settled: record the calls and outputs in model order, then
     /// continue, ask, or settle.
     fn step_settled(&mut self, now: Ts, fx: &mut Vec<Effect>) {
-        let settled = matches!(&self.phase, Phase::Acting(a) if a.finals.is_empty() && a.calls.all_settled());
+        let settled =
+            matches!(&self.phase, Phase::Acting(a) if a.finals.is_empty() && a.calls.all_settled());
         if !settled {
             return;
         }
-        let Phase::Acting(acting) = std::mem::replace(&mut self.phase, Phase::Idle) else { unreachable!() };
+        let Phase::Acting(acting) = std::mem::replace(&mut self.phase, Phase::Idle) else {
+            unreachable!()
+        };
         let recorded = acting.calls.finish();
         // Retry budgets: consecutive failures per tool, any success resets.
         let mut failed: BTreeMap<&str, bool> = BTreeMap::new();
         let mut output_rejected = false;
         for r in &recorded {
-            if r.item.name == crate::agent::FINAL_RESULT_TOOL && matches!(self.agent.output, OutputSpec::Structured { .. }) {
+            if r.item.name == crate::agent::FINAL_RESULT_TOOL
+                && matches!(self.agent.output, OutputSpec::Structured { .. })
+            {
                 output_rejected |= matches!(r.settled.outcome, ToolOutcome::ToolError(_));
                 continue;
             }
@@ -561,14 +695,19 @@ impl AgentRun {
             let count = self.tool_retries.entry(tool.to_owned()).or_default();
             *count = if failed { *count + 1 } else { 0 };
             if *count > self.agent.retries.tool && exceeded.is_none() {
-                exceeded = Some(RunError::ToolRetriesExceeded { tool: tool.to_owned(), retries: self.agent.retries.tool });
+                exceeded = Some(RunError::ToolRetriesExceeded {
+                    tool: tool.to_owned(),
+                    retries: self.agent.retries.tool,
+                });
             }
         }
         let accepted = acting.accepted.first_key_value().map(|(c, v)| (*c, *v));
         if output_rejected && accepted.is_none() {
             self.output_retries += 1;
             if self.output_retries > self.agent.retries.output {
-                exceeded.get_or_insert(RunError::OutputRetriesExceeded { retries: self.agent.retries.output });
+                exceeded.get_or_insert(RunError::OutputRetriesExceeded {
+                    retries: self.agent.retries.output,
+                });
             }
         }
         // The first terminal outcome in model order decides; the others are recorded as answered.
@@ -590,10 +729,16 @@ impl AgentRun {
                         // Not the question asked: its text is recorded as answered.
                         text = question.clone();
                     }
-                    Some(Terminal::Ask(Ask { question: question.clone(), verbatim: *verbatim, answer_tool: tool.clone() }))
+                    Some(Terminal::Ask(Ask {
+                        question: question.clone(),
+                        verbatim: *verbatim,
+                        answer_tool: tool.clone(),
+                    }))
                 }
                 ToolOutcome::StopResponse => Some(Terminal::Stop),
-                _ if tool_outcome::verbatim(outcome).is_some() && !shape.reply_required => Some(Terminal::Stop),
+                _ if tool_outcome::verbatim(outcome).is_some() && !shape.reply_required => {
+                    Some(Terminal::Stop)
+                }
                 _ => None,
             };
             if terminal.is_none() {
@@ -602,7 +747,13 @@ impl AgentRun {
                 reply_required = false;
             }
             replies |= reply_required;
-            let mut output = FunctionCallOutput::new(format!("{}_out", item.id), item.call_id.clone(), text, shape.is_error, self.stamp(now));
+            let mut output = FunctionCallOutput::new(
+                format!("{}_out", item.id),
+                item.call_id.clone(),
+                text,
+                shape.is_error,
+                self.stamp(now),
+            );
             output.name = item.name.clone();
             output.reply_required = reply_required;
             items.push(ChatItem::FunctionCall(item));
@@ -630,7 +781,10 @@ impl AgentRun {
     fn retry_output(&mut self, feedback: String, now: Ts, fx: &mut Vec<Effect>) {
         self.output_retries += 1;
         if self.output_retries > self.agent.retries.output {
-            return self.finish(Err(RunError::OutputRetriesExceeded { retries: self.agent.retries.output }), fx);
+            return self.finish(
+                Err(RunError::OutputRetriesExceeded { retries: self.agent.retries.output }),
+                fx,
+            );
         }
         let id = self.item_id();
         self.record(ChatMessage::text(id, Role::User, feedback, self.stamp(now)).into());
@@ -657,14 +811,20 @@ impl AgentRun {
     fn settle_ask(&mut self, ask: Ask, fx: &mut Vec<Effect>) {
         let question = self.composed(Some(ask.question.clone())).unwrap_or_default();
         let verbatim = if ask.verbatim { Some(question.clone()) } else { self.verbatim_text() };
-        let outcome = RunOutcome::InputRequired { question, verbatim: ask.verbatim, answer_tool: ask.answer_tool };
+        let outcome = RunOutcome::InputRequired {
+            question,
+            verbatim: ask.verbatim,
+            answer_tool: ask.answer_tool,
+        };
         self.finish(Ok(self.result(outcome, verbatim)), fx)
     }
 
     fn complete(&mut self, output: Output, fx: &mut Vec<Effect>) {
         let output = match output {
             Output::Text(text) => Output::Text(self.composed(Some(text)).unwrap_or_default()),
-            Output::Nothing if !self.verbatim.is_empty() => Output::Text(self.composed(None).unwrap_or_default()),
+            Output::Nothing if !self.verbatim.is_empty() => {
+                Output::Text(self.composed(None).unwrap_or_default())
+            }
             other => other,
         };
         let verbatim = self.verbatim_text();
@@ -755,8 +915,12 @@ impl AgentRun {
         }
         let Phase::Aborting { owed, .. } = &mut self.phase else { return };
         match event {
-            Event::InstructionsRendered { render, .. } if owed.render == Some(render) => owed.render = None,
-            Event::LlmEnded { request } | Event::LlmFailed { request, .. } if owed.request == Some(request) => {
+            Event::InstructionsRendered { render, .. } if owed.render == Some(render) => {
+                owed.render = None
+            }
+            Event::LlmEnded { request } | Event::LlmFailed { request, .. }
+                if owed.request == Some(request) =>
+            {
                 owed.request = None
             }
             Event::ToolPrepared { call, .. }
@@ -772,7 +936,10 @@ impl AgentRun {
             _ => {}
         }
         if owed.is_empty() {
-            let Phase::Aborting { error, .. } = std::mem::replace(&mut self.phase, Phase::Idle) else { unreachable!() };
+            let Phase::Aborting { error, .. } = std::mem::replace(&mut self.phase, Phase::Idle)
+            else {
+                unreachable!()
+            };
             self.finish(Err(error), fx);
         }
     }
@@ -782,7 +949,10 @@ impl AgentRun {
         if !due {
             return;
         }
-        let Phase::Aborting { error, owed, .. } = std::mem::replace(&mut self.phase, Phase::Idle) else { unreachable!() };
+        let Phase::Aborting { error, owed, .. } = std::mem::replace(&mut self.phase, Phase::Idle)
+        else {
+            unreachable!()
+        };
         fx.push(Effect::IncompleteCleanup { pending: owed.describe() });
         self.finish(Err(error), fx);
     }
@@ -798,6 +968,9 @@ enum Terminal {
 /// Closes the streamed text of a request, if it streamed any.
 fn end_text(step: &ModelStep, interrupted: bool, fx: &mut Vec<Effect>) {
     if step.has_text() {
-        fx.push(Effect::Emit(StreamEvent::TextEnd { message_id: step.message_id.clone(), interrupted }));
+        fx.push(Effect::Emit(StreamEvent::TextEnd {
+            message_id: step.message_id.clone(),
+            interrupted,
+        }));
     }
 }
