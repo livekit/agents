@@ -1,4 +1,5 @@
-//! Agent-card construction from the endpoint's descriptor, using upstream A2A wire records.
+//! The endpoint's agent card (docs/protocol/a2a.md#the-agent-card), from its descriptor, as the
+//! upstream A2A record.
 
 use std::collections::HashMap;
 
@@ -8,6 +9,7 @@ use a2a::{
 };
 use lk_agents_abi::a2a::card::{EndpointCard, EndpointDescriptor};
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
+use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::errors::HostError;
 
 pub struct CardBuilder;
@@ -69,7 +71,7 @@ pub fn agent_card(descriptor: EndpointDescriptor) -> Result<AgentCard, HostError
 
 impl EndpointCard for CardBuilder {
     fn _core_a2a_extensions_header(requested: Option<String>) -> Option<String> {
-        lk_agents_core::a2a::rpc::extensions_header(requested.as_deref())
+        crate::a2a::rpc::extensions_header(requested.as_deref())
     }
 
     fn _core_a2a_agent_card(descriptor: EndpointDescriptor) -> Result<String, HostError> {

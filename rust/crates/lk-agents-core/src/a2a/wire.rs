@@ -1,14 +1,45 @@
-//! Stored native tasks projected into the upstream A2A records, then encoded once for HTTP/SSE.
+//! Stored tasks projected into the upstream A2A records, a response stream's resume cursor, and
+//! the JSON-RPC envelope encoded once for HTTP and server-sent events.
 
 use std::time::{Duration, UNIX_EPOCH};
 
 use a2a::{
     Artifact, JsonRpcId, JsonRpcResponse, Part, StreamResponse, Task, TaskState, TaskStatus,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lk_agents_abi::a2a::door::DoorFrame;
-use lk_agents_storage::run::TaskState as StoredState;
-use lk_agents_storage::schema::TaskRow;
-use serde::Serialize;
+use lk_agents_abi::a2a_protocol as a2a;
+use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::TaskState as StoredState;
+use lk_agents_abi::storage::thread::TaskRow;
+use serde::{Deserialize, Serialize};
+
+/// Where a resubscribe resumes: after `offset` in one of the task's response streams. Opaque to
+/// clients.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cursor {
+    pub task_id: String,
+    pub stream_id: String,
+    pub offset: String,
+}
+
+impl Cursor {
+    pub fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).expect("stream cursor"))
+    }
+
+    pub fn decode(token: &str) -> Result<Self, StorageError> {
+        if token.len() > 4096 {
+            return Err(StorageError::Invalid("stream cursor exceeds its budget".into()));
+        }
+        URL_SAFE_NO_PAD
+            .decode(token)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(|| StorageError::Invalid("invalid response stream cursor".into()))
+    }
+}
 
 pub fn status(state: StoredState) -> TaskState {
     match state {
@@ -20,6 +51,10 @@ pub fn status(state: StoredState) -> TaskState {
         StoredState::Canceled => TaskState::Canceled,
         StoredState::Rejected => TaskState::Rejected,
     }
+}
+
+fn timestamp<T: From<std::time::SystemTime>>(ms: i64) -> Option<T> {
+    u64::try_from(ms).ok().map(|ms| (UNIX_EPOCH + Duration::from_millis(ms)).into())
 }
 
 pub fn task(row: &TaskRow, context: &str, history: Option<usize>, artifacts: bool) -> Task {
@@ -35,9 +70,7 @@ pub fn task(row: &TaskRow, context: &str, history: Option<usize>, artifacts: boo
         status: TaskStatus {
             state: status(row.status),
             message: row.data.status_message.clone(),
-            timestamp: u64::try_from(row.updated_at)
-                .ok()
-                .map(|ms| (UNIX_EPOCH + Duration::from_millis(ms)).into()),
+            timestamp: timestamp(row.updated_at),
         },
         artifacts: artifacts.then(|| row.data.artifacts.clone()).flatten(),
         history: (!messages.is_empty()).then_some(messages),
@@ -53,9 +86,7 @@ pub fn submitted(id: &str, context: &str, now_ms: i64) -> StreamResponse {
         status: TaskStatus {
             state: TaskState::Submitted,
             message: None,
-            timestamp: u64::try_from(now_ms)
-                .ok()
-                .map(|ms| (UNIX_EPOCH + Duration::from_millis(ms)).into()),
+            timestamp: timestamp(now_ms),
         },
         history: None,
         artifacts: None,
@@ -63,9 +94,16 @@ pub fn submitted(id: &str, context: &str, now_ms: i64) -> StreamResponse {
     })
 }
 
-pub fn progress(id: &str, context: &str, text: String) -> StreamResponse {
+/// A `working` update `message_id` with the progress text, at `now_ms`.
+pub fn progress(
+    id: &str,
+    context: &str,
+    text: String,
+    message_id: String,
+    now_ms: i64,
+) -> StreamResponse {
     let mut message = a2a::Message::new(a2a::Role::Agent, vec![Part::text(text)]);
-    message.message_id = crate::storage::shortuuid("msg_");
+    message.message_id = message_id;
     message.task_id = Some(id.to_owned());
     message.context_id = Some(context.to_owned());
     StreamResponse::StatusUpdate(a2a::TaskStatusUpdateEvent {
@@ -74,7 +112,7 @@ pub fn progress(id: &str, context: &str, text: String) -> StreamResponse {
         status: TaskStatus {
             state: TaskState::Working,
             message: Some(message),
-            timestamp: Some(std::time::SystemTime::now().into()),
+            timestamp: timestamp(now_ms),
         },
         metadata: None,
     })
@@ -117,7 +155,7 @@ pub fn final_status(row: &TaskRow, context: &str) -> StreamResponse {
 
 pub fn success<T: Serialize>(id: JsonRpcId, value: T, cursor: Option<&str>) -> DoorFrame {
     let result = serde_json::to_value(value).expect("A2A wire record");
-    frame(lk_agents_core::a2a::rpc::success(id, result), cursor)
+    frame(crate::a2a::rpc::success(id, result), cursor)
 }
 
 pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {

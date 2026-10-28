@@ -11,6 +11,7 @@
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod attachments;
 pub mod auth;
+pub mod card;
 pub mod caller_history;
 pub mod client;
 pub mod delegation;
@@ -19,6 +20,7 @@ pub mod outcome;
 pub mod policy;
 pub mod rpc;
 pub mod task;
+pub mod wire;
 
 use lk_agents_abi::errors::ProviderError;
 use serde::{Deserialize, Serialize};

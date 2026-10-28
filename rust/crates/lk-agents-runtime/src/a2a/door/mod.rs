@@ -2,7 +2,6 @@
 //! dropping that observer leaves accepted work and its durable stream owned by the door.
 
 mod stream;
-mod wire;
 
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 use lk_agents_worker::endpoint_budget::EndpointBudget;
@@ -15,6 +14,7 @@ use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_core::a2a::auth::{allows, allows_first_message};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
+use lk_agents_core::a2a::wire;
 use lk_agents_storage::db::TaskQuery;
 
 use lk_agents_storage::run::{REASON_KEY, REASON_THREAD_NOT_FOUND, TaskState};
@@ -54,7 +54,7 @@ impl Door {
         host: Arc<dyn TurnHost>,
         owner: TaskTracker,
     ) -> Result<Self, StorageError> {
-        crate::a2a_card::agent_card(config.endpoint)
+        lk_agents_core::a2a::card::agent_card(config.endpoint)
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
         if config.lane.is_empty() {
             return Err(StorageError::Invalid("an A2A door requires a lane".into()));
@@ -607,7 +607,7 @@ impl Inner {
         let refs =
             row.internal.as_ref().map(|internal| internal.streams.as_slice()).unwrap_or_default();
         let streams = self.storage.response_streams();
-        let cursor = offset.as_deref().map(stream::Cursor::decode).transpose()?;
+        let cursor = offset.as_deref().map(wire::Cursor::decode).transpose()?;
         if let Some(cursor) = &cursor {
             if cursor.task_id != task.id || !refs.iter().any(|s| s.stream_id == cursor.stream_id) {
                 return Err(StorageError::Invalid(
@@ -635,7 +635,7 @@ impl Inner {
                 let Some(bytes) = next else { break };
                 let event: a2a::StreamResponse = serde_json::from_slice(&bytes)
                     .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
-                let cursor = stream::Cursor {
+                let cursor = wire::Cursor {
                     task_id: task.id.clone(),
                     stream_id: stream.stream_id.clone(),
                     offset: reader.next_offset().into(),

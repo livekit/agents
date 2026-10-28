@@ -37,7 +37,7 @@ pub use lk_agents_net as net;
 pub use lk_agents_net::source;
 
 pub mod a2a;
-pub mod a2a_card;
+pub use lk_agents_core::a2a::card as a2a_card;
 pub mod agent_run;
 pub mod avatar_output;
 pub mod codecs;

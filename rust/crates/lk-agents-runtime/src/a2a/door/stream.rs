@@ -4,41 +4,15 @@ use std::sync::Arc;
 
 use a2a::{JsonRpcId, StreamResponse};
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lk_agents_abi::a2a::door::{DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::{TurnContext, TurnEvent, TurnHost, Verdict};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{Closed, StreamSink, StreamSource, Ts};
 use lk_agents_storage::StorageError;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
-use super::wire;
 use crate::storage::{ResponseStreams, now_ms, shortuuid};
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Cursor {
-    pub task_id: String,
-    pub stream_id: String,
-    pub offset: String,
-}
-
-impl Cursor {
-    pub fn encode(&self) -> String {
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).expect("stream cursor"))
-    }
-    pub fn decode(token: &str) -> Result<Self, StorageError> {
-        if token.len() > 4096 {
-            return Err(StorageError::Invalid("stream cursor exceeds its budget".into()));
-        }
-        URL_SAFE_NO_PAD
-            .decode(token)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .ok_or_else(|| StorageError::Invalid("invalid response stream cursor".into()))
-    }
-}
+use lk_agents_core::a2a::wire::{self, Cursor};
 
 pub struct Publisher {
     streams: Arc<dyn ResponseStreams>,
@@ -118,7 +92,9 @@ impl Publisher {
         match event {
             TurnEvent::Progress { task_id, text } => {
                 if self.state.lock().await.task_id == *task_id {
-                    self.emit(wire::progress(task_id, context, text.clone()), task_id).await?;
+                    let progress =
+                        wire::progress(task_id, context, text.clone(), shortuuid("msg_"), now_ms());
+                    self.emit(progress, task_id).await?;
                 }
             }
             TurnEvent::Token { task_id, delta } => {
