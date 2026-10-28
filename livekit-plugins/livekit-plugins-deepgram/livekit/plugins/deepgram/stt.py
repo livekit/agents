@@ -298,6 +298,10 @@ class STT(stt.STT):
                     sock_connect=conn_options.timeout,
                 ),
             ) as res:
+                if not res.ok:
+                    raise APIStatusError(
+                        message=await res.text(errors="replace"), status_code=res.status
+                    )
                 return prerecorded_transcription_to_speech_event(
                     config.language,
                     await res.json(),
@@ -313,6 +317,8 @@ class STT(stt.STT):
                 request_id=None,
                 body=None,
             ) from e
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
