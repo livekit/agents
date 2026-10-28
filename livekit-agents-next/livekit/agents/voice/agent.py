@@ -37,7 +37,7 @@ from ..llm import (
     RealtimeModel,
     find_function_tools,
 )
-from ..llm.chat_context import Instructions
+from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..llm.tool_context import (
     DuplicateMode,
     DuplicateScope,
@@ -270,8 +270,8 @@ class Agent(Generic[Context_T, Output_T]):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        """A copy of the context the running agent works on: its own view of the
-        conversation, not the session's history of every agent.
+        """A read-only view of the history the current run works on (agents.md "History"):
+        the agent's own view of the conversation, not the session's history of every agent.
 
         This resolves through the activity bound in the current context, so it is only available
         inside the agent's hooks and tools.
@@ -281,7 +281,7 @@ class Agent(Generic[Context_T, Output_T]):
         """
         binding = self._get_binding_or_raise()
         if isinstance(binding, _VoiceBinding):
-            return binding.session._agent_chat_ctx()
+            return _ReadOnlyChatContext(binding.session._agent_chat_ctx().items)
         return binding.chat_ctx
 
     @property

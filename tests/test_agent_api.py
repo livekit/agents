@@ -156,6 +156,24 @@ async def test_on_exit_receives_the_session_on_replacement_and_close() -> None:
     assert exited == [("first", session), ("second", session)]
 
 
+async def test_agent_chat_ctx_is_a_read_only_view_inside_its_hooks() -> None:
+    agent = Agent(instructions="x")
+    refused: list[bool] = []
+
+    @agent.on_enter
+    async def enter(session: VoiceSession) -> None:
+        with pytest.raises(RuntimeError):
+            agent.chat_ctx.add_message(role="user", content="injected")
+        refused.append(True)
+
+    with pytest.raises(RuntimeError):
+        agent.chat_ctx  # noqa: B018 (outside its hooks and tools)
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": None}) as session:
+        await session.start(agent)
+        assert refused == [True]
+        assert not [i for i in session.history.items if i.type == "message"]
+
+
 async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     """A verbatim ``InputRequired`` speaks the question as written; the next user message is
     the call's output."""
