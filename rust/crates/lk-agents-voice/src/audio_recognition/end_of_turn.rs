@@ -135,7 +135,7 @@ impl AudioRecognition {
         eff
     }
 
-    fn cancel_prediction(&self, prediction: Prediction) -> Effects {
+    pub(super) fn cancel_prediction(&self, prediction: Prediction) -> Effects {
         let mut eff = Effects::new();
         match prediction {
             // `timed_out=False`: the inference is being abandoned, not given up on.

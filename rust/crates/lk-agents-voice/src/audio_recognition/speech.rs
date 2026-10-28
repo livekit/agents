@@ -319,11 +319,12 @@ impl AudioRecognition {
                         self.speech_start_time =
                             Some(now.saturating_sub(secs(ev.raw_accumulated_speech)));
                     }
-                    // A prediction pending while the user is still in a segment is worthless.
+                    // A prediction taken while the user is still in a segment is worthless, answered
+                    // or not: the next pause asks again.
                     if let Phase::Speaking { since, prediction, declared } = &self.phase {
                         let (since, prediction, declared) = (*since, *prediction, *declared);
-                        if let Prediction::Pending(req) = prediction {
-                            eff.cancel_eot(req, false);
+                        if prediction != Prediction::Absent {
+                            eff.append(self.cancel_prediction(prediction));
                             eff.append(self.set_phase(Phase::Speaking {
                                 since,
                                 prediction: Prediction::Absent,
