@@ -25,8 +25,8 @@ the workspace Rust flags.
   (`call*`, `call_soon_threadsafe`, `into_future`, `future_into_py`) outside the Python entry
   `lk-agents-py/src/host/` is an identity of the shrink-only `host-calls-baseline.json`; generated
   code calls through the entry. Generators and integration tests are exempt.
-- Git-tracked handwritten Rust files have a 1,250-line limit. Generated markers
-  must appear on the first line. Existing oversized files have individual
+- Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
+  first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.
 - Clippy resolves banned methods, types and macros over all targets in default,
   Python and all-feature configurations. Per-core lint configurations are checked.

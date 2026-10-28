@@ -38,7 +38,13 @@ BANNED = {
     "livekit-api",
     "lk-agents-runtime",
 }
-GENERATED = re.compile(r"^\s*//[!/ ]*(?:@generated\b|GENERATED\b|Automatically generated\b)", re.I)
+# The exact first line lk-agents-codegen writes; prose that merely starts with "Generated" is not it.
+GENERATED = "//! GENERATED FILE -- DO NOT EDIT."
+
+
+def generated(text: str) -> bool:
+    # A header is outside Rust tokens. Searching later lines could match a raw string.
+    return text.split("\n", 1)[0].rstrip() == GENERATED
 
 
 def git(root: Path, *args: str) -> str:
@@ -182,8 +188,7 @@ def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     violations = {}
     for path in paths:
         text = (root / path).read_text()
-        # A header is outside Rust tokens. Searching later lines could match a raw string.
-        if text.splitlines() and GENERATED.match(text.splitlines()[0]):
+        if generated(text):
             continue
         lines = len(text.splitlines())
         if lines > 1250:
@@ -501,7 +506,7 @@ def source_paths(root: Path) -> list[str]:
         if not (root / path).is_file():
             continue
         text = (root / path).read_text()
-        if not (text.splitlines() and GENERATED.match(text.splitlines()[0])):
+        if not generated(text):
             result.append(path)
     if not result:
         raise ValueError("no handwritten core Rust sources found")
