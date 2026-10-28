@@ -133,6 +133,29 @@ async def test_agent_instructions_and_on_enter() -> None:
     )
 
 
+async def test_on_exit_receives_the_session_on_replacement_and_close() -> None:
+    first = Agent(instructions="first", name="first")
+    second = Agent(instructions="second", name="second")
+    exited: list[tuple[str, VoiceSession]] = []
+    replaced = asyncio.Event()
+
+    @first.on_exit
+    async def leave_first(session: VoiceSession) -> None:
+        exited.append(("first", session))
+        replaced.set()
+
+    @second.on_exit
+    async def leave_second(session: VoiceSession) -> None:
+        exited.append(("second", session))
+
+    async with VoiceSession(vad=None, turn_handling={"turn_detection": None}) as session:
+        await session.start(first)
+        session.update_agent(second)
+        await asyncio.wait_for(replaced.wait(), timeout=5)
+        assert exited == [("first", session)]
+    assert exited == [("first", session), ("second", session)]
+
+
 async def test_input_required_pauses_the_turn_until_the_next_message() -> None:
     """A verbatim ``InputRequired`` speaks the question as written; the next user message is
     the call's output."""

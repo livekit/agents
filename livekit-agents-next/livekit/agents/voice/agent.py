@@ -76,7 +76,7 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R", bound=Awaitable[Any])
 _InstructionsFn = Callable[["RunContext"], str | Awaitable[str]]
 _InstructionsFnT = TypeVar("_InstructionsFnT", bound=Callable[..., str | Awaitable[str]])
-_OnEnterFn = Callable[["VoiceSession"], Any]
+_HookFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 
@@ -115,27 +115,32 @@ class _VoiceBinding(NamedTuple):
         return self.session.conn_options.llm_conn_options
 
 
-class _OnEnterHook:
-    """``Agent.on_enter``: the hook to await, or the decorator registering it.
+class _LiveHook:
+    """``Agent.on_enter`` and ``Agent.on_exit``: the decorator registering the function the
+    hook runs, which receives the ``VoiceSession``, or, called bare, the hook to await.
 
     A descriptor so a subclass still overrides ``async def on_enter(self) -> None``; the
     bound form is untyped on purpose, both uses go through it.
     """
 
+    def __set_name__(self, owner: type[Agent], name: str) -> None:
+        self._name = name
+
     def __get__(self, agent: Agent | None, owner: type[Agent]) -> Any:
         if agent is None:
             return self
-        return _BoundOnEnter(agent)
+        return _BoundLiveHook(agent, self._name)
 
 
-class _BoundOnEnter:
-    def __init__(self, agent: Agent) -> None:
+class _BoundLiveHook:
+    def __init__(self, agent: Agent, name: str) -> None:
         self._agent = agent
+        self._name = name
 
-    def __call__(self, f: _OnEnterFn | None = None, /) -> Any:
+    def __call__(self, f: _HookFn | None = None, /) -> Any:
         if f is not None:
-            return self._agent._register_on_enter(f)
-        return self._agent._run_on_enter()
+            return self._agent._register_hook(self._name, f)
+        return self._agent._run_hook(self._name)
 
 
 def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
@@ -186,16 +191,14 @@ class Agent(Generic[Context_T, Output_T]):
         # assigning frame's namespace is kept and scanned the first time the name is read, since
         # the assignment completes only after the constructor returns
         self._name = name
-        self._defining_namespace = (
-            _assignment_namespace(sys._getframe(1)) if name is None else None
-        )
+        self._defining_namespace = _assignment_namespace(sys._getframe(1)) if name is None else None
 
         self._instructions = instructions
         self._tools = [*tools, *find_function_tools(self)]
         # registered at import by the decorators below; frozen once the agent is first bound
         self._instruction_fns: list[_InstructionsFn] = []
         self._instructions_view: _InstructionsView[Any] | None = None
-        self._on_enter_fn: _OnEnterFn | None = None
+        self._hook_fns: dict[str, _HookFn] = {}
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
 
@@ -528,49 +531,55 @@ class Agent(Generic[Context_T, Output_T]):
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
     # constructor of the VoiceAgent
 
-    on_enter = _OnEnterHook()
-    """Called when the agent takes the conversation.
+    on_enter = _LiveHook()
+    """Called when the agent takes the active live role (agents.md "Hooks").
 
-    Subclasses override it as ``async def on_enter(self) -> None``. On a plain instance it is
-    a decorator registering the function to run then, which receives the session::
+    A decorator registering the function to run then, which receives the session::
 
         @scheduler.on_enter
         async def greet(session: VoiceSession) -> None:
             session.generate_reply(instructions="Greet the caller.")
     """
 
-    def _register_on_enter(self, f: _OnEnterFn) -> _OnEnterFn:
-        self._check_not_frozen("an on_enter function")
-        self._on_enter_fn = f
+    on_exit = _LiveHook()
+    """Called when the agent relinquishes the active live role, on an orderly replacement or
+    session close (agents.md "Hooks").
+
+    A decorator registering the function to run then, which receives the session::
+
+        @front_desk.on_exit
+        async def leave(session: VoiceSession) -> None: ...
+    """
+
+    def _register_hook(self, name: str, f: _HookFn) -> _HookFn:
+        self._check_not_frozen(f"an {name} function")
+        self._hook_fns[name] = f
         return f
 
-    async def _run_on_enter(self) -> Any:
-        if self._on_enter_fn is None:
+    async def _run_hook(self, name: str) -> Any:
+        fn = self._hook_fns.get(name)
+        if fn is None:
             return None
-        result = self._on_enter_fn(self.session)
+        result = fn(self.session)
         if inspect.isawaitable(result):
             result = await result
         return result
 
     def _has_on_enter(self) -> bool:
         """An ``on_enter`` was registered or overridden."""
-        return self._on_enter_fn is not None or not isinstance(
-            inspect.getattr_static(type(self), "on_enter"), _OnEnterHook
+        return "on_enter" in self._hook_fns or not isinstance(
+            inspect.getattr_static(type(self), "on_enter"), _LiveHook
         )
 
     async def _enter(self, ctx: RunContext[Any]) -> Any:
         """``on_enter`` as it was written: an override takes the context when it declares one,
         the decorator form takes the call's session and is nothing in text."""
         hook = type(self).on_enter
-        if isinstance(hook, _OnEnterHook):
-            return await self._run_on_enter() if ctx._session is not None else None
+        if isinstance(hook, _LiveHook):
+            return await self._run_hook("on_enter") if ctx._session is not None else None
         if len(inspect.signature(hook).parameters) > 1:
             return await hook(self, ctx)
         return await hook(self)
-
-    async def on_exit(self) -> None:
-        """Called when the task is exited"""
-        pass
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
