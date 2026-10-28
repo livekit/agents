@@ -7,6 +7,8 @@
 
 #[cfg(feature = "python")]
 pub mod python;
+#[cfg(feature = "python")]
+pub mod stream;
 
 use std::collections::BTreeMap;
 

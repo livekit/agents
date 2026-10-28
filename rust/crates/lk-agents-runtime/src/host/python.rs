@@ -6,37 +6,166 @@
 //! The captured context crosses as a `HostRef` to the host's `(loop, contextvars.Context)` pair,
 //! taken at the operation's entry (`asyncio.get_running_loop(), contextvars.copy_context()`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::python::resolve_key;
 use lk_agents_abi::utils::host_ref::HostRef;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::PyCFunction;
 use tokio::sync::oneshot;
+
+/// A host call started on its loop: resolves to its value, or the value its awaitable resolved to.
+/// Dropping it before it settles cancels the host task; the task still settles on its loop.
+pub(crate) struct Started {
+    receiver: oneshot::Receiver<PyResult<Py<PyAny>>>,
+    in_flight: InFlight,
+}
+
+impl Started {
+    pub(crate) async fn settled(&mut self) -> PyResult<Py<PyAny>> {
+        let result = (&mut self.receiver).await.unwrap_or_else(|_| {
+            Err(pyo3::exceptions::PyRuntimeError::new_err("the host event loop dropped the call"))
+        });
+        self.in_flight.settled.store(true, Ordering::SeqCst);
+        result
+    }
+
+    /// Asks the host task to cancel; it settles with its own outcome.
+    pub(crate) fn cancel(&self) {
+        self.in_flight.cancel();
+    }
+}
 
 /// The host task of a call in flight, cancelled when the call is dropped before it settles.
 struct InFlight {
     event_loop: Py<PyAny>,
     task: Arc<Mutex<Option<Py<PyAny>>>>,
-    settled: Arc<std::sync::atomic::AtomicBool>,
+    settled: Arc<AtomicBool>,
+}
+
+impl InFlight {
+    fn cancel(&self) {
+        if self.settled.load(Ordering::SeqCst) {
+            return;
+        }
+        Python::attach(|py| {
+            let task = self
+                .task
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .map(|t| t.clone_ref(py));
+            if let Some(task) = task
+                && let Ok(cancel) = task.bind(py).getattr("cancel")
+            {
+                let _ = self.event_loop.bind(py).call_method1("call_soon_threadsafe", (cancel,));
+            }
+        });
+    }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        if self.settled.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
-        let task = self.task.lock().unwrap_or_else(|p| p.into_inner()).take();
-        if let Some(task) = task {
-            Python::attach(|py| {
-                let cancel = task.bind(py).getattr("cancel");
-                if let Ok(cancel) = cancel {
-                    let _ =
-                        self.event_loop.bind(py).call_method1("call_soon_threadsafe", (cancel,));
-                }
-            });
-        }
+        self.cancel();
     }
+}
+
+/// `awaiting(awaitable)`: any awaitable as the coroutine `loop.create_task` takes.
+fn awaiting(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    static AWAITING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    AWAITING
+        .get_or_try_init(py, || {
+            let code = c"async def awaiting(awaitable):\n    return await awaitable\n";
+            let module = PyModule::from_code(py, code, c"lk_agents_host.py", c"lk_agents_host")?;
+            Ok(module.getattr("awaiting")?.unbind())
+        })
+        .map(|f| f.bind(py))
+}
+
+/// Starts `call` on `event_loop` inside `ctx`, the context object itself (never a copy): the call
+/// runs in it, and an awaitable it returns runs as a task of that same context, so what the call
+/// sets before and after its awaits stays in `ctx`. Callers serialize their entries into one `ctx`.
+pub(crate) fn start_in<F>(
+    py: Python<'_>,
+    event_loop: &Bound<'_, PyAny>,
+    ctx: &Bound<'_, PyAny>,
+    call: F,
+) -> PyResult<Started>
+where
+    F: for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>> + Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
+    let task = Arc::new(Mutex::new(None));
+    let settled = Arc::new(AtomicBool::new(false));
+    let deliver = {
+        let sender = Arc::new(Mutex::new(Some(sender)));
+        let settled = settled.clone();
+        move |result: PyResult<Py<PyAny>>| {
+            settled.store(true, Ordering::SeqCst);
+            if let Some(sender) = sender.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                let _ = sender.send(result);
+            }
+        }
+    };
+    let task_slot = task.clone();
+    let call = Mutex::new(Some(call));
+    let task_ctx = ctx.clone().unbind();
+    let loop_ref = event_loop.clone().unbind();
+    // Runs on the loop thread, inside `ctx`: the call, then its awaitable as a task of `ctx`.
+    let start = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
+        let py = args.py();
+        let Some(call) = call.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+            return Ok(());
+        };
+        let value = match call(py) {
+            Ok(value) => value,
+            Err(e) => {
+                deliver(Err(e));
+                return Ok(());
+            }
+        };
+        let inspect = py.import("inspect")?;
+        if !inspect.call_method1("isawaitable", (&value,))?.is_truthy()? {
+            deliver(Ok(value.unbind()));
+            return Ok(());
+        }
+        let coroutine = if inspect.call_method1("iscoroutine", (&value,))?.is_truthy()? {
+            value
+        } else {
+            awaiting(py)?.call1((value,))?
+        };
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("context", task_ctx.bind(py))?;
+        let future = loop_ref.bind(py).call_method("create_task", (coroutine,), Some(&kwargs))?;
+        *task_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(future.clone().unbind());
+        let deliver = Mutex::new(Some(deliver.clone()));
+        let done = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
+            let finished = args.get_item(0)?;
+            let result = finished.call_method0("result").map(Bound::unbind);
+            if let Some(deliver) = deliver.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                deliver(result);
+            }
+            Ok(())
+        })?;
+        future.call_method1("add_done_callback", (done,))?;
+        Ok(())
+    })?;
+    event_loop.call_method1("call_soon_threadsafe", (ctx.getattr("run")?, start))?;
+    Ok(Started {
+        receiver,
+        in_flight: InFlight { event_loop: event_loop.clone().unbind(), task, settled },
+    })
+}
+
+/// The `(loop, contextvars.Context)` pair `context` interned at its operation's entry.
+pub(crate) fn captured_pair<'py>(
+    py: Python<'py>,
+    context: &HostRef,
+) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+    let captured = resolve_key(py, context.id())?;
+    captured.bind(py).extract()
 }
 
 /// Runs `call` (building the callable and its arguments) in a copy of `context`. Resolves to
@@ -49,70 +178,15 @@ where
         + Send
         + 'static,
 {
-    let (sender, receiver) = oneshot::channel::<PyResult<Py<PyAny>>>();
-    let task = Arc::new(Mutex::new(None));
-    let settled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let event_loop = Python::attach(|py| -> PyResult<Py<PyAny>> {
-        let captured = resolve_key(py, context.id())?;
-        let (event_loop, ctx): (Bound<'_, PyAny>, Bound<'_, PyAny>) =
-            captured.bind(py).extract()?;
+    let mut started = Python::attach(|py| {
+        let (event_loop, ctx) = captured_pair(py, context)?;
         let ctx = ctx.call_method0("copy")?;
-        let sender = Arc::new(Mutex::new(Some(sender)));
-        let deliver = {
-            let sender = sender.clone();
-            let settled = settled.clone();
-            move |result: PyResult<Py<PyAny>>| {
-                settled.store(true, std::sync::atomic::Ordering::SeqCst);
-                if let Some(sender) = sender.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                    let _ = sender.send(result);
-                }
-            }
-        };
-        let task_slot = task.clone();
-        let call = Mutex::new(Some(call));
-        // Runs on the loop thread, inside `ctx`: the call, then its awaitable as a task of `ctx`.
-        let start = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
-            let py = args.py();
-            let Some(call) = call.lock().unwrap_or_else(|p| p.into_inner()).take() else {
-                return Ok(());
-            };
-            let returned = call(py).and_then(|(callable, arguments)| callable.call1(arguments));
-            let value = match returned {
-                Ok(value) => value,
-                Err(e) => {
-                    deliver(Err(e));
-                    return Ok(());
-                }
-            };
-            let inspect = py.import("inspect")?;
-            if !inspect.call_method1("isawaitable", (&value,))?.is_truthy()? {
-                deliver(Ok(value.unbind()));
-                return Ok(());
-            }
-            // Inside `ctx.run`: the task copies `ctx`, mutations of the sync prefix included.
-            let future = py.import("asyncio")?.call_method1("ensure_future", (&value,))?;
-            *task_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(future.clone().unbind());
-            let deliver = Mutex::new(Some(deliver.clone()));
-            let done = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
-                let finished = args.get_item(0)?;
-                let result = finished.call_method0("result").map(Bound::unbind);
-                if let Some(deliver) = deliver.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                    deliver(result);
-                }
-                Ok(())
-            })?;
-            future.call_method1("add_done_callback", (done,))?;
-            Ok(())
-        })?;
-        event_loop.call_method1("call_soon_threadsafe", (ctx.getattr("run")?, start))?;
-        Ok(event_loop.unbind())
+        start_in(py, &event_loop, &ctx, move |py| {
+            let (callable, arguments) = call(py)?;
+            callable.call1(arguments)
+        })
     })?;
-    let in_flight = InFlight { event_loop, task, settled };
-    let result = receiver.await.unwrap_or_else(|_| {
-        Err(pyo3::exceptions::PyRuntimeError::new_err("the host event loop dropped the call"))
-    });
-    drop(in_flight);
-    result
+    started.settled().await
 }
 
 #[cfg(test)]
@@ -168,6 +242,7 @@ async def blocking():
 
     fn captured(globals: &Bound<'_, PyDict>, value: &str) -> HostRef {
         let pair = globals.get_item("capture").unwrap().unwrap().call1((value,)).unwrap();
+        globals.set_item("pair", &pair).unwrap();
         lk_agents_abi::python::intern_host(pair.unbind())
     }
 
@@ -205,9 +280,10 @@ async def blocking():
             let second: (String, bool) = seen.get_item("second").unwrap().extract().unwrap();
             assert_eq!(first, ("captured".into(), true));
             assert_eq!(second, ("captured".into(), true), "the first call's change leaked");
-            // The caller's own context is as the capture left it.
+            // The captured context is as the capture left it (the calls ran in copies).
             let var = globals.bind(py).get_item("var").unwrap().unwrap();
-            assert_eq!(var.call_method0("get").unwrap().extract::<String>().unwrap(), "captured");
+            let ctx = globals.bind(py).get_item("pair").unwrap().unwrap().get_item(1).unwrap();
+            assert_eq!(ctx.get_item(var).unwrap().extract::<String>().unwrap(), "captured");
         });
     }
 
