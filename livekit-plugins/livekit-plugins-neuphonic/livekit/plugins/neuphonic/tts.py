@@ -448,6 +448,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
         chunks = 0
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for sentence in chunks_stream:
                 self.mark_started()
@@ -457,54 +459,59 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 msg = {"text": f"{sentence.token}<STOP>", "context_id": segment_id}
                 await ws.send_str(json.dumps(msg))
+                read_deadline.expect_response()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws.receive()
+            async with read_deadline.watch():
+                while True:
+                    msg = await ws.receive()
 
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "NeuPhonic websocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        raise APIStatusError(
+                            "NeuPhonic websocket connection closed unexpectedly",
+                            status_code=ws.close_code or -1,
+                            body=f"{msg.data=} {msg.extra=}",
+                        )
 
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        resp = _RESPONSE.validate_json(msg.data)
-                    except ValidationError as error:
-                        raise APIConnectionError(
-                            "Malformed Neuphonic response", retryable=False
-                        ) from error
-
-                    if resp.get("type") == "error":
-                        raise APIError(f"NeuPhonic returned error: {resp}")
-
-                    data = resp.get("data") or {}
-                    audio_data = data.get("audio")
-                    if audio_data and audio_data != "" and data.get("context_id") == segment_id:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
                         try:
-                            b64data = base64.b64decode(audio_data)
-                            if b64data:
-                                output_emitter.push(b64data)
-                        except Exception as e:
-                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+                            resp = _RESPONSE.validate_json(msg.data)
+                        except ValidationError as error:
+                            raise APIConnectionError(
+                                "Malformed Neuphonic response", retryable=False
+                            ) from error
 
-                    nonlocal chunks
-                    if data.get("stop"):
-                        chunks -= 1
+                        if resp.get("type") == "error":
+                            raise APIError(f"NeuPhonic returned error: {resp}")
 
-                    if data.get("context_id") != segment_id or chunks == 0:
-                        output_emitter.end_segment()
-                        break
-                elif msg.type == aiohttp.WSMsgType.BINARY:
-                    pass
-                else:
-                    logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
+                        data = resp.get("data") or {}
+                        audio_data = data.get("audio")
+                        if audio_data and audio_data != "" and data.get("context_id") == segment_id:
+                            try:
+                                b64data = base64.b64decode(audio_data)
+                                if b64data:
+                                    read_deadline.progress()
+                                    output_emitter.push(b64data)
+                            except Exception as e:
+                                logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+
+                        nonlocal chunks
+                        if data.get("stop"):
+                            chunks -= 1
+                            if chunks == 0:
+                                read_deadline.complete_response()
+
+                        if data.get("context_id") != segment_id or chunks == 0:
+                            output_emitter.end_segment()
+                            break
+                    elif msg.type == aiohttp.WSMsgType.BINARY:
+                        pass
+                    else:
+                        logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [

@@ -483,6 +483,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def input_generator() -> AsyncGenerator[
             texttospeech.StreamingSynthesizeRequest, None
         ]:
@@ -498,19 +500,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                     prompt=self._opts.prompt if is_first_input else None,
                 )
                 is_first_input = False
+                read_deadline.expect_response()
                 yield texttospeech.StreamingSynthesizeRequest(input=synthesis_input)
+            read_deadline.expect_response(final=True)
 
         input_gen = input_generator()
         try:
-            stream = await cast(TextToSpeechClient, self._client_factory()).streaming_synthesize(
-                input_gen, timeout=None, retry=None
-            )
-            output_emitter.start_segment(segment_id=utils.shortuuid())
+            async with read_deadline.watch():
+                stream = await cast(
+                    TextToSpeechClient, self._client_factory()
+                ).streaming_synthesize(input_gen, timeout=None, retry=None)
+                output_emitter.start_segment(segment_id=utils.shortuuid())
 
-            async for resp in stream:
-                output_emitter.push(resp.audio_content)
+                async for resp in stream:
+                    read_deadline.audio_received()
+                    output_emitter.push(resp.audio_content)
 
-            output_emitter.end_segment()
+                output_emitter.end_segment()
 
         except DeadlineExceeded:
             raise APITimeoutError() from None

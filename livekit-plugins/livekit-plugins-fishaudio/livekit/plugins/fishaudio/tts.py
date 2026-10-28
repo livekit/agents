@@ -533,7 +533,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
             ) from None
-        except APIStatusError:
+        except (APIStatusError, APITimeoutError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -551,6 +551,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         # audio: gaps line up with sentence breaks (where pauses are natural)
         # rather than mid-clause.
         sent_stream = self._sentence_tokenizer.stream()
+
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
 
         async def input_task() -> None:
             try:
@@ -580,49 +582,50 @@ class SynthesizeStream(tts.SynthesizeStream):
                     msgpack.packb({"event": "text", "text": sentence + " "}, use_bin_type=True)
                 )
                 await ws.send_bytes(msgpack.packb({"event": "flush"}, use_bin_type=True))
+                read_deadline.expect_response()
 
             await ws.send_bytes(msgpack.packb({"event": "stop"}, use_bin_type=True))
+            read_deadline.expect_response(final=True)
 
         async def recv_task() -> None:
-            # No per-receive timeout: Fish has natural inter-sentence gaps that
-            # can exceed `read_timeout` when the LLM is slow. Dead
-            # connections are detected by aiohttp's ws heartbeat (see ws_connect).
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "Fish Audio websocket connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        request_id=None,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
-
-                if msg.type != aiohttp.WSMsgType.BINARY:
-                    logger.debug("unexpected Fish Audio message type %s", msg.type)
-                    continue
-
-                data = msgpack.unpackb(msg.data, raw=False)
-                event = data.get("event")
-                if event == "audio":
-                    audio = data.get("audio")
-                    if audio:
-                        output_emitter.push(audio)
-                elif event == "finish":
-                    reason = data.get("reason")
-                    if reason == "error":
+            async with read_deadline.watch():
+                while True:
+                    msg = await ws.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
                         raise APIStatusError(
-                            "Fish Audio TTS reported an error",
-                            status_code=-1,
+                            "Fish Audio websocket connection closed unexpectedly",
+                            status_code=ws.close_code or -1,
                             request_id=None,
-                            body=str(data),
+                            body=f"{msg.data=} {msg.extra=}",
                         )
-                    break
-                else:
-                    logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
+
+                    if msg.type != aiohttp.WSMsgType.BINARY:
+                        logger.debug("unexpected Fish Audio message type %s", msg.type)
+                        continue
+
+                    data = msgpack.unpackb(msg.data, raw=False)
+                    event = data.get("event")
+                    if event == "audio":
+                        audio = data.get("audio")
+                        if audio:
+                            read_deadline.audio_received()
+                            output_emitter.push(audio)
+                    elif event == "finish":
+                        reason = data.get("reason")
+                        if reason == "error":
+                            raise APIStatusError(
+                                "Fish Audio TTS reported an error",
+                                status_code=-1,
+                                request_id=None,
+                                body=str(data),
+                            )
+                        break
+                    else:
+                        logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
 
         tasks = [
             asyncio.create_task(input_task()),

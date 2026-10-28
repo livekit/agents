@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import grpc
 import riva.client
 from riva.client.proto.riva_audio_pb2 import AudioEncoding
 from riva.client.proto.riva_tts_pb2 import RivaSynthesisConfigRequest
@@ -13,6 +14,7 @@ from riva.client.proto.riva_tts_pb2 import RivaSynthesisConfigRequest
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APITimeoutError,
     tokenize,
     tts,
     utils,
@@ -20,6 +22,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from . import auth
+from .log import logger
 
 
 @dataclass
@@ -136,6 +139,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokenizer_stream = self._opts.word_tokenizer.stream()
         token_q: queue.Queue[tokenize.TokenData | None] = queue.Queue()
         event_loop = asyncio.get_running_loop()
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+        stopped = threading.Event()
+        active_call: grpc.Call | None = None
 
         output_emitter.initialize(
             request_id=context_id,
@@ -164,16 +170,32 @@ class SynthesizeStream(tts.SynthesizeStream):
         def _finish(error: Exception | None) -> None:
             if done_fut.done():
                 return
-            if error is None:
+            if error is None or stopped.is_set():
                 done_fut.set_result(None)
             else:
                 done_fut.set_exception(error)
+
+        def _started(call: object) -> None:
+            nonlocal active_call
+            active_call = call if isinstance(call, grpc.Call) else None
+            if stopped.is_set():
+                if active_call is not None:
+                    active_call.cancel()
+                return
+
+        def _push(audio: bytes) -> None:
+            if not stopped.is_set():
+                read_deadline.progress()
+                output_emitter.push(audio)
 
         def _synthesize_worker() -> None:
             error: Exception | None = None
             try:
                 service = self._get_service()
                 while (token := token_q.get()) is not None:
+                    if stopped.is_set():
+                        break
+                    event_loop.call_soon_threadsafe(read_deadline.expect_response)
                     responses = service.synthesize_online(
                         token.token,
                         self._opts.voice,
@@ -181,12 +203,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                         sample_rate_hz=self._opts.sample_rate,
                         encoding=AudioEncoding.LINEAR_PCM,
                     )
+                    event_loop.call_soon_threadsafe(_started, responses)
                     for response in responses:
-                        event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
+                        if stopped.is_set():
+                            break
+                        event_loop.call_soon_threadsafe(_push, response.audio)
+                    event_loop.call_soon_threadsafe(read_deadline.complete_response)
             except Exception as exc:
                 error = exc
             finally:
-                event_loop.call_soon_threadsafe(_finish, error)
+                with contextlib.suppress(RuntimeError):  # The caller's loop may have shut down.
+                    event_loop.call_soon_threadsafe(_finish, error)
 
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
@@ -201,13 +228,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            await asyncio.gather(*tasks, asyncio.shield(done_fut))
+            async with read_deadline.watch():
+                await asyncio.gather(*tasks, asyncio.shield(done_fut))
             output_emitter.end_segment()
+        except APITimeoutError:
+            raise
         except Exception as exc:
             raise APIConnectionError("NVIDIA synthesis failed") from exc
         finally:
+            stopped.set()
+            if active_call is not None:
+                active_call.cancel()
             token_q.put(None)
             await utils.aio.gracefully_cancel(*tasks)
-            with contextlib.suppress(Exception):
-                await asyncio.shield(done_fut)
+            if not done_fut.done():
+                logger.warning("NVIDIA synthesis cleanup incomplete; SDK worker retains ownership")
             await sent_tokenizer_stream.aclose()

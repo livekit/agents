@@ -390,6 +390,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
         sent_stream = self._sentence_tokenizer.stream()
+        self._read_deadline = tts.StreamReadDeadline(self._conn_options)
 
         async def _input_task() -> None:
             async for data in self.input:
@@ -409,64 +410,66 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_iter = sent_stream.__aiter__()
 
         try:
-            while not self._cancelled.is_set():
-                if next_task is None:
-                    next_task = asyncio.ensure_future(sent_iter.__anext__())
+            async with self._read_deadline.watch():
+                while not self._cancelled.is_set():
+                    if next_task is None:
+                        next_task = asyncio.ensure_future(sent_iter.__anext__())
 
-                waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
-                    next_task
-                }
-                if active is not None:
-                    waiters.add(active.waiter)
-                await asyncio.wait(
-                    waiters,
-                    timeout=self._idle_timeout() if active is not None else None,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                if active is not None and active.waiter.done():
-                    failure = await self._settle_stream(active, output_emitter) or failure
-                    active = None
-                    continue
-
-                if not next_task.done():
-                    # LLM stalled: finalize before the server times the stream out
+                    waiters: set[asyncio.Future[tokenize.TokenData] | asyncio.Future[None]] = {
+                        next_task
+                    }
                     if active is not None:
+                        waiters.add(active.waiter)
+                    await asyncio.wait(
+                        waiters,
+                        timeout=self._idle_timeout() if active is not None else None,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if active is not None and active.waiter.done():
+                        failure = await self._settle_stream(active, output_emitter) or failure
+                        active = None
+                        continue
+
+                    if not next_task.done():
+                        # LLM stalled: finalize before the server times the stream out
+                        if active is not None:
+                            failure = await self._finalize_stream(active, output_emitter) or failure
+                            active = None
+                        continue
+
+                    try:
+                        ev = next_task.result()
+                    except StopAsyncIteration:
+                        break
+                    finally:
+                        next_task = None
+
+                    if not ev.token.strip():
+                        continue
+
+                    self.mark_started()
+
+                    # rotate to a new stream before the fixed 2-minute stream lifespan
+                    if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
                         failure = await self._finalize_stream(active, output_emitter) or failure
                         active = None
-                    continue
 
-                try:
-                    ev = next_task.result()
-                except StopAsyncIteration:
-                    break
-                finally:
-                    next_task = None
+                    if active is None:
+                        active = await self._open_stream(output_emitter, request_id)
 
-                if not ev.token.strip():
-                    continue
+                    active.connection.send_text(active.stream_id, ev.token, text_end=False)
 
-                self.mark_started()
-
-                # rotate to a new stream before the fixed 2-minute stream lifespan
-                if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
+                if active is not None and not self._cancelled.is_set():
                     failure = await self._finalize_stream(active, output_emitter) or failure
                     active = None
-
-                if active is None:
-                    active = await self._open_stream(output_emitter, request_id)
-
-                active.connection.send_text(active.stream_id, ev.token, text_end=False)
-
-            if active is not None and not self._cancelled.is_set():
-                failure = await self._finalize_stream(active, output_emitter) or failure
-                active = None
-            if failure is not None:
-                raise failure
+                if failure is not None:
+                    raise failure
         finally:
             if next_task is not None:
                 await utils.aio.gracefully_cancel(next_task)
             if active is not None:
+                active.connection.cancel_stream(active.stream_id)
                 active.connection.unregister_stream(active.stream_id)
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t)
@@ -492,7 +495,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        connection.register_stream(stream_id, output_emitter, waiter, opts=self._opts)
+        connection.register_stream(
+            stream_id, output_emitter, waiter, opts=self._opts, read_deadline=self._read_deadline
+        )
         return _ActiveStream(
             connection=connection,
             stream_id=stream_id,
@@ -512,6 +517,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> APIError | None:
         try:
             await active.waiter
+        except asyncio.CancelledError:
+            active.connection.cancel_stream(active.stream_id)
+            raise
         except APIError as error:
             if not error.retryable or output_emitter.pushed_duration() == 0:
                 raise
@@ -520,6 +528,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             return error
         finally:
             active.connection.unregister_stream(active.stream_id)
+            self._read_deadline.complete_response()
         return None
 
 
@@ -564,6 +573,7 @@ class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
     opts: _TTSOptions
+    read_deadline: tts.StreamReadDeadline
     audio_ended: bool = False
     # Client cancel and server abort produce identical `terminated` messages.
     # This flag is how recv loop tells them apart.
@@ -661,6 +671,7 @@ class _Connection:
         waiter: asyncio.Future[None],
         *,
         opts: _TTSOptions,
+        read_deadline: tts.StreamReadDeadline,
     ) -> None:
         """Register a new stream and queue its config message."""
         if self._closed or self._error is not None:
@@ -674,7 +685,9 @@ class _Connection:
             raise ValueError(f"stream_id {stream_id} already registered")
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
+        self._streams[stream_id] = _StreamData(
+            emitter=emitter, waiter=waiter, opts=opts, read_deadline=read_deadline
+        )
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -747,6 +760,8 @@ class _Connection:
                     if msg.text_end:
                         payload["text_end"] = True
                     await self._ws.send_str(json.dumps(payload))
+                    if stream := self._streams.get(msg.stream_id):
+                        stream.read_deadline.expect_response(final=msg.text_end)
                 else:
                     await self._ws.send_str(
                         json.dumps({"stream_id": msg.stream_id, "cancel": True})
@@ -830,9 +845,11 @@ class _Connection:
 
                 audio_b64 = resp.get("audio")
                 if audio_b64:
+                    stream.read_deadline.audio_received()
                     stream.emitter.push(base64.b64decode(audio_b64))
 
                 if resp.get("audio_end"):
+                    stream.read_deadline.progress()
                     stream.audio_ended = True
                     # end_segment() is called from SynthesizeStream._run's finally
                     # block (covers cancel/error paths too).

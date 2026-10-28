@@ -349,6 +349,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             setup_msg: dict[str, JsonValue] = {
                 "type": "setup",
@@ -370,39 +372,43 @@ class SynthesizeStream(tts.SynthesizeStream):
                 text_msg = {"type": "text", "text": f"{word.token} "}
                 self.mark_started()
                 await ws.send_str(json.dumps(text_msg))
+                read_deadline.expect_response()
 
             flush_msg = {"type": "end_of_stream"}
             await ws.send_str(json.dumps(flush_msg))
+            read_deadline.expect_response(final=True)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                    # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                    output_emitter.end_segment()
-                    break
-
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    msg_data = json.loads(msg.data)
-                    type_ = msg_data.get("type")
-                    if type_ == "text":
-                        # TODO(laurent): handle text timestamps?
-                        pass
-                    elif type_ == "ready":
-                        pass
-                    elif type_ == "audio":
-                        audio = base64.b64decode(msg_data["audio"])
-                        output_emitter.push(audio)
-                    elif type_ == "end_of_stream":
+            async with read_deadline.watch():
+                while True:
+                    msg = await ws.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        # TODO(laurent): once we support returning eos in the api, we should enable this back.
+                        # raise APIStatusError("Gradium websocket connection closed unexpectedly")
                         output_emitter.end_segment()
                         break
-                    else:
-                        logger.warning(f"unknown message type: {type_}")
+
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        msg_data = json.loads(msg.data)
+                        type_ = msg_data.get("type")
+                        if type_ == "text":
+                            # TODO(laurent): handle text timestamps?
+                            pass
+                        elif type_ == "ready":
+                            pass
+                        elif type_ == "audio":
+                            audio = base64.b64decode(msg_data["audio"])
+                            read_deadline.audio_received()
+                            output_emitter.push(audio)
+                        elif type_ == "end_of_stream":
+                            output_emitter.end_segment()
+                            break
+                        else:
+                            logger.warning(f"unknown message type: {type_}")
 
         ws = await self._connect_ws(self._conn_options)
         async with ws:

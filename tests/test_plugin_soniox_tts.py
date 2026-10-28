@@ -22,7 +22,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectOptions, APIStatusError
-from livekit.agents.tts import AudioEmitter
+from livekit.agents.tts import AudioEmitter, StreamReadDeadline
 from livekit.plugins import soniox
 from livekit.plugins.soniox.tts import _Connection
 
@@ -70,7 +70,13 @@ async def test_websocket_authenticates_once_for_multiple_streams() -> None:
                     conn_options=APIConnectOptions(max_retry=0)
                 )
                 waiter = asyncio.get_running_loop().create_future()
-                connection.register_stream(stream_id, MagicMock(), waiter, opts=tts._opts)
+                connection.register_stream(
+                    stream_id,
+                    MagicMock(),
+                    waiter,
+                    opts=tts._opts,
+                    read_deadline=StreamReadDeadline(APIConnectOptions()),
+                )
                 try:
                     connection.send_text(stream_id, "Hello!", text_end=True)
                     config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
@@ -119,7 +125,13 @@ async def test_connection_error_reaches_all_streams(
     def register_stream(name: str) -> None:
         waiter = asyncio.get_running_loop().create_future()
         waiters.append(waiter)
-        connection.register_stream(name, MagicMock(), waiter, opts=tts._opts)
+        connection.register_stream(
+            name,
+            MagicMock(),
+            waiter,
+            opts=tts._opts,
+            read_deadline=StreamReadDeadline(APIConnectOptions()),
+        )
 
     try:
         if register_before_error:
@@ -182,6 +194,7 @@ class _FakeConnection:
         waiter: asyncio.Future[None],
         *,
         opts: Any,
+        read_deadline: StreamReadDeadline,
     ) -> None:
         self.registered_ids.append(stream_id)
         self._streams[stream_id] = _StreamSlot(emitter, waiter)

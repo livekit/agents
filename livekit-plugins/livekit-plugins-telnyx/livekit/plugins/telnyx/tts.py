@@ -151,7 +151,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from None
         except APIConnectionError:
             raise
-        except APIStatusError:
+        except (APIStatusError, APITimeoutError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -171,38 +171,43 @@ class SynthesizeStream(tts.SynthesizeStream):
             format="audio/mp3",
         )
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             await ws.send_str(json.dumps({"text": " "}))
             self.mark_started()
             await ws.send_str(json.dumps({"text": text}))
             await ws.send_str(json.dumps({"text": ""}))
+            read_deadline.expect_response(final=True)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        data = _AudioMessage.model_validate_json(msg.data)
-                        audio_data = data.audio
-                        if audio_data:
-                            audio_bytes = base64.b64decode(audio_data)
-                            if audio_bytes:
-                                decoder.push(audio_bytes)
-                    except ValidationError as exc:
-                        raise APIConnectionError(
-                            "Invalid Telnyx audio message", retryable=False
-                        ) from exc
+            async with read_deadline.watch():
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = _AudioMessage.model_validate_json(msg.data)
+                            audio_data = data.audio
+                            if audio_data:
+                                audio_bytes = base64.b64decode(audio_data)
+                                if audio_bytes:
+                                    read_deadline.progress()
+                                    decoder.push(audio_bytes)
+                        except ValidationError as exc:
+                            raise APIConnectionError(
+                                "Invalid Telnyx audio message", retryable=False
+                            ) from exc
 
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("Telnyx TTS WebSocket error: %s", ws.exception())
-                    break
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        break
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        logger.error("Telnyx TTS WebSocket error: %s", ws.exception())
+                        break
 
-            decoder.end_input()
+                decoder.end_input()
 
         async def decode_task() -> None:
             async for frame in decoder:

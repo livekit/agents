@@ -130,8 +130,10 @@ class _ContextState(Enum):
 class _ContextInfo:
     context_id: str
     state: _ContextState
+    read_deadline: tts.StreamReadDeadline
     emitter: tts.AudioEmitter | None = None
     waiter: asyncio.Future[None] | None = None
+    input_sent: bool = False
     segment_started: bool = False
     flush_after_push: bool = False
     created_at: float = field(default_factory=time.time)
@@ -321,6 +323,7 @@ class _InworldConnection:
                     ctx_info = _ContextInfo(
                         context_id=ctx_id,
                         state=_ContextState.CREATING,
+                        read_deadline=tts.StreamReadDeadline(conn_options),
                         emitter=emitter,
                         waiter=waiter,
                         flush_after_push=opts.encoding == "PCM",
@@ -423,22 +426,26 @@ class _InworldConnection:
                         pkt["create"]["deliveryMode"] = opts.delivery_mode
                     # Always enable auto_mode since we always use SentenceTokenizer
                     pkt["create"]["autoMode"] = True
-                    await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _SendTextMsg):
                     pkt = {
                         "send_text": {"text": msg.text},
                         "contextId": msg.context_id,
                     }
-                    await self._ws.send_str(json.dumps(pkt))
 
                 elif isinstance(msg, _FlushContextMsg):
                     pkt = {"flush_context": {}, "contextId": msg.context_id}
-                    await self._ws.send_str(json.dumps(pkt))
 
                 else:
                     pkt = {"close_context": {}, "contextId": msg.context_id}
-                    await self._ws.send_str(json.dumps(pkt))
+
+                await self._ws.send_str(json.dumps(pkt))
+                if ctx := self._contexts.get(msg.context_id):
+                    if isinstance(msg, _SendTextMsg):
+                        ctx.input_sent = True
+                    ctx.read_deadline.expect_response(
+                        final=isinstance(msg, (_FlushContextMsg, _CloseContextMsg))
+                    )
 
         except Exception as e:
             logger.error("Inworld send loop error", exc_info=e)
@@ -508,6 +515,10 @@ class _InworldConnection:
                     continue
 
                 if "contextCreated" in result:
+                    if ctx.input_sent:
+                        ctx.read_deadline.progress()
+                    else:
+                        ctx.read_deadline.complete_response()
                     ctx.state = _ContextState.ACTIVE
                     logger.info(
                         "Context created confirmed by server",
@@ -516,6 +527,7 @@ class _InworldConnection:
                     continue
 
                 if audio_chunk := result.get("audioChunk"):
+                    ctx.read_deadline.audio_received()
                     if ctx.emitter:
                         if not ctx.segment_started:
                             ctx.emitter.start_segment(segment_id=context_id)
@@ -568,6 +580,7 @@ class _InworldConnection:
                     continue
 
                 if "flushCompleted" in result:
+                    ctx.read_deadline.progress()
                     # Signals the end of a generation, subsequent timestampes from the server
                     # will reset offset to 0. We need to update the cumulative time to the
                     # generation end time to maintain monotonically increasing timestamps
@@ -1367,7 +1380,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            await waiter
+            async with connection._contexts[context_id].read_deadline.watch():
+                await waiter
         except asyncio.TimeoutError:
             connection.close_context(context_id)
             raise APITimeoutError() from None
@@ -1375,6 +1389,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(context_id)
             raise
         except APIError:
+            connection.close_context(context_id)
             raise
         except Exception as e:
             logger.error("Inworld stream error", extra={"context_id": context_id, "error": e})

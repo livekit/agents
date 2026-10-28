@@ -324,6 +324,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_id=request_id,
                 body=None,
             ) from None
+        except APIConnectionError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
@@ -336,49 +338,55 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
         input_ended = False
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal input_ended
 
             async for word in input_stream:
                 self.mark_started()
                 await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
+                read_deadline.expect_response()
             await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True
+            read_deadline.expect_response(final=True)
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "xAI connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+            async with read_deadline.watch():
+                while True:
+                    msg = await ws.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        raise APIStatusError(
+                            "xAI connection closed unexpectedly",
+                            status_code=ws.close_code or -1,
+                            body=f"{msg.data=} {msg.extra=}",
+                        )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("Unexpected xAI message type %s", msg.type)
-                    continue
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        logger.warning("Unexpected xAI message type %s", msg.type)
+                        continue
 
-                data = json.loads(msg.data)
-                msg_type = data.get("type")
-                if msg_type == "audio.delta":
-                    output_emitter.push(base64.b64decode(data["delta"]))
-                elif msg_type == "audio.done":
-                    if input_ended:
-                        output_emitter.end_segment()
-                        break
-                elif msg_type == "error":
-                    raise APIStatusError(
-                        data.get("message", "unknown xAI error"),
-                        status_code=-1,
-                        body=str(data),
-                    )
-                else:
-                    logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
+                    data = json.loads(msg.data)
+                    msg_type = data.get("type")
+                    if msg_type == "audio.delta":
+                        read_deadline.audio_received()
+                        output_emitter.push(base64.b64decode(data["delta"]))
+                    elif msg_type == "audio.done":
+                        if input_ended:
+                            output_emitter.end_segment()
+                            break
+                    elif msg_type == "error":
+                        raise APIStatusError(
+                            data.get("message", "unknown xAI error"),
+                            status_code=-1,
+                            body=str(data),
+                        )
+                    else:
+                        logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
         async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [

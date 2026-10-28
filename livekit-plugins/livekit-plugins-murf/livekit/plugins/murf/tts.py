@@ -357,6 +357,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_emitter=output_emitter,
             )
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             context_id = utils.shortuuid()
             base_pkt = _to_murf_websocket_pkt(self._opts)
@@ -366,12 +368,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_pkt["text"] = ev.token + " "
                 self.mark_started()
                 await ws.send_str(json.dumps(token_pkt))
+                read_deadline.expect_response()
                 input_sent_event.set()
 
             end_pkt = base_pkt.copy()
             end_pkt["context_id"] = context_id
             end_pkt["end"] = True
             await ws.send_str(json.dumps(end_pkt))
+            read_deadline.expect_response(final=True)
             input_sent_event.set()
 
         async def _input_task() -> None:
@@ -385,37 +389,39 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_tokenizer_stream.end_input()
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            current_segment_id: str | None = None
-            await input_sent_event.wait()
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    raise APIStatusError(
-                        "Murf AI connection closed unexpectedly", request_id=request_id
-                    )
+            async with read_deadline.watch():
+                current_segment_id: str | None = None
+                await input_sent_event.wait()
+                while True:
+                    msg = await ws.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        raise APIStatusError(
+                            "Murf AI connection closed unexpectedly", request_id=request_id
+                        )
 
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.warning("unexpected Murf AI message type %s", msg.type)
-                    continue
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        logger.warning("unexpected Murf AI message type %s", msg.type)
+                        continue
 
-                data = json.loads(msg.data)
-                if current_segment_id is None:
-                    current_segment_id = request_id
-                    output_emitter.start_segment(segment_id=request_id)
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    output_emitter.push(b64data)
-                elif data.get("final"):
-                    if sent_tokenizer_stream.closed:
-                        # close only if the input stream is closed
-                        output_emitter.end_input()
-                        break
-                else:
-                    logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
+                    data = json.loads(msg.data)
+                    if current_segment_id is None:
+                        current_segment_id = request_id
+                        output_emitter.start_segment(segment_id=request_id)
+                    if data.get("audio"):
+                        b64data = base64.b64decode(data["audio"])
+                        read_deadline.audio_received()
+                        output_emitter.push(b64data)
+                    elif data.get("final"):
+                        if sent_tokenizer_stream.closed:
+                            # close only if the input stream is closed
+                            output_emitter.end_input()
+                            break
+                    else:
+                        logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
             async with self._pool.connection(conn_options=self._conn_options) as ws:
@@ -437,6 +443,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APIConnectionError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 

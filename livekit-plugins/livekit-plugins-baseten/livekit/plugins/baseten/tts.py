@@ -370,28 +370,34 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        read_deadline = tts.StreamReadDeadline(self._conn_options)
+
         async def _send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             async for data in self.input:
                 if isinstance(data, self.Flush):
                     continue
                 self.mark_started()
                 await ws.send_str(data)
+                read_deadline.expect_response()
             await ws.send_str(_END_SENTINEL)
+            read_deadline.expect_response(final=True)
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            output_emitter.start_segment(segment_id=request_id)
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY:
-                    output_emitter.push(msg.data)
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    break
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError()
-            output_emitter.end_input()
+            async with read_deadline.watch():
+                output_emitter.start_segment(segment_id=request_id)
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        read_deadline.audio_received()
+                        output_emitter.push(msg.data)
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        break
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        raise APIConnectionError()
+                output_emitter.end_input()
 
         try:
             async with await utils.http_context.ws_connect(

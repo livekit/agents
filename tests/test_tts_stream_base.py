@@ -132,3 +132,23 @@ async def test_batch_over_stream_uses_one_retry_budget() -> None:
         assert provider.attempts == 2
     finally:
         await provider.aclose()
+
+
+async def test_stalled_provider_response_expires_in_the_read_phase() -> None:
+    from livekit.agents import APITimeoutError
+
+    deadline = tts.StreamReadDeadline(APIConnectOptions(read_timeout=0.02))
+    async with asyncio.timeout(1):
+        with pytest.raises(APITimeoutError) as failure:
+            async with deadline.watch():
+                # No provider response is owed while the application is idle.
+                await asyncio.sleep(0.04)
+                deadline.expect_response()
+                await asyncio.sleep(0.01)
+                deadline.progress()
+                await asyncio.sleep(0.01)
+                deadline.complete_response()
+                await asyncio.sleep(0.04)
+                deadline.expect_response()
+                await asyncio.Future()
+    assert failure.value.phase == "read"
