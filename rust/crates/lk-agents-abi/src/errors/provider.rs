@@ -53,6 +53,12 @@ impl ProviderError {
         }
     }
 
+    /// The host cancelled the call itself (`asyncio.CancelledError`): its provider stopped, nothing
+    /// failed.
+    pub fn cancelled(&self) -> bool {
+        matches!(self, ProviderError::Host { error, .. } if error.kind == "CancelledError")
+    }
+
     /// `Some` only for a host exception.
     pub fn host_ref(&self) -> Option<CapturedError> {
         match self {

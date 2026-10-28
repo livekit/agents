@@ -351,6 +351,9 @@ impl RetrySource {
                         return Ok(Some(event));
                     }
                     Ok(None) => return Ok(None),
+                    // The provider stopped its own stream: the recognition ends, unreported and
+                    // never retried.
+                    Err(error) if error.cancelled() => return Ok(None),
                     Err(error) => error,
                 },
                 (None, None) => return Ok(None),
@@ -426,6 +429,8 @@ mod tests {
         #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         /// Each reported failure's `recoverable`.
         reports: Mutex<Vec<bool>>,
+        /// The first attempt is cancelled by the provider instead of failing.
+        cancels: bool,
     }
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -445,6 +450,7 @@ mod tests {
     /// `Fail`s at once, or yields one final transcript then ends.
     enum Attempt {
         Fail,
+        Cancelled,
         Final,
         Done,
     }
@@ -454,6 +460,16 @@ mod tests {
         async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
             match std::mem::replace(self, Attempt::Done) {
                 Attempt::Fail => Err(ApiError::new("hiccup").into()),
+                Attempt::Cancelled => Err(ProviderError::Host {
+                    error: crate::errors::HostError {
+                        kind: "CancelledError".into(),
+                        message: String::new(),
+                        host_ref: None,
+                    },
+                    api_kind: None,
+                    retryable: false,
+                    status_code: None,
+                }),
                 Attempt::Final => Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript))),
                 Attempt::Done => Ok(None),
             }
@@ -489,7 +505,11 @@ mod tests {
             let mut opened = self.opened.lock().unwrap();
             opened.push(offset.unwrap_or_default());
             self.heard.lock().unwrap().push(0);
-            let attempt = if opened.len() == 1 { Attempt::Fail } else { Attempt::Final };
+            let attempt = match (opened.len(), self.cancels) {
+                (1, true) => Attempt::Cancelled,
+                (1, false) => Attempt::Fail,
+                _ => Attempt::Final,
+            };
             let sink = Count(Arc::clone(&self.heard), opened.len() - 1);
             Ok(Some((Box::new(sink), Box::new(attempt))))
         }
@@ -498,6 +518,18 @@ mod tests {
     fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
         let clock: Arc<dyn Clock> = Arc::new(crate::utils::clock::SimClock::new());
         RetryingStt::for_host(inner, ApiConnectOptions { max_retry, ..ApiConnectOptions::default() }, clock).unwrap()
+    }
+
+    // Catches: a provider that cancels its own stream at close reported as a failed recognition
+    // (a session `stt_error` carrying a CancelledError) or reopened as a retry.
+    #[tokio::test(start_paused = true)]
+    async fn a_stream_the_provider_cancels_ends_unreported() {
+        let inner = Arc::new(Flaky { cancels: true, ..Flaky::default() });
+        let stt = retrying(Arc::clone(&inner), 3);
+        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+        assert!(source.next().await.unwrap().is_none());
+        assert!(inner.reports.lock().unwrap().is_empty());
+        assert_eq!(inner.opened.lock().unwrap().len(), 1);
     }
 
     // Catches: a retried stream that loses what was pushed while no attempt was open, reports the
