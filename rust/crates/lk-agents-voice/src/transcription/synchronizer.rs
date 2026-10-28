@@ -22,10 +22,7 @@ const EXCEPTIONS: &str = include_str!("liang/exceptions.txt");
 /// How long `aclose` waits for the forwarder to hand the last words to the text sink.
 pub const SEGMENT_ACLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Counts syllable-like pieces used to pace transcript words. The default is [`Liang`]; a caller's
-/// own `hyphenate_word=` is this trait through `synchronizer.py`'s `_Hyphenator` (a GIL hop per
-/// word).
-#[lk_agents_abi::host(proxy)]
+/// Counts syllable-like pieces used to pace transcript words: [`Liang`] by default.
 pub trait Hyphenator: Send + Sync {
     /// `len(hyphenate_word(word))`. Never zero, including for the empty string.
     fn hyphens(&self, word: &str) -> usize;
@@ -738,13 +735,12 @@ impl TranscriptSynchronizer {
 
     /// `next_in_chain_audio` is the host `io.AudioOutput` the audio passes through to (its
     /// playback events pace the text); `next_in_chain_text` the host `io.TextOutput` the paced
-    /// words go to, or `None`. `hyphenate_word` is the caller's, or `None` for Liang.
+    /// words go to, or `None`.
     #[host(new(kw_only = "speed", defaults(speed = 1.0)))]
     pub fn for_host(
         next_in_chain_audio: Arc<dyn AudioOutput>,
         next_in_chain_text: Option<Arc<dyn TextOutput>>,
         speed: f64,
-        hyphenate_word: Option<Arc<dyn Hyphenator>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Self {
         let tracker = Arc::clone(next_in_chain_audio.tracker());
@@ -752,7 +748,7 @@ impl TranscriptSynchronizer {
             audio_next: next_in_chain_audio,
             text_next: next_in_chain_text,
             speed,
-            hyphenator: hyphenate_word.unwrap_or_else(|| Arc::new(Liang)),
+            hyphenator: Arc::new(Liang),
             clock: Arc::new(lk_agents_abi::RealClock::new()),
             spawner,
         });

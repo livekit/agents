@@ -499,7 +499,6 @@
   "host|rust/crates/lk-agents-voice/src/transcription/synchronizer.rs|impl  for TranscriptSynchronizer::set_enabled|host (method)",
   "host|rust/crates/lk-agents-voice/src/transcription/synchronizer.rs|impl  for TranscriptSynchronizer::text_leg|host (getter (name = \"text_output\"))",
   "host|rust/crates/lk-agents-voice/src/transcription/synchronizer.rs|impl  for TranscriptSynchronizer|lk_agents_abi :: host (object (cell = \"arc\"))",
-  "host|rust/crates/lk-agents-voice/src/transcription/synchronizer.rs|trait Hyphenator|lk_agents_abi :: host (proxy)",
   "host|rust/crates/lk-agents-voice/src/workflows/dtmf.rs|enum ReceiveDtmfError::NoDigits|host (kind = \"ValueError\")",
   "host|rust/crates/lk-agents-voice/src/workflows/dtmf.rs|enum ReceiveDtmfError::UnknownKey|host (kind = \"ValueError\")",
   "host|rust/crates/lk-agents-voice/src/workflows/dtmf.rs|enum ReceiveDtmfError|lk_agents_abi :: host (error (kind = \"livekit.agents.llm.tool_context.ToolError\"))",

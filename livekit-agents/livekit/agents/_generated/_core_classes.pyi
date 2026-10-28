@@ -2084,7 +2084,6 @@ class TranscriptSynchronizer:
         next_in_chain_text: Any | None = None,
         *,
         speed: float = 1.0,
-        hyphenate_word: Any | None = None,
     ) -> None: ...
     @property
     def text_output(self) -> CoreTextOutput: ...
