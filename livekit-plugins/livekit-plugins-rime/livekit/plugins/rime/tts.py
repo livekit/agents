@@ -27,6 +27,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -656,7 +657,7 @@ class ChunkedStream(tts.ChunkedStream):
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
                     logger.error("Rime returned non-audio data", extra={"lk.pii.data": content})
-                    return
+                    raise APIError("Rime returned non-audio data", retryable=False)
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -677,5 +678,7 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=None,
                 body=None,
             ) from None
+        except APIError:
+            raise
         except Exception:
             raise APIConnectionError("Rime HTTP request failed") from None
