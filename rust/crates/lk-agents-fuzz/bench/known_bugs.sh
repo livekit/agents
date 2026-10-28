@@ -120,6 +120,11 @@ rsync -r --links --checksum --from0 --files-from="$files" "$source" "$tree/"
 # and the directories they leave empty (a crate directory without its manifest breaks the
 # workspace's `crates/*`).
 find "$tree/rust/crates" -type d -empty -delete
+# Path dependencies outside the repository (sibling checkouts, `../../rust-sdks/...` from rust/)
+# resolve beside the copy as they do beside the checkout.
+for sibling in $(grep -o 'path = "\.\./\.\./[^/"]*' "$tree/rust/Cargo.toml" | sed 's|.*\.\./\.\./||' | sort -u); do
+    ln -sfn "$(dirname "$root")/$sibling" "$home/$sibling"
+done
 export CARGO_TARGET_DIR="$home/target"
 
 # `git apply` on the copy, which is no repository: paths are taken from the copy's root.
