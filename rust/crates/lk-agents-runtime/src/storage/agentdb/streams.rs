@@ -21,6 +21,9 @@ use super::conn::TokenMinter;
 use super::http_ok;
 use crate::sse::{SseDecoder, SseEvent};
 
+mod cursor;
+use cursor::{MAX_BYTES, MAX_RECORDS, Position, invalid};
+
 /// The streams API's answer to a create.
 #[derive(serde::Deserialize)]
 struct Created {
@@ -128,7 +131,7 @@ impl Streams {
         }
     }
 
-    /// One append, awaited: the record's offset token.
+    /// One append, awaited: the resume cursor immediately after the record.
     pub async fn append_now(&self, stream_id: &str, record: &[u8]) -> Result<String, StorageError> {
         let resp = self
             .http
@@ -140,7 +143,7 @@ impl Streams {
             .await
             .map_err(transport)?;
         let resp = http_ok(resp).await?;
-        Ok(header(&resp, "Stream-Offset").unwrap_or_default())
+        Ok(Position::at(required_next(&resp)?)?.encode())
     }
 
     /// Flushes the queue, then closes the stream: its terminal frame marks the commit.
@@ -172,10 +175,23 @@ impl Streams {
     /// Reads from `from` (`None`: the beginning). With `live`, follows the tail until the stream
     /// closes; without, ends at the tail.
     pub fn read(&self, stream_id: &str, from: Option<&str>, live: bool) -> StreamReader {
+        let decoded = from.map(Position::decode).unwrap_or_else(|| Position::at(START.to_owned()));
+        let (position, error) = match decoded {
+            Ok(position) => (position, None),
+            Err(error) => (Position::at(START.to_owned()).expect("start"), Some(error)),
+        };
+        let cursor = position.encode();
+        let replay = position.consumed;
         StreamReader {
             streams: self.clone(),
             id: stream_id.to_owned(),
-            from: from.unwrap_or(START).to_owned(),
+            position: Position { anchor: position.anchor, consumed: 0 },
+            cursor,
+            replay,
+            replay_bytes: 0,
+            replay_pages: 0,
+            error,
+            boundary: None,
             live,
             buffered: VecDeque::new(),
             closed: false,
@@ -188,12 +204,23 @@ impl Streams {
 pub struct StreamReader {
     streams: Streams,
     id: String,
-    /// The next offset to ask for.
-    from: String,
+    position: Position,
+    cursor: String,
+    replay: usize,
+    replay_bytes: usize,
+    replay_pages: usize,
+    error: Option<StorageError>,
+    boundary: Option<Boundary>,
     live: bool,
     buffered: VecDeque<Vec<u8>>,
     closed: bool,
     sse: Option<Sse>,
+}
+
+struct Boundary {
+    next: String,
+    up_to_date: bool,
+    closed: bool,
 }
 
 struct Sse {
@@ -211,12 +238,14 @@ struct Control {
     error: Option<String>,
     #[serde(default)]
     stream_closed: bool,
+    #[serde(default)]
+    up_to_date: bool,
 }
 
 impl StreamReader {
     /// The offset to resume from after the records returned so far.
     pub fn next_offset(&self) -> &str {
-        &self.from
+        &self.cursor
     }
 
     pub fn is_closed(&self) -> bool {
@@ -225,9 +254,31 @@ impl StreamReader {
 
     /// The next record, or `None` at the end: the tail for a catch-up read, the close for a live one.
     pub async fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
+        let result = self.next_inner().await;
+        if matches!(result, Err(StorageError::Decode(_))) {
+            self.closed = true;
+            self.buffered.clear();
+            self.sse = None;
+        }
+        result
+    }
+
+    async fn next_inner(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
+        if let Some(error) = self.error.take() {
+            self.closed = true;
+            return Err(error);
+        }
         loop {
             if let Some(r) = self.buffered.pop_front() {
+                self.position.consumed += 1;
+                if self.position.consumed > MAX_RECORDS {
+                    return Err(invalid("record replay count exceeds budget"));
+                }
+                self.cursor = self.position.encode();
                 return Ok(Some(r));
+            }
+            if let Some(boundary) = self.boundary.take() {
+                self.advance(boundary)?;
             }
             if self.closed {
                 return Ok(None);
@@ -235,48 +286,116 @@ impl StreamReader {
             if self.live {
                 self.pump_live().await?;
             } else {
-                let up_to_date = self.catch_up().await?;
-                if self.buffered.is_empty() && (up_to_date || self.closed) {
-                    self.closed = true;
-                }
+                self.catch_up().await?;
             }
         }
     }
 
-    /// One `GET`: fills the buffer, advances the offset; `true` at the tail.
-    async fn catch_up(&mut self) -> Result<bool, StorageError> {
+    fn records(&mut self, body: &[u8]) -> Result<(), StorageError> {
+        if body.len() > MAX_BYTES {
+            return Err(invalid("response exceeds byte budget"));
+        }
+        if self.replay > 0 {
+            self.replay_bytes = self
+                .replay_bytes
+                .checked_add(body.len())
+                .filter(|n| *n <= MAX_BYTES)
+                .ok_or_else(|| invalid("replay exceeds byte budget"))?;
+        }
+        let records = split_records(body)?;
+        if records.len() > MAX_RECORDS {
+            return Err(invalid("response exceeds record budget"));
+        }
+        let skip = self.replay.min(records.len());
+        self.replay -= skip;
+        self.position.consumed += skip;
+        self.buffered.extend(records.into_iter().skip(skip));
+        Ok(())
+    }
+
+    fn advance(&mut self, boundary: Boundary) -> Result<(), StorageError> {
+        if self.replay > 0 && (boundary.up_to_date || boundary.closed) {
+            return Err(invalid("replay position is beyond retained records"));
+        }
+        if boundary.next == self.position.anchor && !boundary.up_to_date && !boundary.closed {
+            return Err(invalid("upstream offset did not advance"));
+        }
+        self.position = Position::at(boundary.next)?;
+        if self.replay == 0 {
+            self.cursor = self.position.encode();
+            self.replay_bytes = 0;
+            self.replay_pages = 0;
+        }
+        self.closed = boundary.closed || (!self.live && boundary.up_to_date);
+        Ok(())
+    }
+
+    /// One bounded `GET`. Its official boundary is installed only after buffered records drain.
+    async fn catch_up(&mut self) -> Result<(), StorageError> {
+        self.replay_page()?;
         let resp = self
             .streams
             .http
             .get(self.streams.url(&self.id))
-            .query(&[("offset", self.from.as_str())])
+            .query(&[("offset", self.position.anchor.as_str())])
             .bearer_auth(self.streams.token()?)
             .send()
             .await
             .map_err(transport)?;
         let resp = http_ok(resp).await?;
-        if let Some(next) = header(&resp, "Stream-Next-Offset") {
-            self.from = next;
+        let boundary = Boundary {
+            next: required_next(&resp)?,
+            up_to_date: header(&resp, "Stream-Up-To-Date")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            closed: header(&resp, "Stream-Closed").is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        };
+        let mut body = Vec::new();
+        let mut chunks = resp.bytes_stream();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(transport)?;
+            if chunk.len() > MAX_BYTES.saturating_sub(body.len()) {
+                return Err(invalid("response exceeds byte budget"));
+            }
+            body.extend_from_slice(&chunk);
         }
-        let up_to_date =
-            header(&resp, "Stream-Up-To-Date").is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        if header(&resp, "Stream-Closed").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
-            self.closed = true;
-        }
-        let body = resp.bytes().await.map_err(transport)?;
-        self.buffered.extend(split_records(&body)?);
-        Ok(up_to_date)
+        self.records(&body)?;
+        self.boundary = Some(boundary);
+        Ok(())
     }
 
     /// Reads SSE events until a `data` event lands in the buffer, the stream closes, or the
     /// connection rotates (then reconnects from the offset).
     async fn pump_live(&mut self) -> Result<(), StorageError> {
+        let result = self.pump_live_inner().await;
+        if result.is_err() {
+            self.sse = None;
+            self.rewind();
+        }
+        result
+    }
+
+    fn rewind(&mut self) {
+        self.replay += self.position.consumed;
+        self.position.consumed = 0;
+    }
+
+    fn replay_page(&mut self) -> Result<(), StorageError> {
+        if self.replay > 0 {
+            self.replay_pages += 1;
+            if self.replay_pages > 128 {
+                return Err(invalid("replay exceeds page budget"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn pump_live_inner(&mut self) -> Result<(), StorageError> {
         if self.sse.is_none() {
             let resp = self
                 .streams
                 .http
                 .get(self.streams.url(&self.id))
-                .query(&[("offset", self.from.as_str()), ("live", "sse")])
+                .query(&[("offset", self.position.anchor.as_str()), ("live", "sse")])
                 .bearer_auth(self.streams.token()?)
                 .send()
                 .await
@@ -288,26 +407,30 @@ impl StreamReader {
                 events: VecDeque::new(),
             });
         }
-        let sse = self.sse.as_mut().expect("opened above");
         loop {
+            let sse = self.sse.as_mut().expect("opened above");
             if let Some(event) = sse.events.pop_front() {
                 match event.event.as_str() {
                     "data" => {
-                        self.buffered.extend(split_records(event.data.as_bytes())?);
+                        self.records(event.data.as_bytes())?;
                         return Ok(());
                     }
                     "control" => {
                         let c: Control = serde_json::from_str(&event.data)
                             .map_err(|e| StorageError::Decode(e.to_string()))?;
-                        if let Some(next) = c.stream_next_offset {
-                            self.from = next;
-                        }
                         if let Some(err) = c.error {
                             self.sse = None;
                             return Err(StorageError::Http { status: 0, message: err.to_owned() });
                         }
-                        if c.stream_closed {
-                            self.closed = true;
+                        self.replay_page()?;
+                        self.advance(Boundary {
+                            next: c
+                                .stream_next_offset
+                                .ok_or_else(|| invalid("control omitted next offset"))?,
+                            up_to_date: c.up_to_date,
+                            closed: c.stream_closed,
+                        })?;
+                        if self.closed {
                             self.sse = None;
                             return Ok(());
                         }
@@ -329,8 +452,12 @@ impl StreamReader {
                     return Err(transport(e));
                 }
                 None => {
-                    sse.decoder.finish().map_err(|e| StorageError::Decode(e.to_string()))?;
-                    self.sse = None; // rotation: reconnect from the offset
+                    let finished = sse.decoder.finish();
+                    self.sse = None;
+                    finished.map_err(|e| StorageError::Decode(e.to_string()))?;
+                    // No control may have arrived. Replay the official anchor and skip only
+                    // records actually yielded before rotation.
+                    self.rewind();
                     return Ok(());
                 }
             }
@@ -346,6 +473,10 @@ fn split_records(body: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
     let records: Vec<Box<serde_json::value::RawValue>> = serde_json::from_slice(body)
         .map_err(|e| StorageError::Decode(format!("stream body: {e}")))?;
     Ok(records.into_iter().map(|r| r.get().as_bytes().to_vec()).collect())
+}
+
+fn required_next(resp: &reqwest::Response) -> Result<String, StorageError> {
+    header(resp, "Stream-Next-Offset").ok_or_else(|| invalid("response omitted next offset"))
 }
 
 fn header(resp: &reqwest::Response, name: &str) -> Option<String> {
@@ -381,3 +512,6 @@ mod framing_tests {
         assert_eq!(reader.buffered.pop_front().unwrap(), "\"café\"".as_bytes());
     }
 }
+
+#[cfg(test)]
+mod tests;

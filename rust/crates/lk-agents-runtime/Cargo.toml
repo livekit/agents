@@ -27,6 +27,8 @@ async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "fs", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query", "multipart"] }
 bytes = "1"
+base64.workspace = true
+httparse = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 pyo3 = { workspace = true, optional = true }
 # Thread storage and the A2A door: the cores' plans executed against AgentDB and local SQLite.

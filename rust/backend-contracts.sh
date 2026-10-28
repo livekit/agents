@@ -23,7 +23,7 @@ esac
 
 cd "$(dirname "$0")"
 args=(
-    --locked -p lk-agents-runtime
+    --locked -p lk-agents-runtime --lib
     --test storage_lifecycle --test storage_runs --test storage_lease
     --test storage_context --test storage_process --test storage_schema --test a2a_turns
     --no-tests fail
