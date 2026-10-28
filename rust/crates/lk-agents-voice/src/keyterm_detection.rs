@@ -174,7 +174,7 @@ impl KeytermSlot {
 }
 
 /// The task: request, drain for the first `record_keyterms` call and usage, report.
-pub(super) async fn detection_pass(
+pub async fn detection_pass(
     shared: Arc<SessionShared>,
     llm: Arc<dyn Llm>,
     request: lk_agents_abi::ChatRequest,

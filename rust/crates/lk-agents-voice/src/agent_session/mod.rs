@@ -574,7 +574,7 @@ impl Driver {
     }
 
     /// The loop ended: nothing is held.
-    pub(crate) fn release_all_providers(&mut self) {
+    pub fn release_all_providers(&mut self) {
         self.session.providers.extend(self.providers_held());
         for id in std::mem::take(&mut self.session.providers) {
             self.outbox.push(Effect::ProviderRelease(id));

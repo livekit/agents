@@ -61,9 +61,6 @@ pub struct SessionApi {
     resources: lk_agents_abi::resources::Resources,
     /// `conn_options=`: every leg handed over, at start or later, is bound to its budget.
     conn: lk_agents_abi::voice::session_options::SessionConnOptions,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    #[cfg(feature = "dst")]
-    probe: Mutex<Option<(HostEventProbe, oneshot::Sender<crate::runtime::Runtime>)>>,
 }
 
 /// Test-only (`dst`): what a deterministic simulation needs from a session it drives through this
@@ -74,12 +71,18 @@ pub struct Probe {
     pub step: Box<dyn FnMut(&Step) + Send>,
     /// Every host event, typed, as the drain takes it and before the host sees its wire form.
     pub host_event: HostEventProbe,
-    /// The session's cores after the opening cycle, for a queue owner other than `Runtime::run`.
-    pub runtime: tokio::sync::oneshot::Sender<crate::runtime::Runtime>,
+    /// The queue owner the session's cores go to instead of the runtime: the simulation's own.
+    pub queue_owner: QueueOwnerFactory,
 }
 
 #[cfg(feature = "dst")]
 pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
+
+#[cfg(feature = "dst")]
+pub type QueueOwnerFactory = Box<
+    dyn FnOnce(crate::agent_session::SessionCores) -> Box<dyn crate::agent_session::QueueOwner>
+        + Send,
+>;
 
 #[cfg(any(test, feature = "dst"))]
 impl SessionApi {
@@ -93,9 +96,11 @@ impl SessionApi {
 
 #[cfg(feature = "dst")]
 impl SessionApi {
-    pub fn probe(&self, Probe { step, host_event, runtime }: Probe) {
-        self.observe(step);
-        *self.probe.lock().unwrap_or_else(|p| p.into_inner()) = Some((host_event, runtime));
+    pub fn probe(&self, Probe { step, host_event, queue_owner }: Probe) {
+        if let Stage::Ready(ready) = &mut *self.lock() {
+            ready.builder.journal = crate::trace::Journal::observed(step);
+            ready.builder.probe = Some((host_event, queue_owner));
+        }
     }
 
     /// Every provider and leg the session still holds.
@@ -144,10 +149,10 @@ impl SessionApi {
         let stage = Arc::clone(&self.stage);
         let anchor = self.anchor;
         let time = self.time.clone();
-        #[cfg(feature = "dst")]
-        let probe = self.probe.lock().unwrap_or_else(|p| p.into_inner()).take();
         Ok(async move {
             let Ready { mut builder, interruption } = ready;
+            #[cfg(feature = "dst")]
+            let probe = builder.probe.take();
             if capture_run {
                 builder.capture_run = Some(crate::run_result::RunSpec {
                     user_input: None,
@@ -165,32 +170,30 @@ impl SessionApi {
             room_io.start();
             builder.room_io_events = room_io.events();
 
-            let (mut runtime, handle) = builder.start().await?;
+            let (cores, handle) = builder.start().await?;
             let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
                 handle;
             #[cfg(feature = "dst")]
             let (host_event, queue_owner) = probe.unzip();
+            #[cfg(feature = "dst")]
+            let mut owner = match queue_owner {
+                Some(make) => make(cores),
+                None => Box::new(crate::runtime::Runtime::new(cores)),
+            };
+            #[cfg(not(feature = "dst"))]
+            let mut owner: Box<dyn crate::agent_session::QueueOwner> =
+                Box::new(crate::runtime::Runtime::new(cores));
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
-            runtime.open(time.read());
+            owner.open(time.read());
             let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
             let mut tasks = Vec::new();
-            #[cfg(feature = "dst")]
-            let runtime = match queue_owner {
-                Some(owner) => {
-                    let _ = owner.send(runtime);
-                    None
-                }
-                None => Some(runtime),
-            };
-            #[cfg(not(feature = "dst"))]
-            let runtime = Some(runtime);
-            if let Some(mut runtime) = runtime {
-                tasks.push(spawner.spawn_unboxed(async move { runtime.run().await }));
+            if let Some(run) = owner.run() {
+                tasks.push(spawner.spawn(run));
             }
             // Drained whether or not anybody listens: the queue is unbounded.
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
@@ -1260,7 +1263,7 @@ pub enum ReplyTo {
 }
 
 impl ReplyTo {
-    pub(crate) fn settle(self, answer: Answer) {
+    pub fn settle(self, answer: Answer) {
         match self {
             ReplyTo::Answer(tx) => {
                 let _ = tx.send(answer);

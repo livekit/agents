@@ -300,6 +300,8 @@ impl SessionApi {
         let builder = DriverBuilder {
             view: view_tx,
             journal: Default::default(),
+            #[cfg(feature = "dst")]
+            probe: None,
             resources: resources.clone(),
             session_id: session_id.unwrap_or_else(crate::agent_session::mint_session_id),
             agent,
@@ -368,8 +370,6 @@ impl SessionApi {
             host: HostParts::default(),
             resources,
             conn,
-            #[cfg(feature = "dst")]
-            probe: Mutex::new(None),
         };
         api.host = HostParts {
             events: on_event,

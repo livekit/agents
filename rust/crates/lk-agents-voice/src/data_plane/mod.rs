@@ -114,6 +114,11 @@ impl AudioForwarder {
         }
     }
 
+    /// Whether the microphone is heard: `AgentInput.audio_enabled`.
+    pub fn input_enabled(&self) -> bool {
+        self.input_enabled
+    }
+
     pub fn handle(&mut self, command: ForwarderCommand) -> Vec<ForwarderEffect> {
         let mut effects = Vec::new();
         match command {

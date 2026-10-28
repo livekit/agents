@@ -261,7 +261,7 @@ impl Run {
 
     /// Whether the session's loop is still there to take a call that returns nothing.
     fn loop_runs(&self) -> bool {
-        self.runtime.is_some()
+        self.cores.is_some()
     }
 
     /// Make the host API call an input mirrors, with the arguments a host passes.
@@ -1123,7 +1123,7 @@ impl Run {
         let wait = if self.record.close_begun().is_some() { NEVER_MS } else { BUDGET_MS };
         let until = self.time.now().saturating_add(Duration::from_millis(wait));
         self.drive(Some(until), std::future::pending::<()>()).await;
-        let exited = self.runtime.is_none();
+        let exited = self.cores.is_none();
         // The player goes with the session (`BackgroundAudioPlayer.aclose()`).
         if exited && let Some(player) = self.background.take() {
             player.close().await;
@@ -1185,9 +1185,9 @@ impl Run {
             let observed = self.livelock.lock().unwrap().take();
             if let Some(detail) = observed.or(counted) {
                 self.record.set_livelock(detail);
-                self.drop_runtime();
+                self.drop_cores();
             }
-            let Some(runtime) = &mut self.runtime else {
+            let Some(cores) = &mut self.cores else {
                 // The host's loop outlives the session's: what is ready still runs, so a task the
                 // driver cancelled on its way out is gone before the case sends anything else.
                 // Bounded, as the session's own instants are: a task left spinning never stops.
@@ -1202,45 +1202,45 @@ impl Run {
                 }
                 return None;
             };
-            while let Ok(event) = runtime.queue.try_recv() {
+            while let Ok(event) = cores.queue.try_recv() {
                 self.queue.push(event);
             }
-            while let Ok(frame) = runtime.frames.try_recv() {
+            while let Ok(frame) = cores.frames.try_recv() {
                 self.queue.push_frame(frame);
             }
-            if runtime.driver.stopped() {
+            if cores.driver.stopped() {
                 // The data plane still hears what reached it, then the core's queue is finished.
                 let (frames, undelivered) = self.queue.drain();
                 let now = self.time.read();
-                self.step(|runtime| {
+                self.step(|cores| {
                     for frame in frames {
-                        runtime.on_frame(frame, now);
+                        cores.on_frame(frame, now);
                     }
-                    runtime.finish(undelivered)
+                    cores.finish(undelivered)
                 });
-                self.drop_runtime();
+                self.drop_cores();
                 continue;
             }
             let now = self.time.now();
-            let wake_at = runtime.driver.wake_at();
+            let wake_at = cores.driver.wake_at();
             let wake_due = wake_at.is_some_and(|at| at <= now);
             let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
             match self.queue.next(wake_due, tasks_runnable(), &ready) {
                 Some(Next::Wake) => {
                     let now = self.time.read();
-                    self.step(|runtime| runtime.handle(Event::Wake, now));
+                    self.step(|cores| cores.handle(Event::Wake, now));
                     continue;
                 }
                 Some(Next::Event(event)) => {
                     let now = self.time.read();
-                    self.step(|runtime| runtime.handle(event, now));
+                    self.step(|cores| cores.handle(event, now));
                     continue;
                 }
                 Some(Next::Frames(frames)) => {
                     let now = self.time.read();
-                    self.step(|runtime| {
+                    self.step(|cores| {
                         for frame in frames {
-                            runtime.on_frame(frame, now);
+                            cores.on_frame(frame, now);
                         }
                     });
                     continue;
@@ -1278,8 +1278,8 @@ impl Run {
                 value = &mut done => return Some(value),
                 () = woken => {}
                 () = self.time.wait_until_opt(next) => {}
-                Some(frame) = runtime.frames.recv() => self.queue.push_frame(frame),
-                event = runtime.queue.recv() => match event {
+                Some(frame) = cores.frames.recv() => self.queue.push_frame(frame),
+                event = cores.queue.recv() => match event {
                     Some(event) => self.queue.push(event),
                     None => return None,
                 },
@@ -1289,22 +1289,22 @@ impl Run {
 
     /// One call into the session's cores. A panic is a finding about them, recorded, and the end
     /// of them: they are dropped.
-    fn step(&mut self, call: impl FnOnce(&mut Runtime)) {
-        let Some(runtime) = &mut self.runtime else { return };
-        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(runtime)));
+    fn step(&mut self, call: impl FnOnce(&mut super::executor::Executor)) {
+        let Some(cores) = &mut self.cores else { return };
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(cores)));
         // The observer unwound out of a livelocked step: the loop reports it, not as a panic.
         if self.livelock.lock().unwrap().is_some() {
-            self.drop_runtime();
+            self.drop_cores();
         } else if let Err(panic) = called {
             self.record.set_driver_panic(panic_message(&*panic));
-            self.drop_runtime();
+            self.drop_cores();
         }
     }
 
     /// The cores are gone, as production drops them: the session's answer pump closes every
     /// call never answered.
-    fn drop_runtime(&mut self) {
-        self.runtime = None;
+    fn drop_cores(&mut self) {
+        self.cores = None;
     }
 
     /// Await every retained task, and record how each ended.
@@ -1348,7 +1348,7 @@ impl Run {
                     None => {
                         // Nothing left that could finish it: no step pending, no wake, no task.
                         let enabled = !self.queue.idle()
-                            || self.runtime.as_ref().is_some_and(|r| r.driver.wake_at().is_some())
+                            || self.cores.as_ref().is_some_and(|c| c.driver.wake_at().is_some())
                             || tasks_runnable();
                         if !enabled && self.deadlock.is_none() {
                             self.deadlock = Some(format!(

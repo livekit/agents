@@ -29,7 +29,7 @@ impl Runtime {
 
     pub(crate) fn perform_voice(&mut self, effects: Vec<Effect>) {
         let frames = Arc::clone(&self.shared.frames);
-        let _scope = frames.enter(self.driver.current);
+        let _scope = frames.enter(self.driver.frame());
         // Views first: a receipt or event performed in the same batch must read what the core
         // accepted, not the state before it.
         let mut operations = Vec::with_capacity(effects.len());
@@ -48,8 +48,8 @@ impl Runtime {
     }
 
     fn deliver_session_event(&mut self, event: SessionEvent) {
-        self.watch.publish(SystemTap::Session(event.clone()));
-        let _ = self.events.send(HostEvent::Session(event));
+        self.peer.publish(SystemTap::Session(event.clone()));
+        let _ = self.peer.deliver(HostEvent::Session(event));
     }
 
     #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
@@ -76,14 +76,14 @@ impl Runtime {
             E::CloseRealtimePlayers => self.realtime_players.clear(),
             E::CancelSpeech(handle) => handle.cancel_tasks(),
             E::AttachRecorder { recorder, output } => {
-                self.unobserve_recorder(output);
+                self.shared.unobserve_recorder(output);
                 let tap =
                     crate::recorder_io::RecorderTap::new(recorder.0, self.shared.time.clock());
                 *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
-                self.observe_recorder(None, output);
+                self.shared.observe_recorder(None, output);
             }
             E::DetachRecorder(output) => {
-                self.unobserve_recorder(output);
+                self.shared.unobserve_recorder(output);
                 *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
             }
             E::FlushRecorder(at) => {
@@ -179,8 +179,8 @@ impl Runtime {
                 }
             }
             E::Host(event) => {
-                if let Err(error) = self.events.send(event) {
-                    if let HostEvent::Hook(call) = error.0 {
+                if let Err(event) = self.peer.deliver(event) {
+                    if let HostEvent::Hook(call) = event {
                         let _ = self.reports.send(crate::agent_session::Command::HookDone {
                             id: call.id(),
                             outcome: crate::agent_session::HookOutcome::Failed,
@@ -205,7 +205,7 @@ impl Runtime {
             E::Outputs(outputs) => {
                 self.shared.output.send_replace(outputs);
             }
-            E::Tap(tap) => self.watch.publish(tap),
+            E::Tap(tap) => self.peer.publish(tap),
             E::LaunchHold(hold) => self.shared.launch.publish(hold),
             E::SessionView(view) => {
                 self.shared.view.send_replace(view);
@@ -365,7 +365,7 @@ impl Runtime {
                         if enabled { new.on_attached() } else { new.on_detached() }
                     }
                 }
-                self.observe_recorder(old.as_deref(), next);
+                self.shared.observe_recorder(old.as_deref(), next);
             }
             E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
                 let resources = &self.shared.resources;

@@ -71,7 +71,7 @@ impl Run {
                 },
             );
         }
-        self.record.set_driver_finished(self.runtime.is_none());
+        self.record.set_driver_finished(self.cores.is_none());
         self.record.set_resources_left(self.api.resources().live());
         self.record.set_parks(tokio::runtime::Handle::current().metrics().worker_park_count(0));
         self.record.set_now(now);

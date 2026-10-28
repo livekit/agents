@@ -1,5 +1,5 @@
-//! `DriverBuilder`: assembles a session's runtime (its driver and data plane) from its providers,
-//! legs and options, and spawns the tasks that feed it.
+//! `DriverBuilder`: assembles a session's cores ([`SessionCores`]: its driver and data plane) from
+//! its providers, legs and options, and spawns the tasks that feed it.
 
 use super::driver::*;
 use crate::agent_activity::false_interruption::PausedSpeech;
@@ -9,7 +9,7 @@ use crate::agent_session::SessionShared;
 use crate::agent_session::VoiceSession;
 use crate::agent_session::commands::Origin;
 use crate::agent_session::host_events::HostEvent;
-use crate::agent_session::time::Timebase;
+use crate::agent_session::time::{Now, Timebase};
 use crate::audio::{AudioChannel, spawn_drain};
 use crate::audio_recognition::AudioRecognition;
 use crate::data_plane::{AudioForwarder, ForwarderCommand};
@@ -24,6 +24,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 type EotLeg = lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>;
+
+/// A started session's two cores, the decision core ([`Driver`]) and the data plane
+/// ([`AudioForwarder`]), with what performing their effects needs. The cores decide and the queue
+/// owner performs: the opening effects are still in the driver's outbox.
+pub struct SessionCores {
+    pub driver: Driver,
+    pub forwarder: AudioForwarder,
+    /// Every source's events, in arrival order, and where the effects' reports join them.
+    pub queue: (Tx, Rx<Event>),
+    /// The microphone the session starts with.
+    pub source: Option<lk_agents_abi::resources::ResourceId>,
+    pub eot: Option<Arc<EotLeg>>,
+    pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
+    /// The camera's forwarder parts, its running forwarder and the camera read now.
+    pub video: (
+        crate::audio::VideoForwarderParts,
+        Option<lk_agents_abi::AbortHandle>,
+        Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
+    ),
+    pub shared: Arc<SessionShared>,
+    /// Where host events and taps go.
+    pub peer: PeerHandle,
+    pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
+}
+
+/// What steps a session's cores: the production runtime, or a simulation's own executor.
+pub trait QueueOwner: Send {
+    /// The opening cycle, at the instant the session opens.
+    fn open(&mut self, now: Now);
+    /// The loop that steps the cores from then on; `None` when the owner steps them itself.
+    fn run(self: Box<Self>) -> Option<lk_agents_abi::BoxFuture<'static, ()>>;
+}
 
 pub struct DriverBuilder {
     pub view: tokio::sync::watch::Sender<Arc<crate::agent_session::SessionView>>,
@@ -85,12 +117,15 @@ pub struct DriverBuilder {
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
+    /// Test-only: what a simulation installed before `start()`.
+    #[cfg(feature = "dst")]
+    pub probe: Option<(super::HostEventProbe, super::QueueOwnerFactory)>,
 }
 
 impl DriverBuilder {
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `async` because the provider factories must run on the host loop.
-    pub async fn start(mut self) -> Result<(crate::runtime::Runtime, SessionHandle), DriverError> {
+    pub async fn start(mut self) -> Result<(SessionCores, SessionHandle), DriverError> {
         // `agent_session` and `session_start` run from here.
         let built = self.time.wall_secs();
         let keyterms = self.keyterms.take().map(|mut setup| {
@@ -260,23 +295,20 @@ impl DriverBuilder {
             closing: shared.closing.subscribe(),
         };
 
-        let mut runtime = crate::runtime::Runtime::new(
+        let cores = SessionCores {
             driver,
             forwarder,
-            (queue.clone(), queue_rx),
-            audio_in,
+            queue: (queue.clone(), queue_rx),
+            source: audio_in,
             eot,
             interruption,
-            (video_parts, video_forwarder, self.video_in.take()),
+            video: (video_parts, video_forwarder, self.video_in.take()),
             shared,
-            peer.events.clone(),
-            peer.watch.clone(),
-            self.storage.take(),
-        );
-        let effects = std::mem::take(&mut runtime.driver.outbox);
-        runtime.perform_voice(effects);
+            peer: peer.clone(),
+            storage: self.storage.take(),
+        };
         Ok((
-            runtime,
+            cores,
             SessionHandle {
                 api: queue,
                 events: ev_rx,

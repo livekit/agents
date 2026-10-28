@@ -1,11 +1,11 @@
-//! [`Runtime`]: a session's two cores, the decision core ([`Driver`]) and the data plane
-//! ([`AudioForwarder`]), stepped by one queue owner, and what performs the data plane's effects.
-//! The queue owner only feeds it: [`Runtime::run`] in production, the fuzzer's run in tests.
+//! [`Runtime`]: the production [`QueueOwner`] of a session's two cores, the decision core
+//! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
+//! performs every effect they return. A simulation owns the cores with its own executor instead.
 
 mod effects;
 mod storage;
 
-use crate::agent_session::{Driver, Event, Now, Tx};
+use crate::agent_session::{Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx};
 use crate::audio::{AUDIO_IN_LEG, ChannelEnd};
 use crate::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use crate::trace::ChannelEndCause;
@@ -19,8 +19,8 @@ pub struct Runtime {
     pub driver: Driver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub(crate) shared: Arc<crate::agent_session::SessionShared>,
-    events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
-    watch: crate::agent_session::WatchHub,
+    /// Where host events and taps go.
+    peer: PeerHandle,
     forwarder: AudioForwarder,
     /// One refused-audio warning per active stream, retired when that input ends.
     push_warned: std::collections::BTreeSet<ResourceId>,
@@ -58,35 +58,26 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    pub(crate) fn new(
-        driver: Driver,
-        forwarder: AudioForwarder,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")] queue: (
-            Tx,
-            tokio::sync::mpsc::UnboundedReceiver<Event>,
-        ),
-        source: Option<ResourceId>,
-        eot: Option<Arc<lk_agents_abi::EotLeg<dyn lk_agents_abi::EotDetector>>>,
-        interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
-        (video_parts, video_forwarder, video_in): (
-            crate::audio::VideoForwarderParts,
-            Option<AbortHandle>,
-            Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
-        ),
-        shared: Arc<crate::agent_session::SessionShared>,
-        events: tokio::sync::mpsc::UnboundedSender<crate::agent_session::HostEvent>,
-        watch: crate::agent_session::WatchHub,
-        storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
-    ) -> Self {
+    /// Takes the cores over: the microphone is read and the start's effects performed.
+    pub fn new(cores: SessionCores) -> Self {
+        let SessionCores {
+            driver,
+            forwarder,
+            queue: (reports, queue),
+            source,
+            eot,
+            interruption,
+            video: (video_parts, video_forwarder, video_in),
+            shared,
+            peer,
+            storage,
+        } = cores;
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
-        let (reports, queue) = queue;
         let mut runtime = Runtime {
             driver,
             storage,
             shared,
-            events,
-            watch,
+            peer,
             forwarder,
             push_warned: Default::default(),
             queue,
@@ -108,6 +99,8 @@ impl Runtime {
         if let Some(source) = source {
             runtime.read(source);
         }
+        let effects = runtime.driver.take_outbox();
+        runtime.perform_voice(effects);
         runtime
     }
 
@@ -151,10 +144,8 @@ impl Runtime {
                 if let crate::agent_session::Input::Stt(_, provider) = &mut input {
                     *provider = self
                         .driver
-                        .session
-                        .stt
-                        .as_ref()
-                        .and_then(|stt| self.shared.resources.stt(stt.id))
+                        .stt()
+                        .and_then(|stt| self.shared.resources.stt(stt))
                         .map(|stt| stt.id());
                 }
                 if let crate::agent_session::Input::Eot(_, _, thresholds) = &mut input {
@@ -318,6 +309,16 @@ impl Runtime {
     }
 }
 
+impl QueueOwner for Runtime {
+    fn open(&mut self, now: Now) {
+        Runtime::open(self, now);
+    }
+
+    fn run(mut self: Box<Self>) -> Option<lk_agents_abi::BoxFuture<'static, ()>> {
+        Some(Box::pin(async move { Runtime::run(&mut self).await }))
+    }
+}
+
 /// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
 /// selects on `closing`: the tasks sharing the session's state keep its sender alive. It still
 /// releases everything both cores hold, as its finish would have.
@@ -326,7 +327,7 @@ impl Drop for Runtime {
         self.shared.closing.send_replace(true);
         self.release();
         self.driver.release_all_providers();
-        let effects = std::mem::take(&mut self.driver.outbox);
+        let effects = self.driver.take_outbox();
         self.perform_voice(effects);
     }
 }

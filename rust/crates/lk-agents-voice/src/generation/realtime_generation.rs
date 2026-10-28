@@ -31,7 +31,7 @@ pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
 /// reply faster than it plays, so this is a whole reply (minutes of the smallest audio deltas).
 /// A full player is overrun: the runtime stops delivering to it and its speech ends on what it
 /// holds.
-pub(crate) const PLAYER_CAPACITY: usize = 8192;
+pub const PLAYER_CAPACITY: usize = 8192;
 
 #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;

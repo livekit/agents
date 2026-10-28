@@ -731,8 +731,9 @@ mod tests {
         );
     }
 
-    /// A joined task names the product line that spawned it, not the spawner's: without
-    /// `#[track_caller]` through `Spawner::spawn` every stuck task would point at the harness.
+    /// A joined task names the line that spawned it, the product's or the executor effect's, not
+    /// the spawner's: without `#[track_caller]` through `Spawner::spawn` every stuck task would
+    /// point at the harness's spawner.
     #[test]
     fn a_task_names_the_line_that_spawned_it() {
         let sites = simulate(async {
@@ -745,7 +746,9 @@ mod tests {
         });
         assert!(!sites.is_empty(), "the session spawned no task to check");
         for site in sites {
-            assert!(site.contains("lk-agents-voice/src/"), "a task is placed at {site}");
+            let placed =
+                site.contains("lk-agents-voice/src/") || site.ends_with("drive/executor.rs");
+            assert!(placed, "a task is placed at {site}");
         }
     }
 

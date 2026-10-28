@@ -102,6 +102,16 @@ impl PeerHandle {
         self.journal.record(step);
     }
 
+    /// A host event to the host's drain; handed back when the drain has gone.
+    pub fn deliver(&self, event: HostEvent) -> Result<(), HostEvent> {
+        self.events.send(event).map_err(|refused| refused.0)
+    }
+
+    /// A tap to every watcher.
+    pub fn publish(&self, tap: SystemTap) {
+        self.watch.publish(tap);
+    }
+
     pub fn emit(&self, ev: SessionEvent) {
         if self.journal.is_on() {
             self.journal(Step::Emitted(ev.journal_form()));
@@ -174,7 +184,7 @@ impl Tx {
         self.0.send(event.into()).map_err(|_| QueueClosed)
     }
 
-    pub(crate) fn send_opened(&self, opened: StreamOpened) -> Result<(), StreamOpened> {
+    pub fn send_opened(&self, opened: StreamOpened) -> Result<(), StreamOpened> {
         self.0.send(Event::LegOpened(opened)).map_err(|error| {
             let Event::LegOpened(opened) = error.0 else { unreachable!() };
             opened
@@ -410,6 +420,22 @@ impl Driver {
         self.stopped
     }
 
+    /// What the core decided outside a step (the opening, the loop's end), for the queue owner to
+    /// perform.
+    pub fn take_outbox(&mut self) -> Vec<crate::agent_session::effects::Effect> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    /// The frame the core is stepping in: the queue owner performs its effects inside it.
+    pub fn frame(&self) -> FrameId {
+        self.current
+    }
+
+    /// The session's STT, whose provider identity a recognition input is stamped with.
+    pub fn stt(&self) -> Option<lk_agents_abi::resources::ResourceId> {
+        self.session.stt.as_ref().map(|stt| stt.id)
+    }
+
     /// Answer an awaited command; `None` is a command nobody awaits.
     pub(crate) fn answer(&mut self, call: Option<RequestId>, answer: Answer) {
         if let Some(call) = call {
@@ -448,7 +474,7 @@ impl Driver {
     /// The loop stopped. What was queued and never delivered is refused (a census is still
     /// journalled), then the session's last event goes out, then every waiter and task the loop
     /// leaves is released: nothing settles after `close`.
-    pub(crate) fn finish(
+    pub fn finish(
         &mut self,
         undelivered: Vec<Input>,
     ) -> Vec<crate::agent_session::effects::Effect> {

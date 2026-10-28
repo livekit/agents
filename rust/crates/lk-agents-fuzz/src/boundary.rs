@@ -23,8 +23,9 @@ pub struct Boundary {
 /// The voice campaigns (`tests/survey.rs`, `tests/soak.rs`, `tests/pos.rs`).
 pub const VOICE: Boundary = Boundary {
     cores: &[
-        "voice decision core (agent_session::Driver), stepped by Runtime::handle per delivered event",
-        "voice data plane (data_plane forwarder), stepped by Runtime::on_frame per microphone frame",
+        "voice decision core (agent_session::Driver), stepped by drive::executor per delivered \
+         event, its effects performed against the fakes",
+        "voice data plane (data_plane forwarder), stepped by drive::executor per microphone frame",
         "realtime conversation machine and connection policy (lk_agents_inference::realtime), \
          stepped by fakes::realtime's pump per command, server event and deadline",
     ],
@@ -50,7 +51,7 @@ pub const VOICE: Boundary = Boundary {
         "room io and the avatar runner over FakeRoom; the console's remote session over a socket",
     ],
     outside: &[
-        "Runtime::run and the Tokio session loop (K-30 conformance and stress)",
+        "the voice runtime: its Tokio session loop and effect execution (K-30 conformance and stress)",
         "the runtime's realtime pump, wire codec and fallback adapter (lk_agents_runtime::realtime; \
          K-30 conformance; the fake pump and fallback mirror their contracts)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",

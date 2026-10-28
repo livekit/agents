@@ -97,30 +97,30 @@ impl Driver {
     }
 }
 
-impl crate::runtime::Runtime {
-    pub(crate) fn unobserve_recorder(&self, output: Option<lk_agents_abi::resources::ResourceId>) {
+impl crate::agent_session::SessionShared {
+    pub fn unobserve_recorder(&self, output: Option<lk_agents_abi::resources::ResourceId>) {
         if let Some(observer) =
-            self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
-            && let Some(output) = output.and_then(|id| self.shared.resources.audio_output(id))
+            self.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
+            && let Some(output) = output.and_then(|id| self.resources.audio_output(id))
         {
             output.tracker().unobserve(&observer);
         }
     }
 
     /// Off `previous` first, onto `sink`.
-    pub(crate) fn observe_recorder(
+    pub fn observe_recorder(
         &self,
         previous: Option<&dyn AudioOutput>,
         sink: Option<lk_agents_abi::resources::ResourceId>,
     ) {
-        let Some(tap) = self.shared.recorder_tap() else { return };
-        let mut slot = self.shared.recorder_observer.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(tap) = self.recorder_tap() else { return };
+        let mut slot = self.recorder_observer.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(old) = slot.take()
             && let Some(prev) = previous
         {
             prev.tracker().unobserve(&old);
         }
-        if let Some(out) = sink.and_then(|id| self.shared.resources.audio_output(id)) {
+        if let Some(out) = sink.and_then(|id| self.resources.audio_output(id)) {
             let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
                 Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
             out.tracker().observe(observer.clone());

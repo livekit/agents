@@ -5,7 +5,8 @@
 //! and every call is the host method a Python `AgentSession` makes, with its argument shapes;
 //! people join and leave through the fake room, which the real room io watches. What the host
 //! cannot do it does not do: the test-only probe (the `dst` feature) only watches the journal and
-//! the host events, and hands the session's cores to the run, which steps them as its own queue.
+//! the host events, and hands the session's cores to the run, which steps them as its own queue
+//! and performs their effects ([`executor`]).
 //! It decides nothing: rules read [`Recording`] and nothing else.
 //!
 //! **Each resource is opened by whoever mints it.** Speeches, holds, fillers and hook calls come
@@ -37,8 +38,8 @@ use lk_agents_abi::{
     turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
-        EndpointingKwargs, HostValue, InterruptionKwargs, SessionConnOptions, PreemptiveKwargs, SessionKwargs,
-        TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
+        EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionConnOptions,
+        SessionKwargs, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
 use lk_agents_rtc::{FakeRoom, ParticipantKind};
@@ -50,17 +51,16 @@ use lk_agents_voice::remote_session::{
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
     agent_activity::options::{
-        Deployment, HostOptions, InterruptionGate, InterruptionGateInputs, RealtimeGate,
-        AgentSessionOptions, SttGate, TurnDetection, resolve_interruption_detector,
+        AgentSessionOptions, Deployment, HostOptions, InterruptionGate, InterruptionGateInputs,
+        RealtimeGate, SttGate, TurnDetection, resolve_interruption_detector,
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        Event, FixedRoom, HoldId, HookId, HostEvent, IoKind, Origin, Probe,
-        Pusher, SessionApi, SessionEvents, SpeechCommand, Timebase, TurnCommand,
-        UpdateAgentArgs, api::NodeFactory, effects::Decision,
+        Event, FixedRoom, HoldId, HookId, HostEvent, IoKind, Origin, Probe, Pusher, SessionApi,
+        SessionEvents, SpeechCommand, Timebase, TurnCommand, UpdateAgentArgs, api::NodeFactory,
+        effects::Decision,
     },
     events::SessionEvent,
-    runtime::Runtime,
     filler_scheduler::FillerId,
     generation::Instructions,
     speech_handle::SpeechHandle,
@@ -85,14 +85,14 @@ use crate::{
     record::step_name,
     record::{
         Answer, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Stamps, Tag,
-        TranscriptSetup,
-        hook_of,
+        TranscriptSetup, hook_of,
     },
 };
 use lk_agents_abi::voice::session_options::{EndpointingMode, InterruptionMode, TextTransformSet};
 
 mod apply;
 mod collect;
+mod executor;
 mod finish;
 pub mod queue;
 mod start;
@@ -592,7 +592,11 @@ enum Mic {
     /// The track, how many frames went into it at which instant, and, once the room io has read
     /// it, since when it is subscribed: past that instant the room io had its turn to read it
     /// again, so words spoken into it are owed to the session even when nothing reads them.
-    Room { track: Arc<lk_agents_rtc::FakeTrackPublication>, burst: (u64, u32), read: Option<u64> },
+    Room {
+        track: Arc<lk_agents_rtc::FakeTrackPublication>,
+        burst: (u64, u32),
+        read: Option<u64>,
+    },
     /// The console's socket, as the CLI sends its microphone.
     Console(fakes::FakeCli),
 }
@@ -620,9 +624,9 @@ pub struct Run {
     room: Arc<FakeRoom>,
     /// `aclose()` then `close_io()`, once a case asked for the close, until they resolve.
     closing: Option<BoxFuture<'static, ()>>,
-    /// The session's cores, stepped by the run itself: the run owns its queue. `None` once it
-    /// finished, or panicked.
-    runtime: Option<Runtime>,
+    /// The session's cores, stepped and performed by the run itself: the run owns its queue.
+    /// `None` once they finished, or panicked.
+    cores: Option<executor::Executor>,
     queue: queue::Queue,
     time: Timebase,
     tasks: Arc<Tasks>,

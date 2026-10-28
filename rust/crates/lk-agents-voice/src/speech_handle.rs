@@ -503,7 +503,7 @@ impl SpeechHandle {
     }
 
     /// Cancel every linked task, as `_cancel` does, without marking the speech done.
-    pub(crate) fn cancel_tasks(&self) {
+    pub fn cancel_tasks(&self) {
         let tasks = std::mem::take(&mut self.inner.lock().unwrap().tasks);
         for task in &tasks {
             task.abort();

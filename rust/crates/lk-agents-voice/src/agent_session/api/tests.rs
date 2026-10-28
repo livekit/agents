@@ -22,8 +22,8 @@ async fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_sess
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, _) = ready.builder.start().await.unwrap();
-    let driver = &mut runtime.driver;
+    let (mut cores, _) = ready.builder.start().await.unwrap();
+    let driver = &mut cores.driver;
     let mut out = driver.out();
     let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
     timeout.request_id = Some("handshake-7".into());
@@ -67,8 +67,8 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, _) = ready.builder.start().await.unwrap();
-    let driver = &mut runtime.driver;
+    let (mut cores, _) = ready.builder.start().await.unwrap();
+    let driver = &mut cores.driver;
     let mut out = driver.out();
     let source =
         ChatMessage::text("old-response", Role::Assistant, "Already heard", api.time().read().wall);
@@ -207,7 +207,8 @@ async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, mut handle) = ready.builder.start().await.unwrap();
+    let (cores, mut handle) = ready.builder.start().await.unwrap();
+    let mut runtime = crate::runtime::Runtime::new(cores);
     while handle.events.try_recv().is_ok() {}
     let before = api.steps();
     let effects = runtime.driver.open(api.time().read());
@@ -225,7 +226,8 @@ async fn missing_provider_open_reports_correlated_failure() {
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, _) = ready.builder.start().await.unwrap();
+    let (cores, _) = ready.builder.start().await.unwrap();
+    let mut runtime = crate::runtime::Runtime::new(cores);
     while runtime.queue.try_recv().is_ok() {}
     for leg in [StreamKind::Stt, StreamKind::Vad] {
         let gone = lk_agents_abi::resources::ResourceId(u64::MAX);
@@ -251,7 +253,8 @@ async fn close_is_serviced_before_ready_media() {
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, handle) = ready.builder.start().await.unwrap();
+    let (cores, handle) = ready.builder.start().await.unwrap();
+    let mut runtime = crate::runtime::Runtime::new(cores);
     let (media, frames) = tokio::sync::mpsc::channel(64);
     for _ in 0..64 {
         media.try_send(lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160)).unwrap();
@@ -269,7 +272,8 @@ async fn accepted_views_are_published_before_receipts() {
     let Stage::Ready(ready) = std::mem::replace(&mut *api.lock(), Stage::Closed) else {
         panic!("session must be ready");
     };
-    let (mut runtime, handle) = ready.builder.start().await.unwrap();
+    let (cores, handle) = ready.builder.start().await.unwrap();
+    let mut runtime = crate::runtime::Runtime::new(cores);
     let mut accepted = (**api.view.borrow()).clone();
     accepted.config.configure(&crate::agent_activity::options::aec_warmup_layer(Some(9.0)));
     // The receipt's waker reads the view at the instant the answer is sent.
