@@ -286,7 +286,7 @@ class RealtimeModel(llm.RealtimeModel):
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
             api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
-            model (str, optional): The name of the model to use. Defaults to "gemini-3.8-live" or "gemini-live-2.5-flash-native-audio" (vertexai).
+            model (str, optional): The name of the model to use. Defaults to "gemini-3.8-live".
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
@@ -337,7 +337,7 @@ class RealtimeModel(llm.RealtimeModel):
         if use_vertexai and is_given(tool_response_scheduling):
             _warn_vertex_scheduling_unsupported()
         if not is_given(model):
-            model = "gemini-live-2.5-flash-native-audio" if use_vertexai else "gemini-3.8-live"
+            model = "gemini-3.8-live"
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(

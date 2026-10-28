@@ -50,19 +50,13 @@ def test_model_api_compatibility(
     assert not caplog.records
 
 
-@pytest.mark.parametrize(
-    ("vertexai", "expected"),
-    [
-        (False, "gemini-3.8-live"),
-        (True, "gemini-live-2.5-flash-native-audio"),
-    ],
-)
-def test_default_model_follows_the_api(vertexai: bool, expected: str) -> None:
-    """The Gemini API default must not be a preview model that Google retires."""
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_default_model_is_gemini_3_8_live_on_both_apis(vertexai: bool) -> None:
+    """Neither default may be a model Google retires: the Vertex native-audio model goes on 2026-12-13."""
     model = RealtimeModel(
         vertexai=vertexai, api_key="fake-key", project="test-project", location="us-central1"
     )
-    assert model.model == expected
+    assert model.model == "gemini-3.8-live"
 
 
 @pytest.mark.parametrize(
