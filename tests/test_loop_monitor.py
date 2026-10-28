@@ -15,8 +15,8 @@ import linecache
 import os
 import sys
 import threading
-import traceback
 import time
+import traceback
 import weakref
 from collections.abc import Iterator
 from pathlib import Path
@@ -1097,9 +1097,9 @@ def test_watchdog_sample_under_lock_is_visible_to_tick() -> None:
         t.join(timeout=5)
         assert tick_done.is_set()
         assert reports, "tick should have reported the block"
-        assert reports[0].stacks and reports[0].stacks[0].startswith(
-            "# loop thread sampled"
-        ), reports[0].stacks
+        assert reports[0].stacks and reports[0].stacks[0].startswith("# loop thread sampled"), (
+            reports[0].stacks
+        )
     finally:
         mon.stop()
         loop.close()
@@ -1129,11 +1129,14 @@ def test_watchdog_does_not_replace_incident_on_torn_tick_read() -> None:
         assert mon._incident is not None and mon._incident.samples
         sampled_incident = mon._incident
 
-        between = next(
-            i
-            for i, line in enumerate(inspect.getsourcelines(EventLoopMonitor._on_tick)[0])
-            if "self._last_tick_at = now" in line
-        ) + inspect.getsourcelines(EventLoopMonitor._on_tick)[1]
+        between = (
+            next(
+                i
+                for i, line in enumerate(inspect.getsourcelines(EventLoopMonitor._on_tick)[0])
+                if "self._last_tick_at = now" in line
+            )
+            + inspect.getsourcelines(EventLoopMonitor._on_tick)[1]
+        )
         ran_watchdog = threading.Event()
 
         def on_tick_line(frame, event, arg):  # noqa: ARG001
@@ -1154,9 +1157,9 @@ def test_watchdog_does_not_replace_incident_on_torn_tick_read() -> None:
 
         assert ran_watchdog.is_set()
         assert reports, "tick should have reported the original block"
-        assert reports[0].stacks and reports[0].stacks[0].startswith(
-            "# loop thread sampled"
-        ), reports[0].stacks
+        assert reports[0].stacks and reports[0].stacks[0].startswith("# loop thread sampled"), (
+            reports[0].stacks
+        )
         assert sampled_incident.samples
     finally:
         mon.stop()
