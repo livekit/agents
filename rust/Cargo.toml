@@ -33,7 +33,7 @@ rust-version = "1.90"
 license = "Apache-2.0"
 
 [workspace.dependencies]
-# --- pure tier (§6: no tokio, reqwest, prost, pyo3, no C++) ---
+# --- dependencies the pure cores may take (no tokio, reqwest, prost, pyo3, no C++) ---
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 # The A2A v1 types, from a2aproject/a2a-rs: they serialize as v1 protobuf JSON.
@@ -72,10 +72,10 @@ sysinfo      = { version = "0.39", default-features = false, features = ["system
 # and the binding forwards it -- keys included, as `extra` -- into Python's `logging` (`pyo3-log`).
 log          = { version = "0.4", features = ["kv"] }
 pyo3-log     = { version = "0.13", features = ["kv"] }
-# `image`/`base64`: `lk-agents-media` only. Encoding sits below the purity line by design (§1.11),
+# `image`/`base64`: `lk-agents-media` only. Encoding sits below the purity line by design,
 # so nothing in tiers 0/1 may pull these -- `cargo-deny` should ban them everywhere else.
 # Default features off: no rayon, no decoders, no format probing. JPEG and PNG encode is the whole
-# use, and it is the only native-free way to drop the PIL dependency (§10, `utils/images/`).
+# use, and it is the only native-free way to drop the PIL dependency (`utils/images/`).
 image        = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64       = "0.22"
 async-trait  = "0.1"
@@ -84,7 +84,7 @@ pyo3         = "0.29"
 # every marked item from one call instead of a hand-kept list. Only the bindings may use it, and
 # `lk-agents-inference::local_models`, where a native provider of the local models registers.
 inventory    = "0.3"
-# §10: MCP is the official Rust SDK, not a port. `lk-agents-inference::mcp` only. No `server`,
+# MCP is the official Rust SDK, not a port. `lk-agents-inference::mcp` only. No `server`,
 # `macros` or `schemars` (we are a client); streamable HTTP over the workspace's reqwest and
 # rustls, and the child process for stdio. The legacy SSE transport rmcp does not ship is
 # `mcp::session::connect_sse`, over `sse-stream`, the parser rmcp's own HTTP client uses.
@@ -109,9 +109,8 @@ split-debuginfo = "off"
 
 # The ~270 third-party crates never need debuginfo: we do not step into them, and their line
 # tables are the bulk of both the link input and the artifact size. Our own crates keep the
-# `debug = 1` above, so a failing test still names file:line in code we wrote -- which §5.2
-# depends on, since "eight of the nine FFI hazards fail as a silent hang" is only diagnosable
-# from a readable trace. Dependencies of test targets use this profile too, not `profile.test`.
+# `debug = 1` above, so a failing test still names file:line in code we wrote: a hang across
+# the FFI boundary is only diagnosable from a readable trace. Dependencies of test targets use this profile too, not `profile.test`.
 [profile.dev.package."*"]
 debug = 0
 

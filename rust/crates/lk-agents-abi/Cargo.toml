@@ -5,14 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# docs/CONTRACTS.md §4.7: "the Llm/Stt/Tts/Vad traits. No tokio-net, no pyo3."
+# The host-neutral declarations: records, provider traits, pure helpers. pyo3 only behind the
+# `python` feature, which `lk-agents-py` turns on; without it the crate has no host code.
 #
-# tokio *is* here, and only `sync`: `StreamAdapter` owns an unbounded text queue between its sink
-# and its source (§1.2d -- the text->TTS leg may not drop, so it cannot be `BoundedLossy`). No
-# `net`, no `fs`, no `process`, and nothing in this crate starts a runtime or a task (R13).
-#
-# Deliberately absent: pyo3. `ProviderError` reaches `FallbackChain` with `.retryable` readable
-# with no GIL held, which is the entire reason `lk-agents-errors` copies those scalars out.
+# tokio is here with `sync` and `time` only: `StreamAdapter` owns an unbounded text queue between
+# its sink and its source (the text->TTS leg may not drop). No `net`, no `fs`, no `process`.
 [lib]
 # The `///` docs on the `#[derive(Host)]` records are the reference's Python docstrings, verbatim,
 # because the generator emits them into the Python package. Their indented examples are Python,
@@ -30,7 +27,7 @@ async-trait.workspace = true
 # because items are minted on both sides of the boundary and ordered against each other.
 # Expands to nothing. It exists so `#[host(..)]` is legal Rust; see `voice/mod.rs`.
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
-# `extra` is JSON, not an opaque host payload (§1.11): the reference reads it for control flow and
+# `extra` is JSON, not an opaque host payload: the reference reads it for control flow and
 # `_provider_format` serialises it onto the wire.
 #
 # `preserve_order` is required, not an optimisation: `to_dict` reproduces pydantic's *declaration*
@@ -41,7 +38,7 @@ lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 #
 # `to_dict` is a hand-written projection that reproduces pydantic's declaration order and
 # `exclude_none` rules -- a `#[derive(Serialize)]` on `ChatItem` would produce a *different*,
-# plausible-looking JSON that nothing gates, which is the whole hazard §1.11 named.
+# plausible-looking JSON that nothing gates, which is the whole hazard.
 # `serde_json::Value` is the output type; no `to_dict` type derives serde.
 serde_json = { workspace = true, features = ["preserve_order"] }
 # Optional, and never on a `to_dict` type: the `serde` feature below derives
@@ -56,7 +53,7 @@ log.workspace = true
 # workspace, `RealClock::wait_until`.
 tokio = { workspace = true, features = ["sync", "time"] }
 # `python` only: the runtime the in-place bindings expand against (`src/python.rs`). Without the
-# feature this crate has no pyo3, which is what the note at the top of this file is about.
+# feature this crate has no pyo3.
 pyo3 = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
 # `python` only: the host bridge (`src/python/bridge.rs`) awaits host coroutines on their own loop
