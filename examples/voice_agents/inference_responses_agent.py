@@ -24,6 +24,10 @@ from livekit.agents.llm import function_tool
 # uncomment to enable Krisp voice isolation
 # from livekit.plugins import krisp
 
+# uncomment to give the agent OpenAI's hosted web search, the only hosted tool
+# LiveKit Inference allows; needs livekit-plugins-openai
+# from livekit.plugins import openai
+
 logger = logging.getLogger("inference-responses-agent")
 
 load_dotenv()
@@ -38,6 +42,7 @@ class MyAgent(Agent):
             "You are curious and friendly, and have a sense of humor."
             "You will speak english to the user over voice.",
             tools=[EndCallTool()],
+            # tools=[EndCallTool(), openai.tools.WebSearch()],
         )
 
     async def on_enter(self) -> None:
