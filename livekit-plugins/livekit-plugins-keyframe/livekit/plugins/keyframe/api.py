@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from types import TracebackType
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -41,7 +42,10 @@ class KeyframeAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._own_session and self._session and not self._session.closed:
             await self._session.close()
@@ -55,12 +59,12 @@ class KeyframeAPI:
         livekit_url: str,
         livekit_token: str,
         source_participant_identity: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         """Create a plugin session via POST /v1/sessions/plugins/livekit.
 
         Returns dict with reservation_id and avatar_participant_identity.
         """
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "room_name": room_name,
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
@@ -78,8 +82,8 @@ class KeyframeAPI:
         return await self._post("/v1/sessions/plugins/livekit", payload, headers)
 
     async def _post(
-        self, endpoint: str, payload: dict[str, Any], headers: dict[str, str]
-    ) -> dict[str, Any]:
+        self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
+    ) -> dict[str, JsonValue]:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
@@ -101,7 +105,13 @@ class KeyframeAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return await response.json()  # type: ignore
+                            return TypeAdapter(dict[str, JsonValue]).validate_python(
+                                await response.json()
+                            )
+                    except ValidationError as exc:
+                        raise APIConnectionError(
+                            "Keyframe returned an invalid response", retryable=False
+                        ) from exc
                     except Exception as e:
                         if isinstance(e, APIStatusError) and not e.retryable:
                             raise APIConnectionError(

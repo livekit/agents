@@ -7,6 +7,7 @@ from typing import Any
 
 import aiohttp
 from PIL import Image
+from pydantic import JsonValue
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -50,7 +51,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        **kwargs: Any,
+        **kwargs: JsonValue,
     ) -> None:
         super().__init__()
         self._agent_id = agent_id
@@ -63,7 +64,7 @@ class AvatarSession(BaseAvatarSession):
         self._api_key = api_key
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
-        self._extra_payload: NotGivenOr[dict[str, Any]] = kwargs if kwargs else NOT_GIVEN
+        self._extra_payload: NotGivenOr[dict[str, JsonValue]] = kwargs if kwargs else NOT_GIVEN
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME

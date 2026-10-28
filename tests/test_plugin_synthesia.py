@@ -248,9 +248,13 @@ class TestApiClient:
         def __init__(self, outcomes):
             self._outcomes = list(outcomes)
             self.calls = []
+            self.trace_configs = []
+            self.json_serialize = json.dumps
 
-        def post(self, url, *, headers=None, json=None, timeout=None):
-            self.calls.append({"url": url, "headers": headers, "json": json})
+        def request(self, method, url, *, headers=None, data=None, timeout=None):
+            assert method == "POST"
+            payload = json.loads(data.decode()) if data is not None else None
+            self.calls.append({"url": url, "headers": headers, "json": payload})
             outcome = self._outcomes.pop(0)
             if isinstance(outcome, Exception):
                 return TestApiClient._RaisingCtx(outcome)

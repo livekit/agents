@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from types import TracebackType
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -56,7 +57,10 @@ class AnamAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._own_session and self._session:
             await self._session.close()
@@ -67,7 +71,7 @@ class AnamAPI:
         livekit_url: str,
         livekit_token: str,
         session_options: SessionOptions | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         """
         Starts an engine session.
 
@@ -79,7 +83,7 @@ class AnamAPI:
         Returns:
             The session details, including sessionId and engine host info.
         """
-        persona_config_payload: dict[str, Any] = {
+        persona_config_payload: dict[str, JsonValue] = {
             "type": "ephemeral",
             "name": persona_config.name,
             "avatarId": persona_config.avatarId,
@@ -97,7 +101,7 @@ class AnamAPI:
             if director_notes:
                 persona_config_payload["directorNotes"] = director_notes
 
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "personaConfig": persona_config_payload,
         }
         payload["environment"] = {
@@ -105,6 +109,7 @@ class AnamAPI:
             "livekitToken": livekit_token,
         }
 
+        session_options_payload: dict[str, JsonValue] = {}
         if session_options is not None and (
             session_options.video_width is not None or session_options.video_height is not None
         ):
@@ -117,17 +122,18 @@ class AnamAPI:
                 raise ValueError(
                     "video_width and video_height must be set together (both or neither)"
                 )
-            payload["sessionOptions"] = {
+            session_options_payload = {
                 "videoWidth": session_options.video_width,
                 "videoHeight": session_options.video_height,
             }
 
         if session_options is not None and session_options.show_ai_avatar_disclosure is not None:
-            if "sessionOptions" not in payload:
-                payload["sessionOptions"] = {}
-            payload["sessionOptions"]["showAIAvatarDisclosure"] = (
+            session_options_payload["showAIAvatarDisclosure"] = (
                 session_options.show_ai_avatar_disclosure
             )
+
+        if session_options_payload:
+            payload["sessionOptions"] = session_options_payload
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
@@ -136,8 +142,8 @@ class AnamAPI:
         return await self._post("/v1/engine/session", payload, headers)
 
     async def _post(
-        self, endpoint: str, payload: dict[str, Any], headers: dict[str, str]
-    ) -> dict[str, Any]:
+        self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
+    ) -> dict[str, JsonValue]:
         """
         Internal method to make a POST request with retry logic.
         """
@@ -162,7 +168,9 @@ class AnamAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return await response.json()  # type: ignore
+                            return TypeAdapter(dict[str, JsonValue]).validate_python(
+                                await response.json()
+                            )
                     except APIStatusError as e:
                         if not e.retryable:
                             raise

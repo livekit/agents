@@ -1,8 +1,8 @@
 import logging
 import os
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import NOT_GIVEN, NotGivenOr
 
@@ -20,7 +20,7 @@ class AvatarTalkAPI:
         self,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-    ):
+    ) -> None:
         self._api_url = api_url or DEFAULT_API_URL
         avatartalk_api_key = api_key or os.getenv("AVATARTALK_API_KEY")
         if avatartalk_api_key is None:
@@ -32,13 +32,17 @@ class AvatarTalkAPI:
         self._api_key = avatartalk_api_key
         self._headers = {"Authorization": f"Bearer {self._api_key}"}
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _request(
+        self, method: str, path: str, *, json: dict[str, JsonValue] | None = None
+    ) -> dict[str, JsonValue]:
         async with aiohttp.ClientSession() as session:
             async with session.request(
-                method, f"{self._api_url}{path}", headers=self._headers, **kwargs
+                method, f"{self._api_url}{path}", headers=self._headers, json=json
             ) as response:
                 if response.ok:
-                    result: dict[str, Any] = await response.json()
+                    result = TypeAdapter(dict[str, JsonValue]).validate_python(
+                        await response.json()
+                    )
                     return result
                 else:
                     r = await response.json()
@@ -53,7 +57,7 @@ class AvatarTalkAPI:
         livekit_listener_token: str,
         livekit_room_token: str,
         agent_identity: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         return await self._request(
             "POST",
             "/livekit/create-session",
@@ -68,5 +72,5 @@ class AvatarTalkAPI:
             },
         )
 
-    async def stop_session(self, task_id: str) -> dict[str, Any]:
+    async def stop_session(self, task_id: str) -> dict[str, JsonValue]:
         return await self._request("DELETE", f"/livekit/delete-session/{task_id}")

@@ -19,7 +19,6 @@ import json
 import math
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -30,10 +29,10 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.voice.avatar import (
-    AudioSegmentEnd,
     AvatarSession as BaseAvatarSession,
     QueueAudioOutput,
 )
+from livekit.agents.voice.events import CloseEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from spatius import (
     AudioFormat,
@@ -303,7 +302,7 @@ class AvatarSession(BaseAvatarSession):
             async for item in audio:
                 if isinstance(item, rtc.AudioFrame):
                     await spatius.send_audio(audio=bytes(item.data), end=False)
-                elif isinstance(item, AudioSegmentEnd):
+                else:
                     await spatius.send_audio(audio=b"", end=True)
         except asyncio.CancelledError:
             raise
@@ -412,7 +411,7 @@ class AvatarSession(BaseAvatarSession):
         logger.warning("Spatius avatar session closed unexpectedly")
         self._aclose_atask = asyncio.create_task(self.aclose())
 
-    def _on_session_close(self, _: Any) -> None:
+    def _on_session_close(self, _: CloseEvent) -> None:
         if self._closed or self._aclose_atask is not None:
             return
         self._aclose_atask = asyncio.create_task(self.aclose())
@@ -488,5 +487,5 @@ def _require(value: NotGivenOr[str], env_var: str, name: str) -> str:
     return str(resolved)
 
 
-def _optional(value: NotGivenOr[Any], env_var: str, default: Any) -> Any:
+def _optional(value: NotGivenOr[str], env_var: str, default: str) -> str:
     return value if utils.is_given(value) else os.getenv(env_var, default)

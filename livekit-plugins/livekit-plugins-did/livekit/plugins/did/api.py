@@ -1,8 +1,8 @@
 import asyncio
 import os
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -43,21 +43,21 @@ class DIDAPI:
         self,
         *,
         agent_id: str,
-        transport: dict[str, Any],
-        audio_config: dict[str, Any],
+        transport: dict[str, JsonValue],
+        audio_config: dict[str, JsonValue],
     ) -> str:
         """Dispatch a D-ID avatar worker into the room.
 
         Returns the session id.
         """
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "transport": transport,
             "audio_config": audio_config,
         }
         response_data = await self._post(f"v2/agents/{agent_id}/sessions/join", payload)
-        return response_data["id"]  # type: ignore
+        return TypeAdapter(str).validate_python(response_data["id"])
 
-    async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
         url = f"{self._api_url}/{endpoint}"
         num_attempts = self._conn_options.max_retry + 1
         for attempt in range(num_attempts):
@@ -80,7 +80,7 @@ class DIDAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return await response.json()  # type: ignore
+                    return TypeAdapter(dict[str, JsonValue]).validate_python(await response.json())
             except APIStatusError:
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:

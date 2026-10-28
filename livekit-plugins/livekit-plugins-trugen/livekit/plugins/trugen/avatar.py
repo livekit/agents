@@ -41,8 +41,8 @@ class AvatarSession(BaseAvatarSession):
         *,
         avatar_id: NotGivenOr[str | None] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
-        avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
-        avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        avatar_participant_identity: NotGivenOr[str | None] = NOT_GIVEN,
+        avatar_participant_name: NotGivenOr[str | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__()

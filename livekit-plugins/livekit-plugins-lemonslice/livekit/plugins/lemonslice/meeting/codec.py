@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
+
+from pydantic import JsonValue, TypeAdapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,7 @@ def deserialize_chat(payload: str) -> MeetingChatMessage | None:
         Parsed chat message, or None if the payload is invalid or not a chat message.
     """
     try:
-        obj = json.loads(payload)
+        obj = TypeAdapter[JsonValue](JsonValue).validate_json(payload)
     except (ValueError, TypeError):
         return None
     if not isinstance(obj, dict) or obj.get("type") != "chat":

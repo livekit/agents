@@ -6,12 +6,14 @@ import io
 import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import TYPE_CHECKING, Literal
+from importlib import import_module
+from typing import Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import numpy as np
 from loguru import logger as _logger
+from numpy.typing import NDArray
 from PIL import Image
 
 from livekit import api, rtc
@@ -39,9 +41,6 @@ from livekit.agents.voice.avatar import (
 )
 
 from .log import logger
-
-if TYPE_CHECKING:
-    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -101,6 +100,49 @@ class BitHumanException(Exception):
     """Exception for BitHuman errors"""
 
 
+class _RuntimeSettings(Protocol):
+    FPS: int
+    INPUT_SAMPLE_RATE: int
+
+
+class _AudioChunk(Protocol):
+    bytes: bytes
+    array: NDArray[np.int16]
+    sample_rate: int
+
+
+class _RenderedFrame(Protocol):
+    bgr_image: NDArray[np.uint8] | None
+    audio_chunk: _AudioChunk | None
+    end_of_speech: bool
+
+
+class _BithumanRuntime(Protocol):
+    settings: _RuntimeSettings
+    transaction_id: str
+
+    def _regenerate_transaction_id(self) -> None: ...
+    async def _initialize_token(self) -> None: ...
+    def get_first_frame(self) -> NDArray[np.uint8] | None: ...
+    async def push_audio(self, audio: bytes, sample_rate: int, *, last_chunk: bool) -> None: ...
+    async def flush(self) -> None: ...
+    def interrupt(self) -> None: ...
+    def run(self) -> AsyncIterator[_RenderedFrame]: ...
+    async def stop(self) -> None: ...
+    def cleanup(self) -> None: ...
+
+
+class _RuntimeFactory(Protocol):
+    async def create(
+        self,
+        *,
+        model_path: str | None,
+        api_secret: str | None,
+        token: str | None,
+        api_url: str,
+    ) -> _BithumanRuntime: ...
+
+
 class AvatarSession(BaseAvatarSession):
     """A bitHuman avatar session"""
 
@@ -112,7 +154,7 @@ class AvatarSession(BaseAvatarSession):
         api_token: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[BitHumanModel] = NOT_GIVEN,
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
-        runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
+        runtime: NotGivenOr[_BithumanRuntime | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -235,8 +277,6 @@ class AvatarSession(BaseAvatarSession):
                 raise BitHumanException("`avatar_image` or `avatar_id` must be set for cloud mode")
             if self._api_secret is None:
                 raise BitHumanException("BITHUMAN_API_SECRET are required for cloud mode")
-            if self._api_url is None:
-                raise BitHumanException("BITHUMAN_API_URL are required for cloud mode")
 
         self._avatar_image: Image.Image | str | None = None
         if isinstance(avatar_image, Image.Image):
@@ -254,7 +294,7 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime: AsyncBithuman | None = runtime or None
+        self._runtime: _BithumanRuntime | None = runtime or None
 
     @property
     def _is_expression_model(self) -> bool:
@@ -302,8 +342,6 @@ class AvatarSession(BaseAvatarSession):
             raise BitHumanException(f"Invalid mode: {self._mode}")
 
     async def _start_local(self, agent_session: VoiceSession, room: rtc.Room) -> None:
-        from bithuman import AsyncBithuman
-
         if self._runtime:
             runtime = self._runtime
             logger.debug("previous transaction id: %s", runtime.transaction_id)
@@ -311,7 +349,9 @@ class AvatarSession(BaseAvatarSession):
             logger.debug("new transaction id: %s", runtime.transaction_id)
             await runtime._initialize_token()
         else:
-            runtime = await AsyncBithuman.create(
+            # BitHuman's native AsyncBithuman export has no complete type stub.
+            factory = cast(_RuntimeFactory, import_module("bithuman").AsyncBithuman)
+            runtime = await factory.create(
                 model_path=self._model_path,
                 api_secret=self._api_secret,
                 token=self._api_token,
@@ -434,8 +474,6 @@ class AvatarSession(BaseAvatarSession):
         Returns:
             True if using default auth.api.bithuman.ai endpoint, False otherwise.
         """
-        if self._api_url is None:
-            return True
         try:
             parsed = urlparse(self._api_url)
             hostname = parsed.hostname
@@ -510,9 +548,6 @@ class AvatarSession(BaseAvatarSession):
         Returns:
             True if async=true, False if async=false, None if not present
         """
-        if self._api_url is None:
-            return None
-
         try:
             parsed = urlparse(self._api_url)
             query_params = parse_qs(parsed.query)
@@ -631,7 +666,7 @@ class AvatarSession(BaseAvatarSession):
     async def _send_request_with_retry(
         self,
         headers: dict[str, str],
-        json_data: dict | None = None,
+        json_data: dict[str, str] | None = None,
         form_data: aiohttp.FormData | None = None,
     ) -> None:
         """
@@ -686,7 +721,7 @@ class AvatarSession(BaseAvatarSession):
         return self._http_session
 
     @property
-    def runtime(self) -> AsyncBithuman:
+    def runtime(self) -> _BithumanRuntime:
         if self._runtime is None:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
@@ -698,7 +733,7 @@ class AvatarSession(BaseAvatarSession):
 
 
 class BithumanGenerator(VideoGenerator):
-    def __init__(self, runtime: AsyncBithuman):
+    def __init__(self, runtime: _BithumanRuntime):
         self._runtime = runtime
 
     @property
@@ -732,7 +767,7 @@ class BithumanGenerator(VideoGenerator):
     async def _stream_impl(
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
-        def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
+        def create_video_frame(image: NDArray[np.uint8]) -> rtc.VideoFrame:
             image = np.ascontiguousarray(image[:, :, ::-1])  # BGR -> RGB
             return rtc.VideoFrame(
                 width=image.shape[1],

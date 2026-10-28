@@ -21,10 +21,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -140,7 +140,7 @@ class BosonAvatarAPI:
         idempotency_key: str | None = None,
     ) -> AvatarSessionInfo:
         """Start one Boson Avatar participant in an existing LiveKit room."""
-        body: dict[str, Any] = {
+        body: dict[str, JsonValue] = {
             "avatar_id": avatar_id,
             "transport": {
                 "type": "livekit",
@@ -238,11 +238,11 @@ class BosonAvatarAPI:
         method: str,
         path: str,
         *,
-        json: dict[str, Any] | None = None,
+        json: dict[str, JsonValue] | None = None,
         headers: dict[str, str] | None = None,
         allow_empty: bool = False,
         success_statuses: frozenset[int],
-    ) -> tuple[int, dict[str, Any]]:
+    ) -> tuple[int, dict[str, JsonValue]]:
         request_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "User-Agent": _USER_AGENT,
@@ -394,12 +394,14 @@ async def list_avatars(
         ).list_avatars()
 
 
-async def _read_payload(response: aiohttp.ClientResponse) -> object | None:
+async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
     text = await response.text()
     if not text:
         return None
     try:
-        payload: object = await response.json(content_type=None)
+        payload = TypeAdapter[JsonValue](JsonValue).validate_python(
+            await response.json(content_type=None)
+        )
         return payload
     except ValueError:
         return {"raw": text}

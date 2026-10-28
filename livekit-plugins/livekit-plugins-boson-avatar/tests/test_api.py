@@ -76,8 +76,13 @@ class _Session:
     def __init__(self, outcomes: list[_Response | BaseException]) -> None:
         self._outcomes = outcomes
         self.calls: list[dict[str, object]] = []
+        self.trace_configs: list[aiohttp.TraceConfig] = []
+        self.json_serialize = json.dumps
 
     def request(self, method: str, url: str, **kwargs: object) -> _Response:
+        data = kwargs.pop("data", None)
+        if isinstance(data, aiohttp.payload.Payload):
+            kwargs["json"] = json.loads(data.decode())
         self.calls.append({"method": method, "url": url, **kwargs})
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, BaseException):

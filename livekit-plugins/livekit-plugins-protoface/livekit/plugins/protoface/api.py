@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -68,9 +68,9 @@ class ProtofaceAPI:
         self,
         *,
         avatar_id: str,
-        transport: dict[str, Any],
+        transport: dict[str, JsonValue],
         max_duration_seconds: NotGivenOr[int | None] = NOT_GIVEN,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         """Create a hosted Protoface avatar session.
 
         Args:
@@ -88,13 +88,13 @@ class ProtofaceAPI:
                 after all retry attempts.
             APIStatusError: If Protoface returns a non-retryable error response.
         """
-        body: dict[str, Any] = {"avatar_id": avatar_id, "transport": transport}
+        body: dict[str, JsonValue] = {"avatar_id": avatar_id, "transport": transport}
         if utils.is_given(max_duration_seconds) and max_duration_seconds is not None:
             body["max_duration_seconds"] = max_duration_seconds
 
         return await self._json("POST", "/v1/sessions", json=body)
 
-    async def end_session(self, session_id: str) -> dict[str, Any]:
+    async def end_session(self, session_id: str) -> dict[str, JsonValue]:
         """Request a graceful end for a hosted Protoface session.
 
         Args:
@@ -120,9 +120,9 @@ class ProtofaceAPI:
         method: str,
         path: str,
         *,
-        json: dict[str, Any] | None = None,
+        json: dict[str, JsonValue] | None = None,
         headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         request_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "User-Agent": _USER_AGENT,
@@ -187,13 +187,15 @@ def _resolve_optional_string(value: NotGivenOr[str | None], env_name: str) -> st
     return os.getenv(env_name)
 
 
-async def _read_payload(response: aiohttp.ClientResponse) -> object:
+async def _read_payload(response: aiohttp.ClientResponse) -> JsonValue:
     text = await response.text()
     if not text:
         return {}
 
     try:
-        return await response.json(content_type=None)
+        return TypeAdapter[JsonValue](JsonValue).validate_python(
+            await response.json(content_type=None)
+        )
     except ValueError:
         return {"raw": text}
 

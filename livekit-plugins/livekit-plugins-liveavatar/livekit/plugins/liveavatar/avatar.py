@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import json
 import os
 import uuid
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Generic, Literal, TypeVar
 
 import aiohttp
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -24,10 +24,10 @@ from livekit.agents import (
 )
 from livekit.agents.utils import is_given
 from livekit.agents.voice.avatar import (
-    AudioSegmentEnd,
     AvatarSession as BaseAvatarSession,
     QueueAudioOutput,
 )
+from livekit.agents.voice.events import AgentStateChangedEvent, CloseEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import LiveAvatarAPI, LiveAvatarException
@@ -39,6 +39,22 @@ _AVATAR_AGENT_IDENTITY = "liveavatar-avatar-agent"
 _AVATAR_AGENT_NAME = "liveavatar-avatar-agent"
 
 VideoQuality = Literal["very_high", "high", "medium", "low"]
+
+
+class _SessionToken(BaseModel):
+    session_id: str
+    session_token: str
+
+
+class _SessionStart(BaseModel):
+    ws_url: str
+
+
+_DataT = TypeVar("_DataT")
+
+
+class _SessionResponse(BaseModel, Generic[_DataT]):
+    data: _DataT
 
 
 class AvatarSession(BaseAvatarSession):
@@ -74,15 +90,17 @@ class AvatarSession(BaseAvatarSession):
                 conn_options=conn_options,
             )
         self._is_sandbox = is_sandbox if is_given(is_sandbox) else False
-        self._video_quality = video_quality if is_given(video_quality) else None
+        self._video_quality: VideoQuality | None = (
+            video_quality if is_given(video_quality) else None
+        )
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._tasks: set[asyncio.Task[Any]] = set()
-        self._main_atask: asyncio.Task | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._main_atask: asyncio.Task[None] | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._session_data = None
-        self._msg_ch = utils.aio.Chan[dict]()
+        self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
         self._audio_playing = False
         self._avatar_speaking = False
         self._avatar_interrupted = False
@@ -152,8 +170,9 @@ class AvatarSession(BaseAvatarSession):
             is_sandbox=self._is_sandbox,
             video_quality=self._video_quality,
         )
-        self._session_id = session_config_data["data"]["session_id"]
-        self._session_token = session_config_data["data"]["session_token"]
+        token = _SessionResponse[_SessionToken].model_validate(session_config_data).data
+        self._session_id = token.session_id
+        self._session_token = token.session_token
         logger.info(f"LiveAvatar session created: {self._session_id}")
 
         assert self._session_id is not None
@@ -161,16 +180,18 @@ class AvatarSession(BaseAvatarSession):
         session_start_data = await self._api.start_streaming_session(
             self._session_id, self._session_token
         )
-        self._ws_url = session_start_data["data"]["ws_url"]
+        self._ws_url = (
+            _SessionResponse[_SessionStart].model_validate(session_start_data).data.ws_url
+        )
         logger.info("LiveAvatar streaming session started")
 
         @self._agent_session.on("agent_state_changed")
-        def on_agent_state_changed(ev: Any) -> None:
+        def on_agent_state_changed(ev: AgentStateChangedEvent) -> None:
             if ev.new_state == "idle":
                 self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
         @self._agent_session.on("close")
-        def on_agent_session_close(ev: Any) -> None:
+        def on_agent_session_close(ev: CloseEvent) -> None:
             self._msg_ch.close()
 
         self._audio_buffer = QueueAudioOutput(sample_rate=SAMPLE_RATE, wait_playback_start=True)
@@ -217,13 +238,13 @@ class AvatarSession(BaseAvatarSession):
         else:
             yield frame
 
-    def send_event(self, msg: dict) -> None:
+    def send_event(self, msg: dict[str, JsonValue]) -> None:
         with contextlib.suppress(utils.aio.ChanClosed):
             self._msg_ch.send_nowait(msg)
 
     async def _main_task(self) -> None:
         ws_conn = await utils.http_context.ws_connect(
-            self._api._ensure_http_session(), self._ws_url, conn_options=self._conn_options
+            self._api.http_session(), self._ws_url, conn_options=self._conn_options
         )
         closing = False
         ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
@@ -242,7 +263,7 @@ class AvatarSession(BaseAvatarSession):
                     return
                 combined = b"".join(chunk_buf)
                 encoded_audio = base64.b64encode(combined).decode("utf-8")
-                msg = {
+                msg: dict[str, JsonValue] = {
                     "type": "agent.speak",
                     "event_id": str(uuid.uuid4()),
                     "audio": encoded_audio,
@@ -275,7 +296,7 @@ class AvatarSession(BaseAvatarSession):
                         )
                         if chunk_duration >= threshold:
                             _flush_chunk()
-                elif isinstance(audio_frame, AudioSegmentEnd):
+                else:
                     _flush_chunk()
                     self.send_event({"type": "agent.speak_end", "event_id": str(uuid.uuid4())})
                     self.send_event(
@@ -290,7 +311,7 @@ class AvatarSession(BaseAvatarSession):
                     await ping_interval.tick()
                     if closing:
                         break
-                    msg = {
+                    msg: dict[str, JsonValue] = {
                         "type": "session.keep_alive",
                         "event_id": str(uuid.uuid4()),
                     }
@@ -331,7 +352,7 @@ class AvatarSession(BaseAvatarSession):
                         raise APIConnectionError(
                             message="LiveAvatar connection closed unexpectedly."
                         )
-                event = json.loads(msg.data)
+                event = TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
                 self._handle_server_event(event)
 
         io_tasks = [
@@ -352,7 +373,10 @@ class AvatarSession(BaseAvatarSession):
                     data = await self._api.stop_streaming_session(
                         self._session_id, self._session_token
                     )
-                    if data["code"] <= 200:
+                    code = data["code"]
+                    if not isinstance(code, int):
+                        raise LiveAvatarException("stop response did not contain an integer code")
+                    if code <= 200:
                         logger.info(f"LiveAvatar session stopped: {self._session_id}")
             except Exception as e:
                 logger.warning(f"Failed to stop LiveAvatar session: {e}", exc_info=True)
@@ -360,7 +384,7 @@ class AvatarSession(BaseAvatarSession):
             await self._audio_buffer.aclose()
             await ws_conn.close()
 
-    def _handle_server_event(self, event: dict) -> None:
+    def _handle_server_event(self, event: dict[str, JsonValue]) -> None:
         event_type = event.get("type")
         if event_type == "session.state_updated":
             state = event.get("state")
@@ -389,7 +413,7 @@ class AvatarSession(BaseAvatarSession):
         else:
             logger.debug(f"Unhandled LiveAvatar event: {event_type}")
 
-    def _handle_agent_state_updated(self, event: dict) -> None:
+    def _handle_agent_state_updated(self, event: dict[str, JsonValue]) -> None:
         new_state = event.get("new_state", event.get("state"))
         logger.debug(f"LiveAvatar agent state: {event.get('previous_state')} -> {new_state}")
         if new_state == "talking":
@@ -397,10 +421,10 @@ class AvatarSession(BaseAvatarSession):
         elif new_state in ("idle", "listening") and self._avatar_speaking:
             self._handle_agent_speak_ended(event)
 
-    def _handle_agent_speak_interrupted(self, event: dict) -> None:
+    def _handle_agent_speak_interrupted(self, event: dict[str, JsonValue]) -> None:
         self._avatar_interrupted = True
 
-    def _handle_agent_speak_ended(self, event: dict) -> None:
+    def _handle_agent_speak_ended(self, event: dict[str, JsonValue]) -> None:
         if not self._avatar_speaking and not self._audio_playing:
             return
         self._avatar_speaking = False
@@ -412,7 +436,7 @@ class AvatarSession(BaseAvatarSession):
             self._playback_position = 0.0
             self._audio_playing = False
 
-    def _handle_agent_speak_started(self, event: dict) -> None:
+    def _handle_agent_speak_started(self, event: dict[str, JsonValue]) -> None:
         already_speaking = self._avatar_speaking
         self._avatar_speaking = True
         if not already_speaking:

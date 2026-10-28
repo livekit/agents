@@ -104,7 +104,7 @@ class SynthesiaError(APIError):
 
     def __init__(
         self,
-        message: str,
+        message: object,
         *,
         type: ErrorType | None = None,
         body: object | None = None,
@@ -113,21 +113,19 @@ class SynthesiaError(APIError):
         status: int | None = None,
         request_id: str | None = None,
     ) -> None:
-        if not isinstance(message, str):
-            message = _stringify(message)
+        message_text = message if isinstance(message, str) else _stringify(message)
         self.type = type
         self.retry_after = retry_after
         self.status = status
         self.request_id = request_id
         if retryable is None:
             retryable = type in _RETRYABLE_TYPES
-        super().__init__(message, body=body, retryable=retryable)
+        super().__init__(message_text, body=body, retryable=retryable)
 
 
 def _stringify(value: object) -> str:
-    if isinstance(value, (dict, list)):
-        try:
-            return json.dumps(value, separators=(", ", ": "))
-        except (TypeError, ValueError):
-            pass
-    return str(value)
+    try:
+        encoded = json.dumps(value, separators=(", ", ": "))
+    except (TypeError, ValueError):
+        return str(value)
+    return encoded if isinstance(value, (dict, list)) else str(value)

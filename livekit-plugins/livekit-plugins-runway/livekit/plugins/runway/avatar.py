@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -21,6 +21,7 @@ from livekit.agents import (
 )
 from livekit.agents.utils import http_context, is_given
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.events import CloseEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .log import logger
@@ -135,7 +136,7 @@ class AvatarSession(BaseAvatarSession):
         await self._create_session(livekit_url, livekit_token, room.name)
 
         @agent_session.on("close")
-        def _on_agent_session_close(_: Any) -> None:
+        def _on_agent_session_close(_: CloseEvent) -> None:
             self._ensure_end_session_task()
 
         agent_session.output.replace_audio_tail(
@@ -182,7 +183,9 @@ class AvatarSession(BaseAvatarSession):
                                 status_code=response.status,
                                 body=text,
                             )
-                        payload = await response.json()
+                        payload = TypeAdapter[JsonValue](JsonValue).validate_python(
+                            await response.json()
+                        )
                         session_id = payload.get("id") if isinstance(payload, dict) else None
                         if isinstance(session_id, str):
                             self._realtime_session_id = session_id

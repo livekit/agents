@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from .avatar import VideoQuality
@@ -38,15 +41,16 @@ class LiveAvatarAPI:
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
-        self._api_key = api_key or os.getenv("LIVEAVATAR_API_KEY")
-        if self._api_key is None:
+        resolved_api_key = api_key or os.getenv("LIVEAVATAR_API_KEY")
+        if resolved_api_key is None:
             raise LiveAvatarException("api_key or LIVEAVATAR_API_KEY must be set")
+        self._api_key = resolved_api_key
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
         self._session = session
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
@@ -60,16 +64,16 @@ class LiveAvatarAPI:
         avatar_id: str,
         is_sandbox: bool = False,
         video_quality: VideoQuality | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         """Create a new streaming session, return a session id"""
 
-        livekit_config = {
+        livekit_config: dict[str, JsonValue] = {
             "livekit_room": room.name,
             "livekit_url": livekit_url,
             "livekit_client_token": livekit_token,
         }
 
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "mode": "LITE",
             "avatar_id": avatar_id,
             "is_sandbox": is_sandbox,
@@ -87,14 +91,18 @@ class LiveAvatarAPI:
         response_data = await self._post(endpoint="/token", payload=payload, headers=self._headers)
         return response_data
 
-    async def start_streaming_session(self, session_id: str, session_token: str) -> dict[str, Any]:
+    async def start_streaming_session(
+        self, session_id: str, session_token: str
+    ) -> dict[str, JsonValue]:
         """Start the streaming session"""
         payload = {"session_id": session_id}
         headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
         response_data = await self._post(endpoint="/start", payload=payload, headers=headers)
         return response_data
 
-    async def stop_streaming_session(self, session_id: str, session_token: str) -> dict[str, Any]:
+    async def stop_streaming_session(
+        self, session_id: str, session_token: str
+    ) -> dict[str, JsonValue]:
         """Stop the streaming session"""
         payload = {
             "session_id": session_id,
@@ -105,12 +113,12 @@ class LiveAvatarAPI:
         return response_data
 
     async def _post(
-        self, *, endpoint: str, payload: dict[str, Any], headers: dict[str, Any]
-    ) -> dict[str, Any]:
+        self, *, endpoint: str, payload: Mapping[str, JsonValue], headers: Mapping[str, str]
+    ) -> dict[str, JsonValue]:
         url = self._api_url + endpoint
         for i in range(self._conn_options.max_retry + 1):
             try:
-                async with self._ensure_http_session().post(
+                async with self.http_session().post(
                     url=url, headers=headers, json=payload
                 ) as response:
                     if not response.ok:
@@ -120,7 +128,11 @@ class LiveAvatarAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return await response.json()  # type: ignore
+                    return TypeAdapter(dict[str, JsonValue]).validate_python(await response.json())
+            except ValidationError as exc:
+                raise APIConnectionError(
+                    "LiveAvatar returned an invalid response", retryable=False
+                ) from exc
             except APIStatusError as e:
                 if not e.retryable or i >= self._conn_options.max_retry:
                     raise

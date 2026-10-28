@@ -7,6 +7,7 @@ raised as the provider's error rather than a generic connection error.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import aiohttp
@@ -44,8 +45,11 @@ class _ScriptedSession:
     def __init__(self, script: list[int | BaseException]) -> None:
         self._script = list(script)
         self.posts = 0
+        self.trace_configs: list[aiohttp.TraceConfig] = []
+        self.json_serialize = json.dumps
 
-    def post(self, url: str, **kwargs: Any) -> _Response:
+    def request(self, method: str, url: str, **kwargs: Any) -> _Response:
+        assert method == "POST"
         self.posts += 1
         step = self._script.pop(0) if len(self._script) > 1 else self._script[0]
         if isinstance(step, BaseException):
@@ -106,7 +110,8 @@ async def test_malformed_success_body_is_not_retried():
             raise ValueError("Expecting value: line 1 column 1 (char 0)")
 
     class _BadJSONSession(_ScriptedSession):
-        def post(self, url: str, **kwargs: Any) -> _Response:
+        def request(self, method: str, url: str, **kwargs: Any) -> _Response:
+            assert method == "POST"
             self.posts += 1
             return _BadJSONResponse(200)
 

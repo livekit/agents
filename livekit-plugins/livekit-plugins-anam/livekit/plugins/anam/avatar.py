@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import aiohttp
+from pydantic import TypeAdapter
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -120,7 +121,9 @@ class AvatarSession(BaseAvatarSession):
                 livekit_token=livekit_token,
                 session_options=self._session_options,
             )
-            self.session_id = session_details.get("sessionId")
+            self.session_id = TypeAdapter(str | None).validate_python(
+                session_details.get("sessionId")
+            )
 
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(

@@ -21,6 +21,8 @@ import json
 import os
 from typing import TypeGuard
 
+from pydantic import JsonValue, TypeAdapter
+
 from livekit import api, rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, VoiceSession, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
@@ -222,7 +224,7 @@ class AvatarSession(BaseAvatarSession):
                 await self._discard_partial_start()
                 raise
 
-            if self._state is _State.CLOSED:
+            if self._ending():
                 await self._close_done.wait()
                 await self._discard_partial_start()
                 raise SynthesiaError("avatar session was closed while starting")
@@ -278,7 +280,7 @@ class AvatarSession(BaseAvatarSession):
             raise SynthesiaError(f"avatar swap RPC failed: {e}", type=ErrorType.CONNECTION) from e
 
         try:
-            response = json.loads(raw)
+            response = TypeAdapter[JsonValue](JsonValue).validate_json(raw)
         except ValueError as e:
             raise SynthesiaError("avatar swap returned a malformed response") from e
         avatar_id_result = response.get("avatar_id") if isinstance(response, dict) else None

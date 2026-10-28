@@ -1,8 +1,8 @@
 import asyncio
 import os
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -29,7 +29,7 @@ DEFAULT_PAL_ID = "pb87e71797da"
 DEFAULT_FACE_ID = "r4067604db72"
 
 
-def _coalesce_with_deprecated(
+def coalesce_with_deprecated(
     new_value: NotGivenOr[str],
     deprecated_value: NotGivenOr[str],
     *,
@@ -75,14 +75,14 @@ class TavusAPI:
         pal_id: NotGivenOr[str] = NOT_GIVEN,
         replica_id: NotGivenOr[str] = NOT_GIVEN,
         persona_id: NotGivenOr[str] = NOT_GIVEN,
-        properties: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        properties: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
+        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
         # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
-        face_id = _coalesce_with_deprecated(
+        face_id = coalesce_with_deprecated(
             face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
         )
-        pal_id = _coalesce_with_deprecated(
+        pal_id = coalesce_with_deprecated(
             pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
         )
 
@@ -107,10 +107,12 @@ class TavusAPI:
             pal_id = DEFAULT_PAL_ID
             face_id = face_id or DEFAULT_FACE_ID
 
-        properties = properties or {}
-        payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
+        properties = properties if utils.is_given(properties) else {}
+        payload: dict[str, JsonValue] = {"properties": properties}
+        if utils.is_given(pal_id):
+            payload["pal_id"] = pal_id
         # a user-supplied pal carries its own default face, so only send face_id when we have one
-        if face_id:
+        if utils.is_given(face_id) and face_id:
             payload["face_id"] = face_id
         payload.update(extra)
 
@@ -118,18 +120,18 @@ class TavusAPI:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
 
         response_data = await self._post("conversations", payload)
-        return response_data["conversation_id"]  # type: ignore
+        return TypeAdapter(str).validate_python(response_data["conversation_id"])
 
     async def create_pal(
         self,
         name: NotGivenOr[str] = NOT_GIVEN,
         *,
         default_face_id: str,
-        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
-        name = name or utils.shortuuid("lk_pal_")
+        name = name if utils.is_given(name) and name else utils.shortuuid("lk_pal_")
 
-        payload = {
+        payload: dict[str, JsonValue] = {
             "pal_name": name,
             "default_face_id": default_face_id,
             "pipeline_mode": "echo",
@@ -142,19 +144,19 @@ class TavusAPI:
             payload.update(extra_payload)
 
         response_data = await self._post("pals", payload)
-        return response_data["pal_id"]  # type: ignore
+        return TypeAdapter(str).validate_python(response_data["pal_id"])
 
     async def create_persona(
         self,
         name: NotGivenOr[str] = NOT_GIVEN,
         *,
-        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
         # Deprecated: use create_pal(). Kept on the legacy /v2/personas endpoint.
         logger.warning("`create_persona` is deprecated, use `create_pal` instead")
-        name = name or utils.shortuuid("lk_persona_")
+        name = name if utils.is_given(name) and name else utils.shortuuid("lk_persona_")
 
-        payload = {
+        payload: dict[str, JsonValue] = {
             "persona_name": name,
             "pipeline_mode": "echo",
             "layers": {
@@ -166,9 +168,9 @@ class TavusAPI:
             payload.update(extra_payload)
 
         response_data = await self._post("personas", payload)
-        return response_data["persona_id"]  # type: ignore
+        return TypeAdapter(str).validate_python(response_data["persona_id"])
 
-    async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
         """
         Make a POST request to the Tavus API with retry logic.
 
@@ -204,7 +206,9 @@ class TavusAPI:
                                 "Server returned an error", status_code=response.status, body=text
                             )
                         try:
-                            return await response.json()  # type: ignore
+                            return TypeAdapter(dict[str, JsonValue]).validate_python(
+                                await response.json()
+                            )
                         except ValueError as e:
                             # Tavus already accepted the POST; retrying could create a duplicate.
                             raise APIConnectionError(

@@ -4,10 +4,11 @@ import asyncio
 import io
 import json
 import os
-from typing import Any
+from types import TracebackType
 
 import aiohttp
 from PIL import Image
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -66,7 +67,10 @@ class LemonSliceAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._owns_session and self._session and not self._session.closed:
             await self._session.close()
@@ -83,7 +87,7 @@ class LemonSliceAPI:
         agent_prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_idle_prompt: NotGivenOr[str] = NOT_GIVEN,
         idle_timeout: NotGivenOr[int] = NOT_GIVEN,
-        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
         """
         Initiates a new LemonSlice agent session.
@@ -114,7 +118,7 @@ class LemonSliceAPI:
                 "Only one of agent_id, agent_image_url or agent_image can be provided"
             )
 
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "transport_type": "livekit",
             "properties": {
                 "livekit_url": livekit_url,
@@ -143,7 +147,7 @@ class LemonSliceAPI:
         response_data = await self._post(payload, image_bytes=image_bytes)
         session_id = response_data["session_id"]
         logger.debug(f"LemonSlice Session ID = {session_id}")
-        return session_id  # type: ignore
+        return TypeAdapter(str).validate_python(session_id)
 
     async def join_meeting(
         self,
@@ -168,7 +172,7 @@ class LemonSliceAPI:
         Returns:
             JoinMeetingResult with relay WebSocket URL and meeting bot ID.
         """
-        payload: dict[str, Any] = {
+        payload: dict[str, JsonValue] = {
             "session_id": session_id,
             "meeting_url": meeting_url,
             "livekit_url": livekit_url,
@@ -204,11 +208,11 @@ class LemonSliceAPI:
 
     async def _post(
         self,
-        payload: dict[str, Any],
+        payload: dict[str, JsonValue],
         *,
         url: str | None = None,
         image_bytes: bytes | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         """
         Make a POST request to the LemonSlice API with retry logic.
 
@@ -229,7 +233,7 @@ class LemonSliceAPI:
                 for i in range(self._conn_options.max_retry + 1):
                     try:
                         headers = {"X-API-Key": self._api_key}
-                        request_kwargs: dict[str, Any]
+                        form: aiohttp.FormData | None = None
                         if image_bytes is not None:
                             form = aiohttp.FormData()
                             form.add_field(
@@ -242,10 +246,8 @@ class LemonSliceAPI:
                                 filename="image.png",
                                 content_type="image/png",
                             )
-                            request_kwargs = {"data": form}
                         else:
                             headers["Content-Type"] = "application/json"
-                            request_kwargs = {"json": payload}
 
                         async with http_context.request(
                             session,
@@ -253,7 +255,8 @@ class LemonSliceAPI:
                             url or self._api_url,
                             headers=headers,
                             conn_options=self._conn_options,
-                            **request_kwargs,
+                            data=form,
+                            json=payload if form is None else None,
                         ) as response:
                             if not response.ok:
                                 text = await response.text()
@@ -262,7 +265,13 @@ class LemonSliceAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return await response.json()  # type: ignore
+                            return TypeAdapter(dict[str, JsonValue]).validate_python(
+                                await response.json()
+                            )
+                    except ValidationError as exc:
+                        raise APIConnectionError(
+                            "Lemonslice returned an invalid response", retryable=False
+                        ) from exc
                     except Exception as e:
                         if isinstance(e, APIStatusError):
                             logger.error(

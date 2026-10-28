@@ -18,6 +18,7 @@ import asyncio
 import json
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, utils
 from livekit.agents.utils import http_context
@@ -105,7 +106,7 @@ class SynthesiaAPI:
         }
 
         last_status: int | None = None
-        last_body: object = None
+        last_body: JsonValue = None
         last_exc: Exception | None = None
 
         async with conn_options.total_deadline():
@@ -151,14 +152,14 @@ class SynthesiaAPI:
             request_id=_body_request_id(last_body),
         ) from last_exc
 
-    def _parse_success(self, body: object) -> StartSessionResponse:
+    def _parse_success(self, body: JsonValue) -> StartSessionResponse:
         if isinstance(body, dict):
             session_id = body.get("id") or body.get("session_id")
             if isinstance(session_id, str) and session_id:
                 return StartSessionResponse(session_id=session_id)
         raise SynthesiaError("Synthesia response did not contain a session id")
 
-    def _mapped_error(self, resp: aiohttp.ClientResponse, body: object) -> SynthesiaError:
+    def _mapped_error(self, resp: aiohttp.ClientResponse, body: JsonValue) -> SynthesiaError:
         code = _body_code(body)
         error_type = _CODE_TO_ERROR.get(code or "")
         if error_type is None:
@@ -188,7 +189,7 @@ class SynthesiaAPI:
         )
 
 
-def _exhausted_message(attempts: int, status: int | None, body: object) -> str:
+def _exhausted_message(attempts: int, status: int | None, body: JsonValue) -> str:
     message = "could not start a Synthesia session"
     if attempts > 1:
         message = f"{message} after {attempts} attempts"
@@ -204,11 +205,11 @@ def _exhausted_message(attempts: int, status: int | None, body: object) -> str:
     return message
 
 
-def _is_problem(body: object) -> bool:
+def _is_problem(body: JsonValue) -> bool:
     return isinstance(body, dict) and isinstance(body.get("type"), str)
 
 
-def _body_code(body: object) -> str | None:
+def _body_code(body: JsonValue) -> str | None:
     if not isinstance(body, dict):
         return None
     err = body.get("error")
@@ -217,7 +218,7 @@ def _body_code(body: object) -> str | None:
     return code if isinstance(code, str) else None
 
 
-def _body_message(body: object) -> str | None:
+def _body_message(body: JsonValue) -> str | None:
     if not isinstance(body, dict):
         return None
     if _is_problem(body):
@@ -237,7 +238,7 @@ def _body_message(body: object) -> str | None:
     return f"{code}: {detail}" if code else detail
 
 
-def _body_request_id(body: object) -> str | None:
+def _body_request_id(body: JsonValue) -> str | None:
     if isinstance(body, dict):
         request_id = body.get("requestId")
         if isinstance(request_id, str):
@@ -254,7 +255,7 @@ def _public_avatar_id(avatar_id: str) -> str:
     return avatar_id if avatar_id.startswith(_AVATAR_ID_PREFIX) else _AVATAR_ID_PREFIX + avatar_id
 
 
-def _parse_retry_after(resp: aiohttp.ClientResponse, body: object) -> float | None:
+def _parse_retry_after(resp: aiohttp.ClientResponse, body: JsonValue) -> float | None:
     header = resp.headers.get("Retry-After")
     if header is not None:
         try:
@@ -272,10 +273,12 @@ def _parse_retry_after(resp: aiohttp.ClientResponse, body: object) -> float | No
     return None
 
 
-async def _read_json(resp: aiohttp.ClientResponse) -> object:
+async def _read_json(resp: aiohttp.ClientResponse) -> JsonValue:
     # Errors arrive as application/problem+json, which aiohttp refuses by default,
     # so the content type is checked here rather than delegated.
     try:
-        return await resp.json(content_type=resp.content_type)
+        return TypeAdapter[JsonValue](JsonValue).validate_python(
+            await resp.json(content_type=resp.content_type)
+        )
     except (aiohttp.ContentTypeError, ValueError):
         return None

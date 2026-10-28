@@ -19,7 +19,6 @@ import json
 import os
 import uuid
 from datetime import timedelta
-from typing import Any
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -32,6 +31,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.events import CloseEvent
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import AvatarSessionInfo, AvatarSessionStartError, BosonAvatarAPI
@@ -122,7 +122,7 @@ class AvatarSession(BaseAvatarSession):
         self._startup_cleanup_task: asyncio.Task[None] | None = None
         self._shutdown_task: asyncio.Task[None] | None = None
         self._agent_close_task: asyncio.Task[None] | None = None
-        self._tracked_agent_session: VoiceSession[Any] | None = None
+        self._tracked_agent_session: VoiceSession | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -223,11 +223,7 @@ class AvatarSession(BaseAvatarSession):
                     # still buffering speech until the Avatar is ready.
                     wait_remote_track=rtc.TrackKind.KIND_AUDIO,
                 )
-                replace_audio_tail = getattr(agent_session.output, "replace_audio_tail", None)
-                if callable(replace_audio_tail):
-                    replace_audio_tail(audio_output)
-                else:  # livekit-agents 1.5 compatibility for the experiment image
-                    agent_session.output.audio = audio_output
+                agent_session.output.replace_audio_tail(audio_output)
             except BaseException:
                 # Move all startup cleanup into an independent task. It owns both
                 # the provider result and DELETE, so repeated caller cancellation
@@ -250,6 +246,7 @@ class AvatarSession(BaseAvatarSession):
                 if self._startup_cleanup_task is None:
                     self._create_task = None
 
+        assert started_info is not None
         logger.debug(
             "boson avatar session started",
             extra={
@@ -370,7 +367,7 @@ class AvatarSession(BaseAvatarSession):
             if self._session_info is session_info:
                 self._session_info = None
 
-    def _on_agent_session_close(self, _: Any) -> None:
+    def _on_agent_session_close(self, _: CloseEvent) -> None:
         self._close_requested = True
         if (self._closed and self._session_info is None) or self._agent_close_task is not None:
             return
@@ -488,7 +485,7 @@ def _resolve_optional_string(value: NotGivenOr[str], default: str) -> str:
     return default
 
 
-def _resolve_optional_idempotency_key(value: NotGivenOr[str]) -> str | None:
+def _resolve_optional_idempotency_key(value: object) -> str | None:
     if not utils.is_given(value) or value is None:
         return None
     if not isinstance(value, str) or not value.strip():
@@ -500,7 +497,7 @@ def _resolve_optional_idempotency_key(value: NotGivenOr[str]) -> str | None:
 
 
 def _resolve_optional_positive_int(
-    value: NotGivenOr[int],
+    value: object,
     name: str,
     *,
     maximum: int | None = None,

@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -47,8 +47,8 @@ class SimliConfig:
     max_session_length: int = 600
     max_idle_time: int = 30
 
-    def create_json(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
+    def create_json(self) -> dict[str, JsonValue]:
+        result: dict[str, JsonValue] = {}
         result["faceId"] = f"{self.face_id}/{self.emotion_id}"
         result["handleSilence"] = True
         result["maxSessionLength"] = self.max_session_length

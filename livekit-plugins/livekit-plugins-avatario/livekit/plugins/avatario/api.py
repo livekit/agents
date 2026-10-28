@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from types import TracebackType
 
 import aiohttp
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -37,7 +38,7 @@ class AvatarioAPI:
         self,
         api_key: str,
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
-        video_info: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        video_info: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         session: aiohttp.ClientSession | None = None,
@@ -59,7 +60,10 @@ class AvatarioAPI:
         return self
 
     async def __aexit__(
-        self, exc_type: type | None, exc_val: Exception | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._owns_session and self._session:
             await self._session.close()
@@ -68,7 +72,7 @@ class AvatarioAPI:
         self,
         *,
         livekit_agent_identity: NotGivenOr[str] = NOT_GIVEN,
-        properties: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        properties: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> None:
         """
         Initiate a session request
@@ -86,7 +90,7 @@ class AvatarioAPI:
 
         properties = properties if utils.is_given(properties) else {}
 
-        payload = {
+        payload: dict[str, object] = {
             "avatario_face_id": self._avatar_id,
             "agent_id": livekit_agent_identity,
             "livekit": properties,
@@ -96,7 +100,7 @@ class AvatarioAPI:
             payload.update(self._video_info)
         await self._post(payload)
 
-    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post(self, payload: dict[str, object]) -> dict[str, JsonValue]:
         """
         Make a POST request to the Avatario API with retry logic.
 
@@ -134,8 +138,13 @@ class AvatarioAPI:
                                 status_code=response.status,
                                 body=text,
                             )
-                        data = await response.json()
-                        return cast(dict[str, Any], data)
+                        return TypeAdapter(dict[str, JsonValue]).validate_python(
+                            await response.json()
+                        )
+                except ValidationError as exc:
+                    raise APIConnectionError(
+                        "Avatario returned an invalid response", retryable=False
+                    ) from exc
                 except APIStatusError as e:
                     last_exc = e
                     if not e.retryable:
