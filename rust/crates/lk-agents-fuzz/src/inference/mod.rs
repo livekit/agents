@@ -1,8 +1,8 @@
-//! The inference simulations: the request machines of `lk-agents-inference`, driven on supplied
-//! time against fake gateways that answer as the real ones do -- calibrated latencies, refused
-//! connections, rejections, streams that drop or stall midway, replies that end without their
-//! terminator, transports slow (or failing) to release an attempt -- while their consumer waits,
-//! applies backpressure and gives up.
+//! The inference simulations: the request machines of `lk-agents-inference` and its VAD stream,
+//! driven on supplied time against fake gateways that answer as the real ones do -- calibrated
+//! latencies, refused connections, rejections, streams that drop or stall midway, replies that end
+//! without their terminator, transports slow (or failing) to release an attempt -- while their
+//! consumer waits, applies backpressure and gives up.
 //!
 //! What a fake will report enters the shared scheduler ([`crate::sched`]) only once due, as it
 //! reaches a channel in production; the scheduler then orders what is pending across sources
@@ -14,6 +14,7 @@
 
 pub mod avatar;
 pub mod llm;
+pub mod vad;
 
 use std::time::Duration;
 

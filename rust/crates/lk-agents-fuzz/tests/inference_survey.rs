@@ -1,5 +1,6 @@
 //! The inference simulations (`lk_agents_fuzz::inference`) over many seeds: the LLM request and
-//! the avatar session machines must keep every rule under the arrival order and BasicPOS.
+//! the avatar session machines and the VAD stream must keep every rule under the arrival order
+//! and BasicPOS.
 //!
 //! The campaign is `survey`, behind `--ignored` (the launch gate runs it): `INFERENCE_SEEDS` sizes
 //! it. A failure prints the seed; `LLM_SEED`/`AVATAR_SEED` replays print a run in full (the
@@ -7,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_fuzz::check::KNOWN_FINDINGS;
-use lk_agents_fuzz::inference::{avatar, llm};
+use lk_agents_fuzz::inference::{avatar, llm, vad};
 use lk_agents_fuzz::{boundary, sched::Sampling};
 
 #[test]
@@ -32,6 +33,9 @@ fn survey() {
             reached.extend(outcome.reached);
             let outcome = avatar::run(seed, sampling);
             note(avatar::subject(&outcome.trace), seed, &outcome.violations);
+            reached.extend(outcome.reached);
+            let outcome = vad::run(seed, sampling);
+            note("VadStream", seed, &outcome.violations);
             reached.extend(outcome.reached);
         }
     }

@@ -125,6 +125,8 @@ pub const INFERENCE: Boundary = Boundary {
          stepped per delivered transport or consumer event and due wake",
         "avatar session core (lk_agents_inference::avatar::lifecycle::AvatarSessionLifecycle), \
          stepped per delivered transport, caller or program event and due wake",
+        "VAD stream machine (lk_agents_inference::vad::machine::VadMachine), stepped per \
+         delivered microphone frame, model result, flush and options update",
     ],
     fakes: &[
         "inference::llm::Gateway: connections, rejections, recorded gpt-4.1-mini chunk timing, \
@@ -133,11 +135,17 @@ pub const INFERENCE: Boundary = Boundary {
         "inference::avatar::Gateway: idempotent creates applied on receipt, lost answers, \
          rejections, sessions without terminate ids, late or missing attempt releases",
         "inference::avatar::Program: the creating caller, a racing caller, refusals, closes",
+        "inference::vad: a microphone at 16-48 kHz, mono or stereo, 10 or 20 ms frames, a track \
+         switched midway; a model runtime scoring one window at a time on a speech-like \
+         probability stream, its latency drawn (no VAD recording in the corpus yet), a result \
+         landing after a flush; the host's flushes and option updates",
     ],
-    transitional: &["none: both machines are core machines the simulation steps itself"],
+    transitional: &["none: every machine is a core machine the simulation steps itself"],
     outside: &[
         "the runtime's HTTP exchange tasks and the Python avatar/LLM adapters (K-30 conformance, \
          F-18 real-peer tests)",
+        "the Silero model and the media worker that runs it (F-12 model tests, K-31 \
+         never-block qualification)",
     ],
 };
 
