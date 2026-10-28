@@ -288,6 +288,7 @@ impl TurnHost for Fake {
                         name: "request_photo".into(),
                         call_id: "p1".into(),
                         answer_tool: None,
+                        answer_ref: None,
                     }),
                     ..HandlerOutput::default()
                 })

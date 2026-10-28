@@ -57,8 +57,10 @@ pub struct WaitOptions {
     pub tool: Option<String>,
     /// For a conversation tool's `InputRequired`, the pending call.
     pub call_id: Option<String>,
-    /// The tool the answer is handed to, when the `InputRequired` named one.
+    /// The tool the answer is handed to, when the question carries a reference.
     pub answer_tool: Option<String>,
+    /// What the tool that takes the answer continues with it, such as the expert's task.
+    pub answer_ref: Option<String>,
     pub deadline: Option<i64>,
     /// The tool's parameter schema, added to the status message as a data part.
     pub schema: Option<Value>,
@@ -248,6 +250,9 @@ impl Tasks {
         }
         if let Some(answer_tool) = opts.answer_tool {
             ask.insert("answer_tool".into(), Value::String(answer_tool));
+        }
+        if let Some(answer_ref) = opts.answer_ref {
+            ask.insert("answer_ref".into(), Value::String(answer_ref));
         }
         let mut parts = vec![text_part(question)];
         if let Some(schema) = opts.schema {

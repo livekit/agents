@@ -91,9 +91,11 @@ class TurnContext(BaseModel):
     7.5), as the part's `data`.
     """
     answer_tool: str | None
-    """The tool the message is handed to before the model runs: an `InputRequired(tool=)` of
-    the last turn named it, and this message is its answer.
+    """The tool the message is handed to before the model runs: the last turn's question came
+    from it with a reference, and this message is its answer.
     """
+    answer_ref: str | None
+    """What `answer_tool` continues with the answer, such as the expert's task."""
 
 
 class PendingCall(BaseModel):
@@ -103,7 +105,9 @@ class PendingCall(BaseModel):
     name: str
     call_id: str
     answer_tool: str | None = None
-    """The tool that takes the answer, when the `InputRequired` named one."""
+    """The tool that takes the answer, when the question carries a reference."""
+    answer_ref: str | None = None
+    """What the tool that takes the answer continues with it, such as the expert's task."""
 
 
 class HostEvent(BaseModel):

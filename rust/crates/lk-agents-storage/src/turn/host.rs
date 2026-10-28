@@ -69,9 +69,11 @@ pub struct TurnContext {
     /// A delegating caller's conversation when the message carried a `chat_ctx` data part (plan
     /// 7.5), as the part's `data`.
     pub caller_history: Option<Value>,
-    /// The tool the message is handed to before the model runs: an `InputRequired(tool=)` of
-    /// the last turn named it, and this message is its answer.
+    /// The tool the message is handed to before the model runs: the last turn's question came
+    /// from it with a reference, and this message is its answer.
     pub answer_tool: Option<String>,
+    /// What `answer_tool` continues with the answer, such as the expert's task.
+    pub answer_ref: Option<String>,
     /// Asks whether to yield: before each model call and before the answer streams.
     #[python(skip)]
     pub boundary: Boundary,
@@ -83,10 +85,14 @@ pub struct TurnContext {
 pub struct PendingCall {
     pub name: String,
     pub call_id: String,
-    /// The tool that takes the answer, when the `InputRequired` named one.
+    /// The tool that takes the answer, when the question carries a reference.
     #[serde(default)]
     #[python(default = "None")]
     pub answer_tool: Option<String>,
+    /// What the tool that takes the answer continues with it, such as the expert's task.
+    #[serde(default)]
+    #[python(default = "None")]
+    pub answer_ref: Option<String>,
 }
 
 /// A journal event the handler recorded (docs/journal.md): `tool_execution_updated` for a

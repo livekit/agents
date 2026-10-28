@@ -50,14 +50,11 @@ impl Turn {
 
         // the task this batch continues, when it waits on a question: the batch is the answer,
         // recorded once as the person's message; the asking call keeps its question as its
-        // output, and the tool the question named, if any, takes the answer before the model runs
+        // output, and the tool the question named, if any, takes the answer and its reference first
         let answered = run.tasks.get(&answer_task).await?.filter(|r| r.ask().is_some());
-        let answer_tool = answered
-            .as_ref()
-            .and_then(TaskRecord::ask)
-            .and_then(|a| a.get("answer_tool"))
-            .filter(|t| truthy(t))
-            .map(text_of);
+        let ask = answered.as_ref().and_then(TaskRecord::ask);
+        let field = |key: &str| ask.and_then(|a| a.get(key)).filter(|t| truthy(t)).map(text_of);
+        let (answer_tool, answer_ref) = (field("answer_tool"), field("answer_ref"));
         // a continued task keeps its first messageId and adds the batch to its history
         let row_message_id = answered.is_none().then(|| last.message_id.clone());
         let mut history: Vec<Value> =
@@ -90,6 +87,7 @@ impl Turn {
             agent_stack: run.agents.refs().to_vec(),
             caller_history: ctx.caller_history.clone(),
             answer_tool,
+            answer_ref,
             boundary: boundary.clone(),
         };
         let out: HandlerOutput = match run.guard(self.host.handle(turn_ctx)).await? {
@@ -226,6 +224,7 @@ impl Turn {
                         tool: call.map(|c| c.name.clone()),
                         call_id: call.map(|c| c.call_id.clone()),
                         answer_tool: call.and_then(|c| c.answer_tool.clone()),
+                        answer_ref: call.and_then(|c| c.answer_ref.clone()),
                         ..WaitOptions::default()
                     },
                 )
