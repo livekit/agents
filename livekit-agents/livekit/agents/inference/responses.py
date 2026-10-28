@@ -20,6 +20,7 @@ from openai.types.responses import (
 from openai.types.responses.response_create_params import PromptCacheOptions
 from openai.types.shared_params import Metadata
 from typing_extensions import TypedDict
+from yarl import URL
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError
@@ -48,6 +49,22 @@ from .llm import LLMModels, supports_prompt_cache_breakpoints
 
 # the gateway closes a socket 60 minutes after the upgrade; recycle before that
 _GATEWAY_WS_MAX_SESSION = 55 * 60
+
+# status and retryability per gateway.error code; agent-gateway's GatewayErrCode* constants
+_GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
+    "upstream_connect_failed": (502, True),
+    "quota_exceeded": (429, None),
+    "tool_not_allowed": (400, False),
+    "model_mismatch": (400, False),
+    "invalid_event": (400, False),
+    "unknown_model": (400, False),
+    "no_ws_deployments": (400, False),
+    "no_ws_tag_match": (400, False),
+    "no_hipaa_compliant_deployment": (400, False),
+    "engine_unsupported": (400, False),
+    "moderation_blocked": (400, False),
+    "in_flight_response": (400, False),
+}
 
 
 class ResponsesOptions(TypedDict, total=False):
@@ -290,17 +307,27 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
                 ),
                 timeout,
             )
+        except aiohttp.WSServerHandshakeError as e:
+            if e.status == 429:
+                self._log_rate_limited(e)
+            raise APIStatusError(
+                f"inference gateway refused the WebSocket: {e.message}", status_code=e.status
+            ) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to inference gateway WebSocket") from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError("timed out connecting to inference gateway WebSocket") from e
+
+    def _log_rate_limited(self, e: aiohttp.WSServerHandshakeError) -> None:
+        extra: dict[str, Any] = {"model": URL(self._base_url).query.get("model")}
+        extra.update(extract_quota_usage(e.headers or {}))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
 
 
 class _GatewayResponsesLLMStream(ResponsesLLMStream):
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         event_type = event.get("type")
         if event_type == "gateway.error":
-            # gateway codes are strings ("tool_not_allowed"), so status_code stays -1
             return ResponseErrorEvent.model_validate(
                 {
                     "type": "error",
@@ -313,6 +340,19 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
         if event_type in ("gateway.connected", "gateway.session_expiring"):
             return None
         return super()._parse_ws_event(event)
+
+    def _ws_receive_timeout(self) -> float | None:
+        return self._conn_options.timeout
+
+    def _handle_error(self, event: ResponseErrorEvent) -> None:
+        mapped = _GATEWAY_ERROR_STATUS.get(event.code or "")
+        if mapped is None:
+            super()._handle_error(event)
+            return
+        status_code, retryable = mapped
+        raise APIStatusError(
+            f"{event.message} ({event.code})", status_code=status_code, retryable=retryable
+        )
 
     async def _run_impl(self) -> None:
         try:

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
 import aiohttp
 import pytest
+from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIConnectOptions, APIStatusError, llm as agents_llm
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, llm as agents_llm
 from livekit.agents.inference import responses as inference_responses
 from livekit.agents.inference.responses import LLM as ResponsesLLM
 from livekit.agents.llm._responses_engine import ResponsesWebsocket
@@ -78,11 +80,20 @@ class _ScriptedWs:
     async def send_str(self, data: str) -> None:
         self.sent.append(data)
 
-    async def receive(self) -> _FakeWsMsg:
+    async def receive(self, timeout: float | None = None) -> _FakeWsMsg:
         return _FakeWsMsg(json.dumps(self._frames.pop(0)))
 
     async def close(self) -> None:
         self.closed = True
+
+
+class _SilentWs(_ScriptedWs):
+    """Never answers; times out the way aiohttp's receive(timeout=...) does."""
+
+    async def receive(self, timeout: float | None = None) -> _FakeWsMsg:
+        assert timeout is not None, "the gateway stream must bound each read"
+        await asyncio.sleep(timeout)
+        raise asyncio.TimeoutError
 
 
 class _DialRecord:
@@ -101,6 +112,30 @@ class _FakeSession:
     ) -> _ScriptedWs:
         self.dials.append(_DialRecord(url, headers, heartbeat))
         return _ScriptedWs([])
+
+
+class _RefusingSession:
+    def __init__(self, status: int, headers: dict[str, str] | None = None) -> None:
+        self._status = status
+        self._headers = headers or {}
+
+    async def ws_connect(
+        self, url: str, *, headers: dict[str, str], heartbeat: float
+    ) -> _ScriptedWs:
+        request_url = URL(url)
+        request_info = aiohttp.RequestInfo(
+            url=request_url,
+            method="GET",
+            headers=CIMultiDictProxy(CIMultiDict()),
+            real_url=request_url,
+        )
+        raise aiohttp.WSServerHandshakeError(
+            request_info,
+            (),
+            status=self._status,
+            message="Invalid response status",
+            headers=CIMultiDict(self._headers),
+        )
 
 
 def _make_llm(**kwargs: Any) -> ResponsesLLM:
@@ -218,16 +253,88 @@ async def test_ws_per_call_inference_class_warns(caplog: pytest.LogCaptureFixtur
     await llm_model.aclose()
 
 
-async def test_gateway_error_raises_api_status_error() -> None:
+async def test_gateway_tool_not_allowed_is_400() -> None:
     llm_model = _make_llm()
     _use_connection(llm_model, _ScriptedWs([_CONNECTED, _TOOL_NOT_ALLOWED]))
 
     with pytest.raises(APIStatusError) as exc_info:
         await _drain(llm_model)
 
-    assert exc_info.value.message == _TOOL_NOT_ALLOWED["message"]
-    assert exc_info.value.status_code == -1
+    assert _TOOL_NOT_ALLOWED["message"] in exc_info.value.message
+    assert "tool_not_allowed" in exc_info.value.message
+    assert exc_info.value.status_code == 400
     assert exc_info.value.retryable is False
+    await llm_model.aclose()
+
+
+async def test_gateway_upstream_connect_failed_is_retryable_502() -> None:
+    llm_model = _make_llm()
+    upstream_failed = {
+        "type": "gateway.error",
+        "code": "upstream_connect_failed",
+        "message": "all 1 responses ws candidates failed to dial",
+    }
+    _use_connection(llm_model, _ScriptedWs([upstream_failed]))
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _drain(llm_model)
+
+    assert "upstream_connect_failed" in exc_info.value.message
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.retryable is True
+    await llm_model.aclose()
+
+
+async def test_handshake_401_is_api_status_error_not_retryable() -> None:
+    llm_model = _make_llm()
+    _transport(llm_model)._session = _RefusingSession(401)  # type: ignore[assignment]
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _transport(llm_model)._create_ws(1.0)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.retryable is False
+    await llm_model.aclose()
+
+
+async def test_handshake_429_logs_quota_headers(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    llm_model = _make_llm()
+    _transport(llm_model)._session = _RefusingSession(  # type: ignore[assignment]
+        429, {"X-LiveKit-Inference-RPM-Limit": "10"}
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _transport(llm_model)._create_ws(1.0)
+
+    records = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "LLM request rate limited by inference gateway"
+    ]
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retryable is True
+    assert len(records) == 1
+    assert records[0].rpm_limit == "10"  # type: ignore[attr-defined]
+    assert records[0].model == "openai/gpt-4.1"  # type: ignore[attr-defined]
+    await llm_model.aclose()
+
+
+async def test_ws_receive_timeout_raises_api_timeout() -> None:
+    llm_model = _make_llm()
+    ws = _SilentWs([])
+    _use_connection(llm_model, ws)
+
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=0.05)
+    )
+    with pytest.raises(APITimeoutError):
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    assert ws not in _transport(llm_model)._pool._available
+    assert ws not in _transport(llm_model)._pool._connections
     await llm_model.aclose()
 
 
