@@ -236,6 +236,10 @@ impl CtxUpdate {
 
 /// Context preparation and submission share a bounded continuation budget.
 pub(super) const CONTEXT_PAGE: usize = 64;
+// Continuations pause before consuming their completion allowance. External updates already
+// transfer ownership through synchronous send; replacing large parked inputs can instead exhaust
+// this cap. That overload closes the session, settles pending replies, and retains every owner
+// for admitted cleanup. Retaining unlimited replacements would defeat the ownership bound.
 const RETIRED_CONTEXTS: usize = 4;
 const QUEUED_CONTEXT_ITEMS: usize = 32;
 

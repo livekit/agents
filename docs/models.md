@@ -58,3 +58,21 @@ appropriate transport phases. Call `get(conn_options=...)` or use
 `async with pool.connection(conn_options=...)` for each operation. The
 context manager returns a healthy connection to the pool and retires it on
 failure. `await pool.aclose()` releases the pool's connections.
+
+## Native realtime context updates
+
+Native realtime sessions retain superseded conversation snapshots until admitted cleanup
+workers release them. Preparation pauses when cleanup needs capacity. Interruption, close,
+incoming protocol events and already written response deadlines continue to run.
+
+Additional `update_chat_ctx()` calls can exhaust the retained-context limit while cleanup
+is waiting, including replacements of a pending target during reconnect. The session then
+emits a nonrecoverable `RealtimeModelError` with message
+`realtime context retirement capacity exceeded`, fails pending reply requests and closes.
+Cleanup ownership remains with the framework. Coalesce successive history changes before
+submitting a new full snapshot. Submitting an update does not await cleanup admission.
+
+The limit bounds retained ownership, so the number of updates accepted depends on the
+conversation and outstanding work. The runtime does not promise an unlimited burst of
+context replacements. Ordinary replay of an unchanged conversation uses bounded
+continuations; external item or context growth can still reach the overload limit.

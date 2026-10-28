@@ -254,3 +254,102 @@ fn repeated_reconnects_preserve_replay_with_initial_cleanup_withheld() {
     assert!(replay.fatal.is_none() && !m.closing);
     assert_eq!(creates(&replay), (0..10_000).map(|id| id.to_string()).collect::<Vec<_>>());
 }
+
+fn completed_update_with_cleanup_withheld() -> RealtimeMachine {
+    let mut m = machine();
+    m.open(at(0));
+    let mut submitted =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }));
+    while m.context_pages_pending() {
+        assert!(m.context_continuation_ready());
+        let page = m.continue_context(at(0));
+        assert!(page.fatal.is_none());
+        submitted.merge(page);
+    }
+    acknowledge_page(&mut m, submitted);
+    assert_eq!(m.retired.len(), 2);
+    m
+}
+
+fn expect_terminal_context_refusal(m: &mut RealtimeMachine, step: Step, req_id: &str) {
+    let error = step.fatal.expect("external context bursts must refuse at the ownership cap");
+    assert!(!error.recoverable);
+    assert_eq!(error.message, "realtime context retirement capacity exceeded");
+    assert_eq!(
+        step.events
+            .iter()
+            .filter(|event| matches!(event,
+            Event::GenerateReplyFailed(failed) if failed.req_id == req_id))
+            .count(),
+        1,
+        "terminal refusal must settle the outstanding reply exactly once"
+    );
+    assert!(m.closing);
+    assert!(m.has_context_retirement(), "terminal refusal must retain cleanup ownership");
+    // Merely observing the closed machine or trying to continue it cannot dispose its owners.
+    assert!(m.continue_context(at(1)).frames.is_empty());
+    assert!(m.has_context_retirement());
+    let mut admitted = Vec::new();
+    while let Some(owner) = m.take_context_retirement() {
+        admitted.push(owner);
+    }
+    assert!(!admitted.is_empty());
+    assert!(!m.has_context_retirement());
+    // In production these opaque owners are dropped only by the admitted cleanup worker.
+    drop(admitted);
+}
+
+#[test]
+fn external_update_burst_refuses_terminally_when_prepare_owners_exhaust_cleanup_capacity() {
+    let mut m = completed_update_with_cleanup_withheld();
+    m.command(
+        at(0),
+        Command::GenerateReply(GenerateReply {
+            req_id: "prepare-burst".into(),
+            instructions: None,
+            tool_choice: None,
+        }),
+    );
+    // U2 parks. U3 and U4 replace its entire 10k Prepare owner, filling slots 3 and 4.
+    for expected in [2, 3, 4] {
+        let step = m.command(
+            at(0),
+            Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }),
+        );
+        assert!(step.fatal.is_none());
+        assert_eq!(m.retired.len(), expected);
+        assert!(!m.context_continuation_ready());
+    }
+    let refused =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }));
+    expect_terminal_context_refusal(&mut m, refused, "prepare-burst");
+}
+
+#[test]
+fn external_update_burst_refuses_terminally_when_overlay_pending_inputs_exhaust_cleanup_capacity() {
+    let mut m = completed_update_with_cleanup_withheld();
+    let reconnect = m.reconnect(at(1));
+    assert!(reconnect.fatal.is_none());
+    assert_eq!(m.retired.len(), 3);
+    m.command(
+        at(1),
+        Command::GenerateReply(GenerateReply {
+            req_id: "overlay-burst".into(),
+            instructions: None,
+            tool_choice: None,
+        }),
+    );
+    // U2 becomes the pending input; U3 retires that input as the fourth large owner.
+    for expected in [3, 4] {
+        let step = m.command(
+            at(1),
+            Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }),
+        );
+        assert!(step.fatal.is_none());
+        assert_eq!(m.retired.len(), expected);
+        assert!(!m.context_continuation_ready());
+    }
+    let refused =
+        m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }));
+    expect_terminal_context_refusal(&mut m, refused, "overlay-burst");
+}
