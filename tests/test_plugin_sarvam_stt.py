@@ -549,3 +549,31 @@ async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
     await stt.aclose()
 
     assert session.closed, "STT.aclose() must close the session of a stream the caller dropped"
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+async def test_batch_transcript_without_timestamps_uses_audio_duration(
+    as_list: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    async def recognize(request: web.Request) -> web.Response:
+        await request.read()
+        return web.json_response({"transcript": "hello", "language_code": "en-IN"})
+
+    app = web.Application()
+    app.router.add_post("/recognize", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        endpoint = str(server.make_url("/recognize"))
+        monkeypatch.setattr(sarvam_stt, "_get_urls_for_model", lambda _: (endpoint, endpoint))
+        model = sarvam_stt.STT(api_key="test", http_session=session)
+        try:
+            frame = rtc.AudioFrame.create(
+                sample_rate=16000, num_channels=1, samples_per_channel=1600
+            )
+            result = await model.recognize([frame] if as_list else frame)
+            assert result.alternatives[0].end_time == pytest.approx(0.1)
+        finally:
+            await model.aclose()

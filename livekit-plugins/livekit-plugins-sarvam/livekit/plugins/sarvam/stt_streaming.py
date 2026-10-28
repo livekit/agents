@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
+from pydantic import TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -45,6 +46,7 @@ from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
+from .models import ProviderMessage, message_request_id
 from .stt import _looks_like_error_text
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
@@ -503,7 +505,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._request_id = ""
         self._session_id = ""
-        self._resolved_config: dict[str, Any] | None = None
+        self._resolved_config: dict[str, object] | None = None
         self._session_ended = False
         self._utterance_idx: int | None = None
         self._utterance_in_progress = False
@@ -532,7 +534,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._logger = logger
 
     @property
-    def resolved_config(self) -> dict[str, Any] | None:
+    def resolved_config(self) -> dict[str, object] | None:
         """Return the configuration resolved by Sarvam for this connection."""
         return dict(self._resolved_config) if self._resolved_config is not None else None
 
@@ -685,9 +687,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
         the caller can fall back instead of stalling on an unexpected shape.
         """
         applied = data.get("applied")
-        if not isinstance(applied, list) or not all(isinstance(e, str) for e in applied):
+        if not isinstance(applied, list):
             return None
-        return any(e.split("=", 1)[0].strip() == "endpointing" for e in applied)
+        try:
+            applied_keys = TypeAdapter(list[str]).validate_python(applied, strict=True)
+        except ValidationError:
+            return None
+        return any(entry.split("=", 1)[0].strip() == "endpointing" for entry in applied_keys)
 
     def _handle_config_updated(self, data: dict[str, Any]) -> None:
         if self._pending_endpointing is None:
@@ -729,25 +735,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
         }
 
     @staticmethod
-    def _extract_request_id(data: dict[str, Any]) -> str | None:
-        request_id = data.get("request_id")
-        if request_id is None:
-            nested = data.get("data")
-            if isinstance(nested, dict):
-                request_id = nested.get("request_id")
-            metadata = data.get("metadata")
-            if request_id is None and isinstance(metadata, dict):
-                request_id = metadata.get("request_id")
-        if isinstance(request_id, str) and request_id:
-            return request_id
-        return None
+    def _extract_request_id(data: object) -> str | None:
+        request_id = message_request_id(data)
+        return request_id if isinstance(request_id, str) and request_id else None
 
     @staticmethod
-    def _extract_session_id(data: dict[str, Any]) -> str | None:
-        session_id = data.get("session_id")
-        if isinstance(session_id, str) and session_id:
-            return session_id
-        return None
+    def _extract_session_id(data: object) -> str | None:
+        session_id = ProviderMessage.model_validate(data).session_id
+        return session_id if isinstance(session_id, str) and session_id else None
 
     def _capture_server_ids(self, data: dict[str, Any]) -> None:
         session_id = self._extract_session_id(data)
@@ -844,7 +839,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
     async def _safe_send_str(
         self,
-        ws: Any,
+        ws: aiohttp.ClientWebSocketResponse,
         payload: dict[str, Any],
     ) -> bool:
         """Send a JSON control message, tolerating a peer that already closed.
@@ -865,7 +860,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             return False
         return True
 
-    async def _safe_send_bytes(self, ws: Any, payload: bytes) -> None:
+    async def _safe_send_bytes(self, ws: aiohttp.ClientWebSocketResponse, payload: bytes) -> None:
         if ws.closed:
             return
 
@@ -877,7 +872,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 extra={**self._build_log_context(), "payload_bytes": len(payload)},
             )
 
-    async def _send_pending_config_update(self, ws: Any) -> None:
+    async def _send_pending_config_update(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         payload = self._pending_config_update
         self._pending_config_update = None
         if payload is None:
@@ -1070,7 +1065,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._capture_server_ids(data)
         if event == "session.begin":
             config = data.get("config")
-            self._resolved_config = dict(config) if isinstance(config, dict) else None
+            self._resolved_config = (
+                TypeAdapter(dict[str, object]).validate_python(config)
+                if isinstance(config, dict)
+                else None
+            )
         self._log_stt_event(event, data)
         if event == "session.begin":
             return

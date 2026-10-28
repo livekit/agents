@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 
 import aiohttp
 import numpy as np
+import numpy.typing as npt
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -50,10 +51,14 @@ from livekit.agents import (
 from .log import logger
 from .models import (
     MODEL_SPEAKER_COMPATIBILITY,
+    AudioData,
+    ProviderMessage,
     SarvamTTSLanguages,
     SarvamTTSModels,
     SarvamTTSOutputAudioBitrate,
     SarvamTTSSpeakers,
+    TTSBatchResponse,
+    message_request_id,
 )
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
@@ -116,7 +121,7 @@ def _codec_to_mime_type(codec: str) -> str:
     return mime
 
 
-def _build_mulaw_table() -> np.ndarray:
+def _build_mulaw_table() -> npt.NDArray[np.int16]:
     """Build an ITU-T G.711 mu-law to linear 16-bit PCM lookup table."""
     table = np.zeros(256, dtype=np.int16)
     for i in range(256):
@@ -129,7 +134,7 @@ def _build_mulaw_table() -> np.ndarray:
     return table
 
 
-def _build_alaw_table() -> np.ndarray:
+def _build_alaw_table() -> npt.NDArray[np.int16]:
     """Build an ITU-T G.711 A-law to linear 16-bit PCM lookup table.
 
     Note: A-law sign convention is inverted relative to mu-law -- when the
@@ -149,8 +154,8 @@ def _build_alaw_table() -> np.ndarray:
     return table
 
 
-_MULAW_TABLE: np.ndarray = _build_mulaw_table()
-_ALAW_TABLE: np.ndarray = _build_alaw_table()
+_MULAW_TABLE: npt.NDArray[np.int16] = _build_mulaw_table()
+_ALAW_TABLE: npt.NDArray[np.int16] = _build_alaw_table()
 
 
 def _decode_telephony(codec: str, data: bytes) -> bytes:
@@ -338,10 +343,11 @@ def _error_status_code(error_data: object) -> int:
     it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
     with model bulbul:v4-flash"``. Returns -1 when neither form is present.
     """
-    if not isinstance(error_data, dict):
+    if not isinstance(error_data, (dict, AudioData)):
         return -1
 
-    code = error_data.get("code")
+    parsed = AudioData.model_validate(error_data)
+    code = parsed.code
     if isinstance(code, bool):  # bool is an int subclass; never a status code
         return -1
     if isinstance(code, int):
@@ -349,7 +355,7 @@ def _error_status_code(error_data: object) -> int:
     if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
         return int(code)
 
-    match = _MESSAGE_STATUS_RE.match(str(error_data.get("message", "")))
+    match = _MESSAGE_STATUS_RE.match(str(parsed.message))
     return int(match.group(1)) if match else -1
 
 
@@ -862,10 +868,10 @@ class ChunkedStream(tts.ChunkedStream):
                         body=error_text,
                     )
 
-                response_json = await res.json()
-                request_id = response_json.get("request_id", "")
-                audios = response_json.get("audios", [])
-                if not audios or not isinstance(audios, list):
+                response_json = TTSBatchResponse.model_validate(await res.json())
+                request_id = response_json.request_id
+                audios = response_json.audios
+                if not audios:
                     raise APIConnectionError("Sarvam TTS API response invalid: no audio data")
 
                 output_emitter.initialize(
@@ -902,8 +908,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._server_request_id: str | None = None
 
         # Task management for cleanup
-        self._send_task: asyncio.Task | None = None
-        self._recv_task: asyncio.Task | None = None
+        self._send_task: asyncio.Task[None] | None = None
+        self._recv_task: asyncio.Task[None] | None = None
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -1269,10 +1275,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 body={"raw_message": msg_data},
             ) from e
 
-    async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
+    async def _handle_audio_message(self, resp: object, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
         try:
-            audio_data = resp.get("data", {}).get("audio", "")
+            audio_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data).audio
             if not audio_data:
                 logger.debug("Received empty audio data", extra=self._build_log_context())
                 return True
@@ -1289,10 +1295,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             # Don't stop processing for audio decode errors
             return True
 
-    async def _handle_error_message(self, resp: dict) -> None:
+    async def _handle_error_message(self, resp: object) -> None:
         """Handle error messages from the API."""
-        error_data = resp.get("data", {})
-        error_msg = error_data.get("message", "Unknown error")
+        error_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data)
+        error_msg = error_data.message
         error_code = _error_status_code(error_data)
 
         # The provider decides what goes in these fields, so they are tagged for
@@ -1319,13 +1325,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         raise APIStatusError(
             message=f"TTS API error from Sarvam (status {error_code})",
             status_code=error_code,
-            request_id=error_data.get("request_id") if isinstance(error_data, dict) else None,
+            request_id=error_data.request_id,
         )
 
-    async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
+    async def _handle_event_message(self, resp: object, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""
-        event_data = resp.get("data", {})
-        event_type = event_data.get("event_type")
+        event_data = AudioData.model_validate(ProviderMessage.model_validate(resp).data)
+        event_type = event_data.event_type
         self._maybe_set_server_request_id(event_data)
 
         if event_type == "final":
@@ -1336,7 +1342,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.debug(f"Unknown event type: {event_type}", extra=self._build_log_context())
             return True
 
-    def _build_log_context(self) -> dict:
+    def _build_log_context(self) -> dict[str, object]:
         """Build consistent logging context."""
         return {
             "session_id": self._session_id,
@@ -1347,23 +1353,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             "server_request_id": self._server_request_id,
         }
 
-    def _maybe_set_server_request_id(self, data: dict) -> None:
+    def _maybe_set_server_request_id(self, data: object) -> None:
         """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is not None:
-            return
-
-        request_id = None
-        if isinstance(data, dict):
-            request_id = data.get("request_id")
-            if request_id is None:
-                nested = data.get("data")
-                if isinstance(nested, dict):
-                    request_id = nested.get("request_id")
-                metadata = data.get("metadata")
-                if request_id is None and isinstance(metadata, dict):
-                    request_id = metadata.get("request_id")
-
-        if request_id:
+        if self._server_request_id is None and (request_id := message_request_id(data)):
             self._server_request_id = str(request_id)
 
     async def aclose(self) -> None:

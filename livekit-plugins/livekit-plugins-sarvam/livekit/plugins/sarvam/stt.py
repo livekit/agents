@@ -28,7 +28,7 @@ import platform
 import time
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -50,6 +50,7 @@ from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
+from .models import AudioData, EventData, ProviderMessage, TranscriptionData, message_request_id
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 EOS_FALLBACK_TIMEOUT = 1.0
@@ -326,7 +327,7 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
 
 
 def _extract_confidence(
-    payload: dict,
+    payload: object,
     instance_logger: logging.Logger,
 ) -> float:
     """Read Sarvam's ``language_probability`` from a response payload.
@@ -336,7 +337,7 @@ def _extract_confidence(
     (defensive — the field is documented for the REST endpoint but not
     explicitly for streaming, so contract drift is logged for visibility).
     """
-    value = payload.get("language_probability")
+    value = TranscriptionData.model_validate(payload).language_probability
     # bool is a subclass of int — exclude explicitly so that an accidental
     # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
     # as livekit-plugins-slng/.../stt.py.
@@ -349,27 +350,6 @@ def _extract_confidence(
             value,
         )
     return 1.0
-
-
-def _calculate_audio_duration(
-    buffer: AudioBuffer,
-) -> float:  # TODO: Copied from livekit/agents/utils/audio.py, check if it can be reused
-    """Calculate audio duration from buffer."""
-    try:
-        if isinstance(buffer, list):
-            # Calculate total duration from all frames
-            total_samples = sum(frame.samples_per_channel for frame in buffer)
-            if buffer and total_samples > 0:
-                sample_rate = buffer[0].sample_rate
-                return total_samples / sample_rate
-        elif hasattr(buffer, "duration"):
-            return buffer.duration / 1000.0  # buffer.duration is in ms
-        elif hasattr(buffer, "samples_per_channel") and hasattr(buffer, "sample_rate"):
-            # Single AudioFrame
-            return buffer.samples_per_channel / buffer.sample_rate
-    except Exception as e:
-        logger.warning(f"Could not calculate audio duration: {e}")
-    return 0.0
 
 
 def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
@@ -435,16 +415,14 @@ def _looks_like_error_text(value: object) -> bool:
     return any(hint in lowered for hint in error_hints)
 
 
-def _has_error_field(data: dict) -> bool:
+def _has_error_field(data: object) -> bool:
     """Check whether a parsed message carries an explicit error indicator."""
-    if data.get("error") is not None:
+    message = ProviderMessage.model_validate(data)
+    if message.error is not None:
         return True
-    nested = data.get("data")
-    if isinstance(nested, dict):
-        if nested.get("error") is not None:
-            return True
-        if nested.get("event_type") == "error" or nested.get("event") == "error":
-            return True
+    if isinstance(message.data, dict):
+        nested = EventData.model_validate(message.data)
+        return nested.error is not None or nested.event_type == "error" or nested.event == "error"
     return False
 
 
@@ -671,14 +649,14 @@ class STT(stt.STT):
                         body=error_text,
                     )
 
-                response_json = await res.json()
+                response_json = TranscriptionData.model_validate(await res.json())
                 self._logger.debug(
                     "Sarvam API response received", extra={"lk.pii.response_json": response_json}
                 )
 
-                transcript_text = response_json.get("transcript", "")
-                request_id = response_json.get("request_id", "")
-                detected_language = response_json.get("language_code")
+                transcript_text = response_json.transcript
+                request_id = response_json.request_id or ""
+                detected_language = response_json.language_code
                 if not isinstance(detected_language, str):
                     detected_language = LanguageCode(opts_language or "")
                 else:
@@ -688,18 +666,16 @@ class STT(stt.STT):
                 end_time = 0.0
 
                 # Try to get timestamps if available
-                timestamps_data = response_json.get("timestamps")
-                if timestamps_data and isinstance(timestamps_data, dict):
-                    words_ts_start = timestamps_data.get("start_time_seconds")
-                    words_ts_end = timestamps_data.get("end_time_seconds")
-                    if isinstance(words_ts_start, list) and len(words_ts_start) > 0:
-                        start_time = words_ts_start[0]
-                    if isinstance(words_ts_end, list) and len(words_ts_end) > 0:
-                        end_time = words_ts_end[-1]
+                timestamps_data = response_json.timestamps
+                if timestamps_data is not None:
+                    if timestamps_data.start_time_seconds:
+                        start_time = timestamps_data.start_time_seconds[0]
+                    if timestamps_data.end_time_seconds:
+                        end_time = timestamps_data.end_time_seconds[-1]
 
                 # If start/end times are still 0, use buffer duration as an estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
-                    end_time = _calculate_audio_duration(buffer)
+                    end_time = utils.audio.calculate_audio_duration(buffer)
 
                 alternatives = [
                     stt.SpeechData(
@@ -917,7 +893,7 @@ class SpeechStream(stt.SpeechStream):
         self._should_flush = False  # Flag to trigger flush
 
         self._utterance_speech_start_wall: float | None = None
-        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_final_data: TranscriptionData | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
         self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
@@ -925,8 +901,8 @@ class SpeechStream(stt.SpeechStream):
         self._eos_emitted_for_utterance = False
 
         # Task management for cleanup
-        self._audio_task: asyncio.Task | None = None
-        self._message_task: asyncio.Task | None = None
+        self._audio_task: asyncio.Task[None] | None = None
+        self._message_task: asyncio.Task[None] | None = None
         self._audio_encoding = self._opts.input_audio_codec or "audio/wav"
         self._chunk_size = max(
             int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
@@ -946,7 +922,7 @@ class SpeechStream(stt.SpeechStream):
             }
         )
 
-    def _build_log_context(self) -> dict:
+    def _build_log_context(self) -> dict[str, object]:
         """Build consistent logging context."""
         return {
             "session_id": self._session_id,
@@ -958,23 +934,9 @@ class SpeechStream(stt.SpeechStream):
             "server_request_id": self._server_request_id,
         }
 
-    def _maybe_set_server_request_id(self, data: dict) -> None:
+    def _maybe_set_server_request_id(self, data: object) -> None:
         """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is not None:
-            return
-
-        request_id = None
-        if isinstance(data, dict):
-            request_id = data.get("request_id")
-            if request_id is None:
-                nested = data.get("data")
-                if isinstance(nested, dict):
-                    request_id = nested.get("request_id")
-                metadata = data.get("metadata")
-                if request_id is None and isinstance(metadata, dict):
-                    request_id = metadata.get("request_id")
-
-        if request_id:
+        if self._server_request_id is None and (request_id := message_request_id(data)):
             self._server_request_id = str(request_id)
 
     def _positive_time(self, value: object) -> float | None:
@@ -1003,21 +965,22 @@ class SpeechStream(stt.SpeechStream):
             return fallback_task
         return None
 
-    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
-        transcript_text = transcript_data.get("transcript", "")
+    def _send_final_transcript(self, transcript_data: object) -> bool:
+        transcript = TranscriptionData.model_validate(transcript_data)
+        transcript_text = transcript.transcript
         if not transcript_text:
             return False
 
-        language = LanguageCode(transcript_data.get("language_code", ""))
-        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        language = LanguageCode(transcript.language_code or "")
+        request_id = transcript.request_id or self._server_request_id or ""
         # Streaming reports timing via speech_start/speech_end (the batch
         # `timestamps` array is not sent over the socket). When absent, end_time
         # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
         speech_data = stt.SpeechData(
             language=language,
             text=transcript_text,
-            start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
-            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
+            start_time=self._positive_time(transcript.speech_start) or 0.0,
+            end_time=self._positive_time(transcript.speech_end) or 0.0,
             confidence=_extract_confidence(transcript_data, self._logger),
         )
         self.send(
@@ -1075,7 +1038,7 @@ class SpeechStream(stt.SpeechStream):
             self._connection_state = ConnectionState.DISCONNECTED
 
         # Cancel running tasks first
-        tasks_to_cancel = []
+        tasks_to_cancel: list[asyncio.Task[None]] = []
         if self._audio_task and not self._audio_task.done():
             tasks_to_cancel.append(self._audio_task)
         if self._message_task and not self._message_task.done():
@@ -1245,7 +1208,7 @@ class SpeechStream(stt.SpeechStream):
         self._message_task = asyncio.create_task(self._process_messages(ws))
 
         # Wait for both tasks to complete or reconnection event
-        tasks = [self._audio_task, self._message_task]
+        tasks: list[asyncio.Task[object]] = [self._audio_task, self._message_task]
         reconnect_task = asyncio.create_task(self._reconnect_event.wait())
 
         try:
@@ -1269,8 +1232,9 @@ class SpeechStream(stt.SpeechStream):
                 if audio_exc is not None:
                     raise audio_exc
 
+                final_tasks: list[asyncio.Task[object]] = [self._message_task, reconnect_task]
                 done2, pending2 = await asyncio.wait(
-                    [self._message_task, reconnect_task],
+                    final_tasks,
                     return_when=asyncio.FIRST_COMPLETED,
                     timeout=self._conn_options.read_timeout,
                 )
@@ -1527,10 +1491,10 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_message(self, data: dict) -> None:
+    async def _handle_message(self, data: object) -> None:
         """Handle different types of messages from Sarvam streaming API."""
         try:
-            msg_type = data.get("type")
+            msg_type = ProviderMessage.model_validate(data).type
             self._maybe_set_server_request_id(data)
             if not msg_type:
                 self._logger.warning(
@@ -1572,14 +1536,16 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"Message processing error: {e}") from e
 
-    async def _handle_transcript_data(self, data: dict) -> None:
+    async def _handle_transcript_data(self, data: object) -> None:
         """Handle transcription result messages."""
-        transcript_data = data.get("data", {})
-        transcript_text = transcript_data.get("transcript", "")
+        transcript_data = TranscriptionData.model_validate(
+            ProviderMessage.model_validate(data).data
+        )
+        transcript_text = transcript_data.transcript
         self._maybe_set_server_request_id(transcript_data)
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
-        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        request_id = transcript_data.request_id or self._server_request_id or ""
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
@@ -1587,7 +1553,7 @@ class SpeechStream(stt.SpeechStream):
 
         try:
             # Create usage event with proper metrics extraction
-            metrics = transcript_data.get("metrics", {})
+            metrics = transcript_data.metrics
             # request_data = {
             #     "original_id": request_id,
             #     "processing_latency": metrics.get("processing_latency", 0.0),
@@ -1596,7 +1562,7 @@ class SpeechStream(stt.SpeechStream):
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
                 request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
-                    audio_duration=metrics.get("audio_duration", 0.0),
+                    audio_duration=metrics.audio_duration,
                 ),
             )
             self.send(usage_event)
@@ -1629,10 +1595,10 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_events(self, data: dict) -> None:
+    async def _handle_events(self, data: object) -> None:
         """Handle VAD (Voice Activity Detection) events."""
-        event_data = data.get("data", {})
-        signal_type = event_data.get("signal_type")
+        event_data = EventData.model_validate(ProviderMessage.model_validate(data).data)
+        signal_type = event_data.signal_type
         self._maybe_set_server_request_id(event_data)
 
         if not signal_type:
@@ -1695,16 +1661,14 @@ class SpeechStream(stt.SpeechStream):
             )
             raise
 
-    async def _handle_error_message(self, data: dict) -> None:
+    async def _handle_error_message(self, data: object) -> None:
         """Handle error messages from the API."""
-        error_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
-        error_info = (
-            data.get("error")
-            or error_data.get("error")
-            or error_data.get("message")
-            or "Unknown error"
+        message = ProviderMessage.model_validate(data)
+        error_data = AudioData.model_validate(
+            message.data if isinstance(message.data, dict) else {}
         )
-        error_code = data.get("code", error_data.get("code", "unknown"))
+        error_info = message.error or error_data.error or error_data.message or "Unknown error"
+        error_code = message.code if message.code is not None else error_data.code
         raw_error_message = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         self._maybe_set_server_request_id(data)
 

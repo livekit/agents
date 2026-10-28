@@ -14,6 +14,8 @@
 
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3", "bulbul:v4-flash"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
@@ -456,3 +458,79 @@ MODEL_SPEAKER_COMPATIBILITY = {
     },
     "bulbul:v4-flash": {"all": BULBUL_V4_FLASH_SPEAKERS},
 }
+
+
+class ProviderMessage(BaseModel):
+    model_config = ConfigDict(strict=True, from_attributes=True)
+
+    type: str | None = None
+    request_id: object | None = None
+    session_id: object | None = None
+    data: dict[str, object] | BaseModel | None = None
+    metadata: dict[str, object] | BaseModel | None = None
+    error: object | None = None
+    code: object | None = None
+
+
+def message_request_id(payload: object) -> object:
+    message = ProviderMessage.model_validate(payload)
+    request_id = message.request_id
+    if request_id is None and isinstance(message.data, (dict, BaseModel)):
+        request_id = ProviderMessage.model_validate(message.data).request_id
+    if request_id is None and isinstance(message.metadata, (dict, BaseModel)):
+        request_id = ProviderMessage.model_validate(message.metadata).request_id
+    return request_id
+
+
+class TranscriptionTimestamps(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    start_time_seconds: list[float] = Field(default_factory=list[float])
+    end_time_seconds: list[float] = Field(default_factory=list[float])
+
+
+class TranscriptionMetrics(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    audio_duration: float = 0.0
+
+
+class TranscriptionData(BaseModel):
+    model_config = ConfigDict(strict=True, from_attributes=True)
+
+    transcript: str = ""
+    language_code: str | None = None
+    request_id: str | None = None
+    language_probability: object | None = None
+    speech_start: object | None = None
+    speech_end: object | None = None
+    timestamps: TranscriptionTimestamps | None = None
+    metrics: TranscriptionMetrics = Field(default_factory=TranscriptionMetrics)
+
+
+class EventData(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    request_id: str | None = None
+    signal_type: str | None = None
+    event_type: str | None = None
+    event: str | None = None
+    error: object | None = None
+
+
+class AudioData(BaseModel):
+    model_config = ConfigDict(strict=True, from_attributes=True)
+
+    audio: str = ""
+    event_type: str | None = None
+    request_id: str | None = None
+    code: object | None = None
+    message: object = "Unknown error"
+    error: object | None = None
+
+
+class TTSBatchResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    request_id: str | None = None
+    audios: list[str] = Field(default_factory=list[str])

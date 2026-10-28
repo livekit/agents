@@ -256,6 +256,7 @@ class _FakeSession:
 
     def __init__(self) -> None:
         self.sockets: list[_FakeSocket] = []
+        self.trace_configs: list[aiohttp.TraceConfig] = []
 
     async def ws_connect(self, url: str, **kwargs: Any) -> _FakeSocket:
         self.sockets.append(_FakeSocket(url))
@@ -293,7 +294,7 @@ def _ws_stream(tts: sarvam_tts.TTS) -> sarvam_tts.SynthesizeStream:
     stream._send_task = None
     stream._recv_task = None
     stream._ws_conn = None
-    stream._mark_started = lambda: None  # type: ignore[method-assign]
+    stream._started_time = 0.0
     return stream
 
 
