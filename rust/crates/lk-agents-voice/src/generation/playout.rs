@@ -111,6 +111,8 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         completed: Duration::ZERO,
         reported: 0,
         batch: 0,
+        first_segment: None,
+        cut_below: false,
     };
     let mut ended = loop {
         if handle.interrupted() {
@@ -193,7 +195,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             Ok(Heard {
                 text: synchronized(ev.synchronized_transcript, text),
                 position: ev.playback_position,
-                complete: !ev.interrupted,
+                complete: !ev.interrupted && !playing.cut_below,
                 frames: playing.pushed,
                 played: playing.completed.max(ev.playback_position),
             })
@@ -273,9 +275,11 @@ pub(super) fn unheard() -> Heard {
 /// What the sink reported for this segment, on one channel, in order. `Shown`: a synchroniser
 /// below released a word as of the played position; journalled, and the playout wakes at the
 /// release, ahead of the words' forwarder, so a finished segment's stream closes before its words
-/// reach the text output. `Reset`: the sink's playback count was reset under it.
+/// reach the text output. `Reset`: the sink's playback count was reset under it. `Finished`
+/// carries the tracker's number for the segment it closed.
 enum SinkReport {
     Playback(PlaybackEvent),
+    Finished { segment: u64, ev: PlaybackFinished },
     Shown(lk_agents_abi::TimedString),
     Reset,
 }
@@ -286,6 +290,10 @@ struct SinkReports(mpsc::UnboundedSender<SinkReport>);
 impl PlaybackObserver for SinkReports {
     fn on_playback_event(&self, ev: &PlaybackEvent) {
         let _ = self.0.send(SinkReport::Playback(ev.clone()));
+    }
+
+    fn on_segment_finished(&self, segment: u64, ev: &PlaybackFinished) {
+        let _ = self.0.send(SinkReport::Finished { segment, ev: ev.clone() });
     }
 
     fn on_transcript_shown(&self, word: &lk_agents_abi::TimedString) {
@@ -364,6 +372,11 @@ struct Playing<'a> {
     reported: u64,
     /// Pushed since the last boundary: one `SinkCall::Push` record per stretch.
     batch: u64,
+    /// The tracker's number for this forwarding's first segment, once a frame opened it.
+    first_segment: Option<u64>,
+    /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
+    /// it played, whatever the last segment reports.
+    cut_below: bool,
 }
 
 impl Playing<'_> {
@@ -387,7 +400,7 @@ impl Playing<'_> {
         self.sink_call(SinkCall::End);
         // Cut before its first frame left: never started, so no finish.
         if self.started || !(ev.interrupted && ev.playback_position.is_zero()) {
-            self.finished(ev.playback_position, ev.interrupted);
+            self.finished(ev.playback_position, ev.interrupted || self.cut_below);
         }
     }
 
@@ -427,7 +440,12 @@ impl Playing<'_> {
                 self.played += p.duration;
                 self.report_played();
             }
-            SinkReport::Playback(PlaybackEvent::Finished(f)) => {
+            // Started/progressed only: a tracker reports finishes with their segment.
+            SinkReport::Playback(PlaybackEvent::Finished(_)) => {}
+            SinkReport::Finished { segment, ev: f } => {
+                if f.interrupted && self.first_segment.is_some_and(|first| segment >= first) {
+                    self.cut_below = true;
+                }
                 // A sink with no `Started` (a bare recorder) still played it, unless cut at zero.
                 if !(f.interrupted && f.playback_position.is_zero()) {
                     self.start(self.shared.time.wall_secs());
@@ -504,6 +522,9 @@ impl Playing<'_> {
             self.settle(segment);
             match pushed {
                 Some(Ok(())) => {
+                    if self.first_segment.is_none() {
+                        self.first_segment = Some(self.out.tracker().segments());
+                    }
                     self.pushed += 1;
                     self.pushed_len += frame_duration(frame);
                     self.batch += 1;

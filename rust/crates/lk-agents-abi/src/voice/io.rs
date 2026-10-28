@@ -53,6 +53,13 @@ pub trait PlaybackObserver: Send + Sync {
     /// as interrupted.
     fn on_playback_reset(&self) {}
 
+    /// The tracker's `segment`th segment (counted from 1 over the tracker's life) finished, so a
+    /// listener tells its own segments' reports from a late one of an earlier segment.
+    fn on_segment_finished(&self, segment: u64, ev: &PlaybackFinished) {
+        let _ = segment;
+        self.on_playback_event(&PlaybackEvent::Finished(ev.clone()));
+    }
+
     /// Nobody listens any more; the tracker drops this observer after the next event.
     fn is_closed(&self) -> bool {
         false
@@ -63,6 +70,8 @@ pub trait PlaybackObserver: Send + Sync {
 struct TrackerState {
     /// Between the first `capture_frame` of a segment and its `flush`.
     capturing: bool,
+    /// Segments opened and finished over the tracker's life: the `n`th finish closes the `n`th
+    /// segment, and a reset finishes every one outstanding.
     segments: u64,
     finished: u64,
     last: PlaybackFinished,
@@ -142,7 +151,12 @@ impl PlaybackTracker {
     /// `on_playback_progressed(started_at=, offset=, duration=)`. Invalid durations are refused
     /// before updating playback or notifying observers.
     #[host(method(name = "playback_progressed"))]
-    pub fn report_progressed(&self, started_at: f64, offset: f64, duration: f64) -> std::result::Result<(), InvalidPlaybackTime> {
+    pub fn report_progressed(
+        &self,
+        started_at: f64,
+        offset: f64,
+        duration: f64,
+    ) -> std::result::Result<(), InvalidPlaybackTime> {
         let offset = seconds(offset, "offset")?;
         let duration = seconds(duration, "duration")?;
         self.playback_progressed(self.anchor().ts(started_at), offset, duration);
@@ -181,9 +195,9 @@ impl PlaybackTracker {
         self.observers.lock().unwrap().clone()
     }
 
-    fn emit(&self, ev: PlaybackEvent) {
+    fn emit(&self, notify: impl Fn(&dyn PlaybackObserver)) {
         for o in self.observers() {
-            o.on_playback_event(&ev);
+            notify(&*o);
         }
         // Whoever stopped listening is forgotten here, not at `aclose`.
         self.observers.lock().unwrap().retain(|o| !o.is_closed());
@@ -225,14 +239,18 @@ impl PlaybackTracker {
             interrupted: true,
             synchronized_transcript: None,
         };
-        s.segments = 0;
-        s.finished = 0;
+        s.finished = s.segments;
         s.capturing = false;
         s.epoch += 1;
         s.progressed = Duration::ZERO;
         drop(s);
         self.wake.notify_waiters();
         self.on_playback_reset();
+    }
+
+    /// How many segments were opened so far: the number of the one open or last closed.
+    pub fn segments(&self) -> u64 {
+        self.state.lock().unwrap().segments
     }
 
     /// The playhead per segment: what the sink reported played of the open segment, zero when
@@ -242,18 +260,20 @@ impl PlaybackTracker {
     }
 
     pub fn playback_started(&self, created_at: Ts) {
-        self.emit(PlaybackEvent::Started(PlaybackStarted { created_at }));
+        let ev = PlaybackEvent::Started(PlaybackStarted { created_at });
+        self.emit(|o| o.on_playback_event(&ev));
     }
 
     pub fn playback_progressed(&self, started_at: Ts, offset: Duration, duration: Duration) {
         self.state.lock().unwrap().progressed += duration;
-        self.emit(PlaybackEvent::Progressed(PlaybackProgressed { started_at, offset, duration }));
+        let ev = PlaybackEvent::Progressed(PlaybackProgressed { started_at, offset, duration });
+        self.emit(|o| o.on_playback_event(&ev));
     }
 
     /// A segment finished playing. With no outstanding segment it returns `false` and emits
     /// nothing: a spurious `finished` would release the next segment's wait.
     pub fn playback_finished(&self, ev: PlaybackFinished) -> bool {
-        {
+        let segment = {
             let mut s = self.state.lock().unwrap();
             if s.finished >= s.segments {
                 return false;
@@ -261,9 +281,10 @@ impl PlaybackTracker {
             s.finished += 1;
             s.last = ev.clone();
             s.progressed = Duration::ZERO;
-        }
+            s.finished
+        };
         self.wake.notify_waiters();
-        self.emit(PlaybackEvent::Finished(ev));
+        self.emit(|o| o.on_segment_finished(segment, &ev));
         true
     }
 
@@ -320,8 +341,16 @@ impl PlaybackObserver for PlaybackTracker {
         self.transcript_shown(word);
     }
 
-    /// A reset below is told above, not repeated: each node's count is its own.
+    /// A reset below is told above, not repeated: each node's count is its own. The segment this
+    /// node had open is over, though, once the sink reported it cut: the next frame opens a
+    /// segment of its own, and its wait waits for it.
     fn on_playback_reset(&self) {
+        {
+            let mut s = self.state.lock().unwrap();
+            if s.finished == s.segments {
+                s.capturing = false;
+            }
+        }
         for o in self.observers() {
             o.on_playback_reset();
         }

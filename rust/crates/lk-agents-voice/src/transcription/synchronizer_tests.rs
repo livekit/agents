@@ -167,6 +167,26 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     assert_eq!(shown.split_whitespace().collect::<Vec<_>>(), ["after", "words"]);
 }
 
+// Catches: the synchroniser still capturing after the output below reported its open segment cut
+// and reset. The speech's later frames opened no segment of their own, so its wait returned at
+// once with the cut and its words were shown under the next speech (survey seeds 29564, 24667,
+// 6113).
+#[tokio::test]
+async fn frames_after_a_sink_reset_open_their_own_segment() {
+    let c = Chain::new();
+    let out = c.sync.audio_output();
+    let frame = AudioFrame::new(vec![0u8; 4800], 24_000, 1, 2_400);
+    out.capture_frame(&frame).await.unwrap();
+    c.leaf.playback_finished(PlaybackFinished { interrupted: true, ..Default::default() });
+    c.leaf.reset();
+    out.capture_frame(&frame).await.unwrap();
+    out.flush();
+    let wait = tokio::time::timeout(Duration::ZERO, out.wait_for_playout()).await;
+    assert!(wait.is_err(), "the wait returned before the segment after the reset played");
+    c.finished(100);
+    assert!(!out.wait_for_playout().await.interrupted);
+}
+
 // A cut before any audio (`clear_buffer` with nothing captured) shows none of its text.
 #[tokio::test]
 async fn a_segment_cut_before_its_audio_shows_nothing() {

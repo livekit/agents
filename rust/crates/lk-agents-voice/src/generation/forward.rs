@@ -180,6 +180,10 @@ impl Pump<'_> {
             if self.handle.interrupted() {
                 return Ok(true);
             }
+            // Not interrupted, yet not all of it played: the output cut it (a reset).
+            if !heard.complete {
+                self.acc.cut_short();
+            }
         }
     }
 
@@ -267,7 +271,7 @@ impl Pump<'_> {
                     // and the item reads as cut short (`interrupted=... or out.tts_failed`).
                     Err(Lost { lost: true, opening, synchronized, played }) => {
                         self.voice = Voice::Silent;
-                        self.acc.tts_failed();
+                        self.acc.cut_short();
                         match aligned.as_ref().filter(|a| a.stamped) {
                             // Stamps were already forwarded: the aligned stream never falls back,
                             // so the rest (never heard) is drained and the words are the stamps.
