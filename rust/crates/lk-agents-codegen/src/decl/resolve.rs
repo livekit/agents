@@ -700,6 +700,20 @@ impl Resolver<'_> {
         let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
+        let constants = match voc::find(&record.nested, "constant") {
+            None => Vec::new(),
+            Some(c) => c
+                .nested
+                .iter()
+                .map(|e| match &e.value {
+                    Some(Value::Text(v)) if e.nested.is_empty() => Ok((e.key.clone(), v.clone())),
+                    _ => Err(format!("{at}: constant(name = \"value\", ..) holds host text")),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        if !constants.is_empty() && !matches!(item, syn::Item::Struct(_)) {
+            return Err(format!("{at}: constants belong to a record struct's model"));
+        }
         let tuples = |en: &syn::ItemEnum| {
             en.variants
                 .iter()
@@ -781,6 +795,7 @@ impl Resolver<'_> {
             emit,
             in_place: false,
             transparent,
+            constants,
             persisted,
             members,
             body,
@@ -891,7 +906,7 @@ fn record_target(
     voc::only(
         at,
         &record.nested,
-        &["module", "name", "extract", "emit", "persisted", "transparent"],
+        &["module", "name", "extract", "emit", "persisted", "transparent", "constant"],
     )?;
     let module = voc::text(at, &record.nested, "module")?
         .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;

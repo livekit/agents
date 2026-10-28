@@ -763,6 +763,13 @@ fn model(
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>());
+            if !r.constants.is_empty() {
+                runtime.add("typing", "Literal");
+                s = s.replace("    pass\n", "");
+            }
+            for (name, value) in &r.constants {
+                s.push_str(&format!("    {name}: Literal[{value:?}] = {value:?}\n"));
+            }
             for member in &r.members {
                 s.push_str("\n    @property\n");
                 s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));

@@ -958,5 +958,27 @@ fn a_transparent_record_crosses_as_its_variants_values() {
         pub enum Two { A(String), B(String) }"#,
     )
     .expect("resolves");
-    assert!(crate::records::conversions(&ambiguous).err().is_some_and(|e| e.contains("share a class")));
+    assert!(
+        crate::records::conversions(&ambiguous).err().is_some_and(|e| e.contains("share a class"))
+    );
+}
+
+// Catches: a model's fixed discriminator (`type`) forced into Rust state, missing from the model,
+// or demanded of the host when it builds one.
+#[test]
+fn a_record_constant_is_a_model_field_at_its_fixed_value() {
+    let decls = read(
+        r#"#[crate::host(record(module = "session", extract, emit, constant(type = "stt_metrics")))]
+        pub struct SttMetrics { pub duration: f64 }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        session.contains("    duration: float\n")
+            && session.contains("    type: Literal[\"stt_metrics\"] = \"stt_metrics\"\n"),
+        "{session}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(!shell.contains("\"type\""), "{shell}");
 }
