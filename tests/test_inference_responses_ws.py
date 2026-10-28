@@ -282,25 +282,14 @@ async def test_ws_keepalive_mid_stream_is_ignored() -> None:
     await llm_model.aclose()
 
 
-async def test_ws_receive_uses_stream_idle_timeout() -> None:
-    llm_model = _make_llm(stream_idle_timeout=0.05)
-    _use_connection(llm_model, _SilentWs([]))
-
-    stream = llm_model.chat(
-        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=30)
-    )
-    with pytest.raises(APITimeoutError):
-        await asyncio.wait_for(_consume(stream), 5)
-    await stream.aclose()
-    await llm_model.aclose()
-
-
 async def test_ws_pongs_do_not_reset_idle_timeout() -> None:
-    llm_model = _make_llm(stream_idle_timeout=0.1)
+    llm_model = _make_llm()
     ws = _PongingWs()
     _use_connection(llm_model, ws)
 
-    stream = llm_model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0))
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=0.1)
+    )
     with pytest.raises(APITimeoutError):
         await asyncio.wait_for(_consume(stream), 5)
     await stream.aclose()
@@ -311,7 +300,7 @@ async def test_ws_pongs_do_not_reset_idle_timeout() -> None:
 
 
 async def test_ws_text_frame_resets_idle_timeout() -> None:
-    llm_model = _make_llm(stream_idle_timeout=0.2)
+    llm_model = _make_llm()
     ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
     scripted_receive = ws.receive
 
@@ -323,7 +312,11 @@ async def test_ws_text_frame_resets_idle_timeout() -> None:
     ws.receive = _slow_receive  # type: ignore[method-assign]
     _use_connection(llm_model, ws)
 
-    assert await _drain(llm_model) == "hi"
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=0.2)
+    )
+    assert "".join([c.delta.content or "" async for c in stream if c.delta]) == "hi"
+    await stream.aclose()
     await llm_model.aclose()
 
 
@@ -388,6 +381,22 @@ async def test_gateway_upstream_connect_failed_is_retryable_502() -> None:
 
     assert "upstream_connect_failed" in exc_info.value.message
     assert exc_info.value.status_code == 502
+    assert exc_info.value.retryable is True
+    await llm_model.aclose()
+
+
+async def test_gateway_upstream_timeout_is_retryable_timeout() -> None:
+    llm_model = _make_llm()
+    stalled = {
+        "type": "gateway.error",
+        "code": "upstream_timeout",
+        "message": "upstream sent no event for 1m0s",
+    }
+    _use_connection(llm_model, _ScriptedWs([_CONNECTED, stalled]))
+
+    with pytest.raises(APITimeoutError) as exc_info:
+        await _drain(llm_model)
+
     assert exc_info.value.retryable is True
     await llm_model.aclose()
 
