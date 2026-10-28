@@ -22,6 +22,7 @@ mod host;
 pub mod outcome;
 pub mod policy;
 pub mod rpc;
+pub mod task;
 
 use lk_agents_abi::errors::ProviderError;
 use serde::{Deserialize, Serialize};
