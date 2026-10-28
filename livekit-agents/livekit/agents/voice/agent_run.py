@@ -391,24 +391,25 @@ class AgentRun(Generic[Run_T]):
         hooks = None if self._nested else _run_hooks.get()
         task_id = hooks.task_id if hooks is not None else None
         if hooks is not None and hooks.open_tasks:
-            # the model reads none of what the lane's other open tasks added after this task's
-            # own last item: work the continued task did not see when it paused. An output
-            # belongs to its call's task
+            # each item with its task; an output belongs to its call's task
             call_tasks: dict[str, Any] = {}
-            tasks: list[Any] = []
+            tagged: list[tuple[ChatItem, Any]] = []
             for item in chat_ctx.items:
-                task = (
-                    call_tasks.get(item.call_id) if isinstance(item, FunctionCallOutput) else None
-                )
-                if isinstance(item, (ChatMessage, FunctionCall)):
+                if isinstance(item, FunctionCallOutput):
+                    task = call_tasks.get(item.call_id)
+                elif isinstance(item, (ChatMessage, FunctionCall)):
                     task = item.extra.get(TASK_KEY)
+                else:
+                    task = None
                 if isinstance(item, FunctionCall):
                     call_tasks[item.call_id] = task
-                tasks.append(task)
-            own = [n for n, task in enumerate(tasks) if task == task_id]
-            if own:
-                after = zip(chat_ctx.items[own[-1] + 1 :], tasks[own[-1] + 1 :], strict=True)
-                self._hidden = frozenset(i.id for i, task in after if task in hooks.open_tasks)
+                tagged.append((item, task))
+            last = max((n for n, (_, task) in enumerate(tagged) if task == task_id), default=None)
+            if last is not None:
+                # what other open tasks added after this task's last item: the task never saw it
+                self._hidden = frozenset(
+                    item.id for item, task in tagged[last + 1 :] if task in hooks.open_tasks
+                )
 
         def record(item: ChatItem) -> None:
             if task_id is not None and isinstance(item, (ChatMessage, FunctionCall)):
@@ -445,24 +446,18 @@ class AgentRun(Generic[Run_T]):
             result._done_fut.set_result(None)
             return result
 
-        async def ask(
-            questions: Sequence[tuple[InputRequired, FunctionCall | None]],
-        ) -> RunResult[Run_T]:
-            """The task pauses once, on one question that holds what each call of the step
-            asked, in order and each once: as written when every part is verbatim or another
-            agent asked, else in the agent's own words. It is exact only when every part is."""
-            text = "\n\n".join(dict.fromkeys(q.question for q, _ in questions))
-            verbatim = all(q.verbatim for q, _ in questions)
-            if not verbatim and facing_person:
+        async def ask(question: InputRequired, call: FunctionCall | None) -> RunResult[Run_T]:
+            """The task pauses on ``question`` from ``call``: as written when it is verbatim or
+            another agent asked, else in the agent's own words."""
+            text = question.question
+            if not question.verbatim and facing_person:
                 text = await self._phrase(chat_ctx, text)
             record_said()
             record(ChatMessage(role="assistant", content=[text]))
-            # the call the question's row names: the one whose answer goes back to it, if any
-            relay = next(((q, call) for q, call in questions if q._answer_ref), None)
-            result._pending_call = relay[1] if relay is not None else questions[0][1]
-            if relay is not None and relay[1] is not None:
-                result._answer_tool, result._answer_ref = relay[1].name, relay[0]._answer_ref
-            return finish(None, input_required=text, verbatim=verbatim)
+            result._pending_call = call
+            if question._answer_ref and call is not None:
+                result._answer_tool, result._answer_ref = call.name, question._answer_ref
+            return finish(None, input_required=text, verbatim=question.verbatim)
 
         def finish_task_turn(text: str) -> RunResult[Run_T]:
             # a task holds the conversation: every reply of its model waits on the person
@@ -490,7 +485,7 @@ class AgentRun(Generic[Run_T]):
                 text = transition.error if isinstance(transition, Failed) else transition.reason
                 self._pop(ToolError(text), record)
             elif isinstance(transition, InputRequired):
-                return await ask([(transition, fnc_call)])
+                return await ask(transition, fnc_call)
             elif isinstance(transition, Working):
                 logger.warning(
                     "Working is not applied in text yet; the task keeps the conversation",
@@ -611,7 +606,7 @@ class AgentRun(Generic[Run_T]):
 
             replies = stopped = False
             final: tuple[Any] | None = None
-            questions: list[tuple[InputRequired, FunctionCall | None]] = []
+            questions: list[tuple[FunctionCall, InputRequired]] = []
             for fnc_call in calls:
                 out = outs.get(fnc_call.call_id)
                 if out is None:
@@ -662,7 +657,7 @@ class AgentRun(Generic[Run_T]):
                     if not isinstance(out.transition, Working):
                         break  # the task ended, or it asked; the agent below speaks next
                 elif isinstance(out.transition, InputRequired):
-                    questions.append((out.transition, fnc_call))
+                    questions.append((fnc_call, out.transition))
                 elif out.transition is not None:
                     logger.warning(
                         "a conversation tool returned a transition that only an AgentTask "
@@ -677,7 +672,20 @@ class AgentRun(Generic[Run_T]):
 
             if questions:
                 # the step's questions are one, asked once its every output is known
-                return await ask(questions)
+                takers = [(c, q) for c, q in questions if q._answer_ref]
+                if len(takers) > 1:
+                    logger.warning(
+                        "several questions of one step go back to their tools; the first takes "
+                        "the answer",
+                        extra={"functions": [c.name for c, _ in takers], "runId": self._id},
+                    )
+                call, first = takers[0] if takers else questions[0]
+                question = InputRequired(
+                    "\n\n".join(dict.fromkeys(q.question for _, q in questions)),
+                    verbatim=all(q.verbatim for _, q in questions),
+                    _answer_ref=first._answer_ref,
+                )
+                return await ask(question, call)
             if held and (stopped or not replies):
                 # the one place the step's exact results become one text
                 return finish("\n\n".join(held), verbatim=True)

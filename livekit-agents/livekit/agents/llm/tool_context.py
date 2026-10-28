@@ -394,9 +394,9 @@ APPROVAL_ANSWERED = (
 answer alone reads like a call that ran."""
 
 
-def _answered_read_backs(items: Sequence[Any]) -> dict[str, str]:
-    """The read-backs the person answered, by call id: ``asked`` calls and the text of the
-    person's next message in the same task (``TASK_KEY``)."""
+def _read_back_answers(items: Sequence[Any]) -> dict[str, str]:
+    """The person's answer to each read-back of a tool that requires approval, by call id, read
+    from the history, which is what persists across workers."""
     from .chat_context import ChatMessage, FunctionCall
 
     answered: dict[str, str] = {}
@@ -415,7 +415,7 @@ def as_model_reads(items: Sequence[Any]) -> list[Any]:
     run, the person's answer, and how to run it. What is stored stays the question."""
     from .chat_context import FunctionCall, FunctionCallOutput
 
-    answered = _answered_read_backs(items)
+    answered = _read_back_answers(items)
     names = {i.call_id: i.name for i in items if isinstance(i, FunctionCall)}
     out: list[Any] = []
     for item in items:
@@ -450,7 +450,7 @@ def approval_granted(items: Sequence[Any], call: Any) -> bool:
         except ValueError:
             return c.arguments or ""
 
-    answered = _answered_read_backs(items)
+    answered = _read_back_answers(items)
     task = call.extra.get(TASK_KEY)
     asked: str | None = None  # the arguments of the latest answered, unused read-back
     for item in items:
