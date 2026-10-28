@@ -132,8 +132,7 @@ class LLM(llm.LLM):
     spoken. A later message that emits text joins the reply when the last spoken message
     is ``commentary``, or when hosted tool calls, such as web search, completed since
     that message; a run of hosted calls lets one message join. Every other message that
-    emits text is dropped, and so is any tool call that completes after the first
-    dropped message starts speaking.
+    emits text is dropped. Function tool calls are always kept.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
