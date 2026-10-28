@@ -91,7 +91,16 @@ class TTS(tts.TTS):
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
+        self._owns_client = client is None
         self._client = client or Mistral(api_key=mistral_api_key)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            try:
+                await self._client.__aexit__(None, None, None)
+            finally:
+                # Mistral creates both transports; this plugin never uses the sync one.
+                self._client.__exit__(None, None, None)
 
     @property
     def model(self) -> str:

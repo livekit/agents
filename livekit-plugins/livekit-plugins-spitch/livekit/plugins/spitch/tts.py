@@ -37,6 +37,9 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(language=LanguageCode(language), voice=voice)
         self._client = AsyncSpitch()
 
+    async def aclose(self) -> None:
+        await self._client.close()
+
     @property
     def model(self) -> str:
         return "unknown"
