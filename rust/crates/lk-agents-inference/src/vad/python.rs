@@ -8,7 +8,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::VadModelFactory;
-use super::machine::{VadModel, VadOutput};
+use super::VadModel;
+use super::machine::VadOutput;
 use crate::python::clear;
 
 /// One host model, called from the machine's task; `None` when the factory raised, a silent model

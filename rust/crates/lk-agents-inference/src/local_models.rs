@@ -16,7 +16,7 @@ pub use inventory;
 
 use crate::eot::LocalEotModel;
 use crate::vad::VadModelFactory;
-use crate::vad::machine::VadModel;
+use crate::vad::VadModel;
 
 /// One native provider of the local models.
 pub struct LocalModels {

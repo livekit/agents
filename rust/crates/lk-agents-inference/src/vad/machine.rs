@@ -1,10 +1,14 @@
-//! `inference/vad.py`'s `_VADStream._main_task`, as a synchronous accumulator: the model runs
-//! in-process behind [`VadModel`], no socket and no clock. The slow-inference lag is computed and
-//! reported on [`VadOutput::extra_inference_time`]; the host logs it.
+//! `inference/vad.py`'s `_VADStream._main_task` as a synchronous machine: it cuts the input into
+//! model windows ([`VadPredict`]), one in flight at a time so a recurrent model sees them in order,
+//! and interprets each supplied [`VadResult`] and its measured duration. The runtime executes the
+//! model; no model, clock or task appears here. The slow-inference lag is reported on
+//! [`VadOutput::extra_inference_time`]; the host logs it.
+
+use std::collections::VecDeque;
 
 use crate::abi::AudioFrame;
-use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use lk_agents_abi::{VadEvent, VadEventType};
+use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 
 /// `VAD_WINDOW_SAMPLES`, from `livekit.local_inference`. Silero's frame size at 16 kHz.
 pub const VAD_WINDOW_SAMPLES: usize = 512;
@@ -12,12 +16,6 @@ pub const VAD_WINDOW_SAMPLES: usize = 512;
 pub const MODEL_SAMPLE_RATE: u32 = 16_000;
 
 pub const SLOW_INFERENCE_THRESHOLD: f64 = 0.2;
-
-/// The Silero model behind `livekit.local_inference`; `predict` also returns how long it took.
-pub trait VadModel: Send {
-    fn predict(&mut self, window: &[i16]) -> (f32, f64);
-    fn reset(&mut self);
-}
 
 /// `rtc.AudioResampler`'s default quality, mono: every frame is read as one channel. A construction
 /// failure yields `None` rather than aborting.
@@ -49,6 +47,38 @@ impl Default for VadOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidVadOptions {
+    #[error("VAD durations must be finite and non-negative")]
+    Duration,
+    #[error("VAD thresholds must lie in [0, 1] with deactivation at most activation")]
+    Threshold,
+}
+
+impl VadOptions {
+    /// Checked before any stream uses them: a negative or non-finite duration would size the
+    /// speech buffer from garbage, and inverted thresholds disable the hysteresis.
+    pub fn validate(&self) -> Result<(), InvalidVadOptions> {
+        let durations = [
+            self.min_speech_duration,
+            self.min_silence_duration,
+            self.prefix_padding_duration,
+            self.max_buffered_speech,
+        ];
+        if durations.iter().any(|d| !d.is_finite() || *d < 0.0) {
+            return Err(InvalidVadOptions::Duration);
+        }
+        let unit = |t: f64| (0.0..=1.0).contains(&t);
+        if !unit(self.activation_threshold)
+            || !unit(self.deactivation_threshold)
+            || self.deactivation_threshold > self.activation_threshold
+        {
+            return Err(InvalidVadOptions::Threshold);
+        }
+        Ok(())
+    }
+}
+
 /// One emitted event, plus its PCM: `VadEvent.frames` is a side-table handle (§1.11), so whoever
 /// installs the audio sets it.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,9 +91,23 @@ pub struct VadOutput {
     pub slow_inference: bool,
 }
 
+/// A model window to score: [`VAD_WINDOW_SAMPLES`] samples at [`MODEL_SAMPLE_RATE`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct VadPredict {
+    pub window: u64,
+    pub samples: Vec<i16>,
+}
+
+/// The model's answer for a window and how long the runtime measured it took.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VadResult {
+    pub window: u64,
+    pub probability: f32,
+    pub inference_duration: f64,
+}
+
 pub struct VadMachine {
     opts: VadOptions,
-    model: Box<dyn VadModel>,
     resampler: Option<FrameResampler>,
 
     input_sample_rate: u32,
@@ -83,18 +127,23 @@ pub struct VadMachine {
     speech_threshold_duration: f64,
     silence_threshold_duration: f64,
 
-    input_frames: Vec<AudioFrame>,
-    inference_frames: Vec<AudioFrame>,
+    /// Input-rate samples not yet attributed to a scored window.
+    input: VecDeque<i16>,
+    /// Model-rate samples not yet cut into a window.
+    inference: VecDeque<i16>,
     /// Avoids drift when the sample-rate ratio is not an integer.
     input_copy_remaining_fract: f64,
     extra_inference_time: f64,
+
+    next_window: u64,
+    /// The window whose result is awaited; a result for any other is stale.
+    in_flight: Option<u64>,
 }
 
 impl VadMachine {
-    pub fn new(opts: VadOptions, model: Box<dyn VadModel>) -> Self {
+    pub fn new(opts: VadOptions) -> Self {
         VadMachine {
             opts,
-            model,
             resampler: None,
             input_sample_rate: 0,
             speech_buffer: Vec::new(),
@@ -108,16 +157,18 @@ impl VadMachine {
             pub_timestamp: 0.0,
             speech_threshold_duration: 0.0,
             silence_threshold_duration: 0.0,
-            input_frames: Vec::new(),
-            inference_frames: Vec::new(),
+            input: VecDeque::new(),
+            inference: VecDeque::new(),
             input_copy_remaining_fract: 0.0,
             extra_inference_time: 0.0,
+            next_window: 0,
+            in_flight: None,
         }
     }
 
-    /// The `_FlushSentinel` branch: reset everything, including the model's LSTM state.
+    /// The `_FlushSentinel` branch: every counter restarts and the window in flight goes stale.
+    /// The runtime resets the model's recurrent state with it.
     pub fn reset(&mut self) {
-        self.model.reset();
         self.speech_buffer_index = 0;
         self.speech_buffer_max_reached = false;
         self.speech_buffer.fill(0);
@@ -128,10 +179,11 @@ impl VadMachine {
         self.pub_timestamp = 0.0;
         self.speech_threshold_duration = 0.0;
         self.silence_threshold_duration = 0.0;
-        self.input_frames.clear();
-        self.inference_frames.clear();
+        self.input.clear();
+        self.inference.clear();
         self.input_copy_remaining_fract = 0.0;
         self.extra_inference_time = 0.0;
+        self.in_flight = None;
         self.resampler = (self.input_sample_rate != 0
             && self.input_sample_rate != MODEL_SAMPLE_RATE)
             .then(|| new_resampler(self.input_sample_rate))
@@ -150,7 +202,8 @@ impl VadMachine {
         let rate = f64::from(self.input_sample_rate);
         self.prefix_padding_samples = (opts.prefix_padding_duration * rate) as usize;
         // `ndarray.resize`: truncated, or zero-filled at the end.
-        self.speech_buffer.resize((opts.max_buffered_speech * rate) as usize + self.prefix_padding_samples, 0);
+        self.speech_buffer
+            .resize((opts.max_buffered_speech * rate) as usize + self.prefix_padding_samples, 0);
         // The reference leaves the cursor past a shrunk buffer, where its next rewind or copy
         // raises; clamped instead.
         self.speech_buffer_index = self.speech_buffer_index.min(self.speech_buffer.len());
@@ -159,9 +212,9 @@ impl VadMachine {
         }
     }
 
-    /// Push one frame and run inference over every whole window it completes. A frame at a
-    /// different sample rate from the first is `Err` (the reference logs and drops it).
-    pub fn push(&mut self, frame: AudioFrame) -> Result<Vec<VadOutput>, SampleRateMismatch> {
+    /// Buffer one frame; the next window to score once one is complete and none is in flight. A
+    /// frame at a different sample rate from the first is `Err` (the reference logs and drops it).
+    pub fn push(&mut self, frame: AudioFrame) -> Result<Option<VadPredict>, SampleRateMismatch> {
         if self.input_sample_rate == 0 {
             self.input_sample_rate = frame.sample_rate;
             self.prefix_padding_samples =
@@ -183,137 +236,126 @@ impl VadMachine {
         }
 
         match self.resampler.as_mut() {
-            // Empty is normal (soxr buffers), and a failed push is also empty rather than a panic
-            // on a tokio worker.
-            Some(resampler) => self.inference_frames.extend(resampler.push(&frame).unwrap_or_default()),
-            None => self.inference_frames.push(frame.clone()),
+            // Empty is normal (soxr buffers), and a failed push is also empty rather than a panic.
+            Some(resampler) => {
+                for converted in resampler.push(&frame).unwrap_or_default() {
+                    self.inference.extend(samples(&converted.data));
+                }
+            }
+            None => self.inference.extend(samples(&frame.data)),
         }
-        self.input_frames.push(frame);
-
-        Ok(self.run_windows())
+        self.input.extend(samples(&frame.data));
+        Ok(self.next_predict())
     }
 
-    fn run_windows(&mut self) -> Vec<VadOutput> {
+    /// Apply the model's answer for the window in flight; the outputs it produced and the next
+    /// window to score. A stale result (an earlier window, or one cut before a reset) changes
+    /// nothing.
+    pub fn predicted(&mut self, result: VadResult) -> (Vec<VadOutput>, Option<VadPredict>) {
+        if self.in_flight != Some(result.window) {
+            return (Vec::new(), None);
+        }
+        self.in_flight = None;
+        let outputs = self.apply(f64::from(result.probability), result.inference_duration);
+        (outputs, self.next_predict())
+    }
+
+    fn next_predict(&mut self) -> Option<VadPredict> {
+        if self.in_flight.is_some() || self.inference.len() < VAD_WINDOW_SAMPLES {
+            return None;
+        }
+        let window = self.next_window;
+        self.next_window += 1;
+        self.in_flight = Some(window);
+        Some(VadPredict { window, samples: self.inference.drain(..VAD_WINDOW_SAMPLES).collect() })
+    }
+
+    fn apply(&mut self, probability: f64, inference_duration: f64) -> Vec<VadOutput> {
         let mut out = Vec::new();
-        loop {
-            let available: usize =
-                self.inference_frames.iter().map(|f| f.samples_per_channel as usize).sum();
-            if available < VAD_WINDOW_SAMPLES {
-                break;
-            }
+        let window_duration = VAD_WINDOW_SAMPLES as f64 / f64::from(MODEL_SAMPLE_RATE);
+        self.pub_current_sample += VAD_WINDOW_SAMPLES as u64;
+        self.pub_timestamp += window_duration;
 
-            let input_frame = combine(&self.input_frames, self.input_sample_rate);
-            let inference_frame = combine(&self.inference_frames, MODEL_SAMPLE_RATE);
+        let resampling_ratio = f64::from(self.input_sample_rate) / f64::from(MODEL_SAMPLE_RATE);
+        let to_copy = VAD_WINDOW_SAMPLES as f64 * resampling_ratio + self.input_copy_remaining_fract;
+        let to_copy_int = to_copy as usize;
+        // The fractional carry keeps the event timeline from drifting at non-integer ratios
+        // (44.1 kHz).
+        self.input_copy_remaining_fract = to_copy - to_copy_int as f64;
 
-            let window = to_i16(&inference_frame.data[..VAD_WINDOW_SAMPLES * 2]);
-            let (probability, inference_duration) = self.model.predict(&window);
-            let probability = f64::from(probability);
+        let window_input: Vec<i16> =
+            self.input.drain(..to_copy_int.min(self.input.len())).collect();
+        let available_space = self.speech_buffer.len() - self.speech_buffer_index;
+        let to_copy_buffer = window_input.len().min(available_space);
+        if to_copy_buffer > 0 {
+            self.speech_buffer[self.speech_buffer_index..self.speech_buffer_index + to_copy_buffer]
+                .copy_from_slice(&window_input[..to_copy_buffer]);
+            self.speech_buffer_index += to_copy_buffer;
+        } else if !self.speech_buffer_max_reached {
+            // Reached `max_buffered_speech` (padding included).
+            self.speech_buffer_max_reached = true;
+        }
 
-            let window_duration = VAD_WINDOW_SAMPLES as f64 / f64::from(MODEL_SAMPLE_RATE);
-            self.pub_current_sample += VAD_WINDOW_SAMPLES as u64;
-            self.pub_timestamp += window_duration;
+        self.extra_inference_time =
+            (self.extra_inference_time + inference_duration - window_duration).max(0.0);
+        let slow_inference = inference_duration > SLOW_INFERENCE_THRESHOLD;
 
-            let resampling_ratio = f64::from(self.input_sample_rate) / f64::from(MODEL_SAMPLE_RATE);
-            let to_copy =
-                VAD_WINDOW_SAMPLES as f64 * resampling_ratio + self.input_copy_remaining_fract;
-            let to_copy_int = to_copy as usize;
-            // The fractional carry keeps the event timeline from drifting at non-integer ratios
-            // (44.1 kHz).
-            self.input_copy_remaining_fract = to_copy - to_copy_int as f64;
+        if self.pub_speaking {
+            self.pub_speech_duration += window_duration;
+        } else {
+            self.pub_silence_duration += window_duration;
+        }
 
-            let input_samples = to_i16(&input_frame.data);
-            let available_space = self.speech_buffer.len() - self.speech_buffer_index;
-            let to_copy_buffer = to_copy_int.min(available_space).min(input_samples.len());
-            if to_copy_buffer > 0 {
-                self.speech_buffer
-                    [self.speech_buffer_index..self.speech_buffer_index + to_copy_buffer]
-                    .copy_from_slice(&input_samples[..to_copy_buffer]);
-                self.speech_buffer_index += to_copy_buffer;
-            } else if !self.speech_buffer_max_reached {
-                // Reached `max_buffered_speech` (padding included).
-                self.speech_buffer_max_reached = true;
-            }
+        out.push(VadOutput {
+            event: VadEvent {
+                kind: VadEventType::InferenceDone,
+                samples_index: self.pub_current_sample,
+                timestamp: self.pub_timestamp,
+                speech_duration: self.pub_speech_duration,
+                silence_duration: self.pub_silence_duration,
+                frames: None,
+                probability,
+                inference_duration,
+                speaking: self.pub_speaking,
+                raw_accumulated_silence: self.silence_threshold_duration,
+                raw_accumulated_speech: self.speech_threshold_duration,
+            },
+            frames: vec![mono(pcm(&window_input), self.input_sample_rate)],
+            extra_inference_time: self.extra_inference_time,
+            slow_inference,
+        });
 
-            self.extra_inference_time =
-                (self.extra_inference_time + inference_duration - window_duration).max(0.0);
-            let slow_inference = inference_duration > SLOW_INFERENCE_THRESHOLD;
+        // Hysteresis: `p >= activation` starts speech; once speaking, `p > deactivation` keeps it.
+        if probability >= self.opts.activation_threshold
+            || (self.pub_speaking && probability > self.opts.deactivation_threshold)
+        {
+            self.speech_threshold_duration += window_duration;
+            self.silence_threshold_duration = 0.0;
 
-            if self.pub_speaking {
-                self.pub_speech_duration += window_duration;
-            } else {
-                self.pub_silence_duration += window_duration;
-            }
-
-            let window_frame = mono(
-                input_frame.data[..(to_copy_int * 2).min(input_frame.data.len())].to_vec(),
-                self.input_sample_rate,
-            );
-            out.push(VadOutput {
-                event: VadEvent {
-                    kind: VadEventType::InferenceDone,
-                    samples_index: self.pub_current_sample,
-                    timestamp: self.pub_timestamp,
-                    speech_duration: self.pub_speech_duration,
-                    silence_duration: self.pub_silence_duration,
-                    frames: None,
-                    probability,
-                    inference_duration,
-                    speaking: self.pub_speaking,
-                    raw_accumulated_silence: self.silence_threshold_duration,
-                    raw_accumulated_speech: self.speech_threshold_duration,
-                },
-                frames: vec![window_frame],
-                extra_inference_time: self.extra_inference_time,
-                slow_inference,
-            });
-
-            // Hysteresis: `p >= activation` starts speech; once speaking, `p > deactivation`
-            // keeps it.
-            if probability >= self.opts.activation_threshold
-                || (self.pub_speaking && probability > self.opts.deactivation_threshold)
+            if !self.pub_speaking && self.speech_threshold_duration >= self.opts.min_speech_duration
             {
-                self.speech_threshold_duration += window_duration;
-                self.silence_threshold_duration = 0.0;
+                self.pub_speaking = true;
+                self.pub_silence_duration = 0.0;
+                self.pub_speech_duration = self.speech_threshold_duration;
+                out.push(self.edge(VadEventType::StartOfSpeech, self.pub_speech_duration));
+            }
+        } else {
+            self.silence_threshold_duration += window_duration;
+            self.speech_threshold_duration = 0.0;
 
-                if !self.pub_speaking
-                    && self.speech_threshold_duration >= self.opts.min_speech_duration
-                {
-                    self.pub_speaking = true;
-                    self.pub_silence_duration = 0.0;
-                    self.pub_speech_duration = self.speech_threshold_duration;
-                    out.push(self.edge(VadEventType::StartOfSpeech, self.pub_speech_duration));
-                }
-            } else {
-                self.silence_threshold_duration += window_duration;
-                self.speech_threshold_duration = 0.0;
-
-                if !self.pub_speaking {
-                    self.reset_write_cursor();
-                }
-
-                if self.pub_speaking
-                    && self.silence_threshold_duration >= self.opts.min_silence_duration
-                {
-                    self.pub_speaking = false;
-                    self.pub_silence_duration = self.silence_threshold_duration;
-                    // Trailing silence is subtracted: speech ended when silence started.
-                    let speech = (self.pub_speech_duration - self.silence_threshold_duration).max(0.0);
-                    out.push(self.edge(VadEventType::EndOfSpeech, speech));
-                    self.pub_speech_duration = 0.0;
-                    self.reset_write_cursor();
-                }
+            if !self.pub_speaking {
+                self.reset_write_cursor();
             }
 
-            let input_tail =
-                input_frame.data[(to_copy_int * 2).min(input_frame.data.len())..].to_vec();
-            let inference_tail = inference_frame.data[VAD_WINDOW_SAMPLES * 2..].to_vec();
-            self.input_frames.clear();
-            self.inference_frames.clear();
-            if !input_tail.is_empty() {
-                self.input_frames.push(mono(input_tail, self.input_sample_rate));
-            }
-            if !inference_tail.is_empty() {
-                self.inference_frames.push(mono(inference_tail, MODEL_SAMPLE_RATE));
+            if self.pub_speaking && self.silence_threshold_duration >= self.opts.min_silence_duration
+            {
+                self.pub_speaking = false;
+                self.pub_silence_duration = self.silence_threshold_duration;
+                // Trailing silence is subtracted: speech ended when silence started.
+                let speech = (self.pub_speech_duration - self.silence_threshold_duration).max(0.0);
+                out.push(self.edge(VadEventType::EndOfSpeech, speech));
+                self.pub_speech_duration = 0.0;
+                self.reset_write_cursor();
             }
         }
         out
@@ -346,18 +388,13 @@ impl VadMachine {
                 raw_accumulated_silence: 0.0,
                 raw_accumulated_speech: 0.0,
             },
-            frames: vec![self.copy_speech_buffer()],
+            frames: vec![mono(
+                pcm(&self.speech_buffer[..self.speech_buffer_index]),
+                self.input_sample_rate,
+            )],
             extra_inference_time: self.extra_inference_time,
             slow_inference: false,
         }
-    }
-
-    fn copy_speech_buffer(&self) -> AudioFrame {
-        let mut data = Vec::with_capacity(self.speech_buffer_index * 2);
-        for sample in &self.speech_buffer[..self.speech_buffer_index] {
-            data.extend_from_slice(&sample.to_le_bytes());
-        }
-        mono(data, self.input_sample_rate)
     }
 }
 
@@ -368,48 +405,57 @@ pub struct SampleRateMismatch {
     pub got: u32,
 }
 
-fn combine(frames: &[AudioFrame], sample_rate: u32) -> AudioFrame {
-    let mut data = Vec::with_capacity(frames.iter().map(|f| f.data.len()).sum());
-    for frame in frames {
-        data.extend_from_slice(&frame.data);
-    }
-    mono(data, sample_rate)
-}
-
 pub(crate) fn mono(data: Vec<u8>, sample_rate: u32) -> AudioFrame {
     let samples_per_channel = (data.len() / 2) as u32;
     AudioFrame::new(data, sample_rate, 1, samples_per_channel)
 }
 
-fn to_i16(bytes: &[u8]) -> Vec<i16> {
-    bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()
+fn samples(bytes: &[u8]) -> impl Iterator<Item = i16> + '_ {
+    bytes.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]))
+}
+
+fn pcm(samples: &[i16]) -> Vec<u8> {
+    samples.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A model that replays a scripted probability per window.
-    struct ScriptedModel {
-        probabilities: std::collections::VecDeque<f32>,
+    /// The machine with every window answered at once: each scores the next scripted
+    /// probability, measured at `duration` seconds.
+    struct Scripted {
+        m: VadMachine,
+        probabilities: VecDeque<f32>,
         duration: f64,
     }
 
-    impl VadModel for ScriptedModel {
-        fn predict(&mut self, _window: &[i16]) -> (f32, f64) {
-            (self.probabilities.pop_front().unwrap_or(0.0), self.duration)
+    impl Scripted {
+        fn push(&mut self, frame: AudioFrame) -> Result<Vec<VadOutput>, SampleRateMismatch> {
+            let mut out = Vec::new();
+            let mut next = self.m.push(frame)?;
+            while let Some(predict) = next {
+                let probability = self.probabilities.pop_front().unwrap_or(0.0);
+                let result =
+                    VadResult { window: predict.window, probability, inference_duration: self.duration };
+                let (outputs, following) = self.m.predicted(result);
+                out.extend(outputs);
+                next = following;
+            }
+            Ok(out)
         }
-        fn reset(&mut self) {}
     }
 
-    /// Each window scores the next probability and takes `duration` seconds to infer.
-    fn timed_machine(probabilities: &[f32], duration: f64) -> VadMachine {
-        let probabilities = probabilities.iter().copied().collect();
-        VadMachine::new(VadOptions::default(), Box::new(ScriptedModel { probabilities, duration }))
+    fn scripted(opts: VadOptions, probabilities: &[f32], duration: f64) -> Scripted {
+        Scripted { m: VadMachine::new(opts), probabilities: probabilities.iter().copied().collect(), duration }
+    }
+
+    fn timed_machine(probabilities: &[f32], duration: f64) -> Scripted {
+        scripted(VadOptions::default(), probabilities, duration)
     }
 
     /// Fed at [`MODEL_SAMPLE_RATE`], so no resampler is built.
-    fn machine(probabilities: &[f32]) -> VadMachine {
+    fn machine(probabilities: &[f32]) -> Scripted {
         timed_machine(probabilities, 0.001)
     }
 
@@ -433,7 +479,7 @@ mod tests {
         let mut m = machine(&[0.0]);
         let out = m.push(filled_window(7)).unwrap();
         let done = out.iter().find(|o| o.event.kind == VadEventType::InferenceDone).unwrap();
-        assert!(m.resampler.is_none(), "the model rate needs no conversion");
+        assert!(m.m.resampler.is_none(), "the model rate needs no conversion");
         assert!(
             done.frames.iter().all(|f| f.data.iter().all(|b| *b == 7)),
             "the frames the model scored were rewritten by a resampler that should not exist"
@@ -510,30 +556,52 @@ mod tests {
         assert!(consumed.contains(&1412), "the carry never produced a long window: {consumed:?}");
     }
 
-    // Catches: a flush not resetting the model's LSTM state.
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+    // Catches: a flush leaving the counters running, or a result for a window cut before the
+    // flush applied to the stream after it (the model's state was reset in between).
     #[test]
-    fn a_flush_resets_the_model_as_well_as_the_counters() {
-        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-        struct Counting(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-        impl VadModel for Counting {
-            fn predict(&mut self, _: &[i16]) -> (f32, f64) {
-                (0.0, 0.0)
-            }
-            fn reset(&mut self) {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
-        let resets = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut m = VadMachine::new(
-            VadOptions::default(),
-            Box::new(Counting(resets.clone())),
-        );
-        m.push(window()).unwrap();
+    fn vad_eot_supplied_result_vectors_ignore_results_from_before_a_flush() {
+        let mut m = VadMachine::new(VadOptions::default());
+        let stale = m.push(window()).unwrap().expect("a whole window is scored");
         m.reset();
-        assert_eq!(resets.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let out = m.push(window()).unwrap();
+        let current = m.push(window()).unwrap().expect("the flushed stream scores again");
+        let late = VadResult { window: stale.window, probability: 1.0, inference_duration: 0.0 };
+        assert_eq!(m.predicted(late), (Vec::new(), None), "a stale result changes nothing");
+        let (out, next) =
+            m.predicted(VadResult { window: current.window, probability: 0.0, inference_duration: 0.0 });
         assert_eq!(out[0].event.samples_index, VAD_WINDOW_SAMPLES as u64, "the counters restarted");
+        assert_eq!(next, None);
+    }
+
+    // Catches: a second window handed out while one is in flight: a recurrent model would score
+    // them out of order. Each window follows the previous result.
+    #[test]
+    fn windows_are_scored_one_at_a_time_in_order() {
+        let mut m = VadMachine::new(VadOptions::default());
+        let first = m.push(filled_window(1)).unwrap().unwrap();
+        assert_eq!(m.push(filled_window(2)).unwrap(), None, "one window in flight");
+        let (_, second) =
+            m.predicted(VadResult { window: first.window, probability: 0.0, inference_duration: 0.0 });
+        let second = second.expect("the queued window follows the result");
+        assert!(first.samples.iter().all(|s| *s == 0x0101));
+        assert!(second.samples.iter().all(|s| *s == 0x0202));
+    }
+
+    // Catches: options that size the speech buffer from garbage or invert the hysteresis
+    // accepted.
+    #[test]
+    fn vad_options_are_validated() {
+        assert_eq!(VadOptions::default().validate(), Ok(()));
+        let bad = [
+            VadOptions { min_silence_duration: -0.1, ..VadOptions::default() },
+            VadOptions { max_buffered_speech: f64::NAN, ..VadOptions::default() },
+        ];
+        for opts in bad {
+            assert_eq!(opts.validate(), Err(InvalidVadOptions::Duration));
+        }
+        let inverted = VadOptions { activation_threshold: 0.3, deactivation_threshold: 0.4, ..VadOptions::default() };
+        assert_eq!(inverted.validate(), Err(InvalidVadOptions::Threshold));
+        let above = VadOptions { activation_threshold: 1.5, ..VadOptions::default() };
+        assert_eq!(above.validate(), Err(InvalidVadOptions::Threshold));
     }
 
     // Catches: the speech-buffer bookkeeping (write cursor, prefix rewind, available space);
@@ -575,7 +643,7 @@ mod tests {
     fn a_threshold_updated_mid_stream_applies_from_the_next_window() {
         let mut m = machine(&[0.6; 4]);
         m.push(window()).unwrap();
-        m.update_options(VadOptions { activation_threshold: 0.9, ..VadOptions::default() });
+        m.m.update_options(VadOptions { activation_threshold: 0.9, ..VadOptions::default() });
         for _ in 0..3 {
             assert_eq!(kinds(&m.push(window()).unwrap()), [VadEventType::InferenceDone]);
         }
@@ -585,15 +653,15 @@ mod tests {
     #[test]
     fn a_buffer_updated_mid_stream_is_resized_and_may_fill_again() {
         let none = VadOptions { max_buffered_speech: 0.0, prefix_padding_duration: 0.0, ..VadOptions::default() };
-        let mut m = VadMachine::new(none, Box::new(ScriptedModel { probabilities: [0.9; 4].into(), duration: 0.0 }));
+        let mut m = scripted(none, &[0.9; 4], 0.0);
         m.push(window()).unwrap();
-        assert!(m.speech_buffer_max_reached, "a zero-length buffer is full at once");
+        assert!(m.m.speech_buffer_max_reached, "a zero-length buffer is full at once");
 
-        m.update_options(VadOptions { max_buffered_speech: 1.0, ..none });
-        assert_eq!(m.speech_buffer.len(), 16_000);
-        assert!(!m.speech_buffer_max_reached);
+        m.m.update_options(VadOptions { max_buffered_speech: 1.0, ..none });
+        assert_eq!(m.m.speech_buffer.len(), 16_000);
+        assert!(!m.m.speech_buffer_max_reached);
         m.push(window()).unwrap();
-        assert_eq!(m.speech_buffer_index, VAD_WINDOW_SAMPLES, "the grown buffer took the next window");
+        assert_eq!(m.m.speech_buffer_index, VAD_WINDOW_SAMPLES, "the grown buffer took the next window");
     }
 
     // Catches: a mismatched sample rate silently accepted or dropped.

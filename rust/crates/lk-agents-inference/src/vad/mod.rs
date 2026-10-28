@@ -7,9 +7,10 @@
 )]
 
 //! `inference/vad.py`: the Silero VAD, its model from the linked native provider
-//! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The logic is in
-//! [`machine`]; this gives it the `(Sink, Source)` shape and runs it on a task, and is the session's
-//! [`Vad`] as it is, with no host call per frame when the model is native.
+//! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The decisions are in
+//! [`machine`]; this gives it the `(Sink, Source)` shape, executes the model windows the machine
+//! asks for on a task, and is the session's [`Vad`] as it is, with no host call per frame when the
+//! model is native.
 
 pub mod machine;
 #[cfg(feature = "python")]
@@ -19,9 +20,15 @@ use crate::abi::{AudioFrame, StreamSink, StreamSource};
 use async_trait::async_trait;
 use lk_agents_abi::{MediaRef, ProviderId, Spawner, SpawnerExt, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use machine::{VadMachine, VadModel, VadOptions, VadOutput};
+use machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// The Silero model behind `livekit.local_inference`; `predict` also returns how long it took.
+pub trait VadModel: Send {
+    fn predict(&mut self, window: &[i16]) -> (f32, f64);
+    fn reset(&mut self);
+}
 
 /// Builds a fresh model per stream: "each stream allocates its own per-instance LSTM/context
 /// state".
@@ -50,7 +57,8 @@ impl NativeVad {
     /// The unboxed pair, for callers that need [`VadOutput`]'s audio and lag alongside the event.
     pub fn stream_native(&self) -> (VadSinkHandle, VadOutputSource) {
         let mut opts = self.opts.subscribe();
-        let mut vad_machine = VadMachine::new(*opts.borrow_and_update(), self.models.create());
+        let mut vad_machine = VadMachine::new(*opts.borrow_and_update());
+        let mut model = self.models.create();
 
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<VadCmd>();
         let (output_tx, output_rx) = mpsc::unbounded_channel::<VadOutput>();
@@ -60,21 +68,31 @@ impl NativeVad {
                 if opts.has_changed().unwrap_or(false) {
                     vad_machine.update_options(*opts.borrow_and_update());
                 }
-                let outputs = match item {
+                let mut next = match item {
                     VadCmd::Frame(frame) => match vad_machine.push(frame) {
-                        Ok(outputs) => outputs,
+                        Ok(predict) => predict,
                         // The reference logs and continues.
                         Err(_) => continue,
                     },
                     VadCmd::Flush => {
                         vad_machine.reset();
-                        Vec::new()
+                        model.reset();
+                        None
                     }
                 };
-                for output in outputs {
-                    if output_tx.send(output).is_err() {
-                        return;
+                while let Some(VadPredict { window, samples }) = next {
+                    let (probability, inference_duration) = model.predict(&samples);
+                    let (outputs, following) = vad_machine.predicted(VadResult {
+                        window,
+                        probability,
+                        inference_duration,
+                    });
+                    for output in outputs {
+                        if output_tx.send(output).is_err() {
+                            return;
+                        }
                     }
+                    next = following;
                 }
             }
         });
