@@ -7,7 +7,6 @@ from typing import Any
 from .. import _bindings, _core
 from .._generated import vad
 from .._generated.inference_vad import VADModels
-from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 
@@ -128,12 +127,6 @@ class _VADStream(vad.VADStream):
         push = asyncio.create_task(_push())
         try:
             while (ev := await native.recv()) is not None:
-                if ev.pop("slow_inference"):
-                    logger.warning(
-                        "inference is slower than realtime",
-                        extra={"delay": ev["extra_inference_time"]},
-                    )
-                del ev["extra_inference_time"]
                 ev["type"] = vad.VADEventType(ev["type"])
                 self.send(vad.VADEvent(**ev))
         finally:

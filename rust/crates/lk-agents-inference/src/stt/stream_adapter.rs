@@ -195,9 +195,7 @@ impl StreamSource<SpeechEvent> for AdapterSource {
                             - event.silence_duration
                             - event.inference_duration;
                         self.speech_end = Some(ended);
-                        self.utterance = Some(
-                            event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default(),
-                        );
+                        self.utterance = Some(event.frames);
                         let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
                         end.speech_end_time = Some(ended);
                         return Ok(Some(end));

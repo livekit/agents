@@ -1,7 +1,7 @@
 //! The VAD pipeline events (`vad.py`). A `///` on a Python-targeted declaration is the
 //! reference's docstring verbatim; notes for a Rust reader are `//`.
 
-use crate::MediaRef;
+use crate::AudioFrame;
 
 use lk_agents_host_derive::Host;
 
@@ -24,8 +24,7 @@ pub enum VadEventType {
 ///
 /// Represents an event detected by the Voice Activity Detector (VAD).
 //
-// The `///` above is the reference's docstring, blank first line included. Fires ~every 32 ms per
-// stream, so the audio is one [`MediaRef`] rather than a `Vec` of frames; `None` is an empty list.
+// The `///` above is the reference's docstring, blank first line included.
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(dataclass, module = "vad", path = "livekit.agents", name = "VADEvent")]
 // Read by hand (`FromPyObject` below): `frames` is interned only when it holds audio.
@@ -51,11 +50,10 @@ pub struct VadEvent {
     /// - For `inference_done` events, this contains the audio chunks that were processed.
     /// - For `end_of_speech` events, this contains the complete user speech.
     //
-    // Not emitted: `VadOutput.frames` owns the `frames` key. Read without interning an empty list
-    // (`inference_done` fires ~30/s; a handle each would leak).
+    // Read from a host VAD only for an end of speech, the one event whose audio is recognized
+    // (`inference_done` fires ~30/s).
     #[python(ty = "list[rtc.AudioFrame]", import = "livekit:rtc", default_factory = "list")]
-    #[binding(skip)]
-    pub frames: Option<MediaRef>,
+    pub frames: Vec<AudioFrame>,
     /// Probability that speech is present (only for `INFERENCE_DONE` events).
     #[python(default = "0.0")]
     pub probability: f64,
@@ -75,24 +73,28 @@ pub struct VadEvent {
     pub raw_accumulated_speech: f64,
 }
 
-/// `frames` is one [`MediaRef`] when it holds audio, `None` for `None` or `[]`.
+/// `frames` is read only for an end of speech.
 #[cfg(feature = "python")]
 impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for VadEvent {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_with, intern_media};
+        use crate::python::{attr, attr_with};
         use pyo3::types::PyAnyMethods as _;
         const OWNER: &str = "VadEventFromPy";
         let obj = &*obj;
+        let kind: VadEventType = attr(obj, OWNER, "type")?;
         Ok(VadEvent {
-            kind: attr(obj, OWNER, "type")?,
+            kind,
             samples_index: attr(obj, OWNER, "samples_index")?,
             timestamp: attr(obj, OWNER, "timestamp")?,
             speech_duration: attr(obj, OWNER, "speech_duration")?,
             silence_duration: attr(obj, OWNER, "silence_duration")?,
             frames: attr_with(obj, OWNER, "frames", |v| {
-                Ok((!v.is_none() && v.len().unwrap_or(0) > 0).then(|| intern_media(v.clone().unbind())))
+                if kind != VadEventType::EndOfSpeech || v.is_none() {
+                    return Ok(Vec::new());
+                }
+                v.extract()
             })?,
             probability: attr(obj, OWNER, "probability")?,
             inference_duration: attr(obj, OWNER, "inference_duration")?,
@@ -117,7 +119,7 @@ impl VadEvent {
             timestamp,
             speech_duration,
             silence_duration,
-            frames: None,
+            frames: Vec::new(),
             probability: 0.0,
             inference_duration: 0.0,
             speaking: false,

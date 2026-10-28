@@ -614,6 +614,7 @@ impl Resolver<'_> {
                     (["u32"], []) => Ty::Int(Int::U32),
                     (["u64"], []) => Ty::Int(Int::U64),
                     (["usize"], []) => Ty::Int(Int::Usize),
+                    (["i16"], []) => Ty::Int(Int::I16),
                     (["i32"], []) => Ty::Int(Int::I32),
                     (["i64"], []) => Ty::Int(Int::I64),
                     (["std", "string", "String"], []) => Ty::Str,

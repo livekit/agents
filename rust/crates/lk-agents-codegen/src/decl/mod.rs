@@ -559,6 +559,7 @@ pub enum Int {
     U32,
     U64,
     Usize,
+    I16,
     I32,
     I64,
 }
@@ -644,6 +645,7 @@ impl Int {
             Int::U32 => "u32",
             Int::U64 => "u64",
             Int::Usize => "usize",
+            Int::I16 => "i16",
             Int::I32 => "i32",
             Int::I64 => "i64",
         }

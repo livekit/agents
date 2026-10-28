@@ -149,6 +149,8 @@ impl generated::Implementations for Selected {
     type SttStreamAdapter = lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter<
         lk_agents_runtime::process::Process,
     >;
+    type InferenceVad =
+        lk_agents_runtime::inference::vad::NativeVad<lk_agents_runtime::process::Process>;
     type InferenceStt =
         lk_agents_runtime::inference::stt::NativeStt<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;

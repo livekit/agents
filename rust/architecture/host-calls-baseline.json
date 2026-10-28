@@ -25,7 +25,6 @@
   "host-call:rust/crates/lk-agents-inference/src/eot/python.rs",
   "host-call:rust/crates/lk-agents-inference/src/interruption/python.rs",
   "host-call:rust/crates/lk-agents-inference/src/python.rs",
-  "host-call:rust/crates/lk-agents-inference/src/vad/python.rs",
   "host-call:rust/crates/lk-agents-py/src/nodes.rs",
   "host-call:rust/crates/lk-agents-py/src/storage.rs",
   "host-call:rust/crates/lk-agents-runtime/src/images.rs"

@@ -6,12 +6,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
-use lk_agents_inference::vad::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
-use lk_agents_inference::vad::{VadModelFactory, VadRuntime, VadRuntimeStream};
+use lk_agents_media::workers::{MediaWorker, MediaWorkerClass, MediaWorkers};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use lk_agents_media::workers::{MediaWorker, MediaWorkerClass};
+use super::VadModelFactory;
+use super::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
 
 // At a 10 ms input cadence the item ceiling admits 2.56 s of pending audio. The byte ceiling
 // also bounds oversized producers; one full second of 48 kHz stereo fits a single push.
@@ -140,12 +140,15 @@ impl StreamSource<VadOutput> for Output {
     }
 }
 
-fn open(
+/// One detection: input queued for, and events produced by, an admitted worker that owns the
+/// model from construction to settlement. `runtime` runs the worker's channel waits.
+pub(super) fn open(
     mut options: watch::Receiver<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn Clock>,
-) -> Result<VadRuntimeStream, ProviderError> {
-    let workers = crate::process::workers().map_err(|error| failed(error.to_string()))?;
+    workers: MediaWorkers,
+    runtime: tokio::runtime::Handle,
+) -> Result<(Box<dyn StreamSink<AudioFrame>>, Box<dyn StreamSource<VadOutput>>), ProviderError> {
     let (sender, mut input) = mpsc::channel(INPUT_CAPACITY);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
     let state = Arc::new(InputState {
@@ -156,7 +159,6 @@ fn open(
     let input_state = state.clone();
     let cancelled = CancellationToken::new();
     let stop = cancelled.clone();
-    let runtime = crate::process::caller_handle().map_err(|error| failed(error.to_string()))?;
     // Only bounded channel descriptors precede admission; refusal constructs no model and
     // retains no queued audio. The same worker owns the recurrent state until settlement.
     let worker = workers
@@ -230,5 +232,3 @@ fn open(
         Box::new(Output { events, worker: Some(worker), cancelled, clock }),
     ))
 }
-
-lk_agents_abi::inventory::submit! { VadRuntime { open } }

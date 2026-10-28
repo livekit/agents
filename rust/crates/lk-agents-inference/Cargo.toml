@@ -48,6 +48,8 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true }
+# The VAD stream's cancellation, shared by its sink, its source and its worker.
+tokio-util = { version = "0.7", features = ["rt"] }
 # `livekit-api` cannot express this token: its `Claims` carries no `kind` and no `inference`
 # (`livekit-api/src/access_token.rs`). That -- not the cost of the dependency -- is why the JWT is
 # minted here. `features = ["access-token"]` is three crates (`jsonwebtoken`, `hmac`, `signature`),

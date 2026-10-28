@@ -1426,35 +1426,6 @@ class TtsMetricState:
     ) -> dict[str, Any] | None: ...
 
 
-class InferenceVad:
-    """`inference/vad.py`: Silero VAD, the machine in Rust and the model native when the build links
-    one, else the host's.
-    """
-
-    def __init__(
-        self,
-        model_factory: Any,
-        *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
-        deactivation_threshold: float,
-    ) -> None: ...
-    def update_options(
-        self,
-        *,
-        min_speech_duration: float,
-        min_silence_duration: float,
-        prefix_padding_duration: float,
-        max_buffered_speech: float,
-        activation_threshold: float,
-        deactivation_threshold: float,
-    ) -> None: ...
-    def stream(self) -> InferenceVadStream: ...
-
-
 class ConnectionPoolState:
     def __init__(self, maximum_age: float | None, refresh_on_get: bool) -> None: ...
     @property
@@ -1545,16 +1516,6 @@ class TranscriptSynchronizer:
 class InferenceLlmStream:
     """One in-flight completion."""
 
-    async def recv(self) -> Any: ...
-    async def aclose(self) -> None: ...
-
-
-class InferenceVadStream:
-    """One VAD stream."""
-
-    def push(self, text: rtc.AudioFrame) -> None: ...
-    def flush(self) -> None: ...
-    def end_input(self) -> None: ...
     async def recv(self) -> Any: ...
     async def aclose(self) -> None: ...
 

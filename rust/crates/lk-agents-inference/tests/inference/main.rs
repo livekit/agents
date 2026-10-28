@@ -10,3 +10,4 @@ mod live_gateway;
 mod llm_live;
 mod llm_peer;
 mod realtime;
+mod vad;

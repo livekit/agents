@@ -10,6 +10,260 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/vad/inference.rs.
+type InferenceVadImpl = <crate::Selected as super::Implementations>::InferenceVad;
+
+fn _extract_inference_vad_new_min_speech_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_speech_duration")
+}
+
+fn _extract_inference_vad_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+}
+
+fn _extract_inference_vad_new_prefix_padding_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+}
+
+fn _extract_inference_vad_new_max_buffered_speech(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+}
+
+fn _extract_inference_vad_new_activation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_threshold")
+}
+
+fn _extract_inference_vad_new_deactivation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+}
+
+fn _extract_inference_vad_update_options_min_speech_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_speech_duration")
+}
+
+fn _extract_inference_vad_update_options_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+}
+
+fn _extract_inference_vad_update_options_prefix_padding_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+}
+
+fn _extract_inference_vad_update_options_max_buffered_speech(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+}
+
+fn _extract_inference_vad_update_options_activation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_threshold")
+}
+
+fn _extract_inference_vad_update_options_deactivation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+}
+
+/// The Silero VAD behind `inference.VAD`.
+#[pyclass(frozen, name = "InferenceVad", module = "livekit.agents._core")]
+pub struct InferenceVad(pub(crate) ::std::sync::Arc<InferenceVadImpl>);
+
+#[pymethods]
+impl InferenceVad {
+    #[new]
+    #[pyo3(signature = (model_factory, *, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
+    fn new(model_factory: Bound<'_, PyAny>, #[pyo3(from_py_with = _extract_inference_vad_new_min_speech_duration)] min_speech_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_prefix_padding_duration)] prefix_padding_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_new_max_buffered_speech)] max_buffered_speech: f64, #[pyo3(from_py_with = _extract_inference_vad_new_activation_threshold)] activation_threshold: f64, #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)] deactivation_threshold: f64) -> PyResult<InferenceVad> {
+        ::lk_agents_abi::python::check_pid()?;
+        let model_factory = crate::generated::vad::VadModelsProxy::from_host(&model_factory)?;
+        let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::new(model_factory, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
+        Ok(InferenceVad(::std::sync::Arc::new(out)))
+    }
+
+    /// Every option, applied by each running stream before its next frame.
+    #[pyo3(signature = (*, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold))]
+    fn update_options(&self, #[pyo3(from_py_with = _extract_inference_vad_update_options_min_speech_duration)] min_speech_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_min_silence_duration)] min_silence_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_prefix_padding_duration)] prefix_padding_duration: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_max_buffered_speech)] max_buffered_speech: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_activation_threshold)] activation_threshold: f64, #[pyo3(from_py_with = _extract_inference_vad_update_options_deactivation_threshold)] deactivation_threshold: f64) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::update_options(&self.0, min_speech_duration, min_silence_duration, prefix_padding_duration, max_buffered_speech, activation_threshold, deactivation_threshold);
+        Ok(())
+    }
+
+    /// One detection; each event carries the audio it refers to.
+    fn stream(&self) -> PyResult<InferenceVadStream> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok({ let (sink, source) = out; InferenceVadStream(::std::boxed::Box::new(sink), ::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(source))) })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Vad`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Vad>(),
+        read: |obj| {
+            let this = obj.cast::<InferenceVad>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Vad> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+type InferenceVadStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>;
+
+/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
+#[pyclass(frozen, name = "InferenceVadStream", module = "livekit.agents._core")]
+pub struct InferenceVadStream(::std::boxed::Box<InferenceVadStreamImpl>, ::lk_agents_runtime::source::NativeSource<::lk_agents_abi::VadEvent>);
+
+#[pymethods]
+impl InferenceVadStream {
+    fn push(&self, item: ::lk_agents_abi::AudioFrame) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::push(&*self.0, item).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+    }
+
+    fn flush(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::flush(&*self.0).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+    }
+
+    fn end_input(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::end_input(&*self.0);
+        Ok(())
+    }
+
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        crate::host::source::recv(&self.1, py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        ::lk_agents_abi::StreamSink::end_input(&*self.0);
+        crate::host::source::aclose(&self.1, py)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/vad/inference.rs.
+
+/// [`::lk_agents_abi::vad::inference::VadModels`] over a host `collections.abc.Callable`.
+#[derive(Clone)]
+pub struct VadModelsProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl VadModelsProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::vad::inference::VadModels>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(VadModelsProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::vad::inference::VadModels>(|obj| VadModelsProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
+    fn create(&self) -> ::std::result::Result<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (crate::generated::vad::VadModelProxy::from_host(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/vad/inference.rs.
+
+/// [`::lk_agents_abi::vad::inference::VadModel`] over a host `livekit.local_inference.VAD`.
+#[derive(Clone)]
+pub struct VadModelProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl VadModelProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::vad::inference::VadModel>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(VadModelProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::vad::inference::VadModel>(|obj| VadModelProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
+    fn predict(&self, window: ::std::vec::Vec<i16>) -> ::std::result::Result<f64, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let window_arg = window;
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(window_arg, py)?];
+                Ok((host.bind(py).getattr("predict")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (::lk_agents_abi::python::number_from_py::<f64>(&o, "VadModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+
+    fn reset(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }));
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/vad/vad.rs.
 
 /// [`::lk_agents_abi::Vad`] over a host `livekit.agents.VAD`.

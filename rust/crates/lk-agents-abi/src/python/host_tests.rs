@@ -11,10 +11,6 @@ mod provider_bridge {
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
 
-    fn host_ref_table_len() -> usize {
-        crate::python::media().len_after_drain()
-    }
-
     const STUBS: &str = r#"
 import sys, types as _t
 
@@ -410,26 +406,22 @@ out = SpeechEvent('recognition_usage', recognition_usage=Usage(), alternatives=[
         });
     }
 
-    // Catches: interning an empty `VADEvent.frames` list: ~30 events a second per stream, each a
-    // side-table entry, on the hottest path.
+    // Catches: copying the audio of every VAD event off the host (`inference_done` fires ~30 a
+    // second per stream) when only an end of speech's is recognized.
     #[test]
-    fn an_empty_vad_frame_list_never_reaches_the_side_table() {
+    fn only_an_end_of_speech_carries_its_audio_off_the_host() {
         attach(|py| {
-            let before = host_ref_table_len();
-            let obj = eval_with_stubs(py, "out = VADEvent('inference_done', probability=0.9)");
+            let obj = eval_with_stubs(
+                py,
+                "out = VADEvent('inference_done', probability=0.9, frames=[frame()])",
+            );
             let ev: VadEvent = extract_generated::<VadEvent>(obj.bind(py)).unwrap();
-            assert!(ev.frames.is_none());
-            assert_eq!(host_ref_table_len(), before, "no entry for []");
+            assert!(ev.frames.is_empty());
 
             let obj =
                 eval_with_stubs(py, "out = VADEvent('end_of_speech', frames=[frame(), frame()])");
             let ev: VadEvent = extract_generated::<VadEvent>(obj.bind(py)).unwrap();
-            assert!(ev.frames.is_some(), "real audio must be interned");
-            assert_eq!(
-                host_ref_table_len(),
-                before + 1,
-                "one entry for the whole list, not one per frame"
-            );
+            assert_eq!(ev.frames.len(), 2);
         });
     }
 

@@ -84,8 +84,6 @@ from ._generated._core_classes import (
     GetPhoneNumberResult as GetPhoneNumberResult,
     GetSecurityCodeResult as GetSecurityCodeResult,
     InferenceLlmStream as InferenceLlmStream,
-    InferenceVad as InferenceVad,
-    InferenceVadStream as InferenceVadStream,
     JobInfo as JobInfo,
     JobRequest as JobRequest,
     LlmMetricState as LlmMetricState,
@@ -358,6 +356,10 @@ from ._generated._core_types import (
 from ._generated._core_utils import (
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
+)
+from ._generated._core_vad import (
+    InferenceVad as InferenceVad,
+    InferenceVadStream as InferenceVadStream,
 )
 from ._generated._core_voice import (
     ConsoleIo as ConsoleIo,

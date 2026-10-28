@@ -57,7 +57,6 @@ pub mod text_session;
 
 pub use lk_agents_worker as worker;
 
-pub mod vad;
 
 /// Synchronous media algorithms used by the generated host adapters.
 pub use lk_agents_media as media;

@@ -95,6 +95,7 @@ pub trait Implementations: 'static {
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
+    type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type ConsoleIo: ::lk_agents_abi::voice::console::ConsoleIo;
     type VoiceSessionExecution: ::lk_agents_abi::voice::console::VoiceSessionExecution;
@@ -260,6 +261,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<types::_core_ProviderAttempts>()?;
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;
+    m.add_class::<vad::InferenceVad>()?;
+    m.add_class::<vad::InferenceVadStream>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::ConsoleIo>()?;
     m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;

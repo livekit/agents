@@ -1,29 +1,22 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! `inference/vad.py`: the Silero VAD, its model from the linked native provider
 //! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The decisions are in
-//! [`machine`]; the linked runtime owns stream execution and returns this provider's bounded
+//! [`machine`]; [`stream`] runs each detection on an admitted media worker behind a bounded
 //! `(Sink, Source)` pair. A native model needs no host call per audio frame.
 
 pub mod machine;
-#[cfg(feature = "python")]
-mod python;
+mod stream;
 
 use crate::abi::{AudioFrame, StreamSink, StreamSource};
 use async_trait::async_trait;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{
-    MediaRef, ProviderId, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource,
-};
+use lk_agents_abi::vad::inference::VadModels;
+use lk_agents_abi::{ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
 use machine::{VadOptions, VadOutput};
+use std::marker::PhantomData;
 use std::sync::Arc;
+
+use crate::env::{Env, Standalone};
 
 /// The Silero model behind `livekit.local_inference`; `predict` also returns how long it took.
 pub trait VadModel: Send {
@@ -37,53 +30,51 @@ pub trait VadModelFactory: Send + Sync {
     fn create(&self) -> Box<dyn VadModel>;
 }
 
-pub struct NativeVad {
+/// `E` is the hosting process whose media workers run the model and whose runtime the stream
+/// tasks run on.
+pub struct NativeVad<E: Env = Standalone> {
     /// Watched by every running stream: `update_options` reaches them before their next frame.
     opts: tokio::sync::watch::Sender<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn lk_agents_abi::Clock>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl NativeVad {
+impl<E: Env> NativeVad<E> {
     pub fn new(
         opts: VadOptions,
         models: Arc<dyn VadModelFactory>,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) -> Self {
-        NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, clock }
+        NativeVad { opts: tokio::sync::watch::Sender::new(opts), models, clock, env: PhantomData }
     }
 
     /// The pair for callers that need the audio and lag alongside the VAD event.
     pub fn stream_native(&self) -> Result<(VadSinkHandle, VadOutputSource), ProviderError> {
-        let mut runtimes = inventory::iter::<VadRuntime>.into_iter();
-        let runtime = runtimes.next().ok_or_else(|| {
-            ProviderError::Local(ApiError::new(
-                "VAD execution service unavailable: no runtime linked",
-            ))
-        })?;
-        if runtimes.next().is_some() {
-            return Err(ProviderError::Local(ApiError::new(
-                "VAD execution service unavailable: multiple runtimes linked",
-            )));
-        }
-        let (sink, source) =
-            (runtime.open)(self.opts.subscribe(), self.models.clone(), self.clock.clone())?;
+        let unavailable = |error: String| {
+            ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
+        };
+        let workers = E::workers().map_err(unavailable)?;
+        let runtime = E::caller_runtime().map_err(unavailable)?;
+        let (sink, source) = stream::open(
+            self.opts.subscribe(),
+            self.models.clone(),
+            self.clock.clone(),
+            workers,
+            runtime,
+        )?;
         Ok((VadSinkHandle { sink }, VadOutputSource { source }))
     }
 }
 
-/// `inference/vad.py`: Silero VAD, the machine in Rust and the model native when the build links
-/// one, else the host's.
-///
-/// `model_factory()` builds one host model per stream (each needs its own LSTM state); a model has
-/// `predict(list[int])` and `reset()`. Never called when the model is native.
-#[lk_agents_abi::host(object(name = "InferenceVad", cell = "arc", rust_name = InferenceVad, as_dyn(Vad = as_vad)))]
-impl NativeVad {
-    #[cfg(feature = "python")]
-    #[host(new(kw_only = "min_speech_duration"))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_host(
-        model_factory: Arc<dyn VadModelFactory>,
+/// `_core.InferenceVad`: the generated adapter calls this. `model_factory()` builds one host
+/// model per stream (each needs its own recurrent state); never called when the model is native.
+impl<E: Env> lk_agents_abi::vad::inference::InferenceVad for NativeVad<E> {
+    type Audio = VadSinkHandle;
+    type Events = VadEventSource;
+
+    fn new(
+        model_factory: Arc<dyn VadModels>,
         min_speech_duration: f64,
         min_silence_duration: f64,
         prefix_padding_duration: f64,
@@ -99,18 +90,11 @@ impl NativeVad {
             activation_threshold,
             deactivation_threshold,
         };
-        let clock = <Arc<dyn lk_agents_abi::Clock> as lk_agents_abi::python::Ambient>::ambient();
-        NativeVad::new(opts, crate::local_models::vad_factory_or(model_factory), clock)
+        let host = Arc::new(HostModels(model_factory));
+        NativeVad::new(opts, crate::local_models::vad_factory_or(host), E::clock())
     }
 
-    /// The detector as the provider a session holds directly.
-    pub fn as_vad(self: &Arc<Self>) -> Arc<dyn Vad> {
-        Arc::clone(self) as Arc<dyn Vad>
-    }
-
-    /// `_VADStream.update_options` on a running stream: every option, applied before the next frame.
-    #[host(method(kw_only))]
-    pub fn update_options(
+    fn update_options(
         &self,
         min_speech_duration: f64,
         min_silence_duration: f64,
@@ -129,15 +113,57 @@ impl NativeVad {
         });
     }
 
-    // One stream per call; each event comes with the audio it refers to.
-    #[host(method(name = "stream", stream = InferenceVadStream))]
-    pub fn stream_for_host(&self) -> Result<(VadSinkHandle, VadOutputSource), ProviderError> {
-        self.stream_native()
+    fn stream(&self) -> Result<(VadSinkHandle, VadEventSource), ProviderError> {
+        let (sink, source) = self.stream_native()?;
+        Ok((sink, VadEventSource(source)))
+    }
+}
+
+/// The host's model factory.
+struct HostModels(Arc<dyn VadModels>);
+
+impl VadModelFactory for HostModels {
+    /// A factory that raised gives a silent model rather than a panic on a native worker (never
+    /// selected on a healthy path).
+    fn create(&self) -> Box<dyn VadModel> {
+        match self.0.create() {
+            Ok(model) => Box::new(HostModel(Some(model))),
+            Err(error) => {
+                log::error!(target: "livekit.agents", "VAD model factory failed: {error}");
+                Box::new(HostModel(None))
+            }
+        }
+    }
+}
+
+/// One host model; its `predict` is timed here, as the reference does. A failed call answers
+/// `(0.0, 0.0)`.
+struct HostModel(Option<Arc<dyn lk_agents_abi::vad::inference::VadModel>>);
+
+impl VadModel for HostModel {
+    fn predict(&mut self, window: &[i16]) -> (f32, f64) {
+        let Some(model) = &self.0 else { return (0.0, 0.0) };
+        let started = std::time::Instant::now();
+        match model.predict(window.to_vec()) {
+            Ok(probability) => (probability as f32, started.elapsed().as_secs_f64()),
+            Err(error) => {
+                log::error!(target: "livekit.agents", "VAD model failed: {error}");
+                (0.0, 0.0)
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(model) = &self.0
+            && let Err(error) = model.reset()
+        {
+            log::error!(target: "livekit.agents", "VAD model reset failed: {error}");
+        }
     }
 }
 
 #[async_trait]
-impl Vad for NativeVad {
+impl<E: Env> Vad for NativeVad<E> {
     fn label(&self) -> String {
         "livekit.agents.inference.vad.VAD".into()
     }
@@ -162,8 +188,9 @@ impl Vad for NativeVad {
     }
 }
 
-/// [`VadOutput`] as the session reads it: the event, with the speech it ended on.
-struct VadEventSource(VadOutputSource);
+/// [`VadOutput`] as a reader takes it: the event, with the audio it refers to; inference slower
+/// than realtime is logged.
+pub struct VadEventSource(VadOutputSource);
 
 impl StreamSource<VadEvent> for VadEventSource {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
@@ -173,10 +200,7 @@ impl StreamSource<VadEvent> for VadEventSource {
                 log::warn!(target: "livekit.agents", delay = output.extra_inference_time; "inference is slower than realtime");
             }
             let mut event = output.event;
-            // Only an end of speech's audio is read (a non-streaming STT recognizes it).
-            if event.kind == VadEventType::EndOfSpeech {
-                event.frames = speech_ref(output.frames);
-            }
+            event.frames = output.frames;
             Ok(Some(event))
         })
     }
@@ -189,31 +213,7 @@ impl StreamSource<VadEvent> for VadEventSource {
     }
 }
 
-#[cfg(feature = "python")]
-fn speech_ref(frames: Vec<AudioFrame>) -> Option<MediaRef> {
-    python::speech_ref(frames)
-}
-
-#[cfg(not(feature = "python"))]
-fn speech_ref(_frames: Vec<AudioFrame>) -> Option<MediaRef> {
-    None
-}
-
-/// Runtime-owned stream execution. The inference crate keeps only the synchronous machine and
-/// provider interface; the linked runtime owns queues, model threads and close settlement.
-pub type VadRuntimeStream = (Box<dyn StreamSink<AudioFrame>>, Box<dyn StreamSource<VadOutput>>);
-
-pub struct VadRuntime {
-    pub open: fn(
-        tokio::sync::watch::Receiver<VadOptions>,
-        Arc<dyn VadModelFactory>,
-        Arc<dyn lk_agents_abi::Clock>,
-    ) -> Result<VadRuntimeStream, ProviderError>,
-}
-
-inventory::collect!(VadRuntime);
-
-/// The native runtime's bounded audio ingress.
+/// The stream's bounded audio ingress.
 pub struct VadSinkHandle {
     sink: Box<dyn StreamSink<AudioFrame>>,
 }
@@ -232,12 +232,7 @@ impl StreamSink<AudioFrame> for VadSinkHandle {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The full output, including the PCM the event refers to.
-#[lk_agents_abi::host(stream(name = "InferenceVadStream", doc = "One VAD stream.", sink = crate::vad::VadSinkHandle,
-    input = AudioFrame, input_py = "rtc.AudioFrame", end_input,
-    stub_import = "from livekit import rtc",
-    output = VadOutput))]
 pub struct VadOutputSource {
     source: Box<dyn StreamSource<VadOutput>>,
 }
