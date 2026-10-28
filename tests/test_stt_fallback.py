@@ -274,31 +274,48 @@ async def test_stt_stream_fallback() -> None:
     "error",
     [
         APIStatusError("request rejected", status_code=401),
-        APIError("invalid configuration", retryable=False),
-        APIConnectionError("invalid input", retryable=False),
+        APIError("audio cannot be replayed", retryable=False),
+        APIConnectionError("connection lost after audio was sent", retryable=False),
     ],
-    ids=["http", "provider_message", "close_frame"],
+    ids=["http", "provider_message", "connection"],
 )
-async def test_permanent_request_error_does_not_start_a_recovery_probe(streamed, error):
+async def test_non_retryable_error_allows_background_recovery(streamed, error):
     primary = FakeSTT(fake_exception=error)
     backup = FakeSTT(fake_transcript="backup")
-    adapter = FallbackAdapter([primary, backup], max_retry_per_stt=3, retry_interval=0)
+    adapter = FallbackAdapterTester([primary, backup], max_retry_per_stt=3, retry_interval=0)
+
+    @adapter.on("stt_availability_changed")
+    def restore_primary(event):
+        if event.stt is primary and not event.available:
+            primary.update_options(fake_exception=None, fake_transcript="primary")
+
+    availability = adapter.availability_changed_ch(primary)
     try:
         if streamed:
             async with adapter.stream() as stream:
+                failed_stream = await primary.stream_ch.recv()
+                # Fail the provider connection while the public stream remains open.
+                failed_stream.end_input()
+                event = await asyncio.wait_for(stream.__anext__(), 1)
+                assert event.alternatives[0].text == "backup"
+                assert not (await availability.recv()).available
+                assert (await asyncio.wait_for(availability.recv(), 1)).available
+                assert failed_stream.attempt == 1
+                primary.stream_ch.recv_nowait()  # the recovery probe
+                with pytest.raises(ChanEmpty):
+                    primary.stream_ch.recv_nowait()
                 stream.end_input()
-                texts = [event.alternatives[0].text async for event in stream if event.alternatives]
-                assert texts == ["backup"]
-            attempts = primary.stream_ch
+                assert [event async for event in stream] == []
         else:
             event = await adapter.recognize([])
             assert event.alternatives[0].text == "backup"
-            attempts = primary.recognize_ch
-        # Let a wrongly scheduled recovery request run; this module uses virtual time.
-        await asyncio.sleep(0.01)
-        attempts.recv_nowait()
-        with pytest.raises(ChanEmpty):
-            attempts.recv_nowait()
+            assert not (await availability.recv()).available
+            assert (await asyncio.wait_for(availability.recv(), 1)).available
+            primary.recognize_ch.recv_nowait()  # the failed request
+            primary.recognize_ch.recv_nowait()  # the recovery probe
+            with pytest.raises(ChanEmpty):
+                primary.recognize_ch.recv_nowait()
+            assert (await adapter.recognize([])).alternatives[0].text == "primary"
     finally:
         await adapter.aclose()
 

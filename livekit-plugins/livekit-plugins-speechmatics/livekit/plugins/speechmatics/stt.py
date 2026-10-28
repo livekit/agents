@@ -708,48 +708,44 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
-        try:
-            # Input audio stream
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._stt._sample_rate,
-                num_channels=1,
-            )
+        # Input audio stream
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._stt._sample_rate,
+            num_channels=1,
+        )
 
-            # Process input audio
-            async for data in self._input_ch:
-                # Handle flush sentinel
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    # Forward the original frame to the VAD before resampling/repacking
-                    if self._vad_stream is not None:
-                        self._vad_stream.push_frame(data)
-                    frames = audio_bstream.write(data.data.tobytes())
+        # Process input audio
+        async for data in self._input_ch:
+            # Handle flush sentinel
+            if isinstance(data, self._FlushSentinel):
+                frames = audio_bstream.flush()
+            else:
+                # Forward the original frame to the VAD before resampling/repacking
+                if self._vad_stream is not None:
+                    self._vad_stream.push_frame(data)
+                frames = audio_bstream.write(data.data.tobytes())
 
-                if self._client:
-                    for frame in frames:
-                        await self._client.send_audio(frame.data.tobytes())
+            if self._client:
+                for frame in frames:
+                    await self._client.send_audio(frame.data.tobytes())
 
-                        # send_audio never raises: it closes the audio gate and drops
-                        # this and every later frame. A session error is already raised
-                        # as fatal in _handle_message, so only a clean gate close is a
-                        # lost connection.
-                        if not self._client.is_ready_for_audio:
-                            if self._client.session_error is None:
-                                raise APIConnectionError(
-                                    "lost connection to Speechmatics while sending audio"
-                                )
-                            break
+                    # send_audio never raises: it closes the audio gate and drops
+                    # this and every later frame. A session error is already raised
+                    # as fatal in _handle_message, so only a clean gate close is a
+                    # lost connection.
+                    if not self._client.is_ready_for_audio:
+                        if self._client.session_error is None:
+                            raise APIConnectionError(
+                                "lost connection to Speechmatics while sending audio"
+                            )
+                        break
 
-                        # Only audio the service accepted counts towards usage.
-                        self._speech_duration += frame.duration
+                    # Only audio the service accepted counts towards usage.
+                    self._speech_duration += frame.duration
 
-            # No more input — let the VAD flush any pending event
-            if self._vad_stream is not None:
-                self._vad_stream.end_input()
-
-        except asyncio.CancelledError:
-            raise
+        # No more input — let the VAD flush any pending event
+        if self._vad_stream is not None:
+            self._vad_stream.end_input()
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
         """Call `client.finalize()` whenever the external VAD reports end of speech."""

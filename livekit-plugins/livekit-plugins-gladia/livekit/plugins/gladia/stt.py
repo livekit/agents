@@ -880,51 +880,36 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         self._pushed_audio_duration = 0.0
-        backoff_time = 1.0
-        max_backoff = 30.0
 
         while True:
-            try:
-                # Initialize the Gladia session
-                session_info = await self._init_live_session()
-                session_url = session_info["url"]
-                self._request_id = session_info["id"]
+            # Initialize the Gladia session
+            session_info = await self._init_live_session()
+            session_url = session_info["url"]
+            self._request_id = session_info["id"]
 
-                # Reset backoff on success
-                backoff_time = 1.0
+            # Connect to the WebSocket
+            async with self._session.ws_connect(session_url, autoping=False) as ws:
+                self._ws = ws
+                self._drain_started.clear()
+                self._session_time_offset = self._pushed_audio_duration
+                logger.info(f"Connected to Gladia session {self._request_id}")
 
-                # Connect to the WebSocket
-                async with self._session.ws_connect(session_url, autoping=False) as ws:
-                    self._ws = ws
-                    self._drain_started.clear()
-                    self._session_time_offset = self._pushed_audio_duration
-                    logger.info(f"Connected to Gladia session {self._request_id}")
-
-                    try:
-                        reconnect = await self._run_connection_tasks(
-                            asyncio.create_task(self._send_audio_task()),
-                            asyncio.create_task(self._recv_messages_task()),
-                            reconnect=self._reconnect_event,
-                            drain_started=self._drain_started,
-                        )
-                        if not reconnect:
-                            if self._input_ch.closed and self._input_ch.empty():
-                                break
-                            # A segment stop ends the provider connection, not the public stream.
-                            continue
-                        self._reconnect_event.clear()
-                        logger.info("Reconnecting Gladia session due to options change")
-                    finally:
-                        self._ws = None
-            except APIStatusError as e:
-                if e.status_code == 429:
-                    logger.warning(
-                        f"Rate limited by Gladia API. Backing off for {backoff_time} seconds."
+                try:
+                    reconnect = await self._run_connection_tasks(
+                        asyncio.create_task(self._send_audio_task()),
+                        asyncio.create_task(self._recv_messages_task()),
+                        reconnect=self._reconnect_event,
+                        drain_started=self._drain_started,
                     )
-                    await asyncio.sleep(backoff_time)
-                    backoff_time = min(backoff_time * 2, max_backoff)
-                else:
-                    raise
+                    if not reconnect:
+                        if self._input_ch.closed and self._input_ch.empty():
+                            break
+                        # A segment stop ends the provider connection, not the public stream.
+                        continue
+                    self._reconnect_event.clear()
+                    logger.info("Reconnecting Gladia session due to options change")
+                finally:
+                    self._ws = None
 
     async def _init_live_session(self) -> dict:
         """Initialize a live session with Gladia."""

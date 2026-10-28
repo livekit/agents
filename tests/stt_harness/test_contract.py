@@ -532,9 +532,15 @@ async def test_connection_failure_reaches_fallback(provider, monkeypatch, reques
             await asyncio.wait_for(wait_for_backup(), 3)
             assert any(not error.recoverable for error in errors)
             if request_error is not None:
-                assert len(errors) == 1
-                assert not errors[0].error.retryable
-                assert server.rejected_requests == 1
+                # The foreground request fails once; a new connection tests recovery.
+                async def wait_for_recovery_probe():
+                    while server.rejected_requests < 2 or len(errors) < 2:
+                        await asyncio.sleep(0.01)
+
+                await asyncio.wait_for(wait_for_recovery_probe(), 3)
+                assert server.rejected_requests == 2
+                assert len(errors) == 2
+                assert all(not error.recoverable and not error.error.retryable for error in errors)
         finally:
             await utils.aio.gracefully_cancel(feeder)
 
