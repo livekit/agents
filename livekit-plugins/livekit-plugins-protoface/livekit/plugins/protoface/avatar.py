@@ -169,7 +169,6 @@ class AvatarSession(BaseAvatarSession):
     async def aclose(self) -> None:
         """End the Protoface session and release LiveKit avatar resources."""
         session_id = self._session_id
-        self._session_id = None
         try:
             if session_id is not None:
                 try:
@@ -180,6 +179,8 @@ class AvatarSession(BaseAvatarSession):
                         extra={"session_id": session_id},
                         exc_info=True,
                     )
+                else:
+                    self._session_id = None
         finally:
             await super().aclose()
 
