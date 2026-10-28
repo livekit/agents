@@ -272,12 +272,6 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         output: None,
         interrupted: s.stop.is_some() || out.interrupted,
     };
-    if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
-        // the row is the client's; the history keeps what ran, the run says why it ended
-        settled.outcome = RunOutcome::Canceled;
-        settled.reason = Some("client-cancel".into());
-        return Ok(settled);
-    }
     let answer = s.answer_task.to_owned();
     let n = s.batch.len();
     for (tid, m) in s.task_ids[..n - 1].iter().zip(&s.batch[..n - 1]) {
@@ -291,6 +285,12 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
                 ..TaskPatch::default()
             },
         });
+    }
+    if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
+        // the answer row is the client's; the history keeps what ran, the run says why it ended
+        settled.outcome = RunOutcome::Canceled;
+        settled.reason = Some("client-cancel".into());
+        return Ok(settled);
     }
     // a continued task (an answer to its pending question) keeps its own message and the
     // history `answer_pending` gave it: the message is the receipt row's
@@ -574,9 +574,10 @@ mod tests {
 
         let interrupted = settled(text("late"), Some(Stop::Interrupted), false);
         assert_eq!(interrupted.transitions.last().unwrap().status, TaskState::Canceled);
-        // the client's cancel owns the row: the turn writes no row at all
+        // A2A_SEED=3810 (request_answered_once, Inbox): the client's cancel owns the answer row,
+        // and the batch's earlier messages still end, merged into it, rather than stay working
         let canceled = settled(text("late"), Some(Stop::ClientCanceled), true);
-        assert!(canceled.transitions.is_empty());
+        assert_eq!(statuses(&canceled), vec![("AST_1", TaskState::Completed)]);
         assert_eq!(canceled.outcome, RunOutcome::Canceled);
     }
     #[test]

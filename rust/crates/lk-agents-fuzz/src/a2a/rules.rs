@@ -292,13 +292,22 @@ pub fn one_task_per_message(record: &Record) -> Vec<Violation> {
     out
 }
 
-/// Every received inbox message whose task has not ended is drained once the run settles.
+/// Every received inbox message is answered once the run settles, while its client still waits
+/// on it: a client whose every request died or failed gave up, and its row is left to the next
+/// holder of the lane.
 pub fn received_message_is_drained(record: &Record) -> Vec<Violation> {
-    let pending = record.port.undrained();
-    if pending > 0 {
-        vec![Violation { subject: "Inbox", text: format!("{pending} inbox rows never drained") }]
-    } else {
+    let waiting = |message: &str| {
+        record
+            .requests
+            .iter()
+            .any(|r| r.message_id == message && !r.killed && !matches!(r.answer, Some(Err(_))))
+    };
+    let pending: Vec<&str> =
+        record.port.unanswered_receipts().into_iter().filter(|m| waiting(m)).collect();
+    if pending.is_empty() {
         Vec::new()
+    } else {
+        vec![Violation { subject: "Inbox", text: format!("{pending:?} never drained") }]
     }
 }
 

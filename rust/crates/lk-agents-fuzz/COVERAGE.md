@@ -1174,7 +1174,8 @@ its own task (`message_executes_once`, Continuation), a concurrent write keeps a
 canceled mid-turn (`answer_is_an_outcome`, Concurrent; storage `runs.rs`), a reply to a merged
 question answers the one waiting now (`one_question_pending`, Lane), a concurrent turn leaves the
 lane's question alone (`commit_is_what_the_run_staged`, Concurrent), a watched task that asks is
-answered (`request_answered_once`, Inbox).
+answered and a batch whose answer a client canceled still ends its other messages
+(`request_answered_once`, Inbox).
 
 Still to come: `SubscribeToTask` and its cursor resume are runtime code with no core decision,
 outside the DST; the server lifecycle core (`ServerLifecycle`).

@@ -133,17 +133,17 @@ impl Port {
         self.inbox.iter().filter(|r| r.id > self.drained).count()
     }
 
-    /// Inbox rows past the drain whose task no turn answered: not ended, not asking.
-    pub fn undrained(&self) -> usize {
+    /// The messages of inbox rows whose task no turn answered (not ended, not asking).
+    pub fn unanswered_receipts(&self) -> Vec<&str> {
         self.inbox
             .iter()
-            .filter(|r| r.id > self.drained)
             .filter(|r| {
                 self.tasks
                     .get(&r.task_id)
                     .is_some_and(|t| !t.terminal() && t.status != TaskState::InputRequired)
             })
-            .count()
+            .map(|r| r.message_id.as_str())
+            .collect()
     }
 
     fn held_by_other(&self, worker: usize, now: Duration) -> bool {
