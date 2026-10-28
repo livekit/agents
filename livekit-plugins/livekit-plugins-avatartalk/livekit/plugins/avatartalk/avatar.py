@@ -34,7 +34,7 @@ class AvatarSession(BaseAvatarSession):
         self._emotion = emotion or (os.getenv("AVATARTALK_EMOTION") or DEFAULT_AVATAR_EMOTION)
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
-        self._agent_track = None
+        self.conversation_id: str | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -76,8 +76,6 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str | None] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
-        await super().start(agent_session, room)
-
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -86,16 +84,7 @@ class AvatarSession(BaseAvatarSession):
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set by arguments or environment variables"
             )
 
-        session_task_mapping: dict[str, str] = {}
-
         job_ctx = get_job_context()
-
-        async def _shutdown_session() -> None:
-            if room.name not in session_task_mapping:
-                return
-            await self._avatartalk_api.stop_session(session_task_mapping[room.name])
-
-        job_ctx.add_shutdown_callback(_shutdown_session)
 
         local_participant_identity = job_ctx.local_participant_identity
         livekit_token = self.__generate_lk_token(
@@ -122,36 +111,45 @@ class AvatarSession(BaseAvatarSession):
             "Starting Avatartalk agent session",
             extra={"avatar": self._avatar, "room_name": room.name},
         )
+        resp = await self._avatartalk_api.start_session(
+            livekit_url=livekit_url,
+            avatar=self._avatar,
+            emotion=self._emotion,
+            room_name=room.name,
+            livekit_listener_token=livekit_listener_token,
+            livekit_room_token=livekit_token,
+            agent_identity=local_participant_identity,
+        )
+
+        self.conversation_id = resp["task_id"]
+        logger.debug(
+            "Avatartalk agent session started",
+            extra={
+                "avatar": self._avatar,
+                "emotion": self._emotion,
+                "room_name": room.name,
+                "task_id": self.conversation_id,
+            },
+        )
+
+        await super().start(agent_session, room)
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity="listener",
+                sample_rate=SAMPLE_RATE,
+                # wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
+        )
+
+    async def aclose(self) -> None:
         try:
-            resp = await self._avatartalk_api.start_session(
-                livekit_url=livekit_url,
-                avatar=self._avatar,
-                emotion=self._emotion,
-                room_name=room.name,
-                livekit_listener_token=livekit_listener_token,
-                livekit_room_token=livekit_token,
-                agent_identity=local_participant_identity,
-            )
-
-            self.conversation_id = resp["task_id"]
-            logger.debug(
-                "Avatartalk agent session started",
-                extra={
-                    "avatar": self._avatar,
-                    "emotion": self._emotion,
-                    "room_name": room.name,
-                    "task_id": self.conversation_id,
-                },
-            )
-            session_task_mapping[room.name] = self.conversation_id
-
-            agent_session.output.replace_audio_tail(
-                DataStreamAudioOutput(
-                    room=room,
-                    destination_identity="listener",
-                    sample_rate=SAMPLE_RATE,
-                    # wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-                ),
-            )
-        except AvatarTalkException as e:
-            logger.error(e)
+            if self.conversation_id is not None:
+                try:
+                    await self._avatartalk_api.stop_session(self.conversation_id)
+                except Exception:
+                    logger.warning("failed to stop AvatarTalk session", exc_info=True)
+                else:
+                    self.conversation_id = None
+        finally:
+            await super().aclose()
