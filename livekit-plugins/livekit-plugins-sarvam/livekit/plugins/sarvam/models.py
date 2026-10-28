@@ -14,7 +14,17 @@
 
 from typing import Annotated, Generic, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    JsonValue,
+    Tag,
+    TypeAdapter,
+    field_validator,
+)
 
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3", "bulbul:v4-flash"]
@@ -476,7 +486,7 @@ class ProviderMessage(BaseModel, Generic[DataT]):
     session_id: str | None = None
     data: DataT | None = None
     metadata: RequestMetadata | None = None
-    error: object | None = None
+    error: JsonValue = None
     code: str | int | None = None
 
 
@@ -501,13 +511,22 @@ class TranscriptionMetrics(BaseModel):
     audio_duration: float = 0.0
 
 
+def _optional_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+_OptionalNumber = Annotated[float | None, BeforeValidator(_optional_number)]
+
+
 class TranscriptionData(RequestMetadata):
     transcript: str = ""
     language_code: str | None = None
     request_id: str | None = None
-    language_probability: object | None = None
-    speech_start: object | None = None
-    speech_end: object | None = None
+    language_probability: _OptionalNumber = None
+    speech_start: _OptionalNumber = None
+    speech_end: _OptionalNumber = None
     timestamps: TranscriptionTimestamps | None = None
     metrics: TranscriptionMetrics = Field(default_factory=TranscriptionMetrics)
 
@@ -517,9 +536,9 @@ class EventData(RequestMetadata):
     signal_type: str | None = None
     event_type: str | None = None
     event: str | None = None
-    error: object | None = None
+    error: JsonValue = None
     code: str | int | None = None
-    message: object = "Unknown error"
+    message: JsonValue = "Unknown error"
 
 
 class AudioData(RequestMetadata):
@@ -528,8 +547,8 @@ class AudioData(RequestMetadata):
 
 class ErrorData(RequestMetadata):
     code: str | int | None = None
-    message: object = "Unknown error"
-    error: object | None = None
+    message: JsonValue = "Unknown error"
+    error: JsonValue = None
 
 
 class UnknownData(ErrorData):
@@ -595,7 +614,7 @@ class RealtimeMessage(ProviderMessage[RequestMetadata]):
     """Validated realtime STT events, with provider extensions retained as extras."""
 
     event: str | None = None
-    config: dict[str, object] | None = None
+    config: dict[str, JsonValue] | None = None
     applied: list[str] | None = None
     utterance_idx: int | None = None
     text: str | None = None
@@ -619,9 +638,7 @@ class RealtimeMessage(ProviderMessage[RequestMetadata]):
     )
     @classmethod
     def optional_number(cls, value: object) -> float | None:
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-        return None
+        return _optional_number(value)
 
     @field_validator("applied", mode="before")
     @classmethod

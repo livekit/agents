@@ -26,7 +26,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -510,7 +510,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._request_id = ""
         self._session_id = ""
-        self._resolved_config: dict[str, object] | None = None
+        self._resolved_config: dict[str, JsonValue] | None = None
         self._session_ended = False
         self._utterance_idx: int | None = None
         self._utterance_in_progress = False
