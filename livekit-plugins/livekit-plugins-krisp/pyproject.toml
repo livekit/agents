@@ -39,7 +39,7 @@ dependencies = [
     "numpy>=1.20.0",
     # Closed-source default backend (bundles the Krisp VIVA SDK); distributed
     # under the LiveKit Terms of Service: https://livekit.io/legal/terms-of-service
-    "livekit-plugins-krisp-internal==0.2.0",
+    "livekit-plugins-krisp-internal==0.2.2",
 ]
 
 [project.urls]
