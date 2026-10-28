@@ -26,10 +26,5 @@ buffers, calls, callbacks, streams, notifications and resources need their own c
 tables and both bridge directions as the shared generated adapters land. No required
 future family is represented by a skipped or unconditional-xfail placeholder.
 
-The bootstrap and telemetry modules exercise the separately assigned G-8/G-9/J-5 Python
-regressions. Notebook tests replace the display and network boundaries, so they need no
-IPython installation or credentials. The metric regression drives the real OTel SDK across
-64 jobs through usage, turn, span-duration and loop-blocking measurements. Measurement
-labels allow only the two finite connection-reuse and severity values; unknown values and
-unique model/tool/job attributes cannot grow the aggregation table or leak content.
-These are ordinary unit tests, not claims of final closure for those items.
+The bootstrap and telemetry modules are ordinary G-8/G-9/J-5 regression tests. Notebook tests
+replace the display and network boundaries, so they need no IPython or credentials.

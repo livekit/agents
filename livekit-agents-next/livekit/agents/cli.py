@@ -73,7 +73,7 @@ def _dispatch(server: AgentServer, args: dict[str, Any]) -> int:
     if args["command"] == "console":
         _run_console(server, args["connect_addr"], args["record"])
     elif args["command"] == "start":
-        _run_worker(server, args)
+        return _run_worker(server, args)
     else:
         return _download_files()
     return 0
@@ -213,8 +213,9 @@ def setup_logging(log_level: str, style: str) -> logging.Handler:
 # --- the worker --------------------------------------------------------------------------------
 
 
-def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool = False) -> None:
-    """``start``: the worker until a signal, then drained (not in dev) and closed."""
+def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool = False) -> int:
+    """``start``: the worker until a signal, then drained (not in dev) and closed; nonzero
+    when the worker failed."""
     if args["options"]:
         server.update_options(**args["options"])
     server._config.simulation = args["simulation"]
@@ -271,8 +272,7 @@ def _run_worker(server: AgentServer, args: dict[str, Any], *, unregistered: bool
             signal.signal(sig, lambda *_: os._exit(1))
         _close_loop(loop)
 
-    if not main_task.cancelled():
-        main_task.result()
+    return int(not main_task.cancelled() and main_task.exception() is not None)
 
 
 async def _serve(
@@ -295,7 +295,7 @@ async def _serve(
         await server.run(devmode=devmode, unregistered=unregistered)
     except Exception:
         logger.exception("worker failed")
-        raise
+        raise  # retrieved by _run_worker as the exit status
     finally:
         if channel is not None:
             channel.cancel()

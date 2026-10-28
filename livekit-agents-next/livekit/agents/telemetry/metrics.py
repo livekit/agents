@@ -100,32 +100,15 @@ def _histogram(name: str) -> Any:
     return _meter.create_histogram(name, unit="s")
 
 
-_METRIC_LABEL_VALUES = {
-    "connection_reused": frozenset({"true", "false"}),
-    "severity": frozenset({"warning", "error"}),
-}
-
-
-def _metric_attrs(attributes: dict[str, Any]) -> dict[str, str]:
-    """Finite labels only: at most nine combinations, including either label being absent.
-
-    Model, agent and tool names and per-job metadata belong on traces, where unique values
-    do not create a new metric aggregation for every measurement.
-    """
-    return {
-        key: value
-        for key, value in attributes.items()
-        if key in _METRIC_LABEL_VALUES
-        and isinstance(value, str)
-        and value in _METRIC_LABEL_VALUES[key]
-    }
+# Labels are only what the core's records declare (model, agent and tool names, connection
+# reuse): bounded by the application's configuration. Per-job identity stays on traces.
 
 
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Record the per-turn latency histograms of the history; called at session end."""
     for msg in chat_ctx.messages():
         for name, _, value, attrs in _core.otel_turn_records(dict(msg.metrics)):
-            _histogram(name).record(value, attributes=_metric_attrs(attrs))
+            _histogram(name).record(value, attributes=attrs)
 
 
 @functools.cache
@@ -138,16 +121,16 @@ def collect_usage(metrics: Any) -> None:
     """Record the usage counters (and connection timing) one metrics event carries."""
     for name, kind, value, attrs in _core.otel_usage_records(metrics):
         if kind == "counter":
-            _counter(name).add(value, attributes=_metric_attrs(attrs))
+            _counter(name).add(value, attributes=attrs)
         else:
-            _histogram(name).record(value, attributes=_metric_attrs(attrs))
+            _histogram(name).record(value, attributes=attrs)
 
 
 def record_span_metric(name: str, value: float, attributes: dict[str, Any]) -> None:
     """A duration the core measured with one of its spans (``gen_ai.invoke_agent.duration``,
     ``gen_ai.execute_tool.duration``)."""
-    _histogram(name).record(value, attributes=_metric_attrs(attributes))
+    _histogram(name).record(value, attributes=attributes)
 
 
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
-    _event_loop_blocked.record(duration, attributes=_metric_attrs({"severity": severity}))
+    _event_loop_blocked.record(duration, attributes={"severity": severity})
