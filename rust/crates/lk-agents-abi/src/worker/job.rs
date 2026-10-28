@@ -322,3 +322,22 @@ pub trait SessionJob: Send + Sync {
     #[host(await, name = "_core_connect")]
     async fn connect(&self) -> Result<(), crate::errors::HostError>;
 }
+
+/// The trace of a job's dispatch.
+#[crate::host(functions)]
+pub trait JobTrace {
+    /// A job's dispatch timeline, for its root span: one event per known stage instant (unix
+    /// nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
+    /// latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
+    /// `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
+    /// milliseconds or seconds should that change).
+    #[host(function)]
+    fn job_timeline(
+        received_at: f64,
+        accepted_at: f64,
+        assigned_at: f64,
+        launched_at: f64,
+        entrypoint_started_at: f64,
+        server_started_at: i64,
+    ) -> (Vec<(String, i64)>, Vec<(String, f64)>);
+}

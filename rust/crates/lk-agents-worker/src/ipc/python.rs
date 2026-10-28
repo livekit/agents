@@ -500,58 +500,6 @@ lk_agents_abi::register_host!(class PyProcPool);
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A job's dispatch timeline, for its root span: one event per known stage instant (unix
-/// nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
-/// latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
-/// `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
-/// milliseconds or seconds should that change).
-#[pyfunction]
-#[allow(clippy::type_complexity)]
-fn job_timeline(
-    received_at: f64,
-    accepted_at: f64,
-    assigned_at: f64,
-    launched_at: f64,
-    entrypoint_started_at: f64,
-    server_started_at: i64,
-) -> (Vec<(&'static str, i64)>, Vec<(&'static str, f64)>) {
-    let ns = |ts: f64| (ts * 1e9) as i64;
-    let stages = [
-        ("job_received", received_at),
-        ("job_accepted", accepted_at),
-        ("job_assigned", assigned_at),
-        ("process_assigned", launched_at),
-        ("entrypoint_started", entrypoint_started_at),
-    ];
-    let mut events: Vec<_> =
-        stages.iter().filter(|(_, ts)| *ts != 0.0).map(|(name, ts)| (*name, ns(*ts))).collect();
-    let gaps = [
-        ("lk.job.accept_latency", received_at, accepted_at),
-        ("lk.job.assignment_latency", accepted_at, assigned_at),
-        ("lk.job.launch_latency", assigned_at, launched_at),
-        ("lk.job.entrypoint_latency", launched_at, entrypoint_started_at),
-        ("lk.job.dispatch_latency", received_at, entrypoint_started_at),
-    ];
-    let attributes = gaps
-        .iter()
-        .filter(|(_, start, end)| *start != 0.0 && *end != 0.0)
-        .map(|(attr, start, end)| (*attr, (end - start).max(0.0)))
-        .collect();
-    if server_started_at > 0 {
-        let v = server_started_at as f64;
-        let started = if v > 1e17 {
-            v / 1e9
-        } else if v > 1e11 {
-            v / 1e3
-        } else {
-            v
-        };
-        events.push(("job_started_on_server", ns(started)));
-    }
-    (events, attributes)
-}
-
-lk_agents_abi::register_host!(fn job_timeline);
 
 /// The default bound on `VoiceSession.aclose()` during the shutdown, a guardrail against close
 /// paths that hang: past it the rest of the shutdown (on_session_end, ShuttingDown,

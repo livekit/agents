@@ -246,17 +246,6 @@ class JobRun:
     def redaction(self) -> bool: ...
     def run(self, host: Any) -> Awaitable[None]: ...
 
-def job_timeline(
-    received_at: float,
-    accepted_at: float,
-    assigned_at: float,
-    launched_at: float,
-    entrypoint_started_at: float,
-    server_started_at: int,
-) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
-    """A job's dispatch timeline for its root span: the known stage instants as events (unix
-    nanoseconds), the seconds between adjacent stages as attributes."""
-
 class ProcPool:
     """The warm job processes of ``ipc/proc_pool.py``'s ``ProcPool`` (``host``), which makes the
     executors (``_core_create``), reports a failed initialization (``_core_init_failed``) and

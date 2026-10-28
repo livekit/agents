@@ -60,6 +60,7 @@ impl generated::Implementations for Selected {
     type McpTools = lk_agents_runtime::mcp::McpTools;
     type WorkerCli = lk_agents_runtime::worker::cli::WorkerCli;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
+    type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_inference::creds::Credentials;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;

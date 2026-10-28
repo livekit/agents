@@ -541,7 +541,6 @@
   "pyfunction|rust/crates/lk-agents-py/src/nodes.rs|fn tts_node|pyfunction",
   "pyfunction|rust/crates/lk-agents-py/src/runtime.rs|fn init|pyfunction",
   "pyfunction|rust/crates/lk-agents-worker/src/ipc/python.rs|fn ipc_pair|pyfunction",
-  "pyfunction|rust/crates/lk-agents-worker/src/ipc/python.rs|fn job_timeline|pyfunction",
   "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatContent|pyo3 :: pymethods",
   "pymethods|rust/crates/lk-agents-abi/src/llm/chat_context.rs|impl  for PyChatItem|pyo3 :: pymethods",
   "pymethods|rust/crates/lk-agents-abi/src/metrics/usage.rs|impl  for PyModelUsageCollector|pyo3 :: pymethods",

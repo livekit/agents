@@ -35,7 +35,6 @@ from ._core_handwritten import (
     init as init,
     interruption_metrics as interruption_metrics,
     ipc_pair as ipc_pair,
-    job_timeline as job_timeline,
     metrics_log_fields as metrics_log_fields,
     otel_usage_records as otel_usage_records,
     resolve_host_ref as resolve_host_ref,
@@ -365,5 +364,6 @@ from ._generated._core_worker import (
     cpu_count as cpu_count,
     endpoint_url_base as endpoint_url_base,
     entrypoint_module as entrypoint_module,
+    job_timeline as job_timeline,
     parse_cli as parse_cli,
 )

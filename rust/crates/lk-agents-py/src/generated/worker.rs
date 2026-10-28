@@ -10,6 +10,22 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
+type JobTraceImpl = <crate::Selected as super::Implementations>::JobTrace;
+
+/// A job's dispatch timeline, for its root span: one event per known stage instant (unix
+/// nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
+/// latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
+/// `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
+/// milliseconds or seconds should that change).
+#[pyfunction]
+#[pyo3(signature = (received_at, accepted_at, assigned_at, launched_at, entrypoint_started_at, server_started_at))]
+pub fn job_timeline(received_at: f64, accepted_at: f64, assigned_at: f64, launched_at: f64, entrypoint_started_at: f64, server_started_at: i64) -> PyResult<(::std::vec::Vec<(::std::string::String, i64)>, ::std::vec::Vec<(::std::string::String, f64)>)> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <JobTraceImpl as ::lk_agents_abi::worker::job::JobTrace>::job_timeline(received_at, accepted_at, assigned_at, launched_at, entrypoint_started_at, server_started_at);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
 type ServerEnvironmentImpl = <crate::Selected as super::Implementations>::ServerEnvironment;
 

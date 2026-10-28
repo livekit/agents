@@ -7,6 +7,21 @@ from __future__ import annotations
 
 from .worker_cli import CliArgs
 
+def job_timeline(
+    received_at: float,
+    accepted_at: float,
+    assigned_at: float,
+    launched_at: float,
+    entrypoint_started_at: float,
+    server_started_at: int,
+) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
+    """A job's dispatch timeline, for its root span: one event per known stage instant (unix
+    nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
+    latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
+    `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
+    milliseconds or seconds should that change).
+    """
+
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
 
