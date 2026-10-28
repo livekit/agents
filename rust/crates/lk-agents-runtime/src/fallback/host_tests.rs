@@ -30,26 +30,29 @@ struct Response {
     closed: Arc<AtomicBool>,
 }
 
-#[async_trait::async_trait]
 impl StreamSource<LlmChunk> for Response {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        if self.sent {
-            return std::future::pending().await;
-        }
-        self.sent = true;
-        Ok(Some(LlmChunk {
-            id: "reply".into(),
-            delta: Some(ChoiceDelta {
-                content: Some("native response".into()),
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            if self.sent {
+                return std::future::pending().await;
+            }
+            self.sent = true;
+            Ok(Some(LlmChunk {
+                id: "reply".into(),
+                delta: Some(ChoiceDelta {
+                    content: Some("native response".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        }))
+            }))
+        })
     }
 
-    async fn close(self: Box<Self>, _: Ts) -> Closed {
-        self.closed.store(true, Ordering::SeqCst);
-        Closed::Clean
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move {
+            self.closed.store(true, Ordering::SeqCst);
+            Closed::Clean
+        })
     }
 }
 

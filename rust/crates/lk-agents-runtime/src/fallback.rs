@@ -101,18 +101,17 @@ impl Llm for FallbackLlm {
 /// The chain's native source, consumed through the generated shared stream bridge.
 pub struct FallbackLlmChunks(LlmStream);
 
-#[async_trait::async_trait]
 impl StreamSource<LlmChunk> for FallbackLlmChunks {
-    async fn next(&mut self) -> Result<Option<LlmChunk>, ProviderError> {
-        self.0.next().await
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        self.0.next()
     }
 
     fn cancel_safe(&self) -> bool {
         self.0.cancel_safe()
     }
 
-    async fn close(self: Box<Self>, deadline: Ts) -> Closed {
-        self.0.close(deadline).await
+    fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        self.0.close(deadline)
     }
 }
 
