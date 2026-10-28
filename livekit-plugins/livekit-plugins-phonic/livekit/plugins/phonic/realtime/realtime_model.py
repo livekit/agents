@@ -196,7 +196,7 @@ class _ResponseGeneration:
     audio_cursor_sec: float = 0.0
 
     _created_timestamp: float = field(default_factory=time.time)
-    _done: bool = False
+    done: bool = False
 
     def push_text(self, text: str) -> None:
         if self.output_text:
@@ -414,7 +414,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(self, options=self._opts)
         self._sessions.add(sess)
         return sess
 
@@ -510,9 +510,9 @@ class RealtimeModel(llm.RealtimeModel):
 
 
 class RealtimeSession(llm.RealtimeSession):
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(self, realtime_model: RealtimeModel, *, options: _RealtimeOptions) -> None:
         super().__init__(realtime_model)
-        self._opts = realtime_model._opts
+        self._opts = options
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
 
@@ -1387,7 +1387,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _close_current_generation(self, interrupted: bool) -> None:
         gen = self._current_generation
-        if not gen or gen._done:
+        if not gen or gen.done:
             return
 
         if gen.output_text:
@@ -1406,7 +1406,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         gen.function_ch.close()
         gen.message_ch.close()
-        gen._done = True
+        gen.done = True
         self._current_generation = None
 
     def _handle_audio_chunk(self, message: AudioChunkResponsePayload) -> None:
@@ -1547,7 +1547,7 @@ class RealtimeSession(llm.RealtimeSession):
             "error",
             llm.RealtimeModelError(
                 timestamp=time.time(),
-                label=self._realtime_model._label,
+                label=self._realtime_model.label,
                 error=error,
                 recoverable=recoverable,
             ),
