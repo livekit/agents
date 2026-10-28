@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Sequence
 from enum import Enum
+from typing import TypeAlias
 
 from azure.ai.voicelive.models import (
     AssistantMessageItem,
@@ -192,7 +193,7 @@ def livekit_tools_to_azure_tools(tools: Sequence[llm.Tool]) -> list[Tool]:
 
 
 # Type alias for Azure conversation items
-AzureConversationItem = (
+AzureConversationItem: TypeAlias = (
     SystemMessageItem
     | UserMessageItem
     | AssistantMessageItem

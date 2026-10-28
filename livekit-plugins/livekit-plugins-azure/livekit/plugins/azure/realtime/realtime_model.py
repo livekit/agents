@@ -9,7 +9,7 @@ import weakref
 from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 from azure.ai.voicelive.aio import VoiceLiveConnection, connect
 from azure.ai.voicelive.models import (
@@ -52,7 +52,7 @@ from azure.ai.voicelive.models import (
 from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, _core, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -61,7 +61,6 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.tool_output import remove_instructions
 
 from ..log import logger
 from .utils import (
@@ -142,8 +141,10 @@ class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
     created_timestamp: float
-    messages: dict[str, _MessageGeneration] = field(default_factory=dict)
-    function_calls: dict[str, _FunctionCallGeneration] = field(default_factory=dict)
+    messages: dict[str, _MessageGeneration] = field(default_factory=dict[str, _MessageGeneration])
+    function_calls: dict[str, _FunctionCallGeneration] = field(
+        default_factory=dict[str, _FunctionCallGeneration]
+    )
     first_token_timestamp: float | None = None
 
 
@@ -157,7 +158,7 @@ class _DiscardedGeneration:
     response_id: str | None
 
 
-_ConfirmableEvent = (
+_ConfirmableEvent: TypeAlias = (
     ClientEventConversationItemCreate
     | ClientEventResponseCreate
     | ClientEventInputAudioBufferCommit
@@ -170,13 +171,13 @@ class _ConnectionRequests:
 
     # item and response creations and audio commits Azure hasn't confirmed yet, by event id in
     # send order. They are sent again on the next connection when this one closes first
-    unconfirmed: dict[str, _ConfirmableEvent] = field(default_factory=dict)
+    unconfirmed: dict[str, _ConfirmableEvent] = field(default_factory=dict[str, _ConfirmableEvent])
     # the event that created each item of this conversation, including the replayed ones
-    item_events: dict[str, str] = field(default_factory=dict)
+    item_events: dict[str, str] = field(default_factory=dict[str, str])
     # replayed conversation items by event id, so a rejected one leaves the mirror
-    replay_events: dict[str, str] = field(default_factory=dict)
+    replay_events: dict[str, str] = field(default_factory=dict[str, str])
     # requests of a previous connection that couldn't be sent again before this one closed
-    unsent: list[ClientEvent] = field(default_factory=list)
+    unsent: list[ClientEvent] = field(default_factory=list[ClientEvent])
     # samples appended to the input audio buffer since it was last committed or cleared
     input_audio_samples: int = 0
     # the most recent audio appended since the input audio buffer was last committed or
@@ -186,7 +187,7 @@ class _ConnectionRequests:
     )
     # the audio of each unconfirmed commit by event id, sent again ahead of it
     committed_audio: dict[str, list[ClientEventInputAudioBufferAppend]] = field(
-        default_factory=dict
+        default_factory=dict[str, list[ClientEventInputAudioBufferAppend]]
     )
     # whether the conversation was replayed (or didn't need to be) and the requests sent again
     replayed: bool = False
@@ -1500,8 +1501,9 @@ class RealtimeSession(
                 exclude_handoff=True,
                 exclude_config_update=True,
             )
-            # Remove instruction messages (already sent via the session configuration)
-            remove_instructions(chat_ctx)
+            # The core selects framework instruction items; app-authored system turns remain.
+            for index in reversed(_core.remove_instructions([item.id for item in chat_ctx.items])):
+                del chat_ctx.items[index]
 
             remote_ctx = self._remote_chat_ctx.to_chat_ctx()
             known_ids = {item.id for item in remote_ctx.items}
