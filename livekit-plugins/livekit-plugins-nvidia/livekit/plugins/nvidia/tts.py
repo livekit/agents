@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import contextlib
 import os
 import queue
 import threading
@@ -9,6 +9,7 @@ import riva.client
 from riva.client.proto.riva_audio_pb2 import AudioEncoding
 
 from livekit.agents import (
+    APIConnectionError,
     APIConnectOptions,
     tokenize,
     tts,
@@ -17,8 +18,6 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from . import auth
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -152,31 +151,32 @@ class SynthesizeStream(tts.SynthesizeStream):
                 token_q.put(word_stream)
             token_q.put(None)
 
+        def _finish(error: Exception | None) -> None:
+            if done_fut.done():
+                return
+            if error is None:
+                done_fut.set_result(None)
+            else:
+                done_fut.set_exception(error)
+
         def _synthesize_worker() -> None:
+            error: Exception | None = None
             try:
                 service = self._tts._ensure_session()
-                while True:
-                    token = token_q.get()
-
-                    if not token:
-                        break
-
-                    try:
-                        responses = service.synthesize_online(
-                            token.token,
-                            self._opts.voice,
-                            self._opts.language_code,
-                            sample_rate_hz=self._opts.sample_rate,
-                            encoding=AudioEncoding.LINEAR_PCM,
-                        )
-                        for response in responses:
-                            event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
-
-                    except Exception as e:
-                        logger.error(f"Error in synthesis: {e}")
-                        continue
+                while (token := token_q.get()) is not None:
+                    responses = service.synthesize_online(
+                        token.token,
+                        self._opts.voice,
+                        self._opts.language_code,
+                        sample_rate_hz=self._opts.sample_rate,
+                        encoding=AudioEncoding.LINEAR_PCM,
+                    )
+                    for response in responses:
+                        event_loop.call_soon_threadsafe(output_emitter.push, response.audio)
+            except Exception as exc:
+                error = exc
             finally:
-                event_loop.call_soon_threadsafe(done_fut.set_result, None)
+                event_loop.call_soon_threadsafe(_finish, error)
 
         synthesize_thread = threading.Thread(
             target=_synthesize_worker,
@@ -191,9 +191,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         ]
 
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, asyncio.shield(done_fut))
+            output_emitter.end_segment()
+        except Exception as exc:
+            raise APIConnectionError("NVIDIA synthesis failed") from exc
         finally:
             token_q.put(None)
-            await done_fut
-            output_emitter.end_segment()
+            await utils.aio.gracefully_cancel(*tasks)
+            with contextlib.suppress(Exception):
+                await asyncio.shield(done_fut)
             await sent_tokenizer_stream.aclose()
