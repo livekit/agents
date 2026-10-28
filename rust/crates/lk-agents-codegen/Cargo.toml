@@ -17,3 +17,7 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 # The attribute reader: one parse of the language, shared with the expansions.
 lk-agents-bindgen = { path = "../lk-agents-bindgen" }
+
+[[bin]]
+name = "architecture-allows"
+path = "../../architecture/allows.rs"
