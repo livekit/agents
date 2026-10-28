@@ -33,14 +33,13 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice lk-agents-worker)
+executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice lk-agents-worker)
 compiled=(
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
     "lk-agents-host-derive: proc macros; exercised by every crate that derives"
     "lk-agents-media: tests not in the gate yet (K-12 closure)"
     "lk-agents-rtc: tests not in the gate yet (K-12 closure)"
     "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
-    "lk-agents-codegen: architecture tests and codegen --check run in the architecture step"
     "lk-agents-runtime: tests not in the gate yet (runtime verification is K-30)"
 )
 outside=(
