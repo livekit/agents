@@ -107,6 +107,8 @@ impl generated::Implementations for Selected {
     type WorkerCli = crate::worker_host::cli::WorkerCli;
     type EndpointStream = crate::worker_host::endpoint::PyEndpointStream;
     type EndpointServer = crate::worker_host::endpoint::PyEndpointServer;
+    type AsgiReceive = crate::worker_host::endpoint::AsgiReceive;
+    type AsgiSend = crate::worker_host::endpoint::AsgiSend;
     type ServerConfig = crate::worker_host::PyServerConfig;
     type ServerRuntime = crate::worker_host::PyServer;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;

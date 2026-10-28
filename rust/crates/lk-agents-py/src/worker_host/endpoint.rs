@@ -362,25 +362,10 @@ impl AsgiApp for PyApp {
         self.app
             .await_call(move |app| {
                 let scope = scope_py(app.py(), &scope, &request)?;
-                let receive_conn = conn.clone();
-                let receive =
-                    pyo3::types::PyCFunction::new_closure(app.py(), None, None, move |args, _| {
-                        let conn = receive_conn.clone();
-                        crate::host::future_into_py(args.py(), async move {
-                            let message = conn.receive().await;
-                            Python::attach(|py| received_py(py, message).map(Bound::unbind))
-                        })
-                        .map(Bound::unbind)
-                    })?;
-                let send =
-                    pyo3::types::PyCFunction::new_closure(app.py(), None, None, move |args, _| {
-                        let message = sent_from_py(&args.get_item(0)?)?;
-                        let conn = conn.clone();
-                        crate::host::future_into_py(args.py(), async move {
-                            conn.send(message).await.map_err(PyRuntimeError::new_err)
-                        })
-                        .map(Bound::unbind)
-                    })?;
+                let receive = crate::generated::worker::_core_AsgiReceive(Arc::new(AsgiReceive {
+                    conn: conn.clone(),
+                }));
+                let send = crate::generated::worker::_core_AsgiSend(Arc::new(AsgiSend { conn }));
                 crate::host::construct(app, (scope, receive, send), None)
             })
             .await
@@ -395,6 +380,45 @@ impl AsgiApp for PyApp {
                     traceback: e.traceback(py).and_then(|tb| tb.format().ok()).unwrap_or_default(),
                 })
             })
+    }
+}
+
+/// A receive callable whose argument binding is generated from its ABI declaration.
+pub struct AsgiReceive {
+    conn: AsgiConn,
+}
+
+impl lk_agents_abi::worker::endpoint_host::AsgiReceive for AsgiReceive {
+    fn __call__(&self) -> Result<HostRef, HostError> {
+        let conn = self.conn.clone();
+        Python::attach(|py| {
+            crate::host::future_into_py(py, async move {
+                let message = conn.receive().await;
+                Python::attach(|py| received_py(py, message).map(Bound::unbind))
+            })
+            .map(awaitable_ref)
+        })
+        .map_err(host_error)
+    }
+}
+
+/// A send callable whose argument binding is generated from its ABI declaration.
+pub struct AsgiSend {
+    conn: AsgiConn,
+}
+
+impl lk_agents_abi::worker::endpoint_host::AsgiSend for AsgiSend {
+    fn __call__(&self, message: HostRef) -> Result<HostRef, HostError> {
+        let conn = self.conn.clone();
+        Python::attach(|py| {
+            let message = lk_agents_abi::python::resolve_key(py, message.id())?;
+            let message = sent_from_py(message.bind(py))?;
+            crate::host::future_into_py(py, async move {
+                conn.send(message).await.map_err(PyRuntimeError::new_err)
+            })
+            .map(awaitable_ref)
+        })
+        .map_err(host_error)
     }
 }
 

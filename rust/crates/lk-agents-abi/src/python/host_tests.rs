@@ -161,7 +161,11 @@ out = (loop, context, entered, release, read)
             release.bind(py).call_method0("set").unwrap();
             let (_guard, receiver) = scheduled.expect("scheduling raced the loop's callback");
             let got = py.detach(|| receiver.blocking_recv()).unwrap().unwrap();
-            assert_eq!(got.extract::<String>(py).unwrap(), "agent", "not run in the captured context");
+            assert_eq!(
+                got.extract::<String>(py).unwrap(),
+                "agent",
+                "not run in the captured context"
+            );
             let stop = event_loop.bind(py).getattr("stop").unwrap();
             event_loop.bind(py).call_method1("call_soon_threadsafe", (stop,)).unwrap();
         });
@@ -541,8 +545,7 @@ mod side_tables {
 
     // ------------------------------------------------------------------------ the side tables
 
-    /// A stand-in for a plugin's `APIStatusError` subclass. The package is not importable here, so
-    /// these pin the side table; the isinstance half is pinned in `tests/test_exceptions.py`.
+    /// A plugin error inside the SDK taxonomy when available, or the bare binding's fallback.
     fn make_exception(py: Python<'_>, code: &str) -> Py<PyAny> {
         let locals = pyo3::types::PyDict::new(py);
         py.run(std::ffi::CString::new(code).unwrap().as_c_str(), None, Some(&locals)).unwrap();
@@ -550,7 +553,11 @@ mod side_tables {
     }
 
     const PLUGIN_ERROR: &str = "\
-class MyStatusError(Exception):
+try:
+    from livekit.agents import APIStatusError
+except ImportError:
+    APIStatusError = Exception
+class MyStatusError(APIStatusError):
     def __init__(self):
         super().__init__('rate limited')
         self.retryable = True
@@ -738,7 +745,9 @@ mod session_bridge {
             assert!(parse_specs(py, "out[0]['description'] = None").is_err());
             assert!(parse_specs(py, "out[0]['ignore_on_enter'] = None").is_err());
             assert!(parse_specs(py, "del out[0]['json_schema']").is_err());
-            assert!(!parse_specs(py, "del out[0]['ignore_on_enter']").unwrap()[0].flags.ignore_on_enter);
+            assert!(
+                !parse_specs(py, "del out[0]['ignore_on_enter']").unwrap()[0].flags.ignore_on_enter
+            );
             assert_eq!(parse_specs(py, "del out[0]['description']").unwrap()[0].description, "");
         });
     }

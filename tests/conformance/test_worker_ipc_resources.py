@@ -386,12 +386,13 @@ async def test_ready_pool_processes_use_native_exit_and_reaping_handles(
         _kill_pid(pid)
         # Native ownership/eligibility keeps progressing while host callbacks cannot run.
         time.sleep(1)
+        await _assert_reaped(executor)
 
         async def replacement_ready() -> None:
             while not any(replacement is not executor for replacement in host.ready):
                 await asyncio.sleep(0.01)
 
-        await asyncio.wait_for(replacement_ready(), timeout=5)
+        await asyncio.wait_for(replacement_ready(), timeout=_PROCESS_INITIALIZE_TIMEOUT + 5)
         assert executor not in pool.processes
         assert any(
             replacement.pid != pid for replacement in host.ready if replacement is not executor

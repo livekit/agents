@@ -466,7 +466,7 @@ impl PendingWrite {
 enum Completion {
     Input(WorkerStateInput),
     Load(Option<f32>),
-    CpuSample(Result<(CpuMonitor, Option<f32>), lk_agents_media::workers::WorkerPanicked>),
+    CpuSample(Result<(CpuMonitor, Option<f32>), tokio::task::JoinError>),
     Done,
     EndpointDone(u64),
 }

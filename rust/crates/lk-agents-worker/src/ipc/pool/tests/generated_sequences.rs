@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test(start_paused = true)]
 async fn generated_exit_retry_cancel_and_drain_sequences_release_every_process() {
-    for seed in 0..48_u64 {
+    for seed in 0..288_u64 {
         let phase = std::cell::Cell::new("warmup");
         tokio::time::timeout(Duration::from_secs(30), exercise(seed, &phase))
             .await
@@ -11,13 +11,19 @@ async fn generated_exit_retry_cancel_and_drain_sequences_release_every_process()
 }
 
 async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
+    let pool_size = 1 + (seed % 3) as usize;
+    let failure_count = ((seed / 3) % 3) as usize;
+    let cancel_launch = (seed / 9) % 2 == 1;
+    let yield_count = (seed / 18) % 4;
+    let reverse_close_order = (seed / 72) % 2 == 1;
+    let cancel_first_close = (seed / 144) % 2 == 1;
     let reaped = watch::channel(false).0;
     let host = Arc::new(Host {
-        fail_launch: AtomicUsize::new((seed % 3) as usize),
+        fail_launch: AtomicUsize::new(failure_count),
         reap_gate: Some(reaped.clone()),
         ..Host::default()
     });
-    let pool = pool(&host, 1 + (seed % 3) as usize);
+    let pool = pool(&host, pool_size);
     pool.start().await.unwrap();
     phase.set("observe warm exit");
 
@@ -45,11 +51,11 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
 
     // Sometimes cancel an admitted request while an earlier failed launch is still waiting
     // for its process's receipt. The other requests must continue on fresh processes.
-    let cancel = seed % 2 == 1 && !requests[1].is_finished();
+    let cancel = cancel_launch && !requests[1].is_finished();
     if cancel {
         requests[1].abort();
     }
-    for _ in 0..seed % 4 {
+    for _ in 0..yield_count {
         tokio::task::yield_now().await;
     }
     phase.set("settle launches");
@@ -78,12 +84,12 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
         Err(LaunchError::Admission(PoolAdmissionError::Draining))
     ));
     let mut processes = pool.processes();
-    if seed % 2 == 0 {
+    if reverse_close_order {
         processes.reverse();
     }
     for process in processes {
         host.close(&process).await.unwrap();
-        if seed % 3 == 0 {
+        for _ in 0..yield_count {
             tokio::task::yield_now().await;
         }
     }
@@ -94,7 +100,7 @@ async fn exercise(seed: u64, phase: &std::cell::Cell<&'static str>) {
         let pool = pool.clone();
         async move { pool.aclose().await }
     });
-    if seed % 2 == 1 {
+    if cancel_first_close {
         tokio::task::yield_now().await;
         first_close.abort();
     }

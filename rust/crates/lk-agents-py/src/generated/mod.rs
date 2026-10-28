@@ -96,6 +96,8 @@ pub trait Implementations: 'static {
     type VoiceSessionExecution: ::lk_agents_abi::voice::console::VoiceSessionExecution;
     type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
     type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
+    type AsgiReceive: ::lk_agents_abi::worker::endpoint_host::AsgiReceive;
+    type AsgiSend: ::lk_agents_abi::worker::endpoint_host::AsgiSend;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
@@ -252,6 +254,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_voice_session_start, m)?)?;
     m.add_class::<worker::EndpointStream>()?;
     m.add_class::<worker::EndpointServer>()?;
+    m.add_class::<worker::_core_AsgiReceive>()?;
+    m.add_class::<worker::_core_AsgiSend>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;

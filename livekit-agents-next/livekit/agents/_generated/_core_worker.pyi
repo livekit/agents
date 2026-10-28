@@ -32,6 +32,14 @@ class EndpointServer:
         reason: str = "worker draining",
     ) -> Future[None]: ...
 
+class _core_AsgiReceive:
+    """The native ASGI receive callback, bound to one endpoint exchange."""
+    def __call__(self) -> Future[object]: ...
+
+class _core_AsgiSend:
+    """The native ASGI send callback, bound to one endpoint exchange."""
+    def __call__(self, message: object) -> Future[None]: ...
+
 def job_timeline(
     received_at: float,
     accepted_at: float,

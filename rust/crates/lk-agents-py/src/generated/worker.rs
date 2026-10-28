@@ -105,6 +105,39 @@ impl EndpointServer {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+type _core_AsgiReceiveImpl = <crate::Selected as super::Implementations>::AsgiReceive;
+
+/// The native ASGI receive callback, bound to one endpoint exchange.
+#[pyclass(frozen, name = "_core_AsgiReceive", module = "livekit.agents._core")]
+pub struct _core_AsgiReceive(pub(crate) ::std::sync::Arc<_core_AsgiReceiveImpl>);
+
+#[pymethods]
+impl _core_AsgiReceive {
+    fn __call__(&self) -> PyResult<::lk_agents_abi::HostRef> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_AsgiReceiveImpl as ::lk_agents_abi::worker::endpoint_host::AsgiReceive>::__call__(&self.0).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/worker/endpoint_host.rs.
+type _core_AsgiSendImpl = <crate::Selected as super::Implementations>::AsgiSend;
+
+/// The native ASGI send callback, bound to one endpoint exchange.
+#[pyclass(frozen, name = "_core_AsgiSend", module = "livekit.agents._core")]
+pub struct _core_AsgiSend(pub(crate) ::std::sync::Arc<_core_AsgiSendImpl>);
+
+#[pymethods]
+impl _core_AsgiSend {
+    #[pyo3(signature = (message))]
+    fn __call__(&self, message: ::lk_agents_abi::HostRef) -> PyResult<::lk_agents_abi::HostRef> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_AsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&self.0, message).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
 type JobTraceImpl = <crate::Selected as super::Implementations>::JobTrace;
 

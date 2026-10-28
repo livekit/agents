@@ -86,7 +86,6 @@ cargo check -q --workspace --all-targets
 
 step "worker lifecycle and real transport tests"
 cargo test -q -p lk-agents-worker -p lk-agents-net
-cargo test -q -p lk-agents-worker --test ipc_frames --test worker_cli
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}

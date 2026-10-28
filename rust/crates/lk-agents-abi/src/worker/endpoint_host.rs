@@ -38,3 +38,17 @@ pub trait EndpointServer: Send + Sync + Sized + 'static {
         #[host(default = "worker draining")] reason: String,
     ) -> Result<HostRef, HostError>;
 }
+
+/// The native ASGI receive callback, bound to one endpoint exchange.
+#[crate::host(class(name = "_core_AsgiReceive"))]
+pub trait AsgiReceive: Send + Sync + Sized + 'static {
+    #[host(call, future = HostRef)]
+    fn __call__(&self) -> Result<HostRef, HostError>;
+}
+
+/// The native ASGI send callback, bound to one endpoint exchange.
+#[crate::host(class(name = "_core_AsgiSend"))]
+pub trait AsgiSend: Send + Sync + Sized + 'static {
+    #[host(call, future = ())]
+    fn __call__(&self, message: HostRef) -> Result<HostRef, HostError>;
+}

@@ -1,5 +1,7 @@
 """Bounded native ownership of the CLI's final event-loop cleanup."""
 
+import asyncio
+import contextlib
 import subprocess
 import sys
 import textwrap
@@ -7,6 +9,27 @@ import textwrap
 import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.no_concurrent]
+
+
+async def _run_cleanup(code: str) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, "-c", code]
+    process = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        assert process.stdout is not None
+        # Framework imports have their own allowance; cleanup keeps its twelve-second bound.
+        prefix = await asyncio.wait_for(process.stdout.readuntil(b"cleanup started\n"), timeout=30)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=12)
+        assert process.returncode is not None
+        return subprocess.CompletedProcess(
+            command, process.returncode, (prefix + stdout).decode(), stderr.decode()
+        )
+    finally:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.communicate()
 
 
 @pytest.mark.parametrize(
@@ -59,12 +82,7 @@ def test_stuck_loop_shutdown_exits_nonzero_while_retaining_cleanup(blocking: str
         cli._close_loop(loop)
         print("cleanup falsely completed", flush=True)
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", f"BLOCKING = {blocking!r}\n" + code],
-        capture_output=True,
-        text=True,
-        timeout=12,
-    )
+    result = asyncio.run(_run_cleanup(f"BLOCKING = {blocking!r}\n" + code))
     assert "cleanup started" in result.stdout
     if blocking != "executor":
         assert "cancellation served" in result.stdout
@@ -93,13 +111,12 @@ def test_cooperative_loop_shutdown_disarms_the_native_deadline() -> None:
 
         loop.create_task(pending())
         loop.run_until_complete(asyncio.sleep(0))
+        print("cleanup started", flush=True)
         cli._close_loop(loop)
         print("loop closed", loop.is_closed(), flush=True)
         time.sleep(5.5)
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=12
-    )
+    result = asyncio.run(_run_cleanup(code))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "task settled" in result.stdout and "loop closed True" in result.stdout
     assert "incomplete event-loop cleanup" not in result.stderr
