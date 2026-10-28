@@ -12,6 +12,7 @@ import msgpack
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -255,7 +256,7 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         return await asyncio.wait_for(
             session.ws_connect(
@@ -434,6 +435,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload = _build_tts_request(self._opts, text=self._input_text)
 
         try:
@@ -445,7 +447,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "model": self._opts.model,
                 },
                 data=msgpack.packb(payload, use_bin_type=True),
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
             ) as resp:
                 resp.raise_for_status()
 
@@ -475,6 +477,16 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS via the Fish Audio /v1/tts/live WebSocket endpoint."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        if (
+            conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "fishaudio streaming requires write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -491,7 +503,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=request_id)
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.connect_timeout,
+                pool_timeout=self._conn_options.pool_timeout,
+            ) as ws:
                 await self._run_ws(ws, output_emitter)
 
         except asyncio.TimeoutError:
@@ -552,7 +567,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def recv_task() -> None:
             # No per-receive timeout: Fish has natural inter-sentence gaps that
-            # can exceed `_conn_options.timeout` when the LLM is slow. Dead
+            # can exceed `read_timeout` when the LLM is slow. Dead
             # connections are detected by aiohttp's ws heartbeat (see ws_connect).
             while True:
                 msg = await ws.receive()
