@@ -108,6 +108,55 @@ fn a_failure_after_visible_output_ends_the_request_unretryable() {
     assert!(!effects.iter().any(|e| matches!(e, LlmRequestEffect::LlmRequestStart { .. })));
 }
 
+// Catches: replay guarded on any chunk instead of on output the consumer can act on: the
+// gateway's metadata-only leading delta or a tool call whose arguments are still streaming made a
+// failure final, while a completed tool call must never be issued twice.
+#[test]
+fn only_actionable_output_blocks_a_retry() {
+    let wire = |delta: serde_json::Value, finish: Option<&str>| -> WireChunk {
+        serde_json::from_value(serde_json::json!({
+            "id": "c",
+            "choices": [{"delta": delta, "finish_reason": finish}],
+        }))
+        .unwrap()
+    };
+    let metadata = wire(
+        serde_json::json!({"extra_content": {"livekit": {"inference_tier_billed": "s"}}}),
+        None,
+    );
+    let call = wire(
+        serde_json::json!({"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "lookup"}}]}),
+        None,
+    );
+    let args = wire(
+        serde_json::json!({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+        None,
+    );
+    let done = wire(serde_json::json!({}), Some("tool_calls"));
+    let attempts: [&[WireChunk]; 3] =
+        [&[metadata.clone()], &[metadata, call.clone(), args.clone()], &[call, args, done]];
+    let mut request = start(policy());
+    let mut now = at(0);
+    for (attempt, chunks) in (0u32..).zip(attempts) {
+        reading(&mut request, attempt, now);
+        for chunk in chunks {
+            request.handle(LlmRequestEvent::Chunk { attempt, chunk: chunk.clone() }, now);
+        }
+        let effects = request.handle(LlmRequestEvent::Failed { attempt, failure: failure() }, now);
+        if attempt < 2 {
+            assert!(
+                matches!(effects.as_slice(), [LlmRequestEffect::AttemptFailed { .. }]),
+                "attempt {attempt}: {effects:?}"
+            );
+            request.handle(LlmRequestEvent::AttemptClosed { attempt }, now);
+            now = request.wake_at().unwrap();
+            assert_eq!(request.handle(LlmRequestEvent::Wake, now), vec![started(attempt + 1)]);
+        } else {
+            assert!(!finished(&effects).unwrap().clone().unwrap_err().retryable);
+        }
+    }
+}
+
 // Catches: status retry rules lost in the machine: a 401 retried, a 429 not.
 #[test]
 fn a_rejection_is_retried_only_when_its_status_is_transient() {

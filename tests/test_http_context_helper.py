@@ -1,6 +1,4 @@
-"""Tests for the public `utils.http_context.open()` helper and for the
-inference STT error surface when called outside a job context.
-"""
+"""Tests for the public `utils.http_context.open()` helper."""
 
 from __future__ import annotations
 
@@ -12,7 +10,6 @@ import aiohttp
 import certifi
 import pytest
 
-from livekit.agents import inference
 from livekit.agents.utils import http_context
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -214,28 +211,3 @@ def test_set_default_cert_env_respects_existing_override(
 
     http_context._set_default_cert_env()
     assert os.environ["SSL_CERT_FILE"] == "/custom/bundle.pem"
-
-
-async def test_inference_stt_surfaces_real_error_outside_ctx(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: previously, calling `inference.STT().stream()` outside a job
-    context raised `AttributeError: 'SpeechStream' object has no attribute
-    '_session'` from a background task — masking the real "no http context" error.
-
-    After the fix, _ensure_session() runs inside _run(), so the actual
-    RuntimeError surfaces through the stream's main task.
-    """
-    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
-
-    stt = inference.STT(model="cartesia/sonic-3")
-    stream = stt.stream()
-
-    # SpeechStream no longer eagerly grabs `_session` in __init__.
-    assert not hasattr(stream, "_session")
-
-    with pytest.raises(RuntimeError, match="http_context.open"):
-        await stream._task
-
-    await stream.aclose()

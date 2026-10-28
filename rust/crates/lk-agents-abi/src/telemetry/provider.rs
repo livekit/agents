@@ -334,6 +334,20 @@ mod tests {
         assert_eq!((record.request_id.as_str(), record.ttft, record.duration), ("", 0.5, 2.0));
     }
 
+    // Catches: a metadata-only delta (a gateway deployment stamp) starting the clock, or a
+    // response that generated nothing losing its token counts.
+    #[test]
+    fn a_response_without_output_reports_its_tokens_and_no_ttft() {
+        let mut fold = LlmMetricState::for_host(1.0);
+        let stamp = ChoiceDelta { extra: Some(Default::default()), ..ChoiceDelta::default() };
+        assert!(!fold.observe(&chunk("req-1", Some(stamp)), || unreachable!("not a response")));
+        let usage =
+            CompletionUsage { completion_tokens: 7, total_tokens: 18, ..Default::default() };
+        fold.observe(&LlmChunk { usage: Some(usage), ..chunk("req-1", None) }, || unreachable!());
+        let record = fold.finish(false, || (3.0, context())).expect("chunks arrived");
+        assert_eq!((record.ttft, record.completion_tokens, record.total_tokens), (-1.0, 7, 18));
+    }
+
     // Catches: empty ids keeping the previous request's, or an empty segment id dropped to `None`
     // (`tts.py:733` takes every `ev.request_id`/`ev.segment_id`, and passes the string through).
     #[test]
