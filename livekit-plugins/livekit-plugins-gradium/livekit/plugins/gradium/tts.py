@@ -142,9 +142,10 @@ class _Connection:
         self._ws = ws
         self._sessions: dict[str, asyncio.Queue[_Frame | APIError]] = {}
         self._error: APIError | None = None
-        # the last error frame of a session on this socket: the server closes the
-        # socket after some session failures, which is not the other sessions' fault
-        self._session_error: str | None = None
+        # the code and message of the last error frame of a session on this socket: the
+        # server closes the socket after some session failures, with that code, which is
+        # not the other sessions' fault
+        self._session_error: tuple[Any, str] | None = None
         self._reader = asyncio.create_task(self._read(), name="gradium.tts.reader")
 
     @property
@@ -222,12 +223,15 @@ class _Connection:
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if self._session_error is not None:
+                    if (
+                        self._session_error is not None
+                        and self._session_error[0] == self._ws.close_code
+                    ):
                         # the failure belongs to that session; the others did nothing
                         # wrong and are worth a retry on a new socket
                         error = APIConnectionError(
                             "Gradium closed the connection after a session on it failed: "
-                            f"{self._session_error}"
+                            f"{self._session_error[1]}"
                         )
                     else:
                         error = _close_error(
@@ -254,7 +258,10 @@ class _Connection:
                 if not isinstance(client_req_id, str):
                     client_req_id = None
                 if client_req_id is not None and data.get("type") == "error":
-                    self._session_error = data.get("message") or "unknown error"
+                    self._session_error = (
+                        data.get("code"),
+                        data.get("message") or "unknown error",
+                    )
                 queue = self._sessions.get(client_req_id) if client_req_id else None
                 if queue is not None:
                     queue.put_nowait(data)
