@@ -24,6 +24,7 @@ use tokio::sync::oneshot;
 
 #[cfg(test)]
 mod parentage_tests;
+pub mod loop_monitor;
 pub mod source;
 pub mod stream;
 

@@ -101,7 +101,7 @@ impl generated::Implementations for Selected {
     type PreparedTranscript = lk_agents_runtime::telemetry::upload::TranscriptBuilder;
     type TelemetryWorker = lk_agents_runtime::telemetry::work::SdkWorker;
     type SessionReportUpload = lk_agents_runtime::telemetry::upload::SessionReportUploader;
-    type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;
+    type LoopMonitor = crate::host::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds = lk_agents_runtime::telemetry::loop_monitor::LoopMonitorOptions;
     type TextSessionRunner = lk_agents_runtime::text_session::Runner;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;

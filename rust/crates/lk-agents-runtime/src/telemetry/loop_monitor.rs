@@ -2,7 +2,6 @@
 //! consumes supplied time; host adapters only take clock/stack samples and emit the result.
 
 #[cfg(feature = "python")]
-pub mod python;
 
 use std::collections::VecDeque;
 

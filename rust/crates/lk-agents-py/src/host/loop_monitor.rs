@@ -7,7 +7,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{LoopMonitorClock, LoopMonitorOptions, LoopMonitorPolicy, LoopWatchdog};
+use lk_agents_runtime::telemetry::loop_monitor::{
+    LoopMonitorClock, LoopMonitorOptions, LoopMonitorPolicy, LoopWatchdog,
+};
 use lk_agents_abi::python::{capture_host, resolve_key};
 use lk_agents_abi::telemetry::loop_monitor::{
     BlockedReport, LoopBlock, LoopMonitorEmission, LoopMonitorLog, LoopMonitorSpan,
@@ -598,7 +600,7 @@ fn arm_callbacks(py: Python<'_>, inner: &Arc<Inner>) -> PyResult<()> {
     .unbind();
     let watchdog = inner.clone();
     let mut previous = inner.now();
-    let runtime = crate::process::handle()
+    let runtime = lk_agents_runtime::process::handle()
         .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
     let monitor = LoopWatchdog::start(
         &runtime,
@@ -612,7 +614,7 @@ fn arm_callbacks(py: Python<'_>, inner: &Arc<Inner>) -> PyResult<()> {
             }
             previous = watchdog.now();
         },
-        crate::telemetry::work::record_incomplete_cleanup,
+        lk_agents_runtime::telemetry::work::record_incomplete_cleanup,
     )
     .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
     let callbacks = py.import("gc")?.getattr("callbacks")?;

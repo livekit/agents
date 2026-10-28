@@ -31,7 +31,6 @@
   "host-call:rust/crates/lk-agents-py/src/nodes.rs",
   "host-call:rust/crates/lk-agents-py/src/storage.rs",
   "host-call:rust/crates/lk-agents-runtime/src/images.rs",
-  "host-call:rust/crates/lk-agents-runtime/src/telemetry/loop_monitor/python.rs",
   "host-call:rust/crates/lk-agents-runtime/src/telemetry/work.rs",
   "host-call:rust/crates/lk-agents-runtime/src/worker/cli.rs",
   "host-call:rust/crates/lk-agents-worker/src/ipc/python.rs",
