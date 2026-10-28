@@ -7,7 +7,6 @@ use crate::{EotInferenceMetrics, EotPrediction};
 
 /// The caller mints it, so cancelling a superseded request is a no-op rather than a teardown of the
 /// live one.
-#[crate::host(handwritten(emit, host = "str"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EotRequestId(String);
 
@@ -36,7 +35,6 @@ crate::python::into_host_str!(EotRequestId, |v| v.as_str());
 // --- the actions ------------------------------------------------------------------------------
 
 /// A resolved request and its prediction measurements.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EotResolve {
     pub id: EotRequestId,
@@ -61,29 +59,24 @@ impl EotResolve {
 }
 
 /// Start inference for one request.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EotStartInference {
     pub id: EotRequestId,
 }
 
 /// Flush the detector's buffered audio.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotFlush {}
 
 /// Replace the cloud transport with the local mini model.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotSwapToLocal {}
 
 /// Drop buffered audio and stop when no detector remains.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EotDegrade {}
 
 /// A detector warning and its optional cause.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EotWarn {
     pub warning: String,
@@ -93,7 +86,6 @@ pub struct EotWarn {
 // --- the transport events ---------------------------------------------------------------------
 
 /// The measurements a transport reports for one request.
-#[crate::host(record(module = "eot_events", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredictionEvent {
     pub id: String,

@@ -860,94 +860,6 @@ pub mod agent_run {
     }
 }
 
-pub mod eot_events {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_RESOLVE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_resolve_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotResolve) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotResolve { id, end_of_turn_probability, last_speaking_time, detection_delay, inference_duration, backchannel_probability } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
-            kwargs.set_item("end_of_turn_probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(end_of_turn_probability, py)?)?;
-            kwargs.set_item("last_speaking_time", ::pyo3::IntoPyObjectExt::into_bound_py_any(last_speaking_time, py)?)?;
-            kwargs.set_item("detection_delay", match detection_delay { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("inference_duration", match inference_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("backchannel_probability", match backchannel_probability { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            EOT_RESOLVE.import(py, "livekit.agents._generated.eot_events", "EotResolve")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_START_INFERENCE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_start_inference_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotStartInference) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotStartInference { id } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
-            EOT_START_INFERENCE.import(py, "livekit.agents._generated.eot_events", "EotStartInference")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_FLUSH: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_flush_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotFlush) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotFlush {  } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            EOT_FLUSH.import(py, "livekit.agents._generated.eot_events", "EotFlush")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_SWAP_TO_LOCAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_swap_to_local_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotSwapToLocal) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotSwapToLocal {  } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            EOT_SWAP_TO_LOCAL.import(py, "livekit.agents._generated.eot_events", "EotSwapToLocal")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_DEGRADE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_degrade_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotDegrade) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotDegrade {  } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            EOT_DEGRADE.import(py, "livekit.agents._generated.eot_events", "EotDegrade")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static EOT_WARN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn eot_warn_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::EotWarn) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::EotWarn { warning, reason } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("warning", ::pyo3::IntoPyObjectExt::into_bound_py_any(warning, py)?)?;
-            kwargs.set_item("reason", match reason { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            EOT_WARN.import(py, "livekit.agents._generated.eot_events", "EotWarn")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/eot.rs.
-    static PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn prediction_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::eot::PredictionEvent) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::eot::PredictionEvent { id, probability, detection_delay, inference_duration, backchannel_probability } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
-            kwargs.set_item("probability", ::pyo3::IntoPyObjectExt::into_bound_py_any(probability, py)?)?;
-            kwargs.set_item("detection_delay", match detection_delay { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("inference_duration", match inference_duration { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            kwargs.set_item("backchannel_probability", match backchannel_probability { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
-            PREDICTION_EVENT.import(py, "livekit.agents._generated.eot_events", "PredictionEvent")?.call((), Some(&kwargs))
-    }
-}
-
 pub mod evals {
     use pyo3::prelude::*;
 
@@ -1042,36 +954,6 @@ pub mod evals {
             kwargs.set_item("majority_passed", ::pyo3::IntoPyObjectExt::into_bound_py_any(majority_passed, py)?)?;
             kwargs.set_item("none_failed", ::pyo3::IntoPyObjectExt::into_bound_py_any(none_failed, py)?)?;
             EVALUATION_SCORE.import(py, "livekit.agents._generated.evals", "EvaluationScore")?.call((), Some(&kwargs))
-    }
-}
-
-pub mod keyterm_events {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
-    static KEYTERM_UPDATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn keyterm_update_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::keyterms::KeytermUpdate) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::keyterms::KeytermUpdate { pending, confirm, remove } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("pending", ::pyo3::types::PyList::new(py, pending.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            kwargs.set_item("confirm", ::pyo3::types::PyList::new(py, confirm.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            kwargs.set_item("remove", ::pyo3::types::PyList::new(py, remove.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            KEYTERM_UPDATE.import(py, "livekit.agents._generated.keyterm_events", "KeytermUpdate")?.call((), Some(&kwargs))
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
-    static KEYTERMS_CHANGED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn keyterms_changed_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::turn::keyterms::KeytermsChanged) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::turn::keyterms::KeytermsChanged { keyterms, added, removed } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            kwargs.set_item("keyterms", ::pyo3::types::PyList::new(py, keyterms.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            kwargs.set_item("added", ::pyo3::types::PyList::new(py, added.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            kwargs.set_item("removed", ::pyo3::types::PyList::new(py, removed.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
-            KEYTERMS_CHANGED.import(py, "livekit.agents._generated.keyterm_events", "KeytermsChanged")?.call((), Some(&kwargs))
     }
 }
 

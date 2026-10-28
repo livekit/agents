@@ -115,7 +115,6 @@ pub struct SttContextConfig {
 }
 
 /// One LLM answer: three disjoint lists of terms.
-#[crate::host(record(module = "keyterm_events", emit))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeytermUpdate {
     /// Distinctive terms seen but not yet trusted -- tracked, not applied.
@@ -127,7 +126,6 @@ pub struct KeytermUpdate {
 }
 
 /// The effective list changed, and how.
-#[crate::host(record(module = "keyterm_events", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeytermsChanged {
     /// What the STT should now be biased toward.
