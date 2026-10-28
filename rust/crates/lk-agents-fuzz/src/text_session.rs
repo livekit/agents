@@ -414,12 +414,16 @@ impl World {
                 };
                 timeline.at(now + self.rng.u64(1..50), Src::Host, event);
             }
-            E::HostCheckpoint { checkpoint } => {
+            E::HostCheckpoint { checkpoint, .. } => {
                 send(
                     timeline,
                     Src::Host,
                     now + self.rng.u64(0..20),
-                    V::HostCheckpointDone { checkpoint: *checkpoint, result: Ok(true) },
+                    V::HostCheckpointDone {
+                        checkpoint: *checkpoint,
+                        result: Ok(true),
+                        tools: None,
+                    },
                 );
             }
             _ => {}

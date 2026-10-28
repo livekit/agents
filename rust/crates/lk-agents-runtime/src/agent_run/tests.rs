@@ -164,6 +164,16 @@ impl FakeHost {
 }
 
 impl AgentHost for FakeHost {
+    fn list_tools<'a>(
+        &'a self,
+        invocation: &'a Invocation,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
+        Box::pin(async move {
+            self.saw("tools", invocation);
+            Ok(vec![tool("find_slot")])
+        })
+    }
+
     fn checkpoint<'a>(
         &'a self,
         _invocation: &'a Invocation,
@@ -438,7 +448,12 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
         .collect();
     assert_eq!(
         callbacks,
-        [("prepare", Some("call_find_slot".into())), ("run", Some("call_find_slot".into()))]
+        [
+            ("tools", None),
+            ("prepare", Some("call_find_slot".into())),
+            ("run", Some("call_find_slot".into())),
+            ("tools", None),
+        ]
     );
     assert!(
         seen.iter().all(|(_, i)| i.invocation_id == "run_1"

@@ -8,13 +8,17 @@ fn verdict(driver: &mut Driver, yielded: bool) {
         .iter()
         .rev()
         .find_map(|effect| match effect {
-            Effect::Run { effect: agent_run::Effect::HostCheckpoint { checkpoint }, .. } => {
-                Some(*checkpoint)
-            }
+            Effect::Run {
+                effect: agent_run::Effect::HostCheckpoint { checkpoint, .. }, ..
+            } => Some(*checkpoint),
             _ => None,
         })
         .expect("the active frame awaits a checkpoint");
-    driver.run(agent_run::Event::HostCheckpointDone { checkpoint, result: Ok(yielded) });
+    driver.run(agent_run::Event::HostCheckpointDone {
+        checkpoint,
+        result: Ok(yielded),
+        tools: None,
+    });
 }
 
 #[test]

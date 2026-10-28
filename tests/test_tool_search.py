@@ -8,7 +8,14 @@ from pydantic import Field
 
 from livekit.agents import Agent, RunContext, function_tool
 from livekit.agents.beta import ToolProxyToolset, ToolSearchToolset
-from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream, Tool
+from livekit.agents.llm import (
+    ChatContext,
+    ChatMessage,
+    FunctionCallOutput,
+    FunctionToolCall,
+    LLMStream,
+    Tool,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -20,6 +27,7 @@ class ScriptedLLM(FakeLLM):
     def __init__(self, *steps: FunctionToolCall | str) -> None:
         super().__init__()
         self.steps = deque(steps)
+        self.offered: list[list[str]] = []
 
     def chat(
         self,
@@ -29,8 +37,14 @@ class ScriptedLLM(FakeLLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> LLMStream:
+        from livekit.agents.llm import ToolContext
+
+        self.offered.append(list(ToolContext(tools or []).function_tools))
         incoming = chat_ctx.items[-1]
-        text = incoming.text_content if incoming.type == "message" else incoming.output
+        assert isinstance(incoming, (ChatMessage, FunctionCallOutput))
+        text = (
+            (incoming.text_content or "") if isinstance(incoming, ChatMessage) else incoming.output
+        )
         step = self.steps.popleft()
         self.fake_response_map[text] = FakeLLMResponse(
             input=text,
@@ -63,6 +77,9 @@ async def test_discovered_tool_executes_on_the_next_model_step() -> None:
         ),
     )
     result = await agent.run("Reserve two seats.")
+    assert isinstance(agent.llm, ScriptedLLM)
+    assert "reserve_seats" not in agent.llm.offered[0]
+    assert "reserve_seats" in agent.llm.offered[1]
     assert booked == [2], [
         i.output for i in result.new_messages() if i.type == "function_call_output"
     ]

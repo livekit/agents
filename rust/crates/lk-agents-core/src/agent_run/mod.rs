@@ -90,6 +90,7 @@ pub enum Event {
     HostCheckpointDone {
         checkpoint: CheckpointId,
         result: Result<bool, String>,
+        tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
     },
     InstructionsRendered {
         render: RenderId,
@@ -152,6 +153,7 @@ pub enum Event {
 pub enum Effect {
     HostCheckpoint {
         checkpoint: CheckpointId,
+        list_tools: bool,
     },
     HostCheckpointCancel {
         checkpoint: CheckpointId,
@@ -366,8 +368,8 @@ impl AgentRun {
             event if matches!(self.phase, Phase::Aborting { .. } | Phase::Done) => {
                 self.settle_owed(event, &mut fx)
             }
-            Event::HostCheckpointDone { checkpoint, result } => {
-                self.checkpoint_done(checkpoint, result, now, &mut fx)
+            Event::HostCheckpointDone { checkpoint, result, tools } => {
+                self.checkpoint_done(checkpoint, result, tools, now, &mut fx)
             }
             Event::InstructionsRendered { render, result } => match self.phase {
                 Phase::Rendering(r) if r == render => match result {

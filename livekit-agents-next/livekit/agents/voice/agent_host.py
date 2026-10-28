@@ -27,6 +27,7 @@ from .._generated.agent_run import (
     ArgumentIdentity,
     ArgumentIdentityFingerprint,
     ArgumentIdentityJson,
+    FunctionToolInfo,
     Invocation,
     OutputCandidate,
     OutputCandidateText,
@@ -161,6 +162,15 @@ class AgentHost:
                 if hooks is not None and hooks.checkpoint is not None
                 else False
             )
+
+    async def list_tools(self, invocation: Invocation) -> list[FunctionToolInfo]:
+        """Refresh this run's callable tools after toolset discovery."""
+        from .agent_run import tool_infos
+
+        async with self._operation(invocation):
+            run = _current_run()
+            run.tools.update_tools(self._agent.tools)
+            return tool_infos(run.tools)
 
     async def prepare_tool(
         self, invocation: Invocation, arguments: dict[str, Any]

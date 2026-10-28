@@ -37,14 +37,16 @@ impl AgentRun {
 
     fn checkpoint(&mut self, next: Next, effects: &mut Vec<Effect>) {
         let id = CheckpointId(self.mint());
+        let list_tools = matches!(&next, Next::Request { purpose: Purpose::Turn, .. });
         self.phase = Phase::Checkpoint(Pending { id, next });
-        effects.push(Effect::HostCheckpoint { checkpoint: id });
+        effects.push(Effect::HostCheckpoint { checkpoint: id, list_tools });
     }
 
     pub(super) fn checkpoint_done(
         &mut self,
         checkpoint: CheckpointId,
         result: Result<bool, String>,
+        tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
         now: Ts,
         effects: &mut Vec<Effect>,
     ) {
@@ -57,6 +59,13 @@ impl AgentRun {
         match result {
             Ok(false) => match pending.next {
                 Next::Request { purpose, dynamic } => {
+                    if let Some(tools) = tools {
+                        self.agent.tools = tools;
+                        if let Err(error) = crate::agent::validate(&self.agent) {
+                            return self
+                                .finish_now(Err(RunError::Host(error.to_string())), effects);
+                        }
+                    }
                     self.start_request(purpose, dynamic, now, effects)
                 }
                 Next::Finish(result) => self.finish_now(Ok(result), effects),

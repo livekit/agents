@@ -176,6 +176,13 @@ pub trait AgentHost: Send + Sync {
         #[host(context)] invocation: &'a Invocation,
     ) -> crate::BoxFuture<'a, Result<String, HostError>>;
 
+    /// The tools available for this model step, after toolset discovery.
+    #[host(await)]
+    fn list_tools<'a>(
+        &'a self,
+        #[host(context)] invocation: &'a Invocation,
+    ) -> crate::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>>;
+
     /// Binds the call's arguments to the tool's signature and validates them, in the call's
     /// invocation scope.
     #[host(await, requires(tool_call))]

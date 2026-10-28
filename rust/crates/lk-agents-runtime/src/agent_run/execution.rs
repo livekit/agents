@@ -100,21 +100,28 @@ impl Execution {
     }
     pub(crate) async fn execute(&mut self, effect: Effect) -> Option<RunUpdate> {
         match effect {
-            Effect::HostCheckpoint { checkpoint } => {
+            Effect::HostCheckpoint { checkpoint, list_tools } => {
                 let host = self.ports.host.clone();
                 self.invoke(
                     Work::Checkpoint(checkpoint),
                     None,
                     None,
                     move |inv, events| async move {
-                        let result = host
-                            .checkpoint(&inv)
-                            .await
-                            .map_err(|error| error.to_string());
+                        let mut tools = None;
+                        let result = async {
+                            let yielded = host.checkpoint(&inv).await?;
+                            if list_tools && !yielded {
+                                tools = Some(host.list_tools(&inv).await?);
+                            }
+                            Ok::<_, lk_agents_abi::errors::HostError>(yielded)
+                        }
+                        .await
+                        .map_err(|error| error.to_string());
                         let _ = events
                             .send(Report::Core(Event::HostCheckpointDone {
                                 checkpoint,
                                 result,
+                                tools,
                             }))
                             .await;
                     },
