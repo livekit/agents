@@ -199,6 +199,7 @@ class TextSessionAgent:
 class TextSessionRequest:
     session_id: str
     execution_id: str
+    task_id: str | None = None
     root_scope: str
     contexts: dict[str, object]
     separate_contexts: bool = False

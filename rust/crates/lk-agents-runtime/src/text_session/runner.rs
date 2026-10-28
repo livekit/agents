@@ -127,6 +127,7 @@ fn start(
         TextSessionInput {
             session_id: request.session_id.clone(),
             execution_id: request.execution_id.clone(),
+            task_id: request.task_id.clone(),
             root_scope: request.root_scope.clone(),
             available_scopes: request.contexts.keys().cloned().collect(),
             separate_contexts: request.separate_contexts,

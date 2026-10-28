@@ -70,6 +70,11 @@ exported from `livekit.agents`. The contained result uses the shared
 an input-required question. The envelope retains session frames and pending
 calls separately from that invocation result.
 
+A pending execution keeps its stored identity across human turns. After completion,
+a new request starts a new execution while retaining session history. On A2A,
+`ctx.execution_id` equals the task ID. A pending session must be resumed under
+that same task; supplying a different task is refused before execution.
+
 On input required, save the returned state before accepting another request.
 The next request starts a new invocation of the recorded active frame; no
 Python coroutine remains suspended. A frontend can phrase the endpoint's

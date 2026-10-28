@@ -68,6 +68,7 @@ fn input(state: Option<TextSessionState>) -> TextSessionInput {
     TextSessionInput {
         session_id: "conversation".into(),
         execution_id: "task-42".into(),
+        task_id: None,
         root_scope: "customer".into(),
         available_scopes: BTreeSet::from(["customer".into(), "draft".into()]),
         separate_contexts: false,

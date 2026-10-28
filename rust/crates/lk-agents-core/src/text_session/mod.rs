@@ -37,6 +37,7 @@ pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextS
 pub struct TextSessionInput {
     pub session_id: String,
     pub execution_id: String,
+    pub task_id: Option<String>,
     pub root_scope: String,
     pub available_scopes: BTreeSet<String>,
     pub separate_contexts: bool,
@@ -167,12 +168,24 @@ impl TextSession {
     pub fn new(config: TextSessionConfig, input: TextSessionInput) -> Result<Self, RoutingError> {
         config.validate()?;
         let state = match input.state {
-            Some(state) => {
-                if state.session_id != input.session_id || state.execution_id != input.execution_id
-                {
-                    return Err(RoutingError::InvalidState(
-                        "session or execution identity changed".into(),
-                    ));
+            Some(mut state) => {
+                if state.session_id != input.session_id {
+                    return Err(RoutingError::InvalidState("session identity changed".into()));
+                }
+                let frame = state.frames.get(&state.active_frame_id)
+                    .ok_or_else(|| RoutingError::InvalidState("missing active frame".into()))?;
+                let pending = frame.parent.is_some()
+                    || !frame.pending_calls.is_empty()
+                    || agent_run::execution::pending(&frame.history).is_some();
+                match &input.task_id {
+                    Some(task_id) if pending && *task_id != state.execution_id => {
+                        return Err(RoutingError::InvalidState(
+                            "execution identity changed while awaiting input".into(),
+                        ));
+                    }
+                    Some(task_id) => state.execution_id = task_id.clone(),
+                    None if !pending => state.execution_id = input.execution_id,
+                    None => {}
                 }
                 state
             }
@@ -196,7 +209,7 @@ impl TextSession {
                 };
                 TextSessionState {
                     session_id: input.session_id,
-                    execution_id: input.execution_id,
+                    execution_id: input.task_id.unwrap_or(input.execution_id),
                     root_frame_id: root.clone(),
                     active_frame_id: root.clone(),
                     ancestors: Vec::new(),
@@ -380,7 +393,7 @@ impl TextSession {
         let frame = &self.state.frames[&self.state.active_frame_id];
         let agent = &self.config.agents[&frame.agent_name];
         let resume = message.is_none();
-        let message = message.unwrap_or_else(|| {
+        let mut message = message.unwrap_or_else(|| {
             ChatMessage::text(
                 String::new(),
                 lk_agents_abi::Role::User,
@@ -388,6 +401,9 @@ impl TextSession {
                 std::time::UNIX_EPOCH,
             )
         });
+        agent_run::execution::bind(
+            &mut message, &frame.history, Some(&self.state.execution_id), &invocation_id,
+        );
         let input = RunInput {
             invocation_id: invocation_id.clone(),
             message,

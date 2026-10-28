@@ -1442,6 +1442,7 @@ name = "lk-agents-core"
 version = "0.1.0"
 dependencies = [
  "lk-agents-abi",
+ "serde",
  "serde_json",
 ]
 

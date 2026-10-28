@@ -193,6 +193,8 @@ pub struct TextSessionAgent {
 pub struct TextSessionRequest {
     pub session_id: String,
     pub execution_id: String,
+    #[host(default = None)]
+    pub task_id: Option<String>,
     pub root_scope: String,
     pub contexts: BTreeMap<String, HostRef>,
     /// Construct child application contexts in their frame-owned scopes through the host.

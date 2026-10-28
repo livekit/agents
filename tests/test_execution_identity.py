@@ -16,12 +16,14 @@ async def test_direct_execution_identity_survives_serialized_resume() -> None:
     identities: list[str] = []
     agent = Agent(
         instructions="Book after collecting a date.",
-        llm=FakeLLM(fake_responses=[
-            respond("book", "", call("book")),
-            respond("monday", "", call("book", call_id="c2")),
-            respond("reserved", "Booked."),
-            respond("another booking", "", call("book", call_id="c3")),
-        ]),
+        llm=FakeLLM(
+            fake_responses=[
+                respond("book", "", call("book")),
+                respond("monday", "", call("book", call_id="c2")),
+                respond("reserved", "Booked."),
+                respond("another booking", "", call("book", call_id="c3")),
+            ]
+        ),
     )
 
     @agent.tool
