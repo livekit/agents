@@ -343,7 +343,14 @@ the starting history copied from the parent is not copied back.
 
 Application context sharing is independent of both history choices. The
 application supplies a compatible shared context or constructs a child
-context with its own persisted draft. A shared customer or service reference
+context with its own persisted draft. Pass `context_factory=` to `TextSession`
+for separate child contexts. The sync or async callback receives the agent's name
+and a `ContextStore` bound to that child's scope, and returns the application's
+live context. It constructs services and explicitly calls `store.load_context`;
+tools explicitly call `ctx.store.save_context` to retain changes. Each child
+frame has its own scope, preserved in saved state. Reconstructing a session calls
+the factory again for each child that runs; objects are reused within one request.
+The root uses the supplied `context=`. A shared customer or service reference
 can be reused while booking drafts remain separate. See
 [application context](context.md) for scope and persistence ownership.
 

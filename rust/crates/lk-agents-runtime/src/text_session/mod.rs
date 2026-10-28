@@ -137,8 +137,14 @@ impl Driver {
                         invocation_id: invocation_id.clone(),
                         agent_name,
                         execution_id: Some(execution_id),
-                        frame_id: Some(frame_id),
-                        application_context: Some(self.request.contexts[&context_scope].clone()),
+                        frame_id: Some(frame_id.clone()),
+                        application_context: if self.request.separate_contexts
+                            && context_scope == frame_id.value
+                        {
+                            None
+                        } else {
+                            Some(self.request.contexts[&context_scope].clone())
+                        },
                         context_scope: Some(context_scope),
                         history,
                         function_call: None,

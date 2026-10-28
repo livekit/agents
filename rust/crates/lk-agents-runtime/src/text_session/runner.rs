@@ -129,6 +129,7 @@ fn start(
             execution_id: request.execution_id.clone(),
             root_scope: request.root_scope.clone(),
             available_scopes: request.contexts.keys().cloned().collect(),
+            separate_contexts: request.separate_contexts,
             state: request.state.clone(),
             wall: WallAnchor::of(&*clock),
             cleanup_timeout: CLEANUP_TIMEOUT,

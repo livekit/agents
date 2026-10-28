@@ -46,8 +46,10 @@ from .events import Context_T
 from .run_result import Output_T, RunCompleted, RunInputRequired, RunResult, RunUsage
 
 if TYPE_CHECKING:
+    from ..storage.backends import Storage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
+    from ..text_session import _FrameContexts
     from .agent import Agent
 
 
@@ -128,6 +130,7 @@ class _TextRun(Generic[Context_T]):
         self.hooks = hooks
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
+        self._owned_storage: Storage | None = None
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
@@ -136,6 +139,7 @@ class _TextRun(Generic[Context_T]):
         self.execution_id: str | None = None
         self.frame_id: FrameId | None = None
         self.context_scope: str | None = None
+        self.frame_contexts: _FrameContexts | None = None
         self._toolsets: list[Toolset] = []
 
     @property
@@ -153,7 +157,8 @@ class _TextRun(Generic[Context_T]):
     @property
     def store(self) -> ContextStore:
         store = self.hooks.store if self.hooks is not None else None
-        store = store or self._store
+        if store is None:
+            store = self._store
         if store is None:
             raise RuntimeError("this run has no managed context store")
         return store._for_scope(self.context_scope) if self.context_scope is not None else store
@@ -164,9 +169,9 @@ class _TextRun(Generic[Context_T]):
         from ..storage.resolve import Thread
 
         if self.thread is None:
-            storage = Storage({}, None)
-            info = await storage.threads.create_thread()
-            self.thread = Thread(storage, info.thread_id, agent_name=self.agent.name)
+            self._owned_storage = Storage({}, None)
+            info = await self._owned_storage.threads.create_thread()
+            self.thread = Thread(self._owned_storage, info.thread_id, agent_name=self.agent.name)
         if (self.hooks is None or self.hooks.store is None) and self._store is None:
             activation = await self.thread.storage._core._core_context_store(
                 self.thread.id, self.agent.name
@@ -191,8 +196,13 @@ class _TextRun(Generic[Context_T]):
         try:
             await asyncio.gather(*(t._release() for t in toolsets))
         finally:
-            if self._store is not None:
-                self._store.close()
+            try:
+                if self._store is not None:
+                    self._store.close()
+            finally:
+                storage, self._owned_storage = self._owned_storage, None
+                if storage is not None:
+                    await storage.aclose()
 
 
 async def start_run(
@@ -221,9 +231,9 @@ async def start_run(
         hooks=hooks,
         conn_options=conn_options,
     )
-    await run.prepare_thread()
-    await run.acquire_toolsets()
     try:
+        await run.prepare_thread()
+        await run.acquire_toolsets()
         run.tools = ToolContext(agent.tools)
         captured = contextvars.copy_context()
         captured.run(_BindingContextVar.set, run)

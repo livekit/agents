@@ -201,6 +201,8 @@ class TextSessionRequest:
     execution_id: str
     root_scope: str
     contexts: dict[str, object]
+    separate_contexts: bool = False
+    """Construct child application contexts in their frame-owned scopes through the host."""
     message: ChatItem
     state: TextSessionState | None
     delegated: bool

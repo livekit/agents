@@ -50,7 +50,14 @@ impl TextSession {
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
             let history = history::initial(&parent.history, tool.chat_history);
             let merge_chat_history = tool.merge_chat_history;
+            let separate_context = self.separate_contexts && tool.context_scope.is_none();
             let frame_id = super::FrameId { value: self.mint("frame") };
+            let scope = if separate_context {
+                self.scopes.insert(frame_id.value.clone());
+                frame_id.value.clone()
+            } else {
+                scope
+            };
             let task_id = self.mint("task");
             let mut starting_history_ids = history
                 .iter()

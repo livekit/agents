@@ -475,6 +475,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::text_session::TextSessi
             execution_id: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "execution_id", |v| v.extract::<::std::string::String>())?,
             root_scope: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "root_scope", |v| v.extract::<::std::string::String>())?,
             contexts: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "contexts", |v| v.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, item.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())?,
+            separate_contexts: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "separate_contexts", |v| v.extract::<bool>())?,
             message: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "message", |v| v.extract::<::lk_agents_abi::ChatItem>().map_err(::std::convert::Into::<PyErr>::into))?,
             state: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "state", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::text_session::TextSessionState>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             delegated: ::lk_agents_abi::python::attr_with(obj, "TextSessionRequest", "delegated", |v| v.extract::<bool>())?,

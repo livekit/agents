@@ -70,6 +70,7 @@ fn input(state: Option<TextSessionState>) -> TextSessionInput {
         execution_id: "task-42".into(),
         root_scope: "customer".into(),
         available_scopes: BTreeSet::from(["customer".into(), "draft".into()]),
+        separate_contexts: false,
         state,
         wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(1),

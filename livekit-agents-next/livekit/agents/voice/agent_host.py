@@ -101,13 +101,13 @@ class AgentHost:
         self._running: dict[tuple[str, int], asyncio.Task[Any]] = {}
 
     async def render_instructions(self, invocation: Invocation) -> str:
-        with self._operation(invocation):
+        async with self._operation(invocation):
             ctx = RunContext[Any](function_call=None, run=_current_run())
             return await self._agent._render_dynamic_instructions(ctx)
 
     async def checkpoint(self, invocation: Invocation) -> bool:
         """Forward the framework's verdict under this callback's captured invocation."""
-        with self._operation(invocation):
+        async with self._operation(invocation):
             hooks = _current_run().hooks
             return (
                 await hooks.checkpoint()
@@ -120,7 +120,7 @@ class AgentHost:
     ) -> PreparedArguments:
         """Binds and validates the call's arguments in the call's scope; the prepared call and
         the identity approval binds to (the validated arguments as JSON, decision 15)."""
-        with self._operation(invocation):
+        async with self._operation(invocation):
             run = _current_run()
             call = _function_call(invocation)
             tool = run.tools.get_function_tool(call.name)
@@ -154,7 +154,7 @@ class AgentHost:
 
     async def read_back(self, invocation: Invocation, prepared: _Prepared) -> ReadBackAnswer:
         """The tool's read-back function on the call's arguments."""
-        with self._operation(invocation):
+        async with self._operation(invocation):
             assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
             question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
             if inspect.isawaitable(question):
@@ -169,7 +169,7 @@ class AgentHost:
         self, invocation: Invocation, prepared: _Prepared
     ) -> tuple[ToolReport, dict[str, Any]]:
         """Runs the body, sync or async, and classifies what it returned or raised."""
-        with self._operation(invocation):
+        async with self._operation(invocation):
             prepared.ctx._function_call = _function_call(invocation)
             prepared.ctx._operation = invocation.operation
             try:
@@ -199,7 +199,7 @@ class AgentHost:
         self, invocation: Invocation, candidate: OutputCandidate
     ) -> ValidatedOutput:
         """The output contract and the output validators on a candidate."""
-        with self._operation(invocation):
+        async with self._operation(invocation):
             ctx = RunContext[Any](function_call=None, run=_current_run())
             try:
                 if isinstance(candidate, OutputCandidateText):
@@ -241,7 +241,7 @@ class _Operation:
         self._invocation = invocation
         self._token: contextvars.Token[Any] | None = None
 
-    def __enter__(self) -> None:
+    async def __aenter__(self) -> None:
         run = copy.copy(_current_run())
         run.id = self._invocation.invocation_id
         from .._core_view import from_core_item
@@ -257,7 +257,15 @@ class _Operation:
         if task is not None:
             self._running[self._key] = task
 
-    def __exit__(self, *exc: object) -> None:
+        try:
+            run = _current_run()
+            if run.frame_contexts is not None:
+                await run.frame_contexts.resolve(run)
+        except BaseException:
+            await self.__aexit__()
+            raise
+
+    async def __aexit__(self, *exc: object) -> None:
         self._running.pop(self._key, None)
         if self._token is not None:
             _BindingContextVar.reset(self._token)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any, Generic
@@ -12,6 +14,7 @@ from . import _core, llm, utils
 from ._generated import text_session as records
 from ._generated.agent_run import RunSettled
 from ._generated.text_session import TextSessionState
+from .storage.context_store import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice.agent import Agent, _BindingContextVar
 from .voice.agent_run import _TextRun, door_hooks, run_error, settled_result
@@ -36,9 +39,16 @@ class TextSessionRoutingError(ValueError):
 
 
 class TextSession(Generic[Context_T, Output_T]):
-    def __init__(self, *, agent: Agent[Context_T, Output_T], max_depth: int = 8) -> None:
+    def __init__(
+        self,
+        *,
+        agent: Agent[Context_T, Output_T],
+        max_depth: int = 8,
+        context_factory: Callable[[str, ContextStore], object | Awaitable[object]] | None = None,
+    ) -> None:
         self._agent = agent
         self._max_depth = max_depth
+        self._context_factory = context_factory
 
     async def run(
         self,
@@ -76,6 +86,7 @@ class TextSession(Generic[Context_T, Output_T]):
             usage = RunUsage()
             runs: dict[str, _TextRun[Any]] = {}
             cleanup = AsyncExitStack()
+            contexts = _FrameContexts(self._context_factory, root_scope)
             try:
                 bindings = []
                 for agent in agents:
@@ -87,6 +98,15 @@ class TextSession(Generic[Context_T, Output_T]):
                         hooks=hooks,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
                     )
+                    if not runs:
+                        await run.prepare_thread()
+                        shared_thread = run.thread
+                        shared_store = run.store
+                    else:
+                        run.thread = shared_thread
+                        if hooks is None or hooks.store is None:
+                            run._store = shared_store
+                    run.frame_contexts = contexts
                     await run.acquire_toolsets()
                     cleanup.push_async_callback(run.release_toolsets)
                     run.tools = llm.ToolContext(agent.tools)
@@ -121,6 +141,7 @@ class TextSession(Generic[Context_T, Output_T]):
                         or utils.shortuuid("execution_"),
                         root_scope=root_scope,
                         contexts={root_scope: context},
+                        separate_contexts=self._context_factory is not None,
                         message=to_core_item(incoming),
                         state=state,
                         delegated=hooks.delegated if hooks is not None else False,
@@ -169,6 +190,30 @@ class TextSession(Generic[Context_T, Output_T]):
                 raise
 
         return RunStream(start, agent_name=self._agent.name)
+
+
+class _FrameContexts:
+    """Application object construction, cached only for this request's live frames."""
+
+    def __init__(
+        self,
+        factory: Callable[[str, ContextStore], object | Awaitable[object]] | None,
+        root_scope: str,
+    ) -> None:
+        self.factory = factory
+        self.root_scope = root_scope
+        self.contexts: dict[str, object] = {}
+
+    async def resolve(self, run: _TextRun[Any]) -> None:
+        scope = run.context_scope
+        if self.factory is None or scope is None or scope == self.root_scope:
+            return
+        if scope not in self.contexts:
+            context = self.factory(run.agent.name, run.store)
+            if inspect.isawaitable(context):
+                context = await context
+            self.contexts[scope] = context
+        run.context = self.contexts[scope]
 
 
 def _agents(root: Agent[Any, Any]) -> list[Agent[Any, Any]]:

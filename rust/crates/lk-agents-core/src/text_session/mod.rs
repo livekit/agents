@@ -39,6 +39,7 @@ pub struct TextSessionInput {
     pub execution_id: String,
     pub root_scope: String,
     pub available_scopes: BTreeSet<String>,
+    pub separate_contexts: bool,
     pub state: Option<TextSessionState>,
     pub wall: WallAnchor,
     pub cleanup_timeout: Duration,
@@ -151,6 +152,7 @@ pub struct TextSession {
     config: TextSessionConfig,
     state: TextSessionState,
     scopes: BTreeSet<String>,
+    separate_contexts: bool,
     wall: WallAnchor,
     cleanup_timeout: Duration,
     delegated: bool,
@@ -203,11 +205,19 @@ impl TextSession {
                 }
             }
         };
-        config.validate_state(&state, &input.available_scopes)?;
+        let mut scopes = input.available_scopes;
+        if input.separate_contexts {
+            scopes.extend(state.frames.values().filter_map(|frame| {
+                (frame.parent.is_some() && frame.context_scope == frame.id.value)
+                    .then(|| frame.context_scope.clone())
+            }));
+        }
+        config.validate_state(&state, &scopes)?;
         Ok(Self {
             config,
             state,
-            scopes: input.available_scopes,
+            scopes,
+            separate_contexts: input.separate_contexts,
             wall: input.wall,
             cleanup_timeout: input.cleanup_timeout,
             delegated: input.delegated,

@@ -195,6 +195,9 @@ pub struct TextSessionRequest {
     pub execution_id: String,
     pub root_scope: String,
     pub contexts: BTreeMap<String, HostRef>,
+    /// Construct child application contexts in their frame-owned scopes through the host.
+    #[host(default = false)]
+    pub separate_contexts: bool,
     pub message: ChatItem,
     pub state: Option<TextSessionState>,
     pub delegated: bool,
