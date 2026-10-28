@@ -13,6 +13,7 @@
 //! [`Verdict`], then the [`HandlerOutput`]. A turn yields at a checkpoint once a newer message
 //! waits under `interrupt` or a client canceled its task.
 
+pub mod auth;
 pub mod caller_history;
 pub mod client;
 pub mod delegation;

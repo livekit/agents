@@ -41,6 +41,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
     type WorkerCli = lk_agents_worker::cli::WorkerCli;

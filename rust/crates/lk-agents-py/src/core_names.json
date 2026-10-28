@@ -150,6 +150,8 @@
   "VoiceSession",
   "WARM_TRANSFER_IDENTITY",
   "WarmTransfer",
+  "_core_Credentials",
+  "_core_auth_grant_allows",
   "accuracy",
   "agent_join_token",
   "amd_auto_select_models",

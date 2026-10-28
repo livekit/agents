@@ -5,6 +5,7 @@
 //!
 //! Each record crosses as an instance of its generated model.
 
+mod a2a;
 mod agent;
 mod llm;
 mod storage;

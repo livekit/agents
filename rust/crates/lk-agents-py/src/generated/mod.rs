@@ -7,6 +7,7 @@
 
 use pyo3::prelude::*;
 
+pub mod a2a;
 pub mod agent;
 pub mod inference;
 pub mod llm;
@@ -17,6 +18,8 @@ pub mod worker;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
+    type Credentials: ::lk_agents_abi::a2a::auth::Credentials;
+    type AuthPermissions: ::lk_agents_abi::a2a::auth::AuthPermissions;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
@@ -35,6 +38,8 @@ pub trait Implementations: 'static {
 
 /// Adds every declared class to `_core`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<a2a::_core_Credentials>()?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
     m.add_class::<inference::InferenceAvatar>()?;

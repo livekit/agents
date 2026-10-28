@@ -258,7 +258,7 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
                 raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
             door.bind(storage=self._storage, config=self._config)
             self._http.mount(f"/{door.name}", door.app, name=door.name)
-            self._http.configure_endpoint(f"/{door.name}", public=door.public)
+            self._http.configure_endpoint(f"/{door.name}", public=False)
             self._a2a_endpoints[door.name] = door
         return doors
 

@@ -33,7 +33,7 @@ from .._core import ServerConfig, endpoint_url_base
 from .._generated.storage_turn import Policy, TurnOptions
 from ..storage.backends import Storage
 from ..storage.context import Handler
-from .auth import ANONYMOUS, AuthError, Credentials, Principal, Unauthorized
+from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import METHODS, STREAMING, A2AService, CallContext, JsonRpc
 
@@ -47,8 +47,6 @@ AuthCallable = Callable[[HTTPConnection], "bool | Awaitable[bool]"]
 class A2ASessionOptions(TypedDict, total=False):
     """``a2a_session``'s optional parameters (docs/server.md)."""
 
-    public: bool
-    """``True`` by default: reachable without a LiveKit token."""
     auth: AuthCallable | None
     """The developer's own check, a callable taking the request."""
     inbox: Policy | Mapping[str, Policy] | None
@@ -88,7 +86,6 @@ class A2AEndpoint:
         *,
         endpoint: str,
         description: str,
-        public: bool = True,
         auth: AuthCallable | None = None,
         inbox: Policy | Mapping[str, Policy] | None = None,
         debounce: timedelta | Mapping[str, timedelta] | None = None,
@@ -101,7 +98,6 @@ class A2AEndpoint:
         self.handler = handler
         self.name = endpoint
         self.description = description
-        self.public = public
         self.auth = auth
         self.turn_options = TurnOptions(
             policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
@@ -114,6 +110,7 @@ class A2AEndpoint:
         self._url: str | None = None
         self._url_base: Callable[[], str | None] | None = None
         self._app: Starlette | None = None
+        self._deployment = ""
 
     # -- binding to a server --
 
@@ -127,6 +124,7 @@ class A2AEndpoint:
                 "or a2a_session(storage=...)"
             )
 
+        self._deployment = config.deployment
         own = self.lane
         self._service = A2AService(
             self,
@@ -176,7 +174,6 @@ class A2AEndpoint:
                 name=self.name,
                 description=self.description,
                 version=self.version,
-                public=self.public,
             )
         )
 
@@ -196,6 +193,10 @@ class A2AEndpoint:
         return self._app
 
     async def _serve_card(self, request: Request) -> Response:
+        try:
+            await self.authenticate(request)
+        except AuthError as error:
+            return _auth_response(error)
         # the mount's path is the scope's root_path; base_url carries the host alone
         base = str(request.base_url).rstrip("/") + str(request.scope.get("root_path") or "")
         return JSONResponse(self.card(base.rstrip("/")))
@@ -204,9 +205,14 @@ class A2AEndpoint:
         """The caller of a request: the preamble's grant and verdict, a bearer token when no
         node is in front, the developer's ``auth``.
 
-        Raises ``Unauthorized`` when ``auth`` refuses or the token does not verify, and when
-        a non-public endpoint sees nobody.
+        Raises ``Unauthorized`` when ``auth`` refuses or the token does not verify.
         """
+        if self.auth is not None:
+            allowed = self.auth(connection)
+            if inspect.isawaitable(allowed):
+                allowed = await allowed
+            if not allowed:
+                raise Unauthorized("refused by the endpoint's auth")
         lk_request = getattr(connection.state, "lk_request", None)
         node_authorized = bool(getattr(lk_request, "authorized", False))
         credentials = self.service.credentials
@@ -215,19 +221,14 @@ class A2AEndpoint:
                 connection.headers,
                 agent_name=self.service.agent_name,
                 node_authorized=node_authorized,
+                deployment=self._deployment,
                 query_params=connection.query_params,
             )
         else:
-            principal = Principal(kind="project") if node_authorized else ANONYMOUS
+            if not node_authorized:
+                raise Unauthorized("a LiveKit bearer token is required")
+            principal = PROJECT
 
-        if self.auth is not None:
-            allowed = self.auth(connection)
-            if inspect.isawaitable(allowed):
-                allowed = await allowed
-            if not allowed:
-                raise Unauthorized("refused by the endpoint's auth")
-        if not self.public and principal.anonymous:
-            raise Unauthorized("this endpoint is not public: a project token is required")
         return principal
 
     def call_context(self, connection: HTTPConnection, principal: Principal) -> CallContext:

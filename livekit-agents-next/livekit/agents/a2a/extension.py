@@ -121,7 +121,6 @@ def agent_card(
     name: str,
     description: str,
     version: str = "1.0.0",
-    public: bool = True,
     security_schemes: SecuritySchemes | None = None,
 ) -> pb.AgentCard:
     """The card an endpoint serves: one ``delegate`` skill, text in and text out, the
@@ -144,7 +143,7 @@ def agent_card(
         supported_interfaces=[interface],
     )
 
-    _add_security(card, public=public, security_schemes=security_schemes)
+    _add_security(card, security_schemes=security_schemes)
     return card
 
 
@@ -159,24 +158,20 @@ def _offered_extension() -> pb.AgentExtension:
     )
 
 
-def _add_security(
-    card: pb.AgentCard, *, public: bool, security_schemes: SecuritySchemes | None
-) -> None:
+def _add_security(card: pb.AgentCard, *, security_schemes: SecuritySchemes | None) -> None:
     """A LiveKit project token is always accepted; the developer's own schemes beside it."""
-    note = "" if public else "; required: this endpoint is not public"
     bearer = pb.HTTPAuthSecurityScheme(
         scheme="bearer",
         bearer_format="JWT",
-        description="A LiveKit project token or agent session grant" + note,
+        description="A required LiveKit project token or thread grant",
     )
     card.security_schemes["livekit"].http_auth_security_scheme.CopyFrom(bearer)
 
     for scheme_name, scheme in (security_schemes or {}).items():
         json_format.ParseDict(dict(scheme), card.security_schemes[scheme_name])
 
-    if not public:
-        requirement = card.security_requirements.add()
-        requirement.schemes["livekit"].list.extend([])
+    requirement = card.security_requirements.add()
+    requirement.schemes["livekit"].list.extend([])
 
 
 __all__ = [

@@ -403,7 +403,6 @@ back_office = AgentHandler(lane="backend")
 @back_office.a2a_session(
     endpoint="backend",
     description="The LiveKit Hotel's back office: rooms and bookings.",
-    public=False,
     inbox="queue",
 )
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
