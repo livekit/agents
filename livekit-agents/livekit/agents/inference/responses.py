@@ -60,7 +60,6 @@ _GATEWAY_WS_MAX_SESSION = 55 * 60
 _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "upstream_connect_failed": (502, True),
     "quota_exceeded": (429, None),
-    "tool_not_allowed": (400, False),
     "model_mismatch": (400, False),
     "invalid_event": (400, False),
     "unknown_model": (400, False),
