@@ -20,13 +20,22 @@ mod registry {
     fn every_known_finding_is_a_contract() {
         let mut keys = std::collections::BTreeSet::new();
         for known in crate::check::KNOWN_FINDINGS.iter() {
+            let named = |id: &&str| *id == known.contract;
+            let simulated = crate::inference::llm::RULES.iter().map(|r| &r.0).any(named)
+                || crate::inference::avatar::RULES.iter().map(|r| &r.0).any(named)
+                || crate::worker::RULES.iter().map(|r| &r.0).any(named);
             assert!(
                 known.contract == "session_settles"
+                    || simulated
                     || RULES.iter().any(|rule| rule.id() == known.contract),
                 "{} is listed as a known finding but is no contract",
                 known.contract
             );
-            assert!(keys.insert((known.contract, known.subject)), "{} listed twice", known.contract);
+            assert!(
+                keys.insert((known.contract, known.subject)),
+                "{} listed twice",
+                known.contract
+            );
             assert!(!known.why.is_empty(), "{} has no reason", known.contract);
             if let Some(test) = known.fixed_by {
                 let path = format!("{}/tests/regressions/{test}.rs", env!("CARGO_MANIFEST_DIR"));

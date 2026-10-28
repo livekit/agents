@@ -38,3 +38,5 @@ lk-agents-storage = { path = "../lk-agents-storage", features = ["sqlite"] }
 rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
 livekit-protocol.workspace = true
 a2a.workspace = true
+# The worker simulation: the process pool's synchronous allocation core.
+lk-agents-worker = { path = "../lk-agents-worker" }

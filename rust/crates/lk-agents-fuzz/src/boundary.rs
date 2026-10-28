@@ -77,6 +77,47 @@ pub const STORAGE: Boundary = Boundary {
     ],
 };
 
+/// The inference campaign (`tests/inference_survey.rs`, `inference` module).
+pub const INFERENCE: Boundary = Boundary {
+    cores: &[
+        "LLM request core (lk_agents_inference::llm::lifecycle::LlmRequest over attempts::Attempts), \
+         stepped per delivered transport or consumer event and due wake",
+        "avatar session core (lk_agents_inference::avatar::lifecycle::AvatarSessionLifecycle), \
+         stepped per delivered transport, caller or program event and due wake",
+    ],
+    fakes: &[
+        "inference::llm::Gateway: connections, rejections, recorded gpt-4.1-mini chunk timing, \
+         drops, stalls, malformed and unterminated bodies, late or missing attempt releases",
+        "inference::llm::Consumer: demand with backpressure, cancellation",
+        "inference::avatar::Gateway: idempotent creates applied on receipt, lost answers, \
+         rejections, sessions without terminate ids, late or missing attempt releases",
+        "inference::avatar::Program: the creating caller, a racing caller, refusals, closes",
+    ],
+    transitional: &["none: both machines are core machines the simulation steps itself"],
+    outside: &[
+        "the runtime's HTTP exchange tasks and the Python avatar/LLM adapters (K-30 conformance, \
+         F-18 real-peer tests)",
+    ],
+};
+
+/// The worker campaign (`tests/worker_survey.rs`, `worker` module).
+pub const WORKER: Boundary = Boundary {
+    cores: &["process pool allocation core (lk_agents_worker::ipc::pool::PoolState), stepped per \
+         delivered process, driver or server event and due wake"],
+    fakes: &[
+        "worker::Os: job processes that spawn or fail to, initialize, crash or hang, run a job \
+         and exit, close late, and whose exit watches and reaps fail and are retried",
+        "the driver: admissions with duplicate dispatches, cancels, a drain, the close, launches \
+         of reserved jobs, forgets of settled requests, the cleanup report",
+    ],
+    transitional: &["the driver mirrors lk_agents_worker::ipc::pool's task loop by hand"],
+    outside: &[
+        "the pool's async task, the supervisor's process I/O, IPC and the server connection \
+         (G-12 stress, K-30 conformance)",
+        "registration, job assignment and the server lifecycle (WorkerState: K-2 remainder)",
+    ],
+};
+
 impl Boundary {
     /// Prints the boundary with what the campaign actually delivered, and fails on an empty
     /// inventory: a campaign that cannot say what it covered proves nothing.
