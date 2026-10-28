@@ -8,8 +8,6 @@ events for the streams; the caller is checked by ``auth.py`` and the developer's
 
 from __future__ import annotations
 
-import asyncio
-import contextvars
 import inspect
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -216,7 +214,6 @@ class A2AEndpoint:
                 agent_name=self.service.agent_name,
                 node_authorized=node_authorized,
                 deployment=self._deployment,
-                query_params=connection.query_params,
             )
         else:
             if not node_authorized:
@@ -242,13 +239,12 @@ class A2AEndpoint:
             if received > native.max_payload_bytes:
                 break
             body.extend(chunk)
-        responses = await native.dispatch(
+        responses = await self.service.dispatch(
             bytes(body),
             principal,
             version=request.headers.get("a2a-version"),
             offset=request.headers.get("last-event-id"),
             body_size=received,
-            host_context=(asyncio.get_running_loop(), contextvars.copy_context()),
         )
         try:
             first = await responses.next()

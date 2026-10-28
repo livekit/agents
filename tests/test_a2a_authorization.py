@@ -97,7 +97,7 @@ def test_selected_header_is_the_only_authentication_carrier(credentials: Credent
     token = credentials.thread_grant_token(AgentThreadGrant(scope="user:42", read=True))
     other = credentials.thread_grant_token(AgentThreadGrant(scope="user:7", write=True))
     with pytest.raises(Unauthorized):
-        credentials.principal({}, agent_name="agent", query_params={"access_token": token})
+        credentials.principal({}, agent_name="agent")
     for invalid in ("Basic unsupported", "Bearer ", ""):
         with pytest.raises(Unauthorized):
             credentials.principal(
@@ -107,7 +107,6 @@ def test_selected_header_is_the_only_authentication_carrier(credentials: Credent
     principal = credentials.principal(
         {"Authorization": f"Bearer {token}", "X-LiveKit-Thread-Grant": other},
         agent_name="agent",
-        query_params={"access_token": other},
     )
     assert principal.grant is not None and principal.grant.scope == "user:42"
     assert (

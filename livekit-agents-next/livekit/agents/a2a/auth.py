@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
 
 from .._core import _core_auth_grant_allows, _core_Credentials
 from .._generated.a2a_auth import AuthGrant, AuthPrincipal
 from .._generated.storage_class import ThreadInfo
 
-GRANT_CLAIM = "agentThread"
 GRANT_HEADER = "X-LiveKit-Thread-Grant"
-Flag = Literal["list", "create", "write", "read", "delete"]
 
 
 class AuthError(Exception):
@@ -83,10 +80,6 @@ class Principal(AuthPrincipal):
     def unscoped(self) -> bool:
         return self.kind == "project"
 
-    @property
-    def anonymous(self) -> bool:
-        return False
-
     @classmethod
     def _from_native(cls, principal: AuthPrincipal) -> Principal:
         grant = principal.grant
@@ -128,7 +121,6 @@ class Credentials:
         agent_name: str,
         deployment: str = "",
         node_authorized: bool = False,
-        query_params: Mapping[str, str] | None = None,
     ) -> Principal:
         headers = headers or {}
         return Principal._from_native(
@@ -150,9 +142,6 @@ class Credentials:
         return self._native.thread_grant_token(grant, identity=identity, ttl_seconds=ttl_seconds)
 
 
-# Internal calls must explicitly choose a trusted principal. HTTP requests never receive this
-# missing-principal sentinel; the endpoint authenticates them before dispatch.
-ANONYMOUS = None
 PROJECT = Principal(kind="project", grant=None, identity="", claims={}, endpoint_call=True)
 
 __all__ = [
