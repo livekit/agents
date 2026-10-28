@@ -4,7 +4,7 @@ Keys, all optional:
     patient: the name the caller must end the call verified or registered as; anything booked
         or moved must be theirs
     born: the date of birth, YYYY-MM-DD, that the patient's chart must have
-    new_patient: true if the caller must be registered as a new patient, false if they mustn't
+    new_patient: true if the patient must be the one new chart registered, false if none may be
     booked: morning or afternoon if a new appointment must be booked then, or false if none may
         be
     moved: morning or afternoon if an appointment must be moved to then, or false if none may
@@ -50,11 +50,11 @@ def grade(state: CallState, expected: dict[str, Any]) -> list[str]:
 
     if "new_patient" in expected:
         registered = [name for name in clinic.patients if name not in PATIENTS_ON_FILE]
-        if bool(registered) != expected["new_patient"]:
+        want = [patient] if expected["new_patient"] else []
+        if [n.casefold() for n in registered] != [n.casefold() for n in want]:
             problems.append(
-                f"registered {', '.join(registered)} as a new patient"
-                if registered
-                else "never registered a new patient"
+                f"registered {', '.join(registered) or 'nobody'}, "
+                f"expected {', '.join(want) or 'nobody'}"
             )
 
     seeded = {a.id: a.starts_at for a in Clinic(today=clinic.today).appointments}

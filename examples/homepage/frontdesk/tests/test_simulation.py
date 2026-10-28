@@ -42,6 +42,14 @@ async def test_booking_someone_else_fails():
     ]
 
 
+async def test_registering_anyone_else_too_fails():
+    state = await booked_for("Casey Morgan")
+    await state.clinic.register("Sam Rivera", date(1990, 8, 17))
+    assert grade(state, CASEY_BOOKS) == [
+        "registered Casey Morgan, Sam Rivera, expected Casey Morgan"
+    ]
+
+
 async def test_a_chart_with_the_wrong_birthday_fails():
     wrong = Caller("Casey Morgan", date(1995, 6, 2))
     assert grade(await booked_for("Casey Morgan", wrong), CASEY_BOOKS) == [
