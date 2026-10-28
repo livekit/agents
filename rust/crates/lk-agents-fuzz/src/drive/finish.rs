@@ -354,8 +354,29 @@ const MAX_RELEASE_ROUNDS: u32 = 100;
 ///
 /// `expectations` separates a contract that passed from one that never applied. A report that
 /// cannot tell those apart shows a rule as green long after its state stopped being reachable.
+/// How a run ended, with its evidence. A run stopped at a finite bound is `Budget` unless the
+/// trail shows the cycle it was spinning in: a step limit alone proves no livelock, and a wait
+/// that ran out proves no deadlock unless nothing could have moved it.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub enum Ending {
+    /// Ran to its close; every contract held.
+    #[default]
+    Completed,
+    /// Ran to its close; a contract failed (`failures`).
+    ContractViolated,
+    /// Stopped at the step bound while dispatching the same cycle of steps, the whole trail.
+    Livelock { cycle: Vec<&'static str> },
+    /// A task the run awaited could not finish: nothing pending, no wake, no task runnable.
+    Deadlock { evidence: String },
+    /// Stopped at a finite bound (steps at one instant, release rounds) with no proof of either.
+    Budget { bound: String, trail: String },
+}
+
 #[derive(Debug, Default)]
 pub struct Outcome {
+    pub ending: Ending,
+    /// The run's dispatch order, folded (`Run::dispatch_order`).
+    pub dispatch_order: u64,
     pub case: Case,
     pub failures: Vec<Failure>,
     pub expectations: BTreeMap<&'static str, u32>,
@@ -429,6 +450,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             // What the run reached still counts, and its rules still get their say.
             record_outcome(&run, &mut outcome);
             outcome.failures.push(never_quiet);
+            outcome.ending = ending(&run, &outcome.failures);
             return outcome;
         }
         let grants_before = run.hold_grants();
@@ -517,6 +539,28 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
     outcome.opened = opened_by_input(&run.record);
     outcome.cells = cells_by_input(&run.record);
     outcome.busiest_instant = run.busiest_instant;
+    outcome.dispatch_order = run.dispatch_order();
+    outcome.ending = ending(run, &outcome.failures);
+}
+
+/// How the run ended, from what it recorded: the bound it stopped at and the trail's cycle, the
+/// deadlock evidence, or its findings.
+fn ending(run: &Run, failures: &[Failure]) -> Ending {
+    let trail = run.queue.trail();
+    let stopped = run.record.livelock().map(str::to_owned).or_else(|| {
+        failures.iter().find(|f| f.contract == "session_settles").map(|f| f.detail.clone())
+    });
+    if let Some(bound) = stopped {
+        let trail = trail.lock().unwrap();
+        return match trail.cycle() {
+            Some(cycle) if run.record.livelock().is_some() => Ending::Livelock { cycle },
+            _ => Ending::Budget { bound, trail: trail.dump() },
+        };
+    }
+    if let Some(evidence) = &run.deadlock {
+        return Ending::Deadlock { evidence: evidence.clone() };
+    }
+    if failures.is_empty() { Ending::Completed } else { Ending::ContractViolated }
 }
 
 /// The phases of a conversation, in COVERAGE.md's column order.
@@ -615,21 +659,63 @@ fn opened_by_input(record: &Recording) -> BTreeMap<&'static str, BTreeSet<Kind>>
 mod tests {
     use super::*;
 
-    /// A task that wakes itself forever never lets the clock move: the run stops the session as
-    /// a livelock instead of spinning with it.
+    /// Runs `body` on a fresh run, then closes it and ends it as `run()` does: its outcome.
+    fn ended(body: impl FnOnce(&Run) + 'static) -> Outcome {
+        simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+            body(&run);
+            let mut outcome = Outcome::default();
+            for input in [Input::Advance { ms: Millis(20) }, Input::Close { drain: false }] {
+                run.apply(&input).await;
+                if let Some(stopped) = guard(&run, &mut outcome) {
+                    return stopped;
+                }
+            }
+            run.apply(&Input::AwaitExit {}).await;
+            run.join_tasks().await;
+            run.collect();
+            record_outcome(&run, &mut outcome);
+            outcome
+        })
+    }
+
+    /// A task that wakes itself forever never lets the clock move: the run stops the session at
+    /// its step bound, and the trail shows the cycle it spun in, which is the livelock's proof.
     #[test]
     fn a_task_spinning_at_one_instant_is_a_livelock() {
-        let livelock = simulate(async {
-            let mut run = Run::start(&Setup::default(), 0, Policy::default()).await;
+        let outcome = ended(|_| {
             tokio::spawn(async {
                 loop {
                     tokio::task::yield_now().await;
                 }
             });
-            run.apply(&Input::Advance { ms: Millis(20) }).await;
-            run.record.livelock().map(str::to_owned)
         });
-        assert!(livelock.is_some(), "a spinning task was not reported");
+        assert!(outcome.stopped_early, "a spinning task was not stopped");
+        assert!(
+            matches!(&outcome.ending, Ending::Livelock { cycle } if cycle == &["Tasks"]),
+            "{:?}",
+            outcome.ending
+        );
+    }
+
+    /// A quiet session that closes ends completed; one whose task panicked ends with the
+    /// contract it broke; one whose task waits on nothing that can ever happen is a deadlock,
+    /// with what was (not) enabled as evidence.
+    #[test]
+    fn each_ending_is_told_apart() {
+        assert_eq!(ended(|_| {}).ending, Ending::Completed);
+        let violated = ended(|run| {
+            run.tasks.spawn(Box::pin(async { panic!("boom") }));
+        });
+        assert_eq!(violated.ending, Ending::ContractViolated, "{:?}", violated.failures);
+        let deadlocked = ended(|run| {
+            run.tasks.spawn(Box::pin(std::future::pending()));
+        });
+        assert!(
+            matches!(&deadlocked.ending, Ending::Deadlock { evidence } if evidence.contains("nothing pending")),
+            "{:?}",
+            deadlocked.ending
+        );
     }
 
     /// A joined task names the product line that spawned it, not the spawner's: without

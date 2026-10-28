@@ -234,9 +234,17 @@ fn campaign(window: &Window) {
     // The busiest virtual instant, in steps of the run's loop, and where: NO_PROGRESS_STEPS's
     // derivation.
     let mut busiest = (0u32, 0u64);
+    // How the runs ended (`drive::Ending`), by kind, with one seed each.
+    let mut endings: BTreeMap<String, (usize, u64)> = BTreeMap::new();
 
     for (seed, outcome, took) in run_all(window) {
         busiest = busiest.max((outcome.busiest_instant, seed));
+        let kind = format!("{:?}", outcome.ending);
+        let kind = kind.split([' ', '{']).next().unwrap_or_default().to_owned();
+        endings.entry(kind).or_insert((0, seed)).0 += 1;
+        if window.single {
+            println!("ending: {:?}", outcome.ending);
+        }
         let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
         bands[band_of].absorb(&outcome, took);
         policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
@@ -314,7 +322,10 @@ fn campaign(window: &Window) {
     println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal");
     // A call where the agent was never heard reaches nothing that happens while it speaks.
     println!("{heard} of {seeds} runs where the person heard the agent");
-    println!("busiest instant: {} steps of the run's loop (seed {})\n", busiest.0, busiest.1);
+    println!("busiest instant: {} steps of the run's loop (seed {})", busiest.0, busiest.1);
+    let endings: Vec<String> =
+        endings.iter().map(|(k, (n, seed))| format!("{k} {n} (seed {seed})")).collect();
+    println!("endings: {}\n", endings.join(", "));
 
     // Per family, because the two ways to miss a variant have different fixes: a family at zero
     // is a leg no setup built, and a family part-reached is a search that has not got there yet.

@@ -45,7 +45,7 @@ fn rerun(case: &lk_agents_fuzz::drive::Case) -> String {
         for input in &case.inputs {
             run.apply(input).await;
         }
-        fingerprint(&run.record)
+        format!("{}D {}\n", fingerprint(&run.record), run.dispatch_order())
     })
 }
 

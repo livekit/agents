@@ -13,7 +13,8 @@
 //! The scheduler knows the sources and nothing of what a step reads or writes: BasicPOS draws
 //! every pending step a priority and runs the highest, with no footprints and no race-based
 //! reassignment (owner decisions 21 and 28). Its tests are the small programs at the bottom.
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::mem::Discriminant;
 use std::pin::Pin;
@@ -105,6 +106,84 @@ pub struct Queue {
     /// What was dispatched, in order, folded: two runs that dispatched the same steps in the same
     /// order agree on it.
     order: u64,
+    trail: Arc<Mutex<Trail>>,
+}
+
+/// The last steps dispatched and what is pending, by kind, shared with the run's watchdog: what a
+/// hang that blocks the run's thread is reported with, and what a stopped run's ending reads.
+#[derive(Default)]
+pub struct Trail {
+    /// The last [`TRAIL`] dispatches: their number and kind.
+    pub last: VecDeque<(u64, &'static str)>,
+    /// What is pending, by arrival.
+    pub pending: BTreeMap<u64, &'static str>,
+}
+
+/// Dispatches the trail keeps.
+const TRAIL: usize = 64;
+
+thread_local! {
+    /// The trail of the simulation running on this thread (`drive::simulate_with`).
+    static CURRENT: RefCell<Arc<Mutex<Trail>>> = RefCell::default();
+}
+
+impl Trail {
+    /// A fresh trail for the simulation about to run on this thread.
+    pub fn install() -> Arc<Mutex<Trail>> {
+        let trail = Arc::default();
+        CURRENT.set(Arc::clone(&trail));
+        trail
+    }
+
+    /// The smallest period, of at most a quarter of the trail, that the whole trail repeats:
+    /// the cycle a run that stopped at its step bound was spinning in. `None` when the trail is
+    /// not full or does not repeat, which is no evidence of a livelock.
+    pub fn cycle(&self) -> Option<Vec<&'static str>> {
+        let kinds: Vec<&str> = self.last.iter().map(|(_, kind)| *kind).collect();
+        if kinds.len() < TRAIL {
+            return None;
+        }
+        (1..=TRAIL / 4)
+            .find(|&p| (p..kinds.len()).all(|i| kinds[i] == kinds[i - p]))
+            .map(|p| kinds[kinds.len() - p..].to_vec())
+    }
+
+    pub fn dump(&self) -> String {
+        let last: Vec<String> = self.last.iter().map(|(n, k)| format!("{n}:{k}")).collect();
+        let pending: Vec<String> = self.pending.iter().map(|(a, k)| format!("{a}:{k}")).collect();
+        format!(
+            "last {} dispatches: {}\npending: {}",
+            last.len(),
+            last.join(" "),
+            if pending.is_empty() { "nothing".into() } else { pending.join(" ") }
+        )
+    }
+}
+
+/// An event's kind, without formatting it: what the trail keeps.
+fn label(event: &Event) -> &'static str {
+    match event {
+        Event::Wake => "Wake",
+        Event::Forwarder(_) => "Forwarder",
+        Event::Input(input) => match input {
+            Input::Host(sent) => sent.command.kind(),
+            Input::Stt(_) => "Stt",
+            Input::Vad(_) => "Vad",
+            Input::Room(_) => "Room",
+            Input::RoomIo(_) => "RoomIo",
+            Input::Gen(_) => "Gen",
+            Input::Realtime(_) => "Realtime",
+            Input::Eot(..) => "Eot",
+            Input::Overlap(_) => "Overlap",
+            Input::ChannelEnded(_) => "ChannelEnded",
+            Input::SttRetried(_) => "SttRetried",
+            Input::StreamOpened(_) => "StreamOpened",
+            Input::Video(_) => "Video",
+            Input::InputStarted { .. } => "InputStarted",
+            Input::GateSilenced(_) => "GateSilenced",
+            Input::InputCensus(_) => "InputCensus",
+        },
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +250,7 @@ impl Queue {
             tasks,
             procs: BTreeMap::new(),
             order: ORDER_SEED,
+            trail: CURRENT.with_borrow(Arc::clone),
         }
     }
 
@@ -179,6 +259,7 @@ impl Queue {
         self.arrivals += 1;
         let priority = self.draw();
         let source = Source::of(&event);
+        self.trail.lock().unwrap().pending.insert(arrival, label(&event));
         self.pending.push(Queued { source, arrival, priority, item: Item::Event(event) });
     }
 
@@ -193,6 +274,7 @@ impl Queue {
         let arrival = self.arrivals;
         self.arrivals += 1;
         let priority = self.draw();
+        self.trail.lock().unwrap().pending.insert(arrival, "Frames");
         let item = Item::Frames(vec![frame]);
         self.pending.push(Queued { source: Source::Frames, arrival, priority, item });
     }
@@ -202,6 +284,7 @@ impl Queue {
     pub fn next(&mut self, wake_due: bool, tasks_ready: bool, ready: &[u64]) -> Option<Next> {
         if wake_due {
             self.fold(0, 0);
+            self.note(None, "Wake");
             return Some(Next::Wake);
         }
         self.dispatches += 1;
@@ -257,6 +340,11 @@ impl Queue {
             Pick::Event(i) => {
                 let queued = self.pending.remove(i);
                 self.fold(1, queued.arrival);
+                let kind = match &queued.item {
+                    Item::Event(event) => label(event),
+                    Item::Frames(_) => "Frames",
+                };
+                self.note(Some(queued.arrival), kind);
                 Some(match queued.item {
                     Item::Event(event) => Next::Event(event),
                     Item::Frames(frames) => Next::Frames(frames),
@@ -267,12 +355,14 @@ impl Queue {
                 let priority = self.draw();
                 self.procs.insert(id, priority);
                 self.fold(2, id);
+                self.note(None, "Task");
                 Some(Next::Task(id))
             }
             Pick::Pool => {
                 // The pool took its step: like a goroutine in gosim, it draws its next priority.
                 self.tasks = self.draw();
                 self.fold(3, 0);
+                self.note(None, "Tasks");
                 Some(Next::Tasks)
             }
         }
@@ -281,6 +371,7 @@ impl Queue {
     /// Everything still pending, in arrival order: the frames, and the events.
     pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<Event>) {
         self.pending.sort_by_key(|q| q.arrival);
+        self.trail.lock().unwrap().pending.clear();
         let (mut frames, mut events) = (Vec::new(), Vec::new());
         for queued in self.pending.drain(..) {
             match queued.item {
@@ -294,6 +385,27 @@ impl Queue {
     /// The dispatch order so far, folded into one number: what replaying a seed must reproduce.
     pub fn order(&self) -> u64 {
         self.order
+    }
+
+    /// The trail this queue writes.
+    pub fn trail(&self) -> Arc<Mutex<Trail>> {
+        Arc::clone(&self.trail)
+    }
+
+    /// Whether nothing is pending.
+    pub fn idle(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    fn note(&self, arrival: Option<u64>, kind: &'static str) {
+        let mut trail = self.trail.lock().unwrap();
+        if let Some(arrival) = arrival {
+            trail.pending.remove(&arrival);
+        }
+        if trail.last.len() == TRAIL {
+            trail.last.pop_front();
+        }
+        trail.last.push_back((self.dispatches, kind));
     }
 
     /// FNV-1a over the dispatch's kind and identity (an event's arrival, a task's id).
@@ -705,6 +817,22 @@ mod tests {
         }
         let distinct: BTreeSet<u64> = (0..64).map(|seed| program(seed).1).collect();
         assert!(distinct.len() > 1, "every seed dispatched alike");
+    }
+
+    /// A full trail that repeats one cycle names it; one that does not, or is not full yet, is
+    /// no evidence of a livelock (the run's ending is then `Budget`).
+    #[test]
+    fn the_trail_names_a_cycle_only_when_it_repeats() {
+        let trail = |kinds: &[&'static str], n: usize| Trail {
+            last: (0..n as u64).map(|i| (i, kinds[i as usize % kinds.len()])).collect(),
+            pending: BTreeMap::new(),
+        };
+        assert_eq!(trail(&["Tasks"], TRAIL).cycle(), Some(vec!["Tasks"]));
+        assert_eq!(trail(&["Gen", "Tasks", "Wake"], TRAIL).cycle().map(|c| c.len()), Some(3));
+        assert_eq!(trail(&["Tasks"], TRAIL - 1).cycle(), None, "a trail not yet full");
+        let mut broken = trail(&["Gen", "Tasks"], TRAIL);
+        broken.last[3].1 = "Wake";
+        assert_eq!(broken.cycle(), None, "one step out of the cycle");
     }
 
     /// Transitional (retires with the bridge): a granted task takes exactly its turn, and a

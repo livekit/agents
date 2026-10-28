@@ -98,7 +98,7 @@ pub mod queue;
 mod start;
 
 pub use apply::BUDGET_MS;
-pub use finish::{Outcome, PHASES, finish, guard, run};
+pub use finish::{Ending, Outcome, PHASES, finish, guard, run};
 pub use queue::Policy;
 
 use self::apply::{Feeding, Pending};
@@ -463,7 +463,7 @@ pub fn simulate_with<T>(schedule: u64, body: impl std::future::Future<Output = T
     if schedule != 0 {
         seed.extend_from_slice(&schedule.to_le_bytes());
     }
-    let _watchdog = watchdog(schedule);
+    let _watchdog = watchdog(schedule, queue::Trail::install());
     tokio::runtime::Builder::new_current_thread()
         // Timers only: every leg is in memory, and an I/O driver would poll the OS on every turn
         // of the scheduler, which `event_interval(1)` makes every task poll.
@@ -487,7 +487,8 @@ const HANG_S: u64 = 600;
 /// blocks the run's only thread, so nothing on it can notice. A thread beside it can, and the only
 /// thing it can do about it is end the process loudly, naming the schedule, rather than leave a
 /// campaign parked forever. Disarmed when the returned sender is dropped, with the simulation.
-fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
+/// It dumps the run's trail: the last steps dispatched and what is still pending.
+fn watchdog(schedule: u64, trail: Arc<Mutex<queue::Trail>>) -> std::sync::mpsc::Sender<()> {
     use std::io::Write;
     let limit = std::env::var("VOICE_HANG_S").ok().and_then(|s| s.parse().ok()).unwrap_or(HANG_S);
     let (disarm, armed) = std::sync::mpsc::channel::<()>();
@@ -502,6 +503,9 @@ fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
                  after {limit}s of real time: a step or a task is blocked or never yields. \
                  Rerun it with VOICE_SEED={schedule} VOICE_TRACE=1 to see the input it stopped on."
             );
+            // The run's thread may hold the trail's lock: never wait on it here.
+            let dump = trail.try_lock().map_or_else(|_| "trail locked".into(), |t| t.dump());
+            let _ = writeln!(std::io::stderr(), "{dump}");
             std::process::abort();
         }
     });
@@ -671,4 +675,14 @@ pub struct Run {
     /// The most steps the run took at one virtual instant: what `NO_PROGRESS_STEPS` is derived
     /// from.
     pub busiest_instant: u32,
+    /// A task the run awaited could never finish: nothing was pending, no wake was armed and no
+    /// task could run when its deadline passed. The evidence of a deadlock.
+    deadlock: Option<String>,
+}
+
+impl Run {
+    /// The order of every step dispatched so far, folded: a seed replays it exactly.
+    pub fn dispatch_order(&self) -> u64 {
+        self.queue.order()
+    }
 }

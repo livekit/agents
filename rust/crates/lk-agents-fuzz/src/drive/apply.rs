@@ -1346,6 +1346,18 @@ impl Run {
                     }
                     Some(_) => TaskEnd::Finished,
                     None => {
+                        // Nothing left that could finish it: no step pending, no wake, no task.
+                        let enabled = !self.queue.idle()
+                            || self.runtime.as_ref().is_some_and(|r| r.driver.wake_at().is_some())
+                            || tasks_runnable();
+                        if !enabled && self.deadlock.is_none() {
+                            self.deadlock = Some(format!(
+                                "the task spawned at {} ({site}) never finished, with nothing \
+                                 pending, no wake armed and no task runnable at {} ms",
+                                at.at_ms,
+                                self.stamps.now().at_ms
+                            ));
+                        }
                         task.abort();
                         TaskEnd::Stuck
                     }
