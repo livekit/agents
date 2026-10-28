@@ -7,12 +7,14 @@ import os
 import time
 import typing
 import weakref
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal, Required, TypedDict
+
+from pydantic import JsonValue
 
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -22,6 +24,9 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import audio as audio_utils, is_given
 from phonic import AsyncPhonic
+from phonic.conversations.reconnectable_socket_client import (
+    ReconnectableAsyncConversationsSocketClient,
+)
 from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
@@ -31,6 +36,7 @@ from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
     AudioChunkResponsePayload,
+    ConfigOptions,
     ConfigPayload,
     GenerateReplyPayload,
     InputTextPayload,
@@ -68,7 +74,7 @@ class PhonicToolConfig(TypedDict, total=False):
     """Per-tool behavior overrides for ``configs_for_tools`` (see README). ``name`` is required;
     every other field is optional and falls back to the plugin default when omitted."""
 
-    name: str
+    name: Required[str]
     require_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
@@ -165,7 +171,7 @@ class _RealtimeOptions:
     mcp_servers: NotGivenOr[list[str]]
     observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
-    additional_params: NotGivenOr[dict[str, typing.Any]]
+    additional_params: NotGivenOr[Mapping[str, JsonValue]]
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
@@ -240,7 +246,7 @@ class RealtimeModel(llm.RealtimeModel):
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
-        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        additional_params: NotGivenOr[Mapping[str, JsonValue]] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -448,7 +454,7 @@ class RealtimeModel(llm.RealtimeModel):
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
-        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        additional_params: NotGivenOr[Mapping[str, JsonValue]] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -522,8 +528,15 @@ class RealtimeSession(llm.RealtimeSession):
             api_key=self._opts.api_key,
         )
 
-        self._socket: AsyncConversationsSocketClient | None = None
-        self._socket_ctx: typing.AsyncContextManager[AsyncConversationsSocketClient] | None = None
+        self._socket: (
+            AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient | None
+        ) = None
+        self._socket_ctx: (
+            typing.AsyncContextManager[
+                AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient
+            ]
+            | None
+        ) = None
         self._send_ch = utils.aio.Chan[AudioChunkPayload]()
         self._main_atask = asyncio.create_task(self._main_task(), name="phonic-realtime-session")
 
@@ -541,7 +554,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._ready_to_start = asyncio.Event()
         self._config_sent = False
         self._pending_tool_call_ids: set[str] = set()
-        self._tool_definitions: list[dict] = []
+        self._tool_definitions: list[dict[str, object]] = []
         self._configs_for_tools: dict[str, PhonicToolConfig] = {}
         self._system_prompt_postfix: str = ""
         self._pending_user_text: str | None = None
@@ -622,12 +635,10 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     sent_tool_call_output = True
                     # the tool forbids speech after its call, or the result wants no reply
+                    cfg = self._configs_for_tools.get(item.name or "")
                     if (
-                        self._configs_for_tools.get(item.name or "", {}).get(
-                            "forbid_speech_after_tool_call", False
-                        )
-                        or not item.reply_required
-                    ):
+                        cfg is not None and cfg.get("forbid_speech_after_tool_call", False)
+                    ) or not item.reply_required:
                         forbid_speech = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
@@ -667,10 +678,10 @@ class RealtimeSession(llm.RealtimeSession):
         if sent_tool_call_output and not forbid_speech:
             self._start_new_assistant_turn()
 
-    def _serialize_tools(self) -> list[dict]:
-        tool_definitions: list[dict] = []
+    def _serialize_tools(self) -> list[dict[str, object]]:
+        tool_definitions: list[dict[str, object]] = []
         for tool_schema in self._tools.parse_function_tools("openai", strict=True):
-            cfg = self._configs_for_tools.get(tool_schema["function"]["name"], {})
+            cfg = self._configs_for_tools.get(tool_schema["function"]["name"])
             tool_definitions.append(
                 {
                     "type": "custom_websocket",
@@ -679,15 +690,15 @@ class RealtimeSession(llm.RealtimeSession):
                     # fixed, not configurable: the plugin does not support tool calls during
                     # agent speech
                     "wait_for_speech_before_tool_call": True,
-                    "require_speech_before_tool_call": cfg.get(
-                        "require_speech_before_tool_call", False
+                    "require_speech_before_tool_call": bool(
+                        cfg and cfg.get("require_speech_before_tool_call", False)
                     ),
-                    "allow_tool_chaining": cfg.get("allow_tool_chaining", False),
-                    "forbid_speech_after_tool_call": cfg.get(
-                        "forbid_speech_after_tool_call", False
+                    "allow_tool_chaining": bool(cfg and cfg.get("allow_tool_chaining", False)),
+                    "forbid_speech_after_tool_call": bool(
+                        cfg and cfg.get("forbid_speech_after_tool_call", False)
                     ),
-                    "forbid_tool_call_after_speech": cfg.get(
-                        "forbid_tool_call_after_speech", False
+                    "forbid_tool_call_after_speech": bool(
+                        cfg and cfg.get("forbid_tool_call_after_speech", False)
                     ),
                 }
             )
@@ -782,27 +793,31 @@ class RealtimeSession(llm.RealtimeSession):
                 system_prompt=system_prompt,
                 tools_payload=self._build_tools_payload(),
             )
-            await self._socket.send_reset(ResetPayload(config=config_options))
+            await self._socket.send_reset(
+                ResetPayload(config=ConfigOptions.model_validate(config_options))
+            )
 
-    def _serialize_phonic_tool(self, name: str) -> dict | str:
+    def _serialize_phonic_tool(self, name: str) -> dict[str, object] | str:
         """A phonic_tools entry: an inline built-in object when it's a built-in with a config in
         configs_for_tools (so respond_after_sec / speech_before_tool_call reach Phonic), else the bare
         name (which uses the tool's default config)."""
         if name not in _BUILT_IN_TOOL_NAMES:
             return name
-        cfg = self._configs_for_tools.get(name, {})
+        cfg = self._configs_for_tools.get(name)
+        if cfg is None:
+            return name
         if name == "choose_not_to_respond":
             if "respond_after_sec" not in cfg:
                 return name
-            tool_config: dict = {"respond_after_sec": cfg["respond_after_sec"]}
+            tool_config: dict[str, object] = {"respond_after_sec": cfg["respond_after_sec"]}
         else:  # keypad_input, natural_conversation_ending
             if "speech_before_tool_call" not in cfg:
                 return name
             tool_config = {"speech_before_tool_call": cfg["speech_before_tool_call"]}
         return {"type": "built_in", "name": name, "tool_config": tool_config}
 
-    def _build_tools_payload(self) -> list[dict | str]:
-        tools_payload: list[dict | str] = []
+    def _build_tools_payload(self) -> list[dict[str, object] | str]:
+        tools_payload: list[dict[str, object] | str] = []
         if is_given(self._opts.phonic_tools) and self._opts.phonic_tools:
             tools_payload.extend(
                 self._serialize_phonic_tool(name) for name in self._opts.phonic_tools
@@ -821,9 +836,9 @@ class RealtimeSession(llm.RealtimeSession):
         return "\n".join(f"{m.role}: {m.raw_text_content}" for m in messages)
 
     def _build_config_options(
-        self, *, system_prompt: str, tools_payload: list[dict | str]
-    ) -> dict[str, typing.Any]:
-        options = {
+        self, *, system_prompt: str, tools_payload: list[dict[str, object] | str]
+    ) -> dict[str, object]:
+        options: dict[str, object] = {
             "agent": self._opts.phonic_agent,
             "project": self._opts.project,
             "welcome_message": self._opts.welcome_message,
@@ -903,13 +918,13 @@ class RealtimeSession(llm.RealtimeSession):
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
-        additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        additional_params: NotGivenOr[Mapping[str, JsonValue]] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         # tool_choice is the base update_options param (the framework sends it every turn); Phonic
         # does not support it and ignores it. Every other field is an optional config change.
-        changes: dict[str, typing.Any] = {
+        changes: dict[str, object] = {
             name: value
             for name, value in (
                 ("phonic_agent", phonic_agent),
@@ -1208,12 +1223,13 @@ class RealtimeSession(llm.RealtimeSession):
             logger.debug("Connecting to Phonic Realtime API...")
             # The Phonic Python SDK uses an async context manager for connect()
             t0 = time.perf_counter()
-            self._socket_ctx = self._client.conversations.connect(
+            socket_ctx = self._client.conversations.connect(
                 request_options=RequestOptions(
                     additional_headers={"x-phonic-client": "livekit-agents-py"}
                 )
             )
-            self._socket = await self._socket_ctx.__aenter__()
+            self._socket_ctx = socket_ctx
+            self._socket = await socket_ctx.__aenter__()
             self._report_connection_acquired(time.perf_counter() - t0)
 
             # Need to wait for instructions and tools before sending config
@@ -1233,7 +1249,9 @@ class RealtimeSession(llm.RealtimeSession):
                 system_prompt=self._opts.instructions + self._system_prompt_postfix,
                 tools_payload=self._build_tools_payload(),
             )
-            await self._socket.send_config(ConfigPayload(type="config", **config_options))
+            await self._socket.send_config(
+                ConfigPayload.model_validate({"type": "config", **config_options})
+            )
 
             recv_task = asyncio.create_task(self._recv_task(self._socket), name="phonic-recv")
             send_task = asyncio.create_task(self._send_task(self._socket), name="phonic-send")
@@ -1265,17 +1283,23 @@ class RealtimeSession(llm.RealtimeSession):
             self._close_current_generation(interrupted=False)
 
     @utils.log_exceptions(logger=logger)
-    async def _send_task(self, socket: AsyncConversationsSocketClient) -> None:
+    async def _send_task(
+        self, socket: AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient
+    ) -> None:
         async for payload in self._send_ch:
             await socket.send_audio_chunk(payload)
 
     @utils.log_exceptions(logger=logger)
-    async def _recv_task(self, socket: AsyncConversationsSocketClient) -> None:
+    async def _recv_task(
+        self, socket: AsyncConversationsSocketClient | ReconnectableAsyncConversationsSocketClient
+    ) -> None:
         try:
             async for message in socket:
                 if self._session_should_close.is_set():
                     break
 
+                if isinstance(message, bytes):
+                    raise APIConnectionError("Unexpected binary frame from Phonic")
                 msg_type = message.type
 
                 if msg_type == "assistant_started_speaking":
