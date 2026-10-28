@@ -214,36 +214,36 @@ impl World {
                     Some(Out::Register(_)) => {
                         timeline.at(now + 10_000, Src::Server, In::Disconnect);
                     }
-                    Some(Out::Availability(a)) if a.available => {
-                        let job = a.job_id.clone();
-                        let sent = In::Sent { on: g, job: job.clone() };
-                        timeline.at(now + self.rng.u64(0..20), Src::Driver, sent);
-                        match self.rng.u8(0..20) {
-                            // another worker won it: no assignment
-                            0 | 1 => {}
-                            2 => {
-                                for _ in 0..2 {
-                                    let at = now + self.rng.u64(20..600);
-                                    timeline.at(
-                                        at,
-                                        Src::Server,
-                                        In::Assign { on: g, job: job.clone() },
-                                    );
-                                }
-                            }
-                            // late, past the assignment timeout
-                            3 => {
-                                let at = now + self.rng.u64(7_000..9_000);
-                                timeline.at(at, Src::Server, In::Assign { on: g, job });
-                            }
-                            _ => {
-                                let at = now + self.rng.u64(20..600);
-                                timeline.at(at, Src::Server, In::Assign { on: g, job });
-                            }
-                        }
-                    }
                     _ => {}
                 },
+                WorkerStateEffect::SendAvailability { job_id, .. } => {
+                    let job = job_id.clone();
+                    let sent = In::Sent { on: g, job: job.clone() };
+                    timeline.at(now + self.rng.u64(0..20), Src::Driver, sent);
+                    match self.rng.u8(0..20) {
+                        // another worker won it: no assignment
+                        0 | 1 => {}
+                        2 => {
+                            for _ in 0..2 {
+                                let at = now + self.rng.u64(20..600);
+                                timeline.at(
+                                    at,
+                                    Src::Server,
+                                    In::Assign { on: g, job: job.clone() },
+                                );
+                            }
+                        }
+                        // late, past the assignment timeout
+                        3 => {
+                            let at = now + self.rng.u64(7_000..9_000);
+                            timeline.at(at, Src::Server, In::Assign { on: g, job });
+                        }
+                        _ => {
+                            let at = now + self.rng.u64(20..600);
+                            timeline.at(at, Src::Server, In::Assign { on: g, job });
+                        }
+                    }
+                }
                 WorkerStateEffect::AskUser { slot, .. } => {
                     let accept = match self.rng.u8(0..20) {
                         0 => Some(false),
@@ -520,11 +520,23 @@ fn deliver(
 }
 
 /// The messages a step sent.
-fn sent(step: &Step) -> impl Iterator<Item = &Out> {
+fn protocol_messages(step: &Step) -> impl Iterator<Item = &Out> {
     step.effects.iter().filter_map(|e| match e {
         WorkerStateEffect::Send(m) => m.message.as_ref(),
         _ => None,
     })
+}
+
+/// Acceptance effects and protocol rejections share the same reply accounting.
+fn availability(effect: &WorkerStateEffect) -> Option<(&String, bool)> {
+    match effect {
+        WorkerStateEffect::SendAvailability { job_id, .. } => Some((job_id, true)),
+        WorkerStateEffect::Send(m) => match &m.message {
+            Some(Out::Availability(a)) => Some((&a.job_id, a.available)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// What a trace reached, for the campaign's reach report.
@@ -545,7 +557,7 @@ pub fn reached(trace: &Trace) -> BTreeSet<&'static str> {
                 _ => continue,
             });
         }
-        for m in sent(step) {
+        for m in protocol_messages(step) {
             match m {
                 Out::MigrateJob(_) => {
                     reached.insert("WorkerJobsMigrated");
@@ -582,7 +594,22 @@ fn registers_first(trace: &Trace) -> Vec<String> {
         if !step.after.connected {
             continue;
         }
-        for m in sent(step) {
+        for effect in &step.effects {
+            let message = match effect {
+                WorkerStateEffect::Send(m) => m.message.as_ref(),
+                WorkerStateEffect::SendAvailability { job_id, .. } => {
+                    if !first_sent {
+                        out.push(format!(
+                            "at {} ms {job_id} was accepted before register",
+                            step.at
+                        ));
+                    }
+                    first_sent = true;
+                    continue;
+                }
+                _ => continue,
+            };
+            let Some(m) = message else { continue };
             if !first_sent && !matches!(m, Out::Register(_)) {
                 out.push(format!("at {} ms {m:?} went out before register", step.at));
             }
@@ -634,12 +661,10 @@ fn answered_once(trace: &Trace) -> Vec<String> {
         if !step.after.connected {
             continue;
         }
-        for m in sent(step) {
-            if let Out::Availability(a) = m {
-                *answers.entry(a.job_id.clone()).or_default() += 1;
-                if a.available && offered_draining.contains(&a.job_id) {
-                    out.push(format!("at {} ms {} was accepted while draining", step.at, a.job_id));
-                }
+        for (job_id, accepted) in step.effects.iter().filter_map(availability) {
+            *answers.entry(job_id.clone()).or_default() += 1;
+            if accepted && offered_draining.contains(job_id) {
+                out.push(format!("at {} ms {} was accepted while draining", step.at, job_id));
             }
         }
     }
@@ -657,11 +682,8 @@ fn answered_once(trace: &Trace) -> Vec<String> {
                 .collect();
             let answered: BTreeSet<&String> = tail
                 .iter()
-                .flat_map(sent)
-                .filter_map(|m| match m {
-                    Out::Availability(a) => Some(&a.job_id),
-                    _ => None,
-                })
+                .flat_map(|step| step.effects.iter().filter_map(availability))
+                .map(|(job_id, _)| job_id)
                 .collect();
             for job in offered.difference(&answered) {
                 out.push(format!("{job} was offered and never answered"));
@@ -688,8 +710,9 @@ fn one_disposition(trace: &Trace) -> Vec<String> {
                 .iter()
                 .filter(|e| matches!(e, WorkerStateEffect::LaunchJob { .. }))
                 .count();
-            let updates =
-                sent(step).filter(|m| matches!(m, Out::UpdateJob(u) if u.job_id == *job)).count();
+            let updates = protocol_messages(step)
+                .filter(|m| matches!(m, Out::UpdateJob(u) if u.job_id == *job))
+                .count();
             if launches + updates > 1 {
                 out.push(format!(
                     "at {} ms the assignment of {job} was answered {} times",
@@ -718,7 +741,7 @@ fn jobs_kept(trace: &Trace) -> Vec<String> {
                 out.push(format!("at {} ms terminated {id}, which is not active", step.at));
             }
         }
-        for m in sent(step) {
+        for m in protocol_messages(step) {
             if let Out::MigrateJob(mj) = m {
                 let named: BTreeSet<String> = mj.job_ids.iter().cloned().collect();
                 if matches!(step.input, In::Registered { .. }) && named != active {
@@ -779,11 +802,9 @@ fn accepted_settle(trace: &Trace) -> Vec<String> {
                 _ => {}
             }
         }
-        for m in sent(step) {
-            if let Out::Availability(a) = m
-                && a.available
-            {
-                accepted.insert(a.job_id.clone(), step.at);
+        for (job_id, available) in step.effects.iter().filter_map(availability) {
+            if available {
+                accepted.insert(job_id.clone(), step.at);
             }
         }
         accepted.retain(|_, since| step.at <= *since + grace);

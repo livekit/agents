@@ -39,18 +39,6 @@ pub enum ExtraValue {
 /// A log record's extra fields; the host adds the process's own after them.
 pub type Extra = Vec<(&'static str, ExtraValue)>;
 
-/// Why a memory sample failed.
-pub enum MemoryError<E> {
-    /// The process is gone or not ours to read (`psutil.NoSuchProcess`, `psutil.AccessDenied`):
-    /// warn once and stop monitoring.
-    Unavailable(String),
-    /// Anything else: log it and try again on the next sample.
-    Failed(E),
-    /// An interruption rather than an error (a `BaseException` such as `SystemExit`): stop
-    /// monitoring without a log.
-    Interrupted,
-}
-
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
     pub pid: u32,
@@ -457,7 +445,7 @@ impl Supervision {
                 if let (Some(purpose), Err(reason)) = (self.pending_writes.remove(&id), result) {
                     let expected_ping_close = purpose == WritePurpose::Ping
                         && self.shutting_down
-                        && matches!(reason.as_ref(), WireError::Io(error) if matches!(error.kind(),
+                        && matches!(reason.as_ref(), WireError::Io { kind, .. } if matches!(kind,
                             std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::NotConnected));
                     if !expected_ping_close {
@@ -591,10 +579,11 @@ impl Supervision {
             self.reader_deadline = None;
             self.fail_protocol(
                 now,
-                Arc::new(WireError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "IPC reader did not settle after process exit",
-                ))),
+                Arc::new(WireError::Io {
+                    kind: std::io::ErrorKind::TimedOut,
+                    os_error: None,
+                    message: "IPC reader did not settle after process exit".into(),
+                }),
                 &mut out,
             );
         }

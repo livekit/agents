@@ -38,6 +38,11 @@ pub enum WorkerStateEffect {
         message: String,
     },
     Send(WorkerMessage),
+    /// The runtime encodes the ordered arguments into the upstream protocol's map.
+    SendAvailability {
+        job_id: JobId,
+        arguments: AcceptArguments,
+    },
     /// Call `WorkerHost::on_job_request`, then feed the answer back as
     /// [`WorkerStateInput::RequestDecision`] with the same slot.
     AskUser {
@@ -511,12 +516,12 @@ impl WorkerState {
         let job_id = p.job.id.clone();
         match decision {
             JobDecision::Accept(args) => {
-                let msg = protocol::availability_accept(&job_id, &self.cfg.agent_name, &args);
+                let arguments = protocol::accept_arguments(&self.cfg.agent_name, args.clone());
                 if let Some(p) = self.pending.iter_mut().find(|p| p.slot == slot) {
                     p.state = PendingState::AwaitingAssignment(args);
                     p.accepted = now;
                 }
-                self.queue(msg);
+                self.push(WorkerStateEffect::SendAvailability { job_id, arguments });
             }
             JobDecision::Reject { terminate } => {
                 self.drop_pending(slot);

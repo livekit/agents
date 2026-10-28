@@ -11,8 +11,7 @@ pub use livekit_protocol::{
 };
 use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use prost::Message as _;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 fn server_type_proto(server_type: ServerType) -> JobType {
     match server_type {
@@ -103,27 +102,13 @@ pub fn availability_reject(job_id: &str, terminate: bool) -> WorkerMessage {
     }))
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `lk.agent.name` is written first and user attributes merged over it, so the user's wins.
-pub fn availability_accept(
-    job_id: &str,
-    agent_name: &str,
-    args: &AcceptArguments,
-) -> WorkerMessage {
-    let mut attributes: HashMap<String, String> = HashMap::new();
+pub fn accept_arguments(agent_name: &str, mut args: AcceptArguments) -> AcceptArguments {
+    let mut attributes = BTreeMap::new();
     attributes.insert(ATTRIBUTE_AGENT_NAME.to_string(), agent_name.to_string());
-    for (k, v) in &args.attributes {
-        attributes.insert(k.clone(), v.clone());
-    }
-    wrap(pb::worker_message::Message::Availability(AvailabilityResponse {
-        job_id: job_id.to_string(),
-        available: true,
-        participant_identity: args.identity.clone(),
-        participant_name: args.name.clone(),
-        participant_metadata: args.metadata.clone(),
-        participant_attributes: attributes,
-        ..Default::default()
-    }))
+    attributes.extend(args.attributes);
+    args.attributes = attributes.into_iter().collect();
+    args
 }
 
 /// Full, with zero load and the active job count.
@@ -184,11 +169,8 @@ mod tests {
             attributes: vec![(ATTRIBUTE_AGENT_NAME.into(), "override".into())],
             ..Default::default()
         };
-        let msg = availability_accept("j1", "configured", &args);
-        let Some(pb::worker_message::Message::Availability(a)) = msg.message else {
-            panic!("wrong variant")
-        };
-        assert_eq!(a.participant_attributes[ATTRIBUTE_AGENT_NAME], "override");
+        let args = accept_arguments("configured", args);
+        assert_eq!(args.attributes, vec![(ATTRIBUTE_AGENT_NAME.into(), "override".into())]);
     }
 
     // Catches: forgetting `agent: true` on the register permissions.

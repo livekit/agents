@@ -713,7 +713,6 @@ impl JobRunInner {
         }
     }
 
-    #[allow(clippy::disallowed_macros, clippy::disallowed_methods, reason = "S0: move to runtime")]
     async fn run(self: Arc<Self>) -> PyResult<()> {
         let entry = self.call(|h| h.call_method0("_core_start_entrypoint")).await?;
         let wait_entry = {
@@ -862,7 +861,6 @@ impl JobRunInner {
 
 #[pymethods]
 impl PyJobRun {
-    #[allow(clippy::disallowed_methods, clippy::disallowed_types, reason = "S0: move to runtime")]
     /// `redaction` and `recording` are the job's own (`Job.enable_redaction`,
     /// `Job.enable_recording`), `url` the server's; `session_end` is the door's `on_session_end`.
     #[new]
@@ -992,7 +990,6 @@ impl PyJobRun {
         }
     }
 
-    #[allow(clippy::disallowed_methods, clippy::disallowed_macros, reason = "S0: move to runtime")]
     /// `ctx.<name>()`, an API call of the job's (`delete_room`, ...): `call()`'s awaitable, awaited
     /// on the caller's loop, as a future. A failure is logged whether or not the caller awaits
     /// it, and it is cancelled once the job ends (`close_tasks`). A console job makes no call: its

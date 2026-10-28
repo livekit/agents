@@ -29,10 +29,8 @@ pub mod wire;
 
 #[cfg(feature = "python")]
 pub(crate) use supervisor::secs;
-pub use supervisor::{
-    Extra, ExtraValue, InitError, Level, MemoryError, StartJobError, SupervisorOptions,
-};
-pub use supervisor_driver::{ProcHost, ProcSupervisor};
+pub use supervisor::{Extra, ExtraValue, InitError, Level, StartJobError, SupervisorOptions};
+pub use supervisor_driver::{MemoryError, ProcHost, ProcSupervisor};
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
 use lk_agents_abi::lock;
@@ -169,9 +167,11 @@ async fn read_parent<R: AsyncRead + Unpin, F: FnOnce()>(
             biased;
             () = tokio::time::sleep_until(deadline), if timeout.is_some() => {
                 on_orphan();
-                return Err(WireError::Io(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut, "the IPC parent exceeded its health timeout"
-                )));
+                return Err(WireError::Io {
+                    kind: std::io::ErrorKind::TimedOut,
+                    os_error: None,
+                    message: "the IPC parent exceeded its health timeout".into(),
+                });
             }
             permit = inbox.reserve(), if pending.is_some() => {
                 let Ok(permit) = permit else { return Ok(()); };

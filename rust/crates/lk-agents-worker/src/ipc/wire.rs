@@ -75,8 +75,8 @@ pub use lk_agents_abi::worker::job::StartJobFields as StartJob;
 pub enum WireError {
     #[error("the IPC peer closed before the next frame")]
     Eof,
-    #[error("the socket closed: {0}")]
-    Io(#[from] io::Error),
+    #[error("the socket closed: {message}")]
+    Io { kind: io::ErrorKind, os_error: Option<i32>, message: String },
     #[error("a {0}-byte frame is over the {MAX_FRAME}-byte limit")]
     TooLarge(usize),
     #[error("malformed message: {0}")]
@@ -95,10 +95,10 @@ impl From<&WireError> for lk_agents_abi::worker::ipc::IpcFailure {
                 os_error: None,
                 message: error.to_string(),
             },
-            WireError::Io(cause) => Self::Io {
-                kind: format!("{:?}", cause.kind()),
-                os_error: cause.raw_os_error(),
-                message: cause.to_string(),
+            WireError::Io { kind, os_error, message } => Self::Io {
+                kind: format!("{kind:?}"),
+                os_error: *os_error,
+                message: message.clone(),
             },
             WireError::Malformed(cause) => Self::Malformed { message: cause.to_string() },
             WireError::TooLarge(size) => Self::TooLarge { size: *size as u64 },

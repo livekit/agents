@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from livekit.agents import _core
+from livekit.agents._generated.worker_options import ServerOptions
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +30,7 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             return None
 
     host = Host()
-    config = _core.ServerConfig({})
+    config = _core.ServerConfig(ServerOptions())
     config.simulation = True
     runtime = _core.ServerRuntime(config, host)
     running = asyncio.ensure_future(

@@ -63,14 +63,10 @@ impl Rig {
         logs::record(&actions);
         // The default rig models an immediately successful transport write.
         for action in &actions {
-            if let WorkerStateEffect::Send(message) = action
-                && let Some(livekit_protocol::worker_message::Message::Availability(a)) =
-                    &message.message
-                && a.available
-            {
+            if let WorkerStateEffect::SendAvailability { job_id, .. } = action {
                 self.m.handle(
                     now,
-                    WorkerStateInput::AvailabilitySent { generation: 0, job_id: a.job_id.clone() },
+                    WorkerStateInput::AvailabilitySent { generation: 0, job_id: job_id.clone() },
                 );
             }
         }
@@ -137,7 +133,7 @@ fn job(id: &str) -> Job {
     }
 }
 
-fn sent(actions: &[WorkerStateEffect]) -> Vec<&WorkerMessage> {
+fn protocol_messages(actions: &[WorkerStateEffect]) -> Vec<&WorkerMessage> {
     actions
         .iter()
         .filter_map(|a| match a {
@@ -147,18 +143,41 @@ fn sent(actions: &[WorkerStateEffect]) -> Vec<&WorkerMessage> {
         .collect()
 }
 
-fn availability_out(actions: &[WorkerStateEffect]) -> Vec<&AvailabilityResponse> {
+fn sent(actions: &[WorkerStateEffect]) -> impl Iterator<Item = &WorkerStateEffect> {
+    actions.iter().filter(|effect| {
+        matches!(effect, WorkerStateEffect::Send(_) | WorkerStateEffect::SendAvailability { .. })
+    })
+}
+
+struct AvailabilityReply<'a> {
+    job_id: &'a str,
+    available: bool,
+    terminate: bool,
+}
+
+fn availability_out(actions: &[WorkerStateEffect]) -> Vec<AvailabilityReply<'_>> {
     sent(actions)
-        .into_iter()
-        .filter_map(|m| match &m.message {
-            Some(livekit_protocol::worker_message::Message::Availability(a)) => Some(a),
+        .filter_map(|effect| match effect {
+            WorkerStateEffect::SendAvailability { job_id, .. } => {
+                Some(AvailabilityReply { job_id, available: true, terminate: false })
+            }
+            WorkerStateEffect::Send(message) => match &message.message {
+                Some(livekit_protocol::worker_message::Message::Availability(a)) => {
+                    Some(AvailabilityReply {
+                        job_id: &a.job_id,
+                        available: a.available,
+                        terminate: a.terminate,
+                    })
+                }
+                _ => None,
+            },
             _ => None,
         })
         .collect()
 }
 
 fn statuses(actions: &[WorkerStateEffect]) -> Vec<&UpdateWorkerStatus> {
-    sent(actions)
+    protocol_messages(actions)
         .into_iter()
         .filter_map(|m| match &m.message {
             Some(livekit_protocol::worker_message::Message::UpdateWorker(u)) => Some(u),
@@ -239,7 +258,7 @@ fn assignment_times_out_at_exactly_7_5s() {
     assert!(logged("assignment for job job-1 timed out"), "{out:?}");
     assert_eq!(r.m.reserved_slots(), 0, "the slot must be released on timeout");
     // Assignment timeout is local bookkeeping and emits no server message.
-    assert!(sent(&out).is_empty(), "nothing goes on the wire on assignment timeout: {out:?}");
+    assert!(sent(&out).next().is_none(), "nothing goes on the wire on assignment timeout: {out:?}");
 }
 
 // Catches: the timer surviving the assignment, so a running job is abandoned 7.5 s later.
@@ -547,7 +566,7 @@ fn active_jobs_are_migrated_after_re_registration() {
 
     r.ev(WorkerStateInput::Disconnected { generation: 0 });
     let out = r.register();
-    let migrated: Vec<_> = sent(&out)
+    let migrated: Vec<_> = protocol_messages(&out)
         .into_iter()
         .filter_map(|m| match &m.message {
             Some(livekit_protocol::worker_message::Message::MigrateJob(x)) => Some(x),
@@ -566,7 +585,7 @@ fn a_terminal_job_status_removes_it_from_active_jobs() {
     r.launch("job-1");
     let out =
         r.ev(WorkerStateInput::JobStatus { job_id: "job-1".into(), status: JobStatus::JsRunning });
-    assert_eq!(sent(&out).len(), 1);
+    assert_eq!(sent(&out).count(), 1);
     assert_eq!(r.m.active_jobs().len(), 1, "JS_RUNNING keeps the job");
     r.ev(WorkerStateInput::JobStatus { job_id: "job-1".into(), status: JobStatus::JsSuccess });
     assert_eq!(r.m.active_jobs().len(), 0);
@@ -713,7 +732,7 @@ fn the_register_message_carries_the_worker_identity_and_permissions() {
     };
     let mut r = Rig::with(WorkerConfig { permissions, ..cfg() });
     let out = r.ev(WorkerStateInput::Connecting { generation: 0 });
-    let m = sent(&out);
+    let m = protocol_messages(&out);
     let Some(livekit_protocol::worker_message::Message::Register(reg)) = &m[0].message else {
         panic!("{out:?}")
     };
@@ -755,12 +774,20 @@ fn the_accept_response_carries_the_participant_identity() {
     r.register();
     let slot = slot_of(&r.offer("job-1", 0.0));
     let out = r.ev(WorkerStateInput::RequestDecision { generation: 0, slot, decision: accept() });
-    let a = availability_out(&out);
-    assert!(a[0].available);
-    assert_eq!(a[0].job_id, "job-1");
-    assert_eq!(a[0].participant_identity, "agent-1");
-    assert_eq!(a[0].participant_name, "Agent");
-    assert_eq!(a[0].participant_attributes[lk_agents_abi::ATTRIBUTE_AGENT_NAME], "my-agent");
+    let (job_id, args) = out
+        .iter()
+        .find_map(|effect| match effect {
+            WorkerStateEffect::SendAvailability { job_id, arguments } => Some((job_id, arguments)),
+            _ => None,
+        })
+        .expect("acceptance must be sent");
+    assert_eq!(job_id, "job-1");
+    assert_eq!(args.identity, "agent-1");
+    assert_eq!(args.name, "Agent");
+    assert_eq!(
+        args.attributes,
+        vec![(lk_agents_abi::ATTRIBUTE_AGENT_NAME.into(), "my-agent".into())]
+    );
 }
 
 // Catches: a failed launch leaving its slot reserved forever, which slowly starves the worker.
@@ -852,7 +879,7 @@ fn worker_registration_vectors_failed_and_unknown_assignments_report_failure() {
     r.register();
     let unknown = r.ev(assignment("unknown", None));
     assert!(
-        sent(&unknown).iter().any(|message| matches!(
+        protocol_messages(&unknown).iter().any(|message| matches!(
             &message.message,
             Some(livekit_protocol::worker_message::Message::UpdateJob(update))
                 if update.job_id == "unknown" && update.status == JobStatus::JsFailed as i32
@@ -867,7 +894,7 @@ fn worker_registration_vectors_failed_and_unknown_assignments_report_failure() {
         result: Err(HostError::new("launch failed")),
     });
     assert!(
-        sent(&failed).iter().any(|message| matches!(
+        protocol_messages(&failed).iter().any(|message| matches!(
             &message.message,
             Some(livekit_protocol::worker_message::Message::UpdateJob(update))
                 if update.job_id == "failed" && update.status == JobStatus::JsFailed as i32
@@ -1053,7 +1080,7 @@ fn an_early_assignment_fails_once_and_cannot_be_accepted_by_a_late_decision() {
             None
         };
         let failed = r.ev(assignment("early", None));
-        assert!(sent(&failed).iter().any(|message| matches!(
+        assert!(protocol_messages(&failed).iter().any(|message| matches!(
             &message.message,
             Some(livekit_protocol::worker_message::Message::UpdateJob(update))
                 if update.job_id == "early" && update.status == JobStatus::JsFailed as i32

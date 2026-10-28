@@ -1,5 +1,13 @@
 use super::*;
 
+fn broken_pipe() -> WireError {
+    WireError::Io {
+        kind: std::io::ErrorKind::BrokenPipe,
+        os_error: None,
+        message: "broken pipe".into(),
+    }
+}
+
 fn options() -> SupervisorOptions {
     SupervisorOptions {
         pid: 42,
@@ -64,12 +72,7 @@ fn writes_are_correlated_and_a_stale_failure_does_not_kill_the_process() {
     let failed = state.handle(
         Duration::ZERO,
         10_000,
-        Input::Written {
-            id,
-            result: Err(Arc::new(WireError::Io(std::io::Error::from(
-                std::io::ErrorKind::BrokenPipe,
-            )))),
-        },
+        Input::Written { id, result: Err(Arc::new(broken_pipe())) },
     );
     assert!(
         failed.iter().any(|e| matches!(e, Effect::BeginKill)),
@@ -137,13 +140,8 @@ fn a_thread_transport_failure_or_startup_timeout_never_requests_an_os_kill() {
     opts.killable = false;
     opts.pid = 0;
     let mut state = Supervision::new(opts.clone(), Duration::ZERO);
-    let failed = state.handle(
-        Duration::ZERO,
-        0,
-        Input::ReaderClosed(Some(Arc::new(WireError::Io(std::io::Error::from(
-            std::io::ErrorKind::BrokenPipe,
-        ))))),
-    );
+    let failed =
+        state.handle(Duration::ZERO, 0, Input::ReaderClosed(Some(Arc::new(broken_pipe()))));
     assert!(!failed.iter().any(|effect| matches!(effect, Effect::BeginKill | Effect::Kill)));
     let mut startup = Supervision::new(opts, Duration::ZERO);
     startup.handle(Duration::ZERO, 0, Input::Launched(0));
@@ -264,15 +262,16 @@ fn ipc_protocol_failure_after_native_exit_keeps_the_original_cause() {
     let effects = state.handle(
         Duration::ZERO,
         0,
-        Input::ReaderClosed(Some(Arc::new(WireError::Io(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "partial Ready frame",
-        ))))),
+        Input::ReaderClosed(Some(Arc::new(WireError::Io {
+            kind: std::io::ErrorKind::UnexpectedEof,
+            os_error: None,
+            message: "partial Ready frame".into(),
+        }))),
     );
     assert!(effects.iter().any(|effect| matches!(effect,
         Effect::Initialized(Err(InitError::Protocol(error))) if matches!(error.as_ref(),
-            WireError::Io(cause) if cause.kind() == std::io::ErrorKind::UnexpectedEof && cause.to_string() == "partial Ready frame"))));
-    assert!(matches!(state.protocol_failure(), Some(WireError::Io(_))));
+            WireError::Io { kind: std::io::ErrorKind::UnexpectedEof, message, .. } if message == "partial Ready frame"))));
+    assert!(matches!(state.protocol_failure(), Some(WireError::Io { .. })));
     assert!(state.cleaned());
 }
 
@@ -404,12 +403,7 @@ fn an_in_flight_ping_write_after_orderly_shutdown_does_not_fail_the_job() {
     state.handle(
         Duration::ZERO,
         0,
-        Input::Written {
-            id: ping,
-            result: Err(Arc::new(WireError::Io(std::io::Error::from(
-                std::io::ErrorKind::BrokenPipe,
-            )))),
-        },
+        Input::Written { id: ping, result: Err(Arc::new(broken_pipe())) },
     );
     assert!(state.protocol_failure().is_none(), "the child already declared its orderly exit");
 
@@ -426,15 +420,10 @@ fn an_in_flight_ping_write_after_orderly_shutdown_does_not_fail_the_job() {
     required.handle(
         Duration::ZERO,
         0,
-        Input::Written {
-            id: shutdown,
-            result: Err(Arc::new(WireError::Io(std::io::Error::from(
-                std::io::ErrorKind::BrokenPipe,
-            )))),
-        },
+        Input::Written { id: shutdown, result: Err(Arc::new(broken_pipe())) },
     );
     assert!(
-        matches!(required.protocol_failure(), Some(WireError::Io(_))),
+        matches!(required.protocol_failure(), Some(WireError::Io { .. })),
         "required protocol write failures keep their original cause"
     );
 }

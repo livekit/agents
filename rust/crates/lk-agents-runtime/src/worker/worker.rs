@@ -188,7 +188,25 @@ impl<T: WorkerTransport, P: WorkerHost, C: Clock> Drop for Worker<T, P, C> {
 
 struct PendingWrite {
     message: WorkerMessage,
+    accepted: Option<JobId>,
     deadline: tokio::time::Instant,
+}
+
+/// Encode the core's ordered acceptance without making another admission decision.
+fn availability_message(job_id: &str, arguments: crate::worker::AcceptArguments) -> WorkerMessage {
+    WorkerMessage {
+        message: Some(livekit_protocol::worker_message::Message::Availability(
+            protocol::AvailabilityResponse {
+                job_id: job_id.into(),
+                available: true,
+                participant_identity: arguments.identity,
+                participant_name: arguments.name,
+                participant_metadata: arguments.metadata,
+                participant_attributes: arguments.attributes.into_iter().collect(),
+                ..Default::default()
+            },
+        )),
+    }
 }
 
 /// Short-lived write contention only: not a replay log or a delivery guarantee.
@@ -201,7 +219,11 @@ impl Outbox {
         Self { pending: VecDeque::new(), timeout }
     }
 
-    fn push(&mut self, message: WorkerMessage) -> Result<(), TransportError> {
+    fn push(
+        &mut self,
+        message: WorkerMessage,
+        accepted: Option<JobId>,
+    ) -> Result<(), TransportError> {
         use livekit_protocol::worker_message::Message as M;
         use prost::Message;
         if message.encoded_len() > crate::worker::transport::MAX_CONTROL_MESSAGE {
@@ -222,6 +244,7 @@ impl Outbox {
         }
         self.pending.push_back(PendingWrite {
             message,
+            accepted,
             deadline: tokio::time::Instant::now() + self.timeout,
         });
         Ok(())
@@ -431,12 +454,6 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 
 impl PendingWrite {
     async fn send(self, sink: Arc<dyn WorkerSink>) -> Result<Option<String>, TransportError> {
-        let accepted = match &self.message.message {
-            Some(livekit_protocol::worker_message::Message::Availability(a)) if a.available => {
-                Some(a.job_id.clone())
-            }
-            _ => None,
-        };
         let expired = || TransportError::Io("control write deadline exceeded".into());
         if Instant::now() >= self.deadline {
             return Err(expired());
@@ -444,7 +461,7 @@ impl PendingWrite {
         tokio::time::timeout_at(self.deadline, sink.send(self.message))
             .await
             .map_err(|_| expired())??;
-        Ok(accepted)
+        Ok(self.accepted)
     }
 }
 
@@ -819,7 +836,13 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                     crate::worker::diagnostics::emit(level, message)
                 }
                 WorkerStateEffect::Send(message) => {
-                    if let Err(error) = outbox.push(message) {
+                    if let Err(error) = outbox.push(message, None) {
+                        self.send_failure = Some(error);
+                    }
+                }
+                WorkerStateEffect::SendAvailability { job_id, arguments } => {
+                    let message = availability_message(&job_id, arguments);
+                    if let Err(error) = outbox.push(message, Some(job_id)) {
                         self.send_failure = Some(error);
                     }
                 }
@@ -992,11 +1015,11 @@ mod write_tests {
     async fn pending_statuses_coalesce_but_availability_replies_keep_their_order() {
         let mut queue = Outbox::new(Duration::from_secs(10));
         queue
-            .push(protocol::update_worker(crate::worker::WorkerStatus::Available, 0.1, 0))
+            .push(protocol::update_worker(crate::worker::WorkerStatus::Available, 0.1, 0), None)
             .unwrap();
-        queue.push(protocol::availability_reject("first", false)).unwrap();
-        queue.push(protocol::availability_reject("second", false)).unwrap();
-        queue.push(protocol::update_worker_draining(0)).unwrap();
+        queue.push(protocol::availability_reject("first", false), None).unwrap();
+        queue.push(protocol::availability_reject("second", false), None).unwrap();
+        queue.push(protocol::update_worker_draining(0), None).unwrap();
         use livekit_protocol::worker_message::Message as M;
         assert!(
             matches!(queue.pop_front().unwrap().message.message, Some(M::Availability(a)) if a.job_id == "first")
@@ -1014,9 +1037,9 @@ mod write_tests {
     async fn queue_capacity_and_write_age_are_bounded() {
         let mut queue = Outbox::new(Duration::from_secs(1));
         for i in 0..MAX_PENDING_WRITES {
-            queue.push(protocol::availability_reject(&i.to_string(), false)).unwrap();
+            queue.push(protocol::availability_reject(&i.to_string(), false), None).unwrap();
         }
-        assert!(queue.push(protocol::availability_reject("overflow", false)).is_err());
+        assert!(queue.push(protocol::availability_reject("overflow", false), None).is_err());
         tokio::time::advance(Duration::from_secs(2)).await;
         assert!(queue.pop_front().unwrap().deadline < tokio::time::Instant::now());
         queue.clear();

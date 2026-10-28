@@ -32,6 +32,16 @@ pub trait ProcHost: Send + Sync + 'static {
     fn signal_failed(&self, _: SignalFailure) {}
 }
 
+/// Why a runtime memory sampler failed. Host errors never enter supervision state.
+pub enum MemoryError<E> {
+    /// The process is gone or inaccessible; stop sampling after a diagnostic.
+    Unavailable(String),
+    /// A transient failure, retaining the host error for its diagnostic.
+    Failed(E),
+    /// A process-control interruption; stop sampling without a diagnostic.
+    Interrupted,
+}
+
 const QUEUE: usize = 16;
 
 pub fn time_ms() -> i64 {
@@ -98,7 +108,7 @@ impl ProcSupervisor {
             while let Some((id, message)) = queued.recv().await {
                 let result = wire::write(&mut writer, &message)
                     .await
-                    .map_err(|error| Arc::new(WireError::Io(error)));
+                    .map_err(|error| Arc::new(wire::io_failure(error)));
                 let failed = result.is_err();
                 if written_tx.send((id, result)).await.is_err() || failed {
                     break;

@@ -5,22 +5,27 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Capture the transport cause before crossing into the decision core.
+pub(super) fn io_failure(error: io::Error) -> WireError {
+    WireError::Io { kind: error.kind(), os_error: error.raw_os_error(), message: error.to_string() }
+}
+
 /// The next message.
 pub async fn read<T: DeserializeOwned, R: AsyncRead + Unpin + ?Sized>(
     r: &mut R,
 ) -> Result<T, WireError> {
     let mut len = [0u8; 4];
-    let first = r.read(&mut len[..1]).await?;
+    let first = r.read(&mut len[..1]).await.map_err(io_failure)?;
     if first == 0 {
         return Err(WireError::Eof);
     }
-    r.read_exact(&mut len[1..]).await?;
+    r.read_exact(&mut len[1..]).await.map_err(io_failure)?;
     let len = u32::from_be_bytes(len) as usize;
     if len > MAX_FRAME {
         return Err(WireError::TooLarge(len));
     }
     let mut buf = vec![0; len];
-    r.read_exact(&mut buf).await?;
+    r.read_exact(&mut buf).await.map_err(io_failure)?;
     decode(&buf)
 }
 

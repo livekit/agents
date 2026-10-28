@@ -41,8 +41,8 @@ fn a_status_before_register_is_rejected() {
 #[test]
 fn an_offer_answered_twice_is_rejected() {
     breaks(answered_once, |t| {
-        let s = step_with(t, |s| sent(s).any(|m| matches!(m, Out::Availability(_))));
-        let again = s.effects.iter().find(|e| matches!(e, WorkerStateEffect::Send(_))).cloned();
+        let s = step_with(t, |s| s.effects.iter().any(|e| availability(e).is_some()));
+        let again = s.effects.iter().find(|e| availability(e).is_some()).cloned();
         s.effects.push(again.unwrap());
     });
 }
@@ -70,7 +70,7 @@ fn a_job_dropped_before_its_end_or_left_out_of_the_migration_is_rejected() {
         }
     });
     breaks(jobs_kept, |t| {
-        let s = step_with(t, |s| sent(s).any(|m| matches!(m, Out::MigrateJob(_))));
+        let s = step_with(t, |s| protocol_messages(s).any(|m| matches!(m, Out::MigrateJob(_))));
         s.effects.retain(|e| !matches!(e, WorkerStateEffect::Send(m) if matches!(m.message, Some(Out::MigrateJob(_)))));
         let empty = lk_agents_worker::protocol::migrate_jobs(vec!["J_none".into()]);
         s.effects.push(WorkerStateEffect::Send(empty));

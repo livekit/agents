@@ -120,7 +120,7 @@ async fn real_ipc_frame_fault_matrix() {
             assert!(matches!(error, WireError::Eof));
         } else {
             assert!(
-                matches!(error, WireError::Io(ref cause) if cause.kind() == std::io::ErrorKind::UnexpectedEof),
+                matches!(error, WireError::Io { kind: std::io::ErrorKind::UnexpectedEof, .. }),
                 "cut={cut}: {error}"
             );
         }
@@ -170,9 +170,10 @@ async fn real_ipc_saturation_preserves_health_and_settles_slow_writes_on_close()
         received += 1;
     }
     assert_eq!(received, 64, "saturation retains only the bounded application inbox");
-    assert!(
-        matches!(client.wait_reader().await, Err(WireError::Io(error)) if error.kind() == std::io::ErrorKind::TimedOut)
-    );
+    assert!(matches!(
+        client.wait_reader().await,
+        Err(WireError::Io { kind: std::io::ErrorKind::TimedOut, .. })
+    ));
     client.close().await;
     assert_eq!(Arc::strong_count(&orphaned), 1, "the health callback's host reference settled");
 

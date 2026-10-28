@@ -9,7 +9,6 @@ license.workspace = true
 livekit-protocol.workspace = true
 prost.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
-serde_json = { workspace = true, features = ["preserve_order"] }
 serde.workspace = true
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 thiserror.workspace = true

@@ -448,7 +448,12 @@ impl WorkerHost for GatedHost {
         let _guard = OperationGuard(self.dropped.clone());
         self.started.send("decision").unwrap();
         self.decisions.acquire().await.unwrap().forget();
-        JobDecision::Accept(Default::default())
+        JobDecision::Accept(crate::worker::AcceptArguments {
+            identity: "agent-identity".into(),
+            name: "Agent Name".into(),
+            metadata: "participant-metadata".into(),
+            attributes: vec![(lk_agents_abi::ATTRIBUTE_AGENT_NAME.into(), "per-job-agent".into())],
+        })
     }
     async fn launch_job(&self, info: crate::worker::RunningJobInfo) -> Result<JobId, HostError> {
         let _guard = OperationGuard(self.dropped.clone());
@@ -544,16 +549,43 @@ fn assignment_message(id: &str) -> ServerMessage {
 async fn until_sent(
     sent: &mut tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
     predicate: impl Fn(&protocol::WorkerMessage) -> bool,
-) {
+) -> protocol::WorkerMessage {
     tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            if predicate(&sent.recv().await.expect("runtime stopped")) {
-                break;
+            let message = sent.recv().await.expect("runtime stopped");
+            if predicate(&message) {
+                break message;
             }
         }
     })
     .await
-    .expect("expected worker message");
+    .expect("expected worker message")
+}
+
+#[tokio::test]
+async fn acceptance_delivers_the_job_and_participant_fields_to_the_peer() {
+    let RuntimeRig { mut runtime, handle, peer, mut sent, decisions, started: _started, .. } =
+        runtime_rig();
+    peer.send(register_message("worker")).unwrap();
+    decisions.add_permits(1);
+    let task = tokio::spawn(async move { runtime.run().await });
+    peer.send(Ok(offer("accepted-job"))).unwrap();
+    let message = until_sent(&mut sent, |message| {
+        matches!(&message.message,
+        Some(livekit_protocol::worker_message::Message::Availability(reply)) if reply.available)
+    })
+    .await;
+    handle.send(WorkerCommand::Close).unwrap();
+    task.await.unwrap().unwrap();
+    let Some(livekit_protocol::worker_message::Message::Availability(reply)) = message.message
+    else {
+        unreachable!()
+    };
+    assert_eq!(reply.job_id, "accepted-job");
+    assert_eq!(reply.participant_identity, "agent-identity");
+    assert_eq!(reply.participant_name, "Agent Name");
+    assert_eq!(reply.participant_metadata, "participant-metadata");
+    assert_eq!(reply.participant_attributes[lk_agents_abi::ATTRIBUTE_AGENT_NAME], "per-job-agent");
 }
 
 #[tokio::test(start_paused = true)]
