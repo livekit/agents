@@ -7,8 +7,7 @@ import sys
 
 import pytest
 
-from livekit.agents.cli._legacy import _configure_logger
-from livekit.agents.cli.log import setup_logging
+from livekit.agents.cli import setup_logging
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -22,7 +21,7 @@ def test_production_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", devmode=False, console=False)
+    setup_logging("INFO", "json")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
@@ -39,7 +38,7 @@ def test_development_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch)
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", devmode=True, console=False)
+    setup_logging("INFO", "dev")
     logging.getLogger().info("café عاوز 🗣️")
     stdout.flush()
 
@@ -47,23 +46,6 @@ def test_development_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch)
     assert "café" in message
     assert r"\u0639" in message
     assert r"\U0001f5e3" in message
-
-
-def test_legacy_cli_logging_preserves_unicode_on_cp1252_stdout(monkeypatch):
-    output = io.BytesIO()
-    stdout = io.TextIOWrapper(output, encoding="cp1252")
-    root = logging.getLogger()
-    monkeypatch.setattr(root, "handlers", [])
-    monkeypatch.setattr(root, "level", logging.NOTSET)
-    monkeypatch.setattr(sys, "stdout", stdout)
-    monkeypatch.setattr(logging, "raiseExceptions", False)
-
-    _configure_logger(None, "INFO")
-    logging.getLogger().info("café عاوز 🗣️")
-    stdout.flush()
-
-    record = json.loads(output.getvalue().decode("cp1252", errors="replace"))
-    assert record["message"] == "café عاوز 🗣️"
 
 
 def test_cli_logging_setup_preserves_locale_encoded_stdout_for_print(monkeypatch):
@@ -74,7 +56,7 @@ def test_cli_logging_setup_preserves_locale_encoded_stdout_for_print(monkeypatch
     monkeypatch.setattr(root, "level", logging.NOTSET)
     monkeypatch.setattr(sys, "stdout", stdout)
 
-    setup_logging("INFO", devmode=False, console=False)
+    setup_logging("INFO", "json")
     print("café")
     stdout.flush()
 
@@ -90,7 +72,7 @@ def test_production_cli_logging_keeps_raw_unicode_on_utf8_stdout(monkeypatch):
     monkeypatch.setattr(sys, "stdout", stdout)
     monkeypatch.setattr(logging, "raiseExceptions", False)
 
-    setup_logging("INFO", devmode=False, console=False)
+    setup_logging("INFO", "json")
     logging.getLogger().info("café")
     stdout.flush()
 
