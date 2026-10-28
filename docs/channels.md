@@ -8,7 +8,7 @@ WhatsApp, and email into endpoint requests and delivers their replies.
 | Channel                      | How it reaches the thread                                          | Which thread                                                      | The reply                               |
 | ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------- |
 | web chat, API, partner agent | an A2A client calls the endpoint directly                           | `contextId` on every message after the first                       | the task's answer, streamed or returned |
-| another agent, delegating    | the same, with `livekit/kind: delegation`                           | the caller's thread when the expert shares it, else its own       | the task's answer                       |
+| another agent, delegating    | the same, with `livekit/kind: delegation`                           | the caller's thread under [explicit authority](protocol/a2a.md#delegation-and-conversation-data), else its own | the task's answer                       |
 | phone call                   | a SIP rule dispatches a job; the call runs on a `VoiceSession`       | the thread the dispatch names, else a new one                      | speech                                  |
 
 Every A2A message may carry `livekit/channel` with the channel's name, and
@@ -16,7 +16,7 @@ the handler reads it per message as `ctx.messages[i].channel`: the
 `livekit/channel` value, `delegation` for a message whose `livekit/kind` is
 `delegation`, `a2a` otherwise. The channel picks the endpoint's policy and
 debounce for a message that arrives while a turn runs; see
-[text-endpoints.md](text-endpoints.md). Delegations default to `queue`, web
+[server.md](server.md). Delegations default to `queue`, web
 chat and API clients to `interrupt`.
 
 Messages address a thread by ID; see [threads](threads.md). A routing key
@@ -54,7 +54,7 @@ set when the platform creates it and never changed.
 
 A SIP call's dispatch names the thread the platform resolved by the
 caller's `phone:` key, so a call continues the texts and calls before it.
-See [voice.md](voice.md) for dispatch metadata.
+See [voice-session.md](voice-session.md) for dispatch metadata.
 
 ### Routing an unknown sender
 
@@ -92,7 +92,7 @@ call references. Continuing it by voice requires an explicit authorized
 continuation of that same interaction through the backend endpoint. Seeing a
 question in shared transport history does not by itself restore its private
 frame or complete its waiting task. See [session state](text-session.md#loading-and-saving-session-state)
-and [frontend expert events](voice.md#conversation-owned-inbox).
+and [frontend expert events](voice-session.md#conversation-owned-inbox).
 
 ## Email
 
@@ -139,6 +139,3 @@ messages, scheduled reminders, and cross-channel delivery require separate
 application egress; channel ingress does not add a scheduler or a durable task
 runtime. A live frontend speaks through `ctx.live_session.say()` while its
 `VoiceSession` remains active.
-
-See `examples/use-cases/planned-09_speed_to_lead.py`,
-`planned-12_many_chats.py` and `planned-14_returns_by_email.py`.

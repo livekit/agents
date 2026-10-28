@@ -9,7 +9,7 @@ history, the state, the tasks, the A2A context.
 
 - Not a call. A call is a job: a worker process attached to a room for the
   call's duration. The thread outlives it. The runtime a call attaches to
-  is a `VoiceSession`; see [voice.md](voice.md).
+  is a `VoiceSession`; see [voice-session.md](voice-session.md).
 - Not a request. A text message is a run inside the thread; see below.
 - Not a person. One person may have several threads, one per chat in a
   sidebar for instance, and the application decides which.
@@ -23,13 +23,26 @@ history, the state, the tasks, the A2A context.
 | an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`     |
 | scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope    |
 | attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                                 |
-| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lanes.md](lanes.md)                                                        |
-| the journal | the framework's append-only record of what happened, shared by every lane; see [journal.md](journal.md)                                                           |
+| lanes       | one per configured handler lane: transport history, saved application data and tasks; see [lane concepts](#lanes-and-session-frames)                                                        |
+| the journal | the framework's append-only record of what happened, shared by every lane; see [journal](internals/storage.md#journal)                                                           |
 
 Several endpoints can take part in one thread, each in its configured lane.
 Local agents coordinated by a session have separate frames within saved session
 state; those frames do not each create a transport lane. A tool reads another agent's history
 with `ctx.thread.lane(agent).history()`.
+
+## Lanes and session frames
+
+`AgentHandler(lane=...)` names a transport history/task and concurrency boundary
+inside a thread. Voice and text doors configured for that same lane can share
+transport history. A lane is not allocated for every local agent invocation.
+`TextSessionState` keeps its own agent frames, private histories, and pending
+calls; those frames do not each create a lane.
+
+The journal is the framework's append-only event record, separate from editable
+model history and explicitly saved context fields. Public thread methods read
+those records; lease/fence, table, and event mechanics are in
+[storage internals](internals/storage.md).
 
 ## How a thread is found
 
@@ -38,12 +51,12 @@ By its id, and nothing else.
 | A request carries                     | The thread                                                                         |
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
 | the id, as the A2A `contextId`        | that thread; an id the platform does not know fails the task `thread-not-found`     |
-| no `contextId`                        | a new thread                                                                       |
+| no `contextId`                        | a new thread; a retried first message (same `messageId`) gets the same thread and task |
 | a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs |
 
 A backend that wants to find a conversation again stores the thread id in
 its own tables, against its user, lead or order, and passes it on as
-`contextId` or in the dispatch; see [backend-api.md](backend-api.md).
+`contextId` or in the dispatch; see [clients.md](clients.md).
 For phone-number routing, see
 [channels.md](channels.md).
 
@@ -54,7 +67,7 @@ application's choice.
 
 | Channel       | Conversations per person         | How                                                                                                                                                  |
 | ------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| web chat, API | as many as the application wants | a thread per chat, created with the person as `scope`, listed by scope for a sidebar, titled with `update(attributes=)`; see [backend-api.md](backend-api.md) |
+| web chat, API | as many as the application wants | a thread per chat, created with the person as `scope`, listed by scope for a sidebar, titled with `update(attributes=)`; see [clients.md](clients.md) |
 | the same      | one                              | the backend keeps one thread id per person and sends it every time                                                                                    |
 | calls         | the one the dispatch names       | the backend or the console puts the thread id in the dispatch metadata; with none, every call is a new thread                                          |
 
@@ -73,7 +86,7 @@ after, so a run can execute on any worker. Application fields require explicit
 load/save; returning from a handler does not save them.
 Runs of one agent in a thread execute one at a time, in the order their
 messages arrived, unless the endpoint chose otherwise; see
-[lanes.md](lanes.md) and [text-endpoints.md](text-endpoints.md).
+[lane mechanics](internals/storage.md#lanes) and [server.md](server.md).
 
 ## `ctx.thread`
 
@@ -83,7 +96,7 @@ On every context, in a tool during any run and in an endpoint's handler,
 `rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
 server without storage, and `VoiceSession(thread=ctx.thread)` gives it to
 the call. Without storage, a run's `ctx.thread` is an in-memory thread
-with the same API and no persistence; see [storage.md](storage.md).
+with the same API and no persistence; see [storage.md](internals/storage.md).
 
 | Member                                         | What                                                                          |
 | ---------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -105,7 +118,4 @@ and pushes the expiry. Deleting a thread deletes everything it holds.
 There is nothing to open or close.
 
 `livekit/mergedInto` on a task is unrelated to threads: messages answered
-in one turn; see [text-endpoints.md](text-endpoints.md).
-
-See `examples/use-cases/01_appointments_by_phone_and_text.py`, and
-`planned-12_many_chats.py` for a sidebar.
+in one turn; see [server.md](server.md).

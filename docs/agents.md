@@ -22,8 +22,8 @@ scheduler = Agent[SchedulingContext](
 
 | Parameter | Meaning |
 | --- | --- |
-| `instructions` | Static or channel-specific instructions; dynamic parts come from registered functions |
-| `name`, `id` | Stable agent identity; see below |
+| `instructions` | Static instructions; dynamic parts come from registered functions |
+| `name` | Stable agent identity; see below |
 | `llm` | The reasoning model |
 | `tools` | Tools and toolsets |
 | `output_type` | Final output contract; required for an agent exposed as a tool, including output functions |
@@ -31,16 +31,34 @@ scheduler = Agent[SchedulingContext](
 `Agent[SchedulingContext]` and `RunContext[SchedulingContext]` carry the
 application context type. Tools read application data and services through
 `ctx.context`. The output contract determines the type of run results. See
-[application context](state-and-deps.md) for persistence responsibilities.
+[application context](context.md) for persistence responsibilities.
 
-The id identifies the agent definition. It is
-`name=` or `id=` when given; otherwise a module-level `Agent(...)` takes the
-name of the variable it is assigned to. An unnamed agent
-built anywhere else is `default_agent`.
+The name identifies the agent definition. It is `name=` when given;
+otherwise a module-level `Agent(...)` takes the name of the variable it is
+assigned to when it is first bound. An unnamed agent built anywhere else is
+`default_agent`.
 
 Tools, instruction functions, and lifecycle hooks are registered with
 decorators at import. The first time the agent is bound to a thread they
 freeze: a later registration raises `RuntimeError`.
+
+## Registering tools
+
+Register typed functions on the shared agent during application setup:
+
+```python
+@scheduler.tool
+async def lookup_appointment(
+    ctx: RunContext[SchedulingContext], reference: str
+) -> Appointment:
+    """Look up an appointment by its reference."""
+    return await ctx.context.clinic.get_appointment(reference)
+```
+
+The model selects a tool and supplies its arguments; the framework validates
+those arguments, invokes the function with `RunContext`, and records its result
+for the next model request. See [tools](tools.md) for approvals, human input,
+errors, toolsets, MCP, and local or remote agents exposed as tools.
 
 ## Voice configuration
 
@@ -52,7 +70,7 @@ The same agent definition can be used in text and voice.
 Agent selection and voice configuration are separate operations. When an
 application wants a different voice or listening policy for a specialist,
 it explicitly updates the live session. See
-[updating a live session](voice.md#updating-a-live-session).
+[updating a live session](voice-session.md#updating-a-live-session).
 
 ## Conversation ownership
 
@@ -70,7 +88,7 @@ Call `store.load_context(app)` to restore and validate them, then call
 alone does not save mutations. Unmarked customers, clients, and services
 are application-supplied runtime values. Scope belongs to the
 conversation/job, not to the agent definition. See
-[context and persisted fields](state-and-deps.md) for the complete example.
+[context and persisted fields](context.md) for the complete example.
 
 ## Running a turn
 
@@ -80,7 +98,6 @@ result = await scheduler.run(
     message_history=history,             # the conversation so far; omit for a fresh one
     context=context,                     # typed application data and dependencies
     usage=None,                          # a RunUsage to add this run's usage to
-    max_steps=12,                        # the most model requests one turn may make
 )
 result.status                            # "completed" or "input_required"
 # After narrowing on status:
@@ -96,7 +113,7 @@ It is a discriminated union: `status == "completed"` exposes `output: Output`,
 and `status == "input_required"` exposes `question: str`. Both branches expose
 history and usage. A tool's `InputRequired(...)` sets the framework outcome;
 `output_type` contains only the application's final-result contract. See the
-[result and A2A mapping](text-session.md#what-a-run-returns).
+[result and A2A mapping](#running-a-turn).
 
 `RunResult` describes one agent invocation:
 
@@ -125,18 +142,17 @@ tool-call correlation, and context scopes belong to the session.
 context and perform external effects. The shared Agent definition keeps no
 per-run history or application data after it returns. The
 next turn continues from `result.all_messages()`. The model and tool loop
-stops when it accepts the final output or requests human input. After
-`max_steps` model requests (default 12), it raises `UnexpectedModelBehavior`.
+stops when it accepts the final output or requests human input.
 
 Inside a managed `a2a_session` endpoint the runtime supplies the loaded history
 and scoped `ctx.store`. The application constructs its context with fresh
 runtime dependencies, explicitly calls `await ctx.store.load_context(app)`,
 passes `context=app` to the run, and calls `await ctx.store.save_context(app)`
-to save changes. See [context loading](state-and-deps.md#explicit-load-and-save-on-the-store).
+to save changes. See [context loading](context.md#explicit-load-and-save-on-the-store).
 `agent.run()` executes the agent the caller selected.
 [TextSession](text-session.md) reconstructs and coordinates text conversations
 from explicitly supplied state on each request.
-On a call, `VoiceSession` owns frontend interaction and expert reply routing; see [voice.md](voice.md).
+On a call, `VoiceSession` owns frontend interaction and expert reply routing; see [voice-session.md](voice-session.md).
 
 ## `RunContext`
 
@@ -156,7 +172,7 @@ Every tool, instruction function and output function receives
 
 On a call the context also carries the speech: `ctx.speech_handle`,
 `ctx.wait_for_playout()`, `ctx.with_filler(...)`, `ctx.foreground()` and
-`ctx.disallow_interruptions()`; see [voice.md](voice.md).
+`ctx.disallow_interruptions()`; see [tool calls on a call](voice-session.md#tool-calls-on-a-call).
 
 `RunContext[None]` indicates no application context. Conversation history and
 runtime metadata remain separate from the application object.
@@ -205,10 +221,41 @@ Use constraints on the output data structure for format checks. An output
 function can resolve the final value from application data or an authoritative
 service; its parameters define the final-output arguments and its return type
 defines the result. Raising `ModelRetry` asks the model to correct the attempted
-output. See [authoritative completion](text-session.md#authoritative-completion-and-approval).
+output. See [authoritative completion](#authoritative-completion-and-approval).
 
 For multi-turn conversations with typed final results, see
 [text-session.md](text-session.md).
+
+## Authoritative completion and approval
+
+Tools enforce availability, price, prerequisites, and approval. Resolve final
+results against the authoritative service using an output function:
+
+```python
+async def booking_result(
+    ctx: RunContext[BookingContext],
+    confirmation_code: str,
+) -> Booking:
+    return await ctx.context.hotel.get_confirmed_booking_for_execution(
+        confirmation_code,
+        execution_id=ctx.execution_id,
+    )
+```
+
+For a callable `output_type`, its parameters define the final-output arguments.
+Validate them before invoking the function. Its accepted return value is the
+final typed result; `ModelRetry` asks the model to correct its attempted output.
+Output functions resolve already committed effects. Effectful operations have
+their own idempotency contract.
+
+`ctx.execution_id` identifies the conversational task across human turns.
+Each turn has its own run identity. The framework stores the execution id in
+the run's persisted state, so a resumed run keeps it. On A2A it is the
+transport task id, which a frontend can supply by continuing that task.
+
+Approval binds to the exact effect terms and draft revision. Changed dates,
+room, price, guest, or payment details invalidate prior approval. Recheck
+availability and authorization before committing the booking.
 
 ## Hooks
 
@@ -256,7 +303,7 @@ current run works on, and outside them it raises.
 
 `agent.run_stream(...)` runs the same model/tool loop as `agent.run(...)` and
 exposes incremental events through an async context manager. It accepts the
-same message, history, context, usage, and step-limit arguments. Streaming
+same message, history, context, and usage arguments. Streaming
 does not change tool execution, output validation, approval, or human-input
 semantics.
 
@@ -272,7 +319,6 @@ async with assistant.run_stream(
     message,
     message_history=history,
     context=app,
-    max_steps=12,
 ) as stream:
     async for delta in stream.stream_text(delta=True):
         await send_text(delta)
@@ -292,8 +338,8 @@ when the context is entered, not when the context-manager object is constructed.
 The stream cannot be entered twice or reused for another invocation.
 
 `result()` returns the settled, validated result. It is awaitable and never
-returns `None` merely because execution is unfinished. Model/provider failures,
-step-limit failures, and cancellation retain their normal exception behavior.
+returns `None` merely because execution is unfinished. Model/provider failures
+and cancellation retain their normal exception behavior.
 A failed or cancelled run does not manufacture a completed result.
 
 The last visible text fragment is not the completion boundary. Tools, output
@@ -398,7 +444,7 @@ Every event has:
 | --- | --- | --- |
 | `type` | Literal discriminator | One of the event types below |
 | `sequence` | `int` | Increasing occurrence number within this stream; not a durable reconnect cursor |
-| `agent_id` | `str` | Agent responsible for this occurrence |
+| `agent_name` | `str` | Name of the agent responsible for this occurrence |
 | `invocation_id` | `str` | Invocation producing it; distinguishes repeated calls to the same agent |
 | `frame_id` | `str | None` | Backend session frame when applicable; absent on a direct run |
 
@@ -561,8 +607,6 @@ application-selected boundaries; do not unconditionally save partial mutations
 in `finally`. Merely opening, consuming, or closing a stream saves no application
 context or text session state.
 
-See `examples/use-cases/01_appointments_by_phone_and_text.py` and
-`04_a_claim_with_a_photo.py`.
 
 ## Frontend interaction tasks
 
@@ -570,7 +614,7 @@ For a fast brain attached to an active voice session, `VoiceTask` temporarily
 owns the live interaction and returns a typed result to its waiting caller.
 It is scoped to that frontend session and relies on an in-memory Python await.
 It is not a stateless workload API or a backend persistence mechanism. See
-[frontend voice interactions](voice.md#voicetask-frontend-live-interactions).
+[frontend voice interactions](voice-tasks.md#voicetask).
 
 ## Working with other agents
 
@@ -580,144 +624,6 @@ It is not a stateless workload API or a backend persistence mechanism. See
 | Backend agent as a tool | A `TextSession` manages a child across requests and delivers its typed output to the parent tool call | Each child has its own frame and history |
 | Remote agent as a tool | `RemoteAgent(url).as_tool()` connects to another endpoint | The remote service owns its conversation; `VoiceSession` or the text session retains continuation references |
 
-## Direct delegation
-
-Call another agent directly when the caller can consume its result within
-one invocation:
-
-```python
-@main_line.tool
-async def quick_balance(ctx: RunContext[CustomerContext], account_number: str) -> str:
-    result = await billing.run(
-        f"Look up the balance for account {account_number}. Do not ask follow-up questions.",
-        context=ctx.context,
-        usage=ctx.usage,
-    )
-    if result.status == "input_required":
-        return f"Balance lookup needs more information: {result.question}"
-    return str(result.output)
-```
-
-The outer tool waits for this invocation to finish. Its parent model then
-reads the returned tool value. This starts no session frame or persistent
-parent-child relationship. To continue the expert directly, the application
-must retain its history and supply it to another run.
-
-## Backend agents as tools
-
-Use backend `TextSession` when a specialist may need human replies before producing
-its result. Define the specialist's final `output_type`, then expose it in
-the parent's `tools=`:
-
-```python
-@dataclass
-class BookingRequest:
-    destination: str
-    nights: int
-
-
-book_room = Agent[BookingContext](
-    id="book-room",
-    instructions="Collect preferences and reserve a room after approval.",
-    llm=MODEL,
-    output_type=Booking,
-)
-
-front_desk = Agent[BookingContext](
-    id="front-desk",
-    instructions="Help customers plan their stay.",
-    llm=MODEL,
-    tools=[book_room.as_tool(
-        tool_name="book_room",
-        tool_description="Collect preferences and book a room.",
-        parameters=BookingRequest,
-        needs_approval=True,
-        chat_history="fork",
-        merge_chat_history=True,
-    )],
-)
-
-session = TextSession(agent=front_desk)
-turn = await session.run(message, state=saved_state, context=app)
-```
-
-The parent model selects the tool and supplies validated `BookingRequest`
-arguments. `needs_approval` uses the shared tool approval gate before the
-child starts. Actions inside the child, such as reserving or charging, can
-require their own approval.
-
-The session runs the child in its own frame. An input-required result keeps
-that frame active for the next human reply. An accepted `Booking` completes
-the child and fills the parent's original tool call; a fresh parent LLM
-invocation then reads the result. Each Python invocation finishes between
-human turns.
-
-`chat_history="fresh"` starts with the specialist's instructions and tool input;
-`"fork"` also copies selected parent history. `merge_chat_history=True` returns
-new visible user/assistant dialogue with the result; `False` returns only the
-result. Private child tools and instructions remain in the child frame.
-Application-context sharing is independent of these history choices.
-
-`turn.result` is the invocation's `RunResult`; `turn.state` holds frames
-and pending calls. The application explicitly loads the routing record before
-calling the session and saves the returned state and changed persisted context
-fields after each turn, including approval and human-input waits. See the
-[session specification](text-session.md) for the complete entrypoint, history
-rules, and switching between turn and direct execution.
-
-## Remote agents as tools
-
-A `RemoteAgent` connects to an agent endpoint using A2A. Expose it through `.as_tool()`
-and attach the returned tool to the parent:
-
-```python
-from livekit.agents.a2a import RemoteAgent
-
-back_office = RemoteAgent(
-    "https://northside.livekit.cloud/agents/eligibility/production/eligibility"
-)
-front_desk = Agent(
-    instructions="Help patients with appointments and insurance eligibility.",
-    llm=MODEL,
-    tools=[back_office.as_tool()],
-)
-
-session = VoiceSession(llm=REALTIME_MODEL, context=app, thread=ctx.thread)
-await session.start(agent=front_desk, room=ctx.room)
-```
-
-The remote card supplies the tool's name, description, and supported input.
-The remote service owns its history, application data, approval behavior,
-and completion contract. The local tool takes its configuration from that
-endpoint. Local agent-tool options such as `chat_history`,
-`merge_chat_history`, and `needs_approval` do not configure the remote tool.
-
-In the frontend, `VoiceSession` coordinates the interaction while the adapter
-handles the A2A protocol. Expert events enter the calling frontend conversation's in-process
-queue and wake its session without database polling. Persistence of frontend
-event delivery is optional. The frontend
-presents useful progress when the conversational floor permits and can rephrase
-questions without taking ownership of the expert's task. An input-required
-response records that expert as the destination for the next relevant human
-reply. See [inbox delivery](voice.md#conversation-owned-inbox). Completion delivers the remote result to the parent tool
-call, then the parent model continues. Failures and cancellation propagate
-through the tool lifecycle.
-
-The frontend session retains the remote endpoint and conversation/task
-references in process. The remote service retains its private history; it can
-use plain `Agent.run()` or a text session. Frontend event recovery is optional
-and separate from backend persistence.
-
-Backend agents can attach the same remote tool through `tools=`. In that case,
-`TextSession` owns the pending call across requests and the application
-explicitly saves its returned backend routing state. No frontend event queue
-or live session is created by a backend run.
-
-The adapter manages connection lifecycle, authentication, task correlation,
-and delegation metadata. Applications configure the endpoint and attach its
-tool; protocol calls and metadata recording are internal.
-
-When the endpoint advertises the LiveKit extension, the adapter uses its
-thread-correlation protocol so the remote agent can keep its own lane in
-the caller's thread. Other A2A endpoints retain their own remote context.
-See [A2A](a2a.md) for the wire protocol and authentication rules.
+Detailed delegation contracts and examples live in
+[tools](tools.md#agents-as-tools); `TextSession` owns backend continuation and
+`VoiceSession` owns frontend presentation and expert reply routing.

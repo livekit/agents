@@ -6,13 +6,12 @@ for each request; pass the previously saved `TextSessionState` to continue the
 same logical conversation. Agent definitions remain shared configuration.
 
 Each `run()` builds request-scoped execution from the supplied state. A text
-request has a bounded lifetime; its conversation state can outlive the request. The application explicitly loads and saves that state.
+request has a bounded lifetime; its conversation state can outlive the request.
+The application explicitly loads and saves that state.
 The `TextSession` object, runtime services, and Python execution stack are not
 serialized.
 
-An `Agent` is shared configuration. A conversational task collects information
-across turns and produces a validated result. The text session invokes
-`Agent.run()`, tracks agents called as tools, and
+The text session invokes `Agent.run()`, tracks agents called as tools, and
 delivers each child's accepted output to its caller.
 
 Applications can call any agent directly. Routing state belongs to the session;
@@ -20,12 +19,12 @@ application data and services belong to the context supplied by the application.
 
 `VoiceSession` owns frontend expert-tool interactions, event delivery, and human
 reply correlation. It does not require a `TextSession`. See
-[frontend expert events](voice.md#conversation-owned-inbox).
+[frontend expert events](voice-session.md#conversation-owned-inbox).
 
 `VoiceTask` has a separate frontend role: a bounded live interaction inside
 an active voice session, with its parent waiting in memory. Backend stateless
 runs use `Agent.run()`; backend conversations spanning requests use routing
-state. See [frontend voice interactions](voice.md#voicetask-frontend-live-interactions).
+state. See [frontend voice interactions](voice-tasks.md#voicetask).
 
 ## Agent definitions and application data
 
@@ -38,7 +37,7 @@ class BookingContext:
 
 
 book_room = Agent[BookingContext](
-    id="book-room",
+    name="book-room",
     instructions=(
         "Collect the booking details. Ask for anything missing. "
         "Reserve only after approval. Produce a final Booking only after "
@@ -59,89 +58,22 @@ instructions render selected context data for the model.
 
 `persisted(...)` selects stored fields. The application calls `load_context`
 to restore them and `save_context` to save changes. It supplies fresh customer
-and service objects on each activation. See [application context](state-and-deps.md)
+and service objects on each activation. See [application context](context.md)
 for the load/save contract and scope ownership.
 
-## What a run returns
+## Session results
 
-`Agent.run()` returns `RunResult[Output]`. The result container describes the
-invocation's status; `output_type` describes only the application's final value.
-The invocation ends when it returns, including when it needs human input.
+`TextSession.run()` returns an envelope with `result: RunResult[Output]` and
+`state: TextSessionState`. The contained result uses the shared
+[agent result contract](agents.md#running-a-turn): a completed typed output or
+an input-required question. The envelope retains session frames and pending
+calls separately from that invocation result.
 
-| `result.status` | Available data | What happens next |
-| --- | --- | --- |
-| `"completed"` | `result.output: Output` | The child completes and the session delivers its value to the parent tool call |
-| `"input_required"` | `result.question: str` | Deliver the question and save the active conversation |
-
-`RunResult[Output]` is a discriminated union. Checking its literal `status`
-narrows the result: the completed branch exposes the declared output type,
-and the input-required branch exposes the question. History and usage access
-are available on both branches.
-
-History methods on the result describe the agent invocation represented by
-that result. They do not flatten the session's private frame histories. Session
-state retains those separate histories for application inspection.
-
-The session returns an envelope containing `result: RunResult[Output]` and
-`state: TextSessionState`. The contained run result uses this invocation contract.
-Session frames and parent-call bookkeeping belong to the envelope's routing
-state. See the [result surface](agents.md#running-a-turn).
-
-The model produces the application's final value. The framework constructs
-the result container. An `InputRequired` returned by a tool requests the
-input-required result; it is not part of the application's output schema.
-
-Ordinary tool calls run within the invocation. Their recorded results go back
-to the model, which chooses its next action. Validation failures return feedback
-to the model within the invocation's retry and usage budget. Failure, refusal,
-cancellation, and timeout retain their own handling.
-
-### A2A mapping
-
-The transport maps framework status to the corresponding A2A task state:
-
-| Python result | A2A task state | A2A payload |
-| --- | --- | --- |
-| `status="completed"` | `completed` | The accepted output is delivered as the result artifact |
-| `status="input_required"` | `input-required` | The question is delivered in the task status message |
-
-The Python spelling uses an underscore; the wire spelling uses a hyphen.
-Application output and framework status remain separate in both interfaces.
-See [A2A tasks](a2a.md#answering-a-task) for the transport lifecycle.
-
-## Human input
-
-```python
-result = await book_room.run(message, context=app, message_history=history)
-
-if result.status == "input_required":
-    await send_question(result.question)
-elif result.status == "completed":
-    booking = result.output  # Booking
-```
-
-A model-generated question produces an input-required result. A tool can also request
-input directly:
-
-```python
-@book_room.tool
-async def clarify_view(ctx: RunContext[BookingContext]):
-    return InputRequired("Would you prefer a garden or sea view?")
-```
-
-The invocation records a complete message sequence before returning. A tool
-requesting input records its question as its outcome; its Python body has
-finished. On the next human message, a new invocation reads the updated
-history and context. The LLM interprets the reply, asks follow-up questions,
-and calls tools to update the draft.
-
-Deliver model-generated text directly. `verbatim=True` preserves exact wording
-for tool-generated questions. A separate frontend agent may phrase an expert's
-question under the application's presentation policy.
-
-For `output_type=str`, conversational tasks use an explicit final-output action
-to distinguish completion from a question. A standalone text run returns its
-answer as its output. Completion is determined by the output contract.
+On input required, save the returned state before accepting another request.
+The next request starts a new invocation of the recorded active frame; no
+Python coroutine remains suspended. A frontend can phrase the endpoint's
+question through its own presentation policy. A2A maps the outcome under its
+[task-answering contract](protocol/a2a.md#answering-a-task).
 
 ## Running a text conversation
 
@@ -153,7 +85,7 @@ class BookingRequest:
 
 
 front_desk = Agent[BookingContext](
-    id="front-desk",
+    name="front-desk",
     instructions="Help customers plan their stay.",
     llm=MODEL,
     tools=[
@@ -264,29 +196,10 @@ constructed application context supplied to agents.
 application assigns `turn.state` and saves explicitly after each retained turn,
 including `status="input_required"`. Runtime service objects remain outside routing
 state. Load and save any marked application-context fields explicitly as
-well; see [context persistence](state-and-deps.md#persisting-text-session-state).
+well; see [context persistence](context.md#persisting-text-session-state).
 
-## Configuring an agent tool
-
-`agent.as_tool(...)` exposes the agent to a parent model through `tools=`.
-
-| Parameter | Meaning |
-| --- | --- |
-| `tool_name` | Name the parent model uses to call the tool |
-| `tool_description` | Explains when the parent should select this specialist |
-| `parameters` | Dataclass or Pydantic model defining the parent's tool arguments |
-| `needs_approval` | Requires human approval before starting the requested child invocation |
-| `chat_history` | `"fresh"` starts from the tool input; `"fork"` also copies selected parent history |
-| `merge_chat_history` | `True` returns the child's visible dialogue alongside its typed result; `False` returns only the result |
-
-The framework validates the parent-provided arguments against `parameters`
-before starting the child. These arguments become the child's task input.
-The child's `output_type` defines its final result. Runtime services and the
-persisted draft are supplied through application context.
-
-History selection and merging are independent. For example,
-`chat_history="fork", merge_chat_history=False` lets a specialist use the
-parent conversation while returning only its accepted result.
+Agent-tool names, typed parameters, approvals, and history selection are
+configured through [the tool API](tools.md#configuring-an-agent-tool).
 
 ## Approval before starting a child
 
@@ -312,7 +225,7 @@ Approval to start a specialist and approval for a business action are separate.
 A booking specialist may collect preferences before its reservation tool asks
 permission to commit the booking. Configure that tool with
 `needs_approval=`; bind its approval to the exact reservation terms and
-draft revision. See [human input and approvals](human-in-the-loop.md#approvals).
+draft revision. See [human input and approvals](tools.md#approval).
 
 The application explicitly saves each returned routing state, including approval
 waits. Session state stores pending decisions and call relationships; runtime
@@ -361,13 +274,13 @@ history, approval, and execution. The text session retains the references needed
 deliver completion to its parent agent. The same remote tool can be attached
 to a frontend agent; there, `VoiceSession` owns those interactions without a
 session. Progress, cancellation, and protocol metadata are handled by the adapter. See
-[remote agents as tools](agents.md#remote-agents-as-tools).
+[remote agents as tools](tools.md#remote-agents-as-tools).
 
 ## Frames and history isolation
 
 Each conversational frame records:
 
-- A unique frame ID and stable agent ID.
+- A unique frame ID and stable agent name.
 - Its own model-compatible message history.
 - Its parent frame ID and originating parent tool-call ID, when called as a tool.
 - The application's context-scope reference.
@@ -386,19 +299,14 @@ Each child owns its model history throughout its conversation.
 | Starting history | Child receives |
 | --- | --- |
 | `chat_history="fresh"` | Its own instructions and the agent-tool input |
-| `chat_history="fork"` | Its own instructions, a copy of selected parent conversation history, and the agent-tool input |
-
-A history selector can filter or transform the parent messages before the
-child starts. It can pass relevant exchanges, redact fields, or produce a
-summary. The selector customizes the starting history rather than creating
-a separate conversation mode.
+| `chat_history="fork"` | Its own instructions, a copy of the parent conversation history, and the agent-tool input |
 
 Forking copies history when the child frame is created. Preserve complete
 message/tool exchanges and leave the unfinished parent delegation call out
 of the child's input. The child uses its own agent instructions.
 
-After `InputRequired`, resume the recorded child history. Starting history
-selection is applied once per child frame, not again on every human reply.
+After `InputRequired`, resume the recorded child history. The starting history
+is chosen once per child frame, not again on every human reply.
 
 ## Information returned to the parent
 
@@ -425,7 +333,6 @@ need to return only a validated address.
 | --- | --- | --- |
 | Validate a supplied address | Fresh | Result only |
 | Book a room using previously discussed preferences | Fork | Result and visible dialogue |
-| Review a selected part of a conversation | Fork with a history selector | Result only |
 
 The session delivers the chosen information before invoking the parent again.
 Keep the parent's tool call/result sequence valid, preserve dialogue ordering,
@@ -437,36 +344,7 @@ Application context sharing is independent of both history choices. The
 application supplies a compatible shared context or constructs a child
 context with its own persisted draft. A shared customer or service reference
 can be reused while booking drafts remain separate. See
-[application context](state-and-deps.md) for scope and persistence ownership.
-
-## Authoritative completion and approval
-
-Tools enforce availability, price, prerequisites, and approval. Resolve final
-results against the authoritative service using an output function:
-
-```python
-async def booking_result(
-    ctx: RunContext[BookingContext],
-    confirmation_code: str,
-) -> Booking:
-    return await ctx.context.hotel.get_confirmed_booking_for_execution(
-        confirmation_code,
-        execution_id=ctx.execution_id,
-    )
-```
-
-For a callable `output_type`, its parameters define the final-output arguments.
-Validate them before invoking the function. Its accepted return value is the
-final typed result; `ModelRetry` asks the model to correct its attempted output.
-Output functions resolve already committed effects. Effectful operations have
-their own idempotency contract.
-
-`ctx.execution_id` identifies the conversational task across human turns.
-Each turn has its own run identity.
-
-Approval binds to the exact effect terms and draft revision. Changed dates,
-room, price, guest, or payment details invalidate prior approval. Recheck
-availability and authorization before committing the booking.
+[application context](context.md) for scope and persistence ownership.
 
 ## Persistence and execution ownership
 
@@ -475,9 +353,10 @@ The application explicitly loads and saves it alongside the relevant context
 fields. Runtime services are reconstructed by application code. Save routing
 and application changes consistently so both describe the same completed turn.
 
-Serialize turns for one conversation and use revision checks on saves. Bound
-agent-tool calls and nesting depth. Resolve stable agent IDs through the session's
-configured agent definitions; an unknown ID produces a routing error.
+Serialize turns for one conversation and use revision checks on saves.
+`TextSession(agent=..., max_depth=8)` bounds the stack depth; an agent-tool call
+beyond it fails. Resolve stable agent names through the session's configured
+agent definitions; an unknown name produces a routing error.
 
 Conversation persistence preserves the position between turns. External effects
 require domain validation, idempotency, and reconciliation. Python call stacks

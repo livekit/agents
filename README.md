@@ -60,7 +60,6 @@ cd console && pnpm install && pnpm dev       # http://localhost:3000
 - [`frontdesk`](examples/frontdesk/README.md): dental appointment booking
 - [`hotel-receptionist`](examples/hotel-receptionist/README.md): hotel bookings, lookups and cancellations
 - [`airline-support`](examples/airline-support/README.md): airline customer care as a graph
-- [`use-cases`](docs/examples/use-cases/README.md): one agent per idea
 
 ## More
 

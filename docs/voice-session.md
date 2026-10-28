@@ -1,4 +1,4 @@
-# Voice
+# VoiceSession
 
 A call runs on a `VoiceSession`: the runtime a room attaches to, with the
 models, turn detection and audio. It runs an `Agent`, and it runs it in the
@@ -82,9 +82,68 @@ not promise zero-latency model replacement.
 `update_agent` changes the agent's instructions, tools, and reasoning behavior.
 It preserves the session's audio settings. VoiceTask activation and restoration also
 preserve those settings. The application calls `update_options` when a routing
-change should alter presentation, and explicitly restores the desired settings
-when returning to the parent. Multiple sessions using the same agent can have
+change should alter presentation. Multiple sessions using the same agent can have
 different voices and listening policies.
+
+### Temporary overrides
+
+`update_options` writes the session's base settings. For a change that lasts
+only as long as an operation, use an override layer:
+
+```python
+async with session.override_options(tts=specialist_voice):
+    await session.say("Let me read the terms back to you.")
+```
+
+Each setting takes its value from the topmost override that sets it, else from
+the base. Base changes made during an override persist and show through once the
+override is removed. The layer belongs to the block that opened it and is
+released when that block ends, on success, failure or cancellation. Transfer,
+DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
+overrides inside its own code and they are released when the task ends.
+
+## Custom I/O and recording
+
+Audio, video and text endpoints may be implemented in Rust, Python or Node.
+They use the same typed capability and stream contracts as provider plugins;
+language adapters handle invocation, backpressure, errors and cleanup. An
+`AudioOutput` reports playback progress and completion separately from frame
+acceptance.
+
+The session owns input/output routing, transcript synchronization and recording.
+Replacing its playback destination changes that destination only. Recording
+continues on the same session timeline without requiring the application to
+find and rebuild a recorder wrapper. Unrelated transforms and input attachments
+are preserved.
+
+Frames and playback reports carry attachment/segment identity. Reports from a
+replaced output remain attributable to its old media and cannot advance the
+new output. The session retains accounting for already delivered audio while
+releasing obsolete endpoints. Recording failure and cleanup failure are
+observable outcomes, not silent loss of recording.
+
+See the [I/O composition contract](internals/rust-core.md#session-io-composition)
+for ownership and the [shared primitives](internals/rust-core.md#common-runtime-primitives)
+for cross-language stream semantics.
+
+### Output handover policy
+
+Output replacement takes effect at a segment boundary. The current playback
+segment finishes on its original output; subsequent segments use the replacement
+after the current segment settles. A segment is a unit of output playback, not
+an inferred sentence boundary.
+
+Replacement has one policy and does not interrupt speech. An application that
+needs an immediate switch explicitly interrupts the current speech, waits for
+the interruption to settle, then replaces the output. There is no separate
+cut-and-switch replacement mode.
+
+Existing work retains its original output binding until it finishes or is
+interrupted. Pause, resume, stop and cleanup target that binding even after
+another output is selected. Buffered audio is not silently replayed on the
+replacement, and generated or accepted audio is not counted as heard audio.
+Recording and transcript accounting retain the same session timeline across
+the change.
 
 ## The call's thread
 
@@ -121,7 +180,7 @@ brain's progress while it waits.
 back_office = RemoteAgent("http://127.0.0.1:7880/agents/dentist/default/backend")
 voice = Agent(
     instructions="You are the practice's voice on the phone. Hand every request to the back office.",
-    tools=[back_office.as_tool()],            # one tool, ask
+    tools=[back_office.as_tool()],            # one tool, named from the card
 )
 
 @server.rtc_session()
@@ -137,7 +196,7 @@ The fast brain phrases questions while the live session correlates replies with 
 remote task. Completion supplies the
 parent's tool result; a failed remote task becomes a tool error.
 Connection lifecycle and delegation metadata are managed internally. See
-[remote agents as tools](agents.md#remote-agents-as-tools) for routing and
+[remote agents as tools](tools.md#remote-agents-as-tools) for routing and
 persistence ownership.
 
 One brain, two doors: voice and text share one set of tools, explicitly persisted application data
@@ -294,7 +353,7 @@ An eligible agent can present the expert's updates and continue its pending
 interaction. The existing delegation, remote task, and originating call IDs
 remain unchanged; regaining access does not create a new remote request or
 reassign a result to an unrelated tool call. The
-[airline refund example](voice.md#example-airline-refund-and-receipt-email)
+[airline refund example](voice-tasks.md#example-airline-refund-and-receipt-email)
 shows updates waiting during a frontend inline task.
 
 If no eligible agent returns, the application must eventually explicitly
@@ -326,187 +385,25 @@ background execution, a scheduler, or Python stack recovery. The backend request
 inbox continues to serve endpoint request policies independently.
 
 
-### Example: airline refund and receipt email
+## Tool calls on a call
 
-A passenger asks for a refund. The frontend calls the remote airline agent,
-which checks the ticket and handles refund eligibility, approval, and execution.
-While it works, the passenger asks to use a different email for the receipt.
-The frontend collects that address with a local live task.
+On a call, a tool's `RunContext` also carries the speech it belongs to:
 
-```python
-from dataclasses import dataclass
+| Member | What |
+| --- | --- |
+| `ctx.speech_handle` | the `SpeechHandle` of the reply that made this tool call; raises in `agent.run()` |
+| `await ctx.wait_for_playout()` | waits until the speech spoken before this tool ran has played out, not the whole turn |
+| `async with ctx.with_filler(source, delay=0, interval=None, max_steps=None)` | while the block runs, speaks `source` (a string, or a callable taking the step count and returning text, a handle, or `None` to skip) once the session has been idle for `delay` seconds; with `interval` it repeats, up to `max_steps` |
+| `async with ctx.foreground()` | waits for the session to be idle, then holds the floor for the block, so no other speech or deferred tool reply lands in between; yields the `VoiceSession` |
+| `ctx.disallow_interruptions()` | makes the rest of this reply uninterruptible; raises `RuntimeError` if it was already interrupted |
 
-from livekit.agents import Agent, RunContext
-from livekit.agents.a2a import RemoteAgent
-from livekit.agents.beta.workflows import GetEmailTask
+## Temporary voice interactions
 
-
-@dataclass
-class AirlineContext:
-    booking_reference: str
-    airline: AirlineServices
-
-
-refunds = RemoteAgent(REFUND_AGENT_URL)
-front_desk = Agent[AirlineContext](
-    instructions=(
-        "Help passengers with refunds through the airline refund expert. "
-        "If the passenger asks to change their receipt email, collect and save it. "
-        "Never promise a refund until the expert confirms it."
-    ),
-    tools=[refunds.as_tool()],
-)
-
-
-@front_desk.tool
-async def change_receipt_email(ctx: RunContext[AirlineContext]) -> str:
-    """Collect and confirm the email address for this booking's refund receipt."""
-    # Passenger: "Please send the refund receipt to a different email."
-    # The refund expert may still be checking the ticket.
-    # INLINE TASK: temporarily owns the floor to collect and confirm the address.
-    # It has no remote tool and cannot interact with the refund expert.
-    # INBOX: expert progress/questions/results arrive in the frontend queue
-    # and wake the session, but wait for email capture to finish.
-    # The passenger's spelling and confirmation answers go only to this task.
-    result = await GetEmailTask().run()
-
-    # The task restores front_desk; no explicit update_agent() is needed.
-    await ctx.context.airline.set_refund_receipt_email(
-        booking_reference=ctx.context.booking_reference,
-        email=result.email_address,
-    )
-    # INBOX: after this foreground tool finishes and the floor is available,
-    # front_desk can present queued events because it exposes refunds.as_tool().
-    # Another active agent with that same remote tool would also be eligible.
-    # No polling or manual drain.
-    # Progress can be combined. An expert question is phrased by front_desk;
-    # the live session sends the next relevant answer to the recorded refund task.
-    # A refund completion resolves the original remote call before the next
-    # ordinary frontend model invocation announces the confirmed outcome.
-    return f"The refund receipt email is now {result.email_address}."
-```
-
-For example, the refund expert may ask whether the passenger accepts a partial
-refund while the email task is confirming a spelling. That question stays queued
-until the task returns and the frontend tool finishes. The email confirmation
-is not treated as acceptance of the refund. The frontend then asks the refund
-question, and the live session sends its answer to the expert.
-
-The frontend selects `change_receipt_email` for the passenger's explicit new
-request, using a model-valid foreground view while the remote call remains
-pending. Expert-event presentation alone does not invoke this tool. This
-example handles the passenger's separate request to change their email; it
-does not turn an expert's email question into a local collection task.
-`AirlineServices` is application-provided; it saves the receipt destination in
-the authoritative booking/refund record used by the expert. The service enforces
-whether the receipt address can still change. Saving the address neither approves
-nor executes a refund. The host supplies the authenticated booking context to
-the live session. The frontend event queue is in-process and requires no DB.
-
-## VoiceTask: frontend live interactions
-
-`VoiceTask` is a temporary interaction run by the fast brain: the frontend
-agent attached to an active voice session. It can collect an email address,
-confirm a spoken name, gather DTMF input, or guide another bounded exchange
-before returning a typed result to the frontend's calling tool.
-`VoiceTask[Output]` describes the typed live-interaction primitive; helpers such
-as `GetEmailTask` return their domain result through `.run()`.
-
-Calling `.run()` resolves the active `VoiceSession` from the current frontend
-invocation. No session argument or application-side session check is required.
-The binding is invocation-local, so simultaneous sessions cannot share it.
-Calling a live task without an active live-session interaction raises a clear
-error before the task starts. Text-mode backend runs do not provide this binding.
-
-The task temporarily takes the conversational floor. The parent frontend
-waits in memory while the task receives live user turns and invokes its model
-and tools. On accepted final output, the task returns its typed result and
-restores the parent, whose model can continue from the tool result. This is
-suspension and restoration of the same frontend activation: the parent's
-`on_exit` and `on_enter` hooks are not called for the task transition.
-
-The lifetime is the active `VoiceSession`. Completion, cancellation, and session
-closure end the task. Cleanup releases the floor and restores any temporary
-session presentation settings, including on failure. Audio configuration
-remains owned by `VoiceSession`; application changes during the interaction
-must have explicit restoration behavior.
-
-This is an in-memory frontend interaction, not a stateless workload or backend
-execution primitive. Its parent await remains on the running Python stack.
-Saving history or application fields does not restore that await after a
-worker restart, deployment, or session loss. It does not provide background
-execution, scheduling, or cross-request task recovery.
-
-Use `Agent.run()` for stateless backend invocations and `TextSession` for
-backend agent-tool conversations that continue across requests using saved
-routing state. A frontend task and a backend delegation have separate owners:
-temporarily collecting live input does not silently cancel, transfer, or
-complete an outstanding remote task.
-
-### Authoring a custom VoiceTask
-
-Construct a `VoiceTask` and register its tools as functions. `output_type`
-declares the typed result; returning `Completed(value)` from one of the task's
-tools completes the live interaction. Ordinary tool values and conversational
-speech keep it active. The framework validates the completed value before
-returning it to the waiting caller and restoring that caller's live role.
-
-```python
-from pydantic import BaseModel, EmailStr
-
-from livekit.agents import Completed, VoiceTask, RunContext
-
-
-class EmailResult(BaseModel):
-    email_address: EmailStr
-
-
-def collect_email() -> VoiceTask[EmailResult]:
-    task = VoiceTask[EmailResult](
-        instructions=(
-            "Collect the passenger's receipt email. Clarify spelling when needed. "
-            "Call confirm_email with the address. Its approval read-back asks the "
-            "passenger to confirm; finish only after they approve that exact address."
-        ),
-        output_type=EmailResult,
-    )
-
-    async def read_back(ctx: RunContext[object], email_address: EmailStr) -> str:
-        return f"Should I use {email_address} for your refund receipt?"
-
-    @task.tool(needs_approval=read_back)
-    async def confirm_email(
-        ctx: RunContext[object], email_address: EmailStr
-    ) -> Completed[EmailResult]:
-        # EmailStr validates the address; the shared approval gate runs before
-        # this body. Changing the address requires confirmation again.
-        return Completed(EmailResult(email_address=email_address))
-
-    return task
-
-
-@front_desk.tool
-async def change_receipt_email(ctx: RunContext[AirlineContext]) -> str:
-    result = await collect_email().run()  # EmailResult; current session is implicit.
-    # Completed restored front_desk. Its queued expert events become eligible
-    # once this tool finishes, provided it still exposes the remote refund tool.
-    await ctx.context.airline.set_refund_receipt_email(
-        booking_reference=ctx.context.booking_reference,
-        email=result.email_address,
-    )
-    return f"Refund receipt email updated to {result.email_address}."
-```
-
-The factory constructs a fresh task for each interaction. It registers tools
-before `.run()` starts; no Agent or VoiceTask subclass is needed. The local task
-uses the active session's frontend model and audio configuration. Its tools can
-use the runtime wrapper without depending on the parent's application data;
-this example types the unused application context as `object`.
-
-`Completed[EmailResult]` ends this live task, not the remote refund task or the
-whole call. The email's confirmation authorizes using that address; it does
-not authorize a refund. The factory replaces the prebuilt `GetEmailTask` in
-the preceding example and requires no expert-triggered collection behavior.
+A [VoiceTask](voice-tasks.md) temporarily owns the floor, returns a typed result,
+and restores its caller without running the parent's exit/enter hooks. Expert
+events wait while the task collects input. See the
+[airline refund example](voice-tasks.md#example-airline-refund-and-receipt-email)
+for the exact inbox-processing boundaries and a task called from a frontend tool.
 
 ## Structured results in voice
 
@@ -518,6 +415,3 @@ the waiting frontend tool. Neither frontend path requires `TextSession`.
 The remote backend may use plain `Agent.run()` or a backend
 [TextSession](text-session.md) to coordinate its own specialists. The endpoint
 returns its outcome through A2A; it does not select the frontend speaking agent.
-
-See `examples/use-cases/01_appointments_by_phone_and_text.py`,
-`03_insurance_eligibility.py` and `07_hospital_main_line.py`.

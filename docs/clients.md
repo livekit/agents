@@ -2,7 +2,7 @@
 
 Everything a backend does with threads from outside the agent: the
 platform's threads service, the tokens it mints, and a client for an
-endpoint. The wire underneath is [a2a.md](a2a.md).
+endpoint. The wire underneath is [a2a.md](protocol/a2a.md).
 
 ## Threads
 
@@ -100,7 +100,8 @@ stable and yours to store. A tagging feature is one table of your own.
 A thread's history and its tasks come from the threads service's
 `GetThreadItems` and `GetThreadTasks`, under the project credential or a
 grant with `read`; the agent serves no content routes of its own. The
-state and the journal are not readable from outside. Inside a run,
+state, lanes and journal are not readable through these public APIs; only
+the [admin API](#admin-reads) reads them. Inside a run,
 `ctx.thread` is the durable thread: `info()`, `chat_history(agent=)`,
 `update(attributes=)` and `lane(...).tasks(...)`
 ([threads.md](threads.md)).
@@ -124,11 +125,11 @@ token = credentials.thread_grant_token(
 | Call | Returns |
 |---|---|
 | `thread_grant_token(grant, identity="", ttl_seconds=3600)` | a thread grant for a browser or a device |
-| `project_token(identity="worker", ttl_seconds=3600)` | a project credential carrying the `agentEndpoint` call grant, which passes the node to a `public=False` endpoint of any agent in the project |
+| `project_token(identity="worker", ttl_seconds=3600)` | a project credential carrying the `agentEndpoint` call grant, which passes the node to any endpoint of any agent in the project |
 | `verify(token)` | the `Principal`: `kind` (`project` or `grant`), `grant`, `identity`, `claims`; raises `Unauthorized` |
 
 `AgentThreadGrant` takes `scope` or `thread_ids` and the flags `create`,
-`write` and `read` ([a2a.md](a2a.md), Tokens); `can_create()`,
+`write` and `read` ([a2a.md](protocol/a2a.md), Tokens); `can_create()`,
 `can_list(scope)`, `can_read(thread)`, `can_write(thread)` and
 `can_delete(thread)` are its checks. Its `list` and `delete` flags are the
 threads service's browser operations
@@ -153,24 +154,43 @@ await client.cancel(task_id, thread_id=thread_id, reason="the user closed the ch
 await client.aclose()
 ```
 
-`AgentClient(endpoint_url, token=None, httpx_client=None)` has four calls:
-`connect`, `send`, `cancel` and `aclose`. It is thin over the stock a2a-sdk:
-`connect()`, which `send` and `cancel` call for you, reads the card once, speaks JSON-RPC over HTTP with
-server-sent events, and asks for the Live extension when the card offers
-it. `send(message, thread_id=, task_id=, metadata=, chat_ctx=)` takes a
-text or a message dict; with no `thread_id` it continues the thread of
-its last reply, and with none it starts a new one. `chat_ctx` goes as a
-`chat_ctx` part only to a card that offers the extension. Each update is a
+`AgentClient(endpoint_url, token=None)` has four calls: `connect`, `send`,
+`cancel` and `aclose`. It runs on the framework's Rust A2A client, the one
+the server side uses: `connect()`, which `send` and `cancel` call for you,
+reads the card once and speaks JSON-RPC over HTTP with server-sent events.
+`send(message, thread_id=, task_id=, metadata=, chat_ctx=)` takes a `str` or
+a `Message` (`from livekit.agents.a2a import Message`), the typed A2A message
+record: `parts` (text, data or file), `metadata` (typed LiveKit keys and an
+application map) and an optional `message_id`. With no `thread_id` it
+continues the thread of its last reply, and with none it starts a new one. The
+endpoint accepts a `thread_id` only
+when the token it verifies covers that thread ([tokens](protocol/a2a.md#tokens)).
+`chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
+extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
 `TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
 `livekit/` keys short; a `working` update with text is progress, and the
-terminal update carries the whole answer. `extensions` is what the server
-echoed, `offers_extension` what the card offers.
+terminal update carries the whole answer. `offers_extension` is whether the
+card lists the LiveKit extension, a capability hint that grants nothing.
 
 A resume is a `send` with the thread id, its `contextId`: there is no
 separate get or resume call.
 
 Nothing here is required: `tasks/get`, `tasks/list` and
 `tasks/resubscribe` are served to any A2A client.
+
+## Admin reads
+
+The developer console reads a thread's state, lanes and journal through the
+AgentDB admin service, `AgentDBService` in livekit/protocol
+`livekit_agentdb.proto`, served by LiveKit's public API under
+`/v0/projects/p_/databases`: `GetDatabase`, `ListDatabases`, `DumpDatabase` (a
+consistent SQLite export of a thread's database, `ThreadInfo.database_id`, as a
+time-limited download URL), `CreateDatabase` and `DeleteDatabase`; queries go
+over the data plane ([connection](internals/storage.md#connection-and-authentication)).
+It is admin-only: it requires an `agent.databaseAdmin` token minted from the
+project's key and secret, runs on a developer's backend, and is never exposed to
+a customer frontend. Customer frontends use only the threads API and A2A above,
+under an authorized grant.
 
 ## Calls
 
@@ -208,7 +228,3 @@ threads does not implicitly select where a message should execute.
 
 With a grant, `list` takes the subject from the token (the grant's `list`
 flag) and `delete` needs the grant's `delete` flag.
-
-See `examples/use-cases/03_insurance_eligibility.py` for a remote expert,
-`planned-09_speed_to_lead.py` for outbound calls, and `planned-12_many_chats.py`
-for a sidebar.

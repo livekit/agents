@@ -1,9 +1,17 @@
-# Text endpoints
+# AgentServer and entrypoints
 
-A text endpoint is a door into a thread over the A2A protocol. Web chats,
-API clients and partner agents all come through it, with channel metadata available to the handler.
+`AgentServer` serves application entrypoints. Modules can declare doors on
+an `AgentHandler` and the server assembles them. Text endpoints receive A2A
+requests; voice entrypoints attach a `VoiceSession` to a room. Both receive
+runtime thread/storage access, while application context loading and saving
+remain explicit.
 
-## The handler
+Voice entrypoints accept `on_simulation_end`, called with a `SimulationContext`
+after a simulated conversation finishes. It exposes the simulator verdict and
+lets application checks veto the result. See [testing and simulations](testing.md#simulations)
+for registration, context fields and verdict semantics.
+
+## Text entrypoints
 
 ```python
 from livekit.agents import AgentServer, RunResult
@@ -48,25 +56,25 @@ the entrypoint, which serves them with `server.add(handler, ...)`:
 ```python
 back_office = AgentHandler(lane="backend")
 
-@back_office.a2a_session(endpoint="backend", description="The back office.", public=False)
+@back_office.a2a_session(endpoint="backend", description="The back office.")
 async def text(ctx: A2ASessionContext) -> str: ...
 ```
 
 `lane=` names the lane its doors write; left out, the worker's own. A
 handler with a lane of its own keeps its conversations apart from the
-worker's on the same thread ([lanes.md](lanes.md)), which is how two
+worker's on the same thread ([lane mechanics](internals/storage.md#lanes)), which is how two
 agents share one process in `examples/`. `livekit.agents.a2a_session` and
 `rtc_session` are the same decorators for a single door with no handler;
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 
-The handler explicitly calls an agent or an [TextSession](text-session.md).
+The handler explicitly calls an agent or a [TextSession](text-session.md).
 A direct `agent.run()` executes that agent. A text-session handler loads the routing
 state, passes it to `session.run()`, and saves the returned state.
 
 | `A2ASessionContext` | What                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `message`           | the turn's user message, a `ChatMessage`: every part of every message in the batch, in order; `message.text_content` |
-| `messages`          | the individual A2A messages of the batch: `message_id`, `parts`, `metadata`, `channel`, `received_at`, `.text`, `.data` |
+| `messages`          | the individual A2A messages of the batch, each a [`Message`](clients.md#a-client-for-an-endpoint) record: `message_id`, `parts`, `metadata`, `channel`, `received_at`, `.text`, `.data` |
 | `message_history`   | the agent's history so far                                                                                           |
 | `store`             | managed storage for explicit application-context load/save |
 | `thread`           | the durable thread; see [threads.md](threads.md)                                                                  |
@@ -80,7 +88,6 @@ state, passes it to `session.run()`, and saves the returned state.
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`                          | the last path segment of the endpoint's URL                                                                                              |
 | `description`                       | required: what another agent reads to decide whether to call                                                                             |
-| `public`                            | `True` by default: reachable without a LiveKit token. `False` admits only callers holding a project token             |
 | `auth`                              | the developer's own check: a callable taking the request and returning a truthy value to admit it                                       |
 | `inbox`, `debounce`                 | see below                                                                                                                                |
 | `storage`                           | this endpoint's storage when it is not the server's                                                                                      |
@@ -100,11 +107,49 @@ endpoint publishes an agent card at `.well-known/agent-card.json`, so a
 stock A2A client works with no LiveKit code: it sends a first message, gets
 a `contextId` back, and sends it from then on. The card declares a bearer
 scheme for a LiveKit project token or thread grant, always listed and
-marked required only when the endpoint is not public.
+required.
 
 The endpoint serves the conversation and nothing else. A thread's history
 and tasks are read from outside through the platform's threads service;
-see [backend-api.md](backend-api.md).
+see [clients.md](clients.md).
+
+## Voice entrypoints
+
+```python
+@server.rtc_session()
+async def phone(ctx: JobContext) -> None:
+    app = SchedulingContext(clinic=clinic_service)
+    session = VoiceSession(
+        llm=REALTIME_MODEL, context=app, thread=ctx.thread
+    )
+    await session.start(agent=scheduler, room=ctx.room)
+    await session.store.load_context(app)
+    await session.generate_reply(instructions="Greet the caller and offer help.")
+```
+
+The runtime resolves the dispatched thread before the handler runs. The
+application constructs the frontend context and starts its voice session.
+Speech, turn detection, agent replacement, and frontend event delivery follow
+the [VoiceSession contract](voice-session.md).
+
+## Handler outcomes
+
+Tool and handler transitions have distinct meanings. An ordinary tool's
+`Completed(value)` supplies that tool's result to the model. A handler can
+use transport transitions to answer its A2A task.
+
+```python
+from livekit.agents import Completed, Failed, Rejected, InputRequired, Working
+
+Completed(value)                 # tool result, or a completed transport task
+Failed(error)                    # failed: the error text is the last message
+Rejected(reason)                 # will not run this input
+InputRequired(question)          # waiting on the person; asked in the facing agent's words
+Working(message=None)            # transport working status; no Python checkpoint
+```
+
+When returned as handler transitions, these map to A2A task states `completed`, `failed`, `rejected`,
+`input-required` and `working`.
 
 ## A message while a turn is running
 
@@ -156,13 +201,16 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
   next boundary and a running tool finishes.
 - A tool's `InputRequired` ends the turn `input-required` with the question
   as the reply. The next message in the thread answers it; see
-  [human-in-the-loop.md](human-in-the-loop.md).
+  [human input](tools.md#human-input).
 - A message with the `taskId` of a terminal task fails with
   `UnsupportedOperationError`: a follow-up is a new task.
 
-The LiveKit extension, `https://livekit.io/a2a/ext/agents/v1`, adds
-typed chat items and these metadata keys, written `livekit/<name>` for
-short. A stock client ignores them.
+LiveKit endpoints add typed chat items and these metadata keys, under the
+namespace `https://livekit.io/a2a/ext/agents/v1` and written `livekit/<name>`
+for short. They need no extension negotiation; the card's
+`capabilities.extensions` entry is only a capability hint and grants no thread
+access ([explicit authority](protocol/a2a.md#delegation-and-conversation-data)).
+A stock client ignores them.
 
 | Key                                                 | Meaning                                                                                      |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -177,24 +225,5 @@ short. A stock client ignores them.
 with a later one, a message that continued a waiting task, and a waiting
 task a new message answered.
 
-## Clients
 
-```python
-from livekit.agents.a2a import AgentClient
-
-client = AgentClient("https://acme.livekit.cloud/agents/assistant/production/assistant", token=token)
-reply = await client.send("Where is my order?", thread_id=thread_id)
-reply.task_id, reply.thread_id
-async for update in reply: ...                                 # progress, then the answer
-await client.send("Yes, the generic is fine", thread_id=thread_id, task_id=task_id)   # answer a waiting task
-await client.cancel(task_id, thread_id=thread_id)
-```
-
-Thin over the stock `a2a-sdk`; any A2A client works without it.
-
-[Routed conversations](text-session.md) cover conversational input and child results.
-Conversation persistence stores histories and routing records between turns;
-it does not restore suspended Python execution.
-
-See `examples/use-cases/01_appointments_by_phone_and_text.py` and
-`04_a_claim_with_a_photo.py`.
+Endpoint clients and browser access follow the [client API](clients.md).

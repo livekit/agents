@@ -37,7 +37,7 @@ class BookingContext:
 
 
 book_room = Agent[BookingContext](
-    id="book-room",
+    name="book-room",
     instructions=BOOKING_INSTRUCTIONS,
     llm=MODEL,
     output_type=Booking,
@@ -261,12 +261,91 @@ context does not preserve a Python call stack.
 An external effect may succeed before its local result is committed. Stable
 operation identities and idempotency/reconciliation are required; saving a
 draft cannot make an external API atomic with AgentDB. See
-[the AgentDB access contract](storage.md#application-records-and-context-fields).
+[the AgentDB access contract](#application-records-and-transactions).
 
 Custom field storage adapters remain an advanced option. They must specify
 ownership and commit behavior; external stores cannot be described as atomic
 with execution storage without an actual protocol. The default persisted
 field path requires no handwritten snapshots or repositories.
+
+## Application records and transactions
+
+Draft persistence and direct application writes can use the same AgentDB.
+Choose the access pattern according to the data and its commit requirements:
+
+| Access | Purpose | Commit behavior |
+| --- | --- | --- |
+| persisted context fields | Save marked application data with explicit `save_context` | Join the managed commit, or commit directly outside a managed transaction |
+| Explicit application SQL/transactions | Business records, unique operation IDs, invoices, outbox entries | `transaction()` joins the managed commit; `independent_transaction()` commits on block exit |
+
+Use the same thread database when the data belongs to that thread. A
+customer-wide invoice or global room inventory may require a different
+application/database scope; thread deletion/expiry must not accidentally
+remove records whose retention or ownership outlives the conversation.
+Sharing AgentDB does not imply all business records belong in one thread.
+
+The runtime opens storage internally and supplies a scoped handle:
+
+```python
+store = ctx.store
+await store.load_context(app)
+# Run agent/tools with the loaded application context.
+await store.save_context(app)
+```
+
+Connection open/close, thread/scope resolution, and lease ownership are
+framework responsibilities.
+
+The scoped store provides context load/save and application database access
+through two transaction forms:
+
+```python
+async with ctx.store.transaction() as tx:   # joins the turn's managed commit
+    await tx.execute(
+        "INSERT INTO notes (booking_id, body) VALUES (?, ?)", (booking_id, body)
+    )
+
+async with ctx.store.independent_transaction() as tx:   # durable when the block exits
+    rows = await tx.fetch("SELECT id, status FROM charges WHERE booking_id = ?", (booking_id,))
+    charge = await tx.fetch_one("SELECT * FROM charges WHERE id = ?", (charge_id,))
+```
+
+| Method | Returns |
+| --- | --- |
+| `await tx.execute(sql, params)` | nothing; runs one statement |
+| `await tx.fetch(sql, params)` | `list[Row]` |
+| `await tx.fetch_one(sql, params)` | one `Row`, or `None` |
+
+Writes in `transaction()` commit or roll back with the turn, like a nested
+savepoint. Outside a managed turn, `transaction()` behaves like
+`independent_transaction()`. `independent_transaction()` commits when its
+block exits, whatever the turn does next. Application SQL is unrestricted: it may read and write any
+table, including the framework's history, state, task and event tables;
+keeping those consistent is then the application's responsibility. Do not
+place raw SQL inside the draft.
+
+For a payment, an independently committed preparation transaction is essential:
+
+```text
+independent_transaction(): create/retrieve unique pending charge operation
+  -> commit before dispatch
+Payment provider: charge exact saved terms using operation ID as idempotency key
+independent_transaction(): record outcome and related business changes
+  -> draft/checkpoint references that authoritative outcome
+```
+
+If preparation were staged until the end-of-turn commit, a charge could happen
+before its operation record existed durably, so preparation uses
+`independent_transaction()`, durable on block exit. Do not hold an open SQL
+transaction across network calls to a payment provider. Async dispatch can use
+an outbox committed with the operation record.
+
+After a provider timeout or crash between effect and outcome commit, reconcile
+the same operation; absence of a result is not proof no charge happened. Domain
+uniqueness constraints guard repeated semantic requests even when the LLM emits
+another tool call ID. Persisted context fields are working data, not a
+replacement for those constraints. Both can share one AgentDB while keeping
+separate commit boundaries.
 
 ## How many drafts? Scope and cardinality
 
@@ -375,5 +454,5 @@ service clients or other unmarked values.
 Conversation history, application fields, and external effects have separate
 lifecycles. Saving a draft does not record an external operation's outcome or
 make that operation safe to repeat. Services must enforce idempotency and
-reconcile uncertain outcomes. A durable execution runtime and external wake-up
-recovery are deferred; context persistence does not provide them.
+reconcile uncertain outcomes. The framework provides no durable execution
+runtime or external wake-up recovery; context persistence does not provide them.

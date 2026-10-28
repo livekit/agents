@@ -92,6 +92,8 @@ specification; implementation cleanup must follow the agreed contracts.
   holds the tools, the state and the systems of record.
 - **Agent** (`voice/agent.py`): shared configuration, `Agent[Context]`, and validated
   `output_type`, authored as a constructed instance with registered callbacks. `await agent.run(message, message_history=, context=)` executes that agent.
+  Static instructions plus `@agent.instructions` functions; identity is an optional `name=`,
+  else the module-level variable name. The loop itself is `AgentRun` in `lk-agents-core`.
 - **Streaming**: `agent.run_stream(...)` and backend `session.run_stream(...)` are
   async context managers with one text/event consumer and an awaitable `result()`.
   They share `run()` semantics; cancellation and cleanup settle before final retrieval.
@@ -112,19 +114,24 @@ specification; implementation cleanup must follow the agreed contracts.
   Temporarily takes the floor, returns a typed result, and restores the parent without
   calling the parent's on_exit/on_enter hooks. Its
   parent await remains in memory. Not for stateless workloads, backend orchestration,
-  background execution, or recovery across requests/deployments. See `docs/voice.md`.
+  background execution, or recovery across requests/deployments. See `docs/voice-tasks.md`.
 - **Context persistence**: `persisted(...)` marks fields; `load_context` and `save_context`
   are explicit. Runtime services remain application-supplied objects.
 - **Thread**: one conversation (`AT_...` id, the A2A `contextId`), with configured handler lanes,
-  histories and transport tasks stored in agent-db.
+  histories and transport tasks stored in its database (agent-db, or local SQLite).
+- **Rust core** (`rust/crates/`, see `docs/internals/rust-core.md`): decision cores are
+  synchronous sans-I/O state machines (events and time in, effects out); `lk-agents-runtime`
+  executes every effect, owns I/O, Tokio, queues and the host/RTC proxies; `lk-agents-abi`
+  declares the boundary once and codegen emits the Python bindings from it.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
   `AgentHandler(lane=)`: `rtc_session()` (a call, run on a `VoiceSession`) and
   `a2a_session(endpoint=)` (an A2A text endpoint). The entrypoint's `AgentServer` serves them
   with `server.add(...)`; the examples' `main.py` adds a front desk and a back office.
+  Registration, job, process-pool and supervision decisions live in `lk-agents-worker`.
 - **Approval and verbatim**: `needs_approval=` holds approval in the framework (the body runs
   only on a repeat of the call after the person answered its read-back). The agent facing the
   person words questions and results unless they are `verbatim=True`.
-- **VoiceSession** (`voice/agent_session.py`): owns frontend expert-tool calls, an
+- **VoiceSession** (`voice/agent_session.py`, decisions in `lk-agents-voice`): owns frontend expert-tool calls, an
   in-process frontend event queue, and human reply correlation without TextSession.
   Expert events are eligible when the active agent exposes the corresponding remote
   tool and the floor is available; the original Agent object need not be active.
@@ -135,30 +142,43 @@ specification; implementation cleanup must follow the agreed contracts.
   Queue persistence is optional and separate from backend request batching. Owns
   STT, TTS, VAD, turn detection,
   endpointing, interruption and audio delivery. `update_options(...)` explicitly changes
-  session configuration; selecting an agent preserves those settings.
+  session configuration; selecting an agent preserves those settings. `async with
+  session.override_options(...)` layers temporary settings released when the block ends.
 
 ### Key Directories
 ```
-livekit-agents/livekit/agents/
-├── voice/              # Agent, VoiceSession, room I/O, transcription
-├── a2a/                # The text door: A2A endpoint, codec, LiveKit extension, AgentClient, tokens
-├── delegation/         # Internal remote tool adapter, progress and task correlation
-├── storage/            # AgentDBStorage, thread resolution, the call's lane (live.py)
-├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime engines
+livekit-agents-next/livekit/agents/   # the public Python API and host adapters
+├── voice/              # Agent, VoiceSession, VoiceTask, the livekit.rtc room adapter
+├── a2a/                # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
+├── delegation/         # Host side of remote agent tools
+├── storage/            # AgentDBStorage, SQLiteStorage, thread handles, the context store
+├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime APIs
 ├── beta/workflows/     # Domain result types, validation helpers and transfer operations
-├── stt/, tts/          # Speech-to-text and text-to-speech, fallback and stream adapters
+├── stt/, tts/          # Speech-to-text and text-to-speech provider bases
 ├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
-├── ipc/                # Process pool, job processes, the ASGI app endpoint streams are served into
+├── ipc/                # Job-process bootstrap and the ASGI app endpoint streams are served into
 ├── cli/                # dev / start subcommands invoked by `lk agent`
 ├── simulation.py       # Scenarios for `lk agent simulate`
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
-└── _core.pyi           # Stubs of the Rust core extension
+├── _generated/         # Generated implementations and forwarding modules (never edited)
+└── _core.pyi           # Generated stubs of the Rust core extension
 
-rust/crates/            # The Rust core (worker control plane, agent-db client, voice driver,
-                        # inference clients, media), built into livekit.agents._core; see docs/rust-core.md
+rust/crates/            # The Rust core, built into livekit.agents._core; see docs/internals/rust-core.md
+├── lk-agents-abi       # Export declarations and typed boundary records
+├── lk-agents-core      # AgentRun, tools/approval/output acceptance, TextSession routing
+├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
+├── lk-agents-worker    # Registration, jobs, IPC messages, supervision and pool policy
+├── lk-agents-inference # Reconnect, retry and fallback machines for model clients
+├── lk-agents-storage   # Schema, statement plans, lease/fence and commit rules
+├── lk-agents-a2a       # Endpoint policies and A2A task transitions
+├── lk-agents-media     # Codecs, resampling, filters and sample arithmetic
+├── lk-agents-runtime   # All I/O: effects, connections, Tokio, queues, host and RTC proxies
+├── lk-agents-py        # Python module registration shell
+├── lk-agents-bindgen, lk-agents-host-derive, lk-agents-codegen   # Declarations IR, markers, generation
+└── lk-agents-fuzz      # Deterministic simulation of the cores with realistic fakes
 livekit-plugins/        # Provider plugins (openai, anthropic, google, deepgram, etc.)
 examples/               # Fast brain / slow brain examples: frontdesk, hotel-receptionist, airline-support
-docs/                   # The 2.0 design, one feature per page; docs/examples/use-cases/ one agent per idea
+docs/                   # The 2.0 design, one feature per page
 console/                # Next.js web console: chat, call, and a live view of the thread
 skills/                 # Agent skills shipped with the repo (migrate-to-v2)
 tests/                  # Test suite with fakes (fake_stt.py, fake_vad.py)
@@ -176,9 +196,10 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 ### Request Flow
 1. A text message reaches `/agents/<agent>/<deployment>/<endpoint>` as A2A; a call is a job dispatch.
 2. The platform resolves the thread (the `contextId`, or `thread_id` in the dispatch metadata) or creates one.
-3. The worker loads the agent's lane from agent-db and takes its lease.
+3. The worker takes the agent's lane lease and loads the lane from the thread's database.
 4. The handler runs `agent.run(...)` (text) or the `VoiceSession` runs the agent (call).
-5. The framework commits history and explicitly saved context fields and releases the lease.
+5. The framework commits history, explicitly saved context fields and task rows in one fenced
+   write and releases the lease.
 
 ## Environment Variables
 - `LIVEKIT_URL`: WebSocket URL of LiveKit server
@@ -189,7 +210,20 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ## Code Style
 - Line length: 100 characters
-- Python 3.10+ compatibility required
+- Python 3.11+ compatibility required
 - Google-style docstrings
 - Strict mypy type checking enabled
 - Use `make check` and `make fix` before committing
+
+## Rust architecture rules
+- The subject cores (`lk-agents-core`, `-voice`, `-worker`, `-inference`, `-storage`, `-a2a`,
+  `-media`) and `lk-agents-abi` have no tokio, futures or pyo3 dependency; a `cargo metadata`
+  test enforces it. Cores never depend on the runtime.
+- Banned constructs in cores (spawns, `select!`/`join!`, ambient clocks, unbounded channels) are
+  clippy `disallowed_methods`, `disallowed_types` and `disallowed_macros` in `clippy.toml`.
+- Every handwritten `.rs` file stays within 1,250 lines; generated files carry a marker and are
+  skipped. A test enforces it.
+- Handwritten export declarations (`#[host]`, `#[derive(Host)]`) live only in `lk-agents-abi`;
+  generated files are never edited, and `lk-agents-codegen --check` rejects drift.
+- Existing violations carry `#[allow]` or a baseline entry; baselines only shrink. Never add one:
+  fix the code.
