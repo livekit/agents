@@ -15,6 +15,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponseInputParam,
+    ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
@@ -239,6 +240,13 @@ class ResponsesLLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
+        # Azure's HTTP endpoint can return several alternate `message` items in one
+        # response; only the first that emits text is spoken.
+        self._text_owner: str | None = None
+        self._join_candidate: str | None = None
+        self._message_phases: dict[str, str | None] = {}
+        self._second_message_started = False
+        self._dropped_item_ids: list[str] = []
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -342,6 +350,13 @@ class ResponsesLLMStream(llm.LLMStream):
             return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
+        elif event_type == "response.output_item.added":
+            # in-progress tool items can lack fields the done event carries
+            # (web_search_call's `action`), so validate only the messages the stream reads
+            item = event.get("item")
+            if not isinstance(item, dict) or item.get("type") != "message":
+                return None
+            return ResponseOutputItemAddedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
             return ResponseOutputItemDoneEvent.model_validate(event)
         elif event_type == "response.output_text.delta":
@@ -363,6 +378,8 @@ class ResponsesLLMStream(llm.LLMStream):
             self._handle_error(event)
         if isinstance(event, ResponseCreatedEvent):
             self._handle_response_created(event)
+        if isinstance(event, ResponseOutputItemAddedEvent):
+            self._handle_output_item_added(event)
         if isinstance(event, ResponseOutputItemDoneEvent):
             chunk = self._handle_output_items_done(event)
         if isinstance(event, ResponseTextDeltaEvent):
@@ -421,9 +438,21 @@ class ResponsesLLMStream(llm.LLMStream):
                     },
                 )
 
+        if self._dropped_item_ids:
+            logger.warning(
+                "dropped extra Responses output items",
+                extra={
+                    "response_id": self._response_id,
+                    "model": self._model,
+                    "dropped_item_ids": self._dropped_item_ids,
+                },
+            )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
-        self._llm._prev_resp_id = self._response_id
+        # the stored response still holds the dropped items (an unanswered function call
+        # 400s the next turn), so chaining onto it would diverge from what was spoken
+        self._llm._prev_resp_id = "" if self._dropped_item_ids else self._response_id
         self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
@@ -448,9 +477,32 @@ class ResponsesLLMStream(llm.LLMStream):
             )
         return chunk
 
+    def _handle_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        if not isinstance(event.item, ResponseOutputMessage):
+            return
+        item_id = event.item.id
+        self._message_phases[item_id] = event.item.phase
+        if self._text_owner is None:
+            return
+        if (
+            self._message_phases.get(self._text_owner) == "commentary"
+            and self._join_candidate is None
+        ):
+            self._join_candidate = item_id
+        else:
+            self._drop_item(item_id)
+
+    def _drop_item(self, item_id: str) -> None:
+        self._second_message_started = True
+        if item_id not in self._dropped_item_ids:
+            self._dropped_item_ids.append(item_id)
+
     def _handle_output_items_done(self, event: ResponseOutputItemDoneEvent) -> llm.ChatChunk | None:
         chunk = None
         if event.item.type == "function_call":
+            if self._second_message_started:
+                self._drop_item(event.item.call_id)
+                return None
             chunk = llm.ChatChunk(
                 id=self._response_id,
                 delta=llm.ChoiceDelta(
@@ -466,7 +518,11 @@ class ResponsesLLMStream(llm.LLMStream):
                 ),
             )
             self._pending_tool_calls.add(event.item.call_id)
-        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+        elif (
+            isinstance(event.item, ResponseOutputMessage)
+            and event.item.phase is not None
+            and event.item.id not in self._dropped_item_ids
+        ):
             # Models like gpt-5.3-codex label assistant messages as intermediate
             # `commentary` or the `final_answer`
             chunk = llm.ChatChunk(
@@ -482,7 +538,20 @@ class ResponsesLLMStream(llm.LLMStream):
     def _handle_response_output_text_delta(
         self, event: ResponseTextDeltaEvent
     ) -> llm.ChatChunk | None:
+        if not event.delta:
+            return None
+        text = event.delta
+        if self._text_owner is None:
+            self._text_owner = event.item_id
+        elif event.item_id == self._join_candidate:
+            # commentary and the answer after it are spoken as one reply; the space
+            # keeps their sentences from running together
+            self._text_owner, self._join_candidate = event.item_id, None
+            text = " " + text
+        elif event.item_id != self._text_owner:
+            self._drop_item(event.item_id)
+            return None
         return llm.ChatChunk(
             id=self._response_id,
-            delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
+            delta=llm.ChoiceDelta(content=text, role="assistant"),
         )
