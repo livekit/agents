@@ -43,7 +43,7 @@ pub struct FakeTools {
     registry: Arc<Registry>,
     /// Prepared calls' speeches by prepared id, until the body takes them; what a dropped
     /// preparation releases.
-    prepared: Arc<Mutex<BTreeMap<u64, Arc<SpeechHandle>>>>,
+    prepared: Arc<Mutex<Preparations>>,
     refs: Arc<dyn lk_agents_abi::RefRegistry>,
     /// The bodies that answered `Detached` and run on, by call id: what a cancel ends.
     detached: Mutex<BTreeMap<String, Slot>>,
@@ -83,11 +83,19 @@ impl lk_agents_abi::RefRegistry for NoRefs {
 }
 
 /// Prepared arguments no body ran with (a read-back, a refused duplicate) release their speech.
-struct PreparedRefs(Arc<Mutex<BTreeMap<u64, Arc<SpeechHandle>>>>);
+#[derive(Default)]
+struct Preparations {
+    // A body takes the entry before the corresponding HostRef is dropped. Never reuse its id:
+    // that older reference may still release it after another preparation has been inserted.
+    next: u64,
+    speeches: BTreeMap<u64, Arc<SpeechHandle>>,
+}
+
+struct PreparedRefs(Arc<Mutex<Preparations>>);
 
 impl lk_agents_abi::RefRegistry for PreparedRefs {
     fn release(&self, id: u64) {
-        self.0.lock().unwrap().remove(&id);
+        self.0.lock().unwrap().speeches.remove(&id);
     }
 }
 
@@ -131,8 +139,9 @@ impl HostToolRunner for FakeTools {
             .filter(|h| h.created().is_some())
             .expect("a tool runs in a created speech");
         let mut prepared = self.prepared.lock().unwrap();
-        let id = prepared.keys().next_back().map_or(0, |n| n + 1);
-        prepared.insert(id, handle);
+        let id = prepared.next;
+        prepared.next = id.checked_add(1).expect("prepared argument ids exhausted");
+        prepared.speeches.insert(id, handle);
         let args = PreparedArguments {
             prepared: lk_agents_abi::HostRef::new(id, &self.refs),
             identity: ArgumentIdentity::Json(serde_json::Value::Object(arguments)),
@@ -158,6 +167,7 @@ impl HostToolRunner for FakeTools {
             .prepared
             .lock()
             .unwrap()
+            .speeches
             .remove(&prepared.id())
             .expect("a body runs on prepared arguments");
         let call = call.clone();
@@ -269,5 +279,63 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
             ToolOutcome::InputRequired { question: text, verbatim: true, tool: None }
         }
         Answer::Working => ToolOutcome::Working(Some(text)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::utils::spawner::TokioSpawner;
+    use lk_agents_voice::{
+        agent_activity::scheduling::SpeechId,
+        agent_session::{Timebase, Tx},
+    };
+
+    #[tokio::test]
+    async fn dropping_started_preparation_does_not_release_a_later_call() {
+        let time = Timebase::simulated();
+        let (registry, mut records) =
+            Registry::new(crate::record::Stamps::new(time), Arc::new(TokioSpawner::current()));
+        let tools = FakeTools::new(registry);
+        let speech = Arc::new(SpeechHandle::new(SpeechId(1), true, Tx::disconnected()));
+        let call = FunctionCall {
+            id: "item_first".into(),
+            call_id: "first".into(),
+            name: "lookup".into(),
+            arguments: "{}".into(),
+            created_at: std::time::UNIX_EPOCH,
+            extra: Default::default(),
+            group_id: None,
+        };
+        let first =
+            tools.prepare(&call, Default::default(), &speech.object()).await.unwrap().unwrap();
+        // A body takes its speech immediately, while its host preparation remains alive until
+        // execution settles. Another call may be prepared during that interval.
+        let first_body = tools.run(&first.prepared, &call, false);
+        let second_call = FunctionCall { call_id: "second".into(), ..call };
+        let second = tools
+            .prepare(&second_call, Default::default(), &speech.object())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(first);
+        // Check before run's assertion acquires the mutex, so the failing regression leaves
+        // preparation cleanup usable rather than causing a second panic during unwinding.
+        let second_is_prepared =
+            tools.prepared.lock().unwrap().speeches.contains_key(&second.prepared.id());
+        assert!(second_is_prepared, "the earlier body's cleanup released the later call");
+        let second_body = tools.run(&second.prepared, &second_call, false);
+        let (report, ()) = tokio::join!(second_body, async {
+            let super::super::Record::Opened {
+                detail, control: Some(Control::Tool(answer)), ..
+            } = records.recv().await.unwrap()
+            else {
+                panic!("the second body must open a tool invocation")
+            };
+            assert!(matches!(detail, Detail::Tool { call_id, .. } if call_id == "second"));
+            assert!(answer.send(Body::Answer(ToolOutcome::Nothing)).is_ok());
+        });
+        assert!(matches!(report.unwrap().outcome, ToolOutcome::Nothing));
+        drop(first_body);
     }
 }
