@@ -130,8 +130,8 @@ class LLM(llm.LLM):
 
     When a reply holds several message items, only the first one that emits text is
     spoken. A later message that emits text joins the reply when the last spoken message
-    is ``commentary``, or when a hosted tool call, such as web search, completed after
-    the reply started; each hosted call lets one message join. Every other message that
+    is ``commentary``, or when hosted tool calls, such as web search, completed since
+    that message; a run of hosted calls lets one message join. Every other message that
     emits text is dropped, and so is any tool call that completes after the first
     dropped message starts speaking.
     """
