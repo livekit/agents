@@ -237,7 +237,7 @@ def _elapsed_ms(started_at: float) -> float:
     return (time.perf_counter() - started_at) * 1000
 
 
-class TTS(tts.TTS):
+class TTS(tts.TTS[Literal["slng_event"]]):
     def __bool__(self) -> bool:
         # LiveKit Agents code may use truthiness checks like `tts or None`.
         # Some EventEmitter-style bases can be falsy when they have no listeners,
@@ -467,7 +467,7 @@ class TTS(tts.TTS):
                 self._candidate_tts.append(candidate)
                 candidate.on("metrics_collected", self._forward_metrics)
                 candidate.on("slng_event", self._forward_plugin_event)
-            self._fallback = tts.FallbackAdapter(self._candidate_tts, sample_rate=sample_rate)
+            self._fallback = tts.FallbackAdapter(list(self._candidate_tts), sample_rate=sample_rate)
 
     def _forward_metrics(self, metrics: Any) -> None:
         self.emit("metrics_collected", metrics)
