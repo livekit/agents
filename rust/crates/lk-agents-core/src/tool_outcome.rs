@@ -2,9 +2,11 @@
 //! whether it asks the model for a reply, and the text a verbatim result delivers. One table for
 //! direct runs, TextSession and voice; the host only classifies what the body returned or raised.
 
+use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
     DELIVERED, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT, ToolOutcome, WAITING_PREFIX,
 };
+use std::collections::BTreeMap;
 
 /// The output a [`ToolOutcome`] records, and whether it asks the model for a reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +76,36 @@ pub fn delivered(outcome: &ToolOutcome) -> Option<String> {
         ToolOutcome::Value { more: Some(more), .. } => format!("{DELIVERED}{text}\n{more}"),
         _ => format!("{DELIVERED}{text}"),
     })
+}
+
+/// The invocation's tool retry budget (`Retries.tool`): consecutive retried steps per tool, reset
+/// by any call of that tool that did not ask for a retry. Shared by AgentRun and a call's reply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolRetries(BTreeMap<String, u32>);
+
+impl ToolRetries {
+    /// One settled step's calls as `(tool, retried)`: the first tool, by name, whose retries
+    /// went over `limit`.
+    pub fn step<'a>(
+        &mut self,
+        calls: impl IntoIterator<Item = (&'a str, bool)>,
+        limit: u32,
+    ) -> Option<RunError> {
+        let mut retried: BTreeMap<&str, bool> = BTreeMap::new();
+        for (tool, retry) in calls {
+            *retried.entry(tool).or_insert(true) &= retry;
+        }
+        let mut exceeded = None;
+        for (tool, retried) in retried {
+            let count = self.0.entry(tool.to_owned()).or_default();
+            *count = if retried { *count + 1 } else { 0 };
+            if *count > limit && exceeded.is_none() {
+                exceeded =
+                    Some(RunError::ToolRetriesExceeded { tool: tool.to_owned(), retries: limit });
+            }
+        }
+        exceeded
+    }
 }
 
 #[cfg(test)]

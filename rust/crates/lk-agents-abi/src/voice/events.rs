@@ -756,8 +756,6 @@ pub struct RunSettledWire {
     pub final_output: Option<crate::HostRef>,
     /// The exception a tool completed with, resolved; `None` otherwise.
     pub error: Option<crate::HostRef>,
-    /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
-    pub run_error: Option<crate::agent::run::RunError>,
     /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
     pub speech_handle: Option<crate::CoreObject>,
 }

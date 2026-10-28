@@ -5,9 +5,12 @@ use crate::agent_activity::handoff::HandoffId;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, HoldId, HookId, Origin};
-use crate::events::{RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent};
+use crate::events::{
+    DiagnosticEvent, RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent,
+};
 use crate::speech_handle::SpeechHandle;
 use crate::trace::HandoffStep;
+use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{HostRef, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -34,6 +37,8 @@ pub enum RunOutput {
     Value(HostRef),
     /// `complete(exception)`: the interned exception, which the run raises.
     Error(HostRef),
+    /// The speech's reply ended on a framework outcome (a tool spent its retries).
+    Failed(RunError),
 }
 
 /// One thing a run owns while it is live. The run settles when none is left.
@@ -153,6 +158,7 @@ impl Runs {
             (true, _) => RunOutcome::Failed(RunFailure::Speech),
             // `isinstance(final_output, BaseException)` (`.resolve_expressive_options`).
             (false, Some(RunOutput::Error(e))) => RunOutcome::Failed(RunFailure::Output(e)),
+            (false, Some(RunOutput::Failed(e))) => RunOutcome::Failed(RunFailure::Run(e)),
             (false, Some(RunOutput::Value(v))) => RunOutcome::Completed { final_output: Some(v) },
             (false, None) => {
                 // Only the no-output case retries, and only with a speech to read.
@@ -248,6 +254,24 @@ impl Driver {
         }
     }
 
+    /// A tool of `speech` spent its retry budget and the reply ended: a run settling on the speech
+    /// fails with it, as `agent.run()` does.
+    pub(crate) fn tool_retries_exceeded(
+        &mut self,
+        speech: SpeechId,
+        error: RunError,
+        out: &mut Out,
+    ) {
+        if let RunError::ToolRetriesExceeded { tool, retries } = &error {
+            let d = DiagnosticEvent::error(crate::events::diagnostics::TOOL_RETRIES_EXCEEDED)
+                .with("function", tool.clone())
+                .with("max_retries", retries.to_string())
+                .with("speech_id", speech.0.to_string());
+            out.machine().emit(SessionEvent::Diagnostic(d));
+        }
+        self.session.runs.outputs.insert(speech, RunOutput::Failed(error));
+    }
+
     /// A `WaitForIdleAndHold` from an owned speech's tool is the run's.
     pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, out: &mut Out) {
         let Origin::Tool { call_id } = origin else { return };
@@ -260,8 +284,8 @@ impl Driver {
 
     /// The run an item belongs to: the open run for its own speeches and the handoff record. The
     /// `run(user_input=)` user message is not the run's, as in the reference (`RunResult.events`
-    /// opens with the reply), and neither is a committed call: a run call became the run's when it
-    /// started (`RunItemAdded`); a call answered without running is no run's.
+    /// opens with the reply), and neither is a committed call: a call became the run's when it
+    /// started (`RunItemAdded`).
     pub(crate) fn run_of_item(&self, source: &Source) -> Option<RunRef> {
         let open = self.session.runs.current()?;
         match source {

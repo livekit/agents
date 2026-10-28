@@ -217,6 +217,7 @@ pub(crate) async fn run_tools(
     ctx: &ReplyContext,
     tools: ToolStep,
     forwarded_text_empty: bool,
+    retries: &mut lk_agents_core::tool_outcome::ToolRetries,
 ) -> Option<StepDecision> {
     // A never-adopted preemptive generation's calls never started and are owed nothing.
     if tools.is_empty() || !handle.scheduled() {
@@ -273,6 +274,9 @@ pub(crate) async fn run_tools(
         return None;
     }
 
+    let limit = lk_agents_abi::agent::Retries::default().tool;
+    let retried = executions.iter().map(|e| (e.call.name.as_str(), e.retry));
+    let retries_exceeded = retries.step(retried, limit);
     let mut decision = crate::tool_executor::next_step(crate::tool_executor::StepInputs {
         tool_output: &executions,
         interrupted_before_tools,
@@ -283,6 +287,7 @@ pub(crate) async fn run_tools(
         max_tool_steps: ctx.speech.max_tool_steps(),
         forwarded_text_empty,
         user_metrics: ctx.user_metrics.clone(),
+        retries_exceeded,
     });
 
     // A host running hooks runs the event's handlers before the step goes on: they may cancel the
@@ -298,6 +303,7 @@ pub(crate) async fn run_tools(
             executed: decision.tools_executed.clone().map(Box::new),
             warnings: decision.warnings.clone(),
             deliveries: decision.deliveries.clone(),
+            retries_exceeded: decision.retries_exceeded.clone(),
         },
         verdict: waits.then_some(tx),
     });

@@ -26,7 +26,8 @@ const FILLER_STOPPED: &str =
 impl Driver {
     // ------------------------------------------------------------------ the running set
 
-    /// A hosted call enters the running set and is announced; the away window is held off.
+    /// A started call is the run's; a hosted one enters the running set and is announced, and the
+    /// away window is held off.
     pub(crate) fn on_tool_started(
         &mut self,
         now: Ts,
@@ -42,16 +43,17 @@ impl Driver {
             name: call.name.clone(),
             hosted: runner.is_some(),
         });
-        let Some(runner) = runner else { return };
-        let closing = self.session.closing_past_edge();
-        out.machine().append(self.session.states.on_tool_call_started(now, closing));
-        // The call is the run's once it runs, whichever run is open when it is committed.
+        // The call is the run's once it starts, whichever run is open when it is committed: one
+        // answered without running (an unknown tool) too, as its output is.
         if let Some(run) = self.session.runs.current()
             && self.session.runs.owns(crate::run_result::Owned::Speech(speech))
         {
             let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
             out.machine().emit(SessionEvent::RunItemAdded { run, item });
         }
+        let Some(runner) = runner else { return };
+        let closing = self.session.closing_past_edge();
+        out.machine().append(self.session.states.on_tool_call_started(now, closing));
         let output_id = self.session.ids.mint("item");
         out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),

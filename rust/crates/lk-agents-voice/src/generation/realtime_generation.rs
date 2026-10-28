@@ -33,6 +33,7 @@ pub(crate) async fn realtime_generation_task(
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: &tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>,
     wake: &Tx,
+    retries: &mut lk_agents_core::tool_outcome::ToolRetries,
 ) -> Result<StepOutcome, DriverError> {
     // The authorization, per step: the server's deltas queue meanwhile. It stops a server turn
     // talking over a `say()`, and a tool follow-up over what became current while tools ran.
@@ -176,7 +177,8 @@ pub(crate) async fn realtime_generation_task(
         request_ids,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await else {
+    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty, retries).await
+    else {
         return Ok(StepOutcome::Done(finished));
     };
     Ok(deliver_realtime(shared, handle, wake, decision, finished))

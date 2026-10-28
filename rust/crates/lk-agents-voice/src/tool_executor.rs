@@ -6,6 +6,7 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle}
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::RunningToolCall;
 use crate::trace::{CoreStep, ToolStep};
+use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, ToolChoice, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -285,6 +286,8 @@ pub struct StepTools {
     pub executed: Option<Box<ToolsExecutedEvent>>,
     pub warnings: Vec<StepWarning>,
     pub deliveries: Vec<Delivery>,
+    /// A tool spent its retry budget: the reply ends here and the run fails with it.
+    pub retries_exceeded: Option<RunError>,
 }
 
 /// `FunctionCall.extra` key on a call of a tool that requires approval: `asked` when it returned
@@ -471,6 +474,8 @@ pub struct ToolExecution {
     pub raw_update: Option<String>,
     /// What the person gets because of this call, once its output is committed.
     pub delivery: Option<Delivery>,
+    /// `ModelRetry`: spends the tool's retry budget.
+    pub retry: bool,
 }
 
 /// What reaches the person because of a call's outcome (the reference's verbatim `say()` and
@@ -633,11 +638,12 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
         call.extra.insert(APPROVAL_KEY.to_owned(), mark);
     }
     let end = ToolEnd::of(&outcome);
+    let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
     // A completion the host validated for a VoiceTask asks for no reply: the parent gets the floor.
     if let (ToolOutcome::Completed { .. }, Some(value)) = (&outcome, &transition) {
         output.reply_required = false;
         let delivery = Some(Delivery::Complete(value.clone()));
-        return ToolExecution { call, output, end, raw_update: None, delivery };
+        return ToolExecution { call, output, end, raw_update: None, delivery, retry };
     }
     let delivery = match outcome {
         ToolOutcome::Update { raw, .. } => {
@@ -646,7 +652,8 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
                 crate::speech_handle::TOOL_NON_BLOCKING_EXTRA_KEY.to_owned(),
                 serde_json::Value::Bool(true),
             );
-            return ToolExecution { call, output, end, raw_update: Some(raw), delivery: None };
+            let raw_update = Some(raw);
+            return ToolExecution { call, output, end, raw_update, delivery: None, retry };
         }
         ToolOutcome::InputRequired { question, verbatim, tool } => Some(Delivery::Ask(Ask {
             call_id: call.call_id.clone(),
@@ -659,7 +666,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),
     };
-    ToolExecution { call, output, end, raw_update: None, delivery }
+    ToolExecution { call, output, end, raw_update: None, delivery, retry }
 }
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
@@ -716,6 +723,8 @@ pub struct StepDecision {
     interrupted: bool,
     /// A call completed a VoiceTask: the step has no follow-up, whatever the outputs ask.
     completes: bool,
+    /// A tool spent its retry budget: no follow-up either.
+    pub retries_exceeded: Option<RunError>,
     previous_user_metrics: Option<MetricsReport>,
 }
 
@@ -726,7 +735,10 @@ impl StepDecision {
         self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
         if self.next != NextStep::Interrupted {
             self.next = next_of(
-                event.has_tool_reply() && !self.interrupted && !self.completes,
+                event.has_tool_reply()
+                    && !self.interrupted
+                    && !self.completes
+                    && self.retries_exceeded.is_none(),
                 self.max_steps_reached,
                 self.previous_user_metrics.clone(),
             );
@@ -766,6 +778,8 @@ pub struct StepInputs<'a> {
     /// This step forwarded no text; see [`ReplyRequest::previous_user_metrics`].
     pub forwarded_text_empty: bool,
     pub user_metrics: Option<MetricsReport>,
+    /// The reply's [`ToolRetries`](lk_agents_core::tool_outcome::ToolRetries) after this step.
+    pub retries_exceeded: Option<RunError>,
 }
 
 pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
@@ -812,6 +826,7 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         interrupted: inputs.interrupted,
         completes: (inputs.tool_output.iter())
             .any(|o| matches!(o.delivery, Some(Delivery::Complete(_)))),
+        retries_exceeded: inputs.retries_exceeded,
         previous_user_metrics: inputs
             .forwarded_text_empty
             .then(|| inputs.user_metrics.clone())
@@ -846,6 +861,7 @@ fn quiet(next: NextStep) -> StepDecision {
         max_steps_reached: false,
         interrupted: false,
         completes: false,
+        retries_exceeded: None,
         previous_user_metrics: None,
     }
 }
@@ -926,7 +942,7 @@ impl Driver {
         hosted: bool,
         out: &mut Out,
     ) {
-        let StepTools { commit, executed, warnings, deliveries } = tools;
+        let StepTools { commit, executed, warnings, deliveries, retries_exceeded } = tools;
         // What the handlers left is what is committed: calls, then outputs.
         let commit = match &executed {
             Some(e) => crate::tool_executor::commit_of(&e.function_calls, &e.function_call_outputs),
@@ -997,6 +1013,9 @@ impl Driver {
             }));
         }
         out.trace(ToolStep::Finished { speech, committed: n });
+        if let Some(error) = retries_exceeded {
+            self.tool_retries_exceeded(speech, error, out);
+        }
         let Some(executed) = executed else { return };
         // Not the host's to emit: after the commit, as before any hook existed for it.
         if !hosted {

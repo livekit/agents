@@ -60,6 +60,7 @@ from ..types import (
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
 from .agent import Agent, ModelSettings, Output_T, _BindingContextVar, _VoiceBinding
+from .agent_run import run_error
 from .events import (
     AgentEvent,
     AgentState,
@@ -935,6 +936,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if (run := wire["run"]) is None:
             return
         error = wire["error"]
+        if (failure := wire["run_error"]) is not None:
+            error = run_error(failure)
         if wire["outcome"] == "failed" and error is None and wire["speech_handle"] is not None:
             error = wire["speech_handle"].exception()
         if wire["outcome"] == "closed":

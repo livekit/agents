@@ -239,7 +239,7 @@ pub struct AgentRun {
     usage: RunUsage,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
-    tool_retries: BTreeMap<String, u32>,
+    tool_retries: tool_outcome::ToolRetries,
     output_retries: u32,
     /// The dynamic instructions last rendered, for a phrasing request.
     dynamic: Option<String>,
@@ -316,7 +316,7 @@ impl AgentRun {
             next_id: 0,
             usage: RunUsage::default(),
             verbatim: Vec::new(),
-            tool_retries: BTreeMap::new(),
+            tool_retries: tool_outcome::ToolRetries::default(),
             output_retries: 0,
             dynamic: None,
             checkpoints: false,
@@ -720,29 +720,14 @@ impl AgentRun {
         };
         let recorded = acting.calls.finish();
         // Retry budgets: consecutive failures per tool, any success resets.
-        let mut failed: BTreeMap<&str, bool> = BTreeMap::new();
-        let mut output_rejected = false;
-        for r in &recorded {
-            if r.item.name == crate::agent::FINAL_RESULT_TOOL
-                && matches!(self.agent.output, OutputSpec::Structured { .. })
-            {
-                output_rejected |= matches!(r.settled.outcome, ToolOutcome::ToolError(_));
-                continue;
-            }
-            let entry = failed.entry(r.item.name.as_str()).or_insert(true);
-            *entry &= r.settled.retry;
-        }
-        let mut exceeded = None;
-        for (tool, failed) in failed {
-            let count = self.tool_retries.entry(tool.to_owned()).or_default();
-            *count = if failed { *count + 1 } else { 0 };
-            if *count > self.agent.retries.tool && exceeded.is_none() {
-                exceeded = Some(RunError::ToolRetriesExceeded {
-                    tool: tool.to_owned(),
-                    retries: self.agent.retries.tool,
-                });
-            }
-        }
+        let structured = matches!(self.agent.output, OutputSpec::Structured { .. });
+        let is_final = |r: &&Recorded| structured && r.item.name == crate::agent::FINAL_RESULT_TOOL;
+        let output_rejected = (recorded.iter().filter(is_final))
+            .any(|r| matches!(r.settled.outcome, ToolOutcome::ToolError(_)));
+        let tools = recorded.iter().filter(|r| !is_final(r));
+        let mut exceeded = self
+            .tool_retries
+            .step(tools.map(|r| (r.item.name.as_str(), r.settled.retry)), self.agent.retries.tool);
         let accepted = acting.accepted.first_key_value().map(|(c, v)| (*c, *v));
         if output_rejected && accepted.is_none() {
             self.output_retries += 1;

@@ -154,18 +154,6 @@ def run(request: pytest.FixtureRequest) -> Entrypoint:
     return request.param  # type: ignore[no-any-return]
 
 
-def voice_defect(reason: str) -> pytest.MarkDecorator:
-    """A shared contract the call does not meet yet: fails until the voice core is fixed."""
-    return pytest.mark.parametrize(
-        "run",
-        [
-            pytest.param(_direct, id="direct"),
-            pytest.param(_text_session, id="text_session"),
-            pytest.param(_voice, id="voice", marks=pytest.mark.xfail(strict=True, reason=reason)),
-        ],
-    )
-
-
 async def test_a_plain_reply_is_the_output(run: Entrypoint) -> None:
     agent = Agent(name="desk", instructions="Help", llm=Script(Reply("Hello there.")))
     settled = await run(agent, "Hi")
@@ -238,7 +226,6 @@ async def test_invalid_arguments_go_back_to_the_model_and_the_body_never_runs(
     settled.expect.no_more_events()
 
 
-@voice_defect("a call answered without running (unknown tool) is not recorded as the run's event")
 async def test_an_unknown_tool_is_reported_to_the_model(run: Entrypoint) -> None:
     model = Script(call("refund", {}, "c1"), Reply("I cannot refund."))
     agent = Agent(name="desk", instructions="Help", llm=model)
@@ -287,7 +274,6 @@ async def test_model_retry_from_a_tool_reaches_the_model_and_the_retry_succeeds(
     )
 
 
-@voice_defect("on a call ModelRetry has no per-tool retry limit: only the step cap ends the loop")
 async def test_a_tool_that_keeps_asking_for_a_retry_exhausts_its_retries(run: Entrypoint) -> None:
     model = Script(*[call("weather", {"city": f"Paris {i}"}, f"c{i}") for i in range(4)])
     agent = Agent(name="desk", instructions="Help", llm=model)

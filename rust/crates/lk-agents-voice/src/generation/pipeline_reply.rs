@@ -20,6 +20,7 @@ use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::NextStep;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ChatItem, ChatMessage, Ts};
+use lk_agents_core::tool_outcome::ToolRetries;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -106,15 +107,18 @@ async fn run(
     }
     // The last step spoken on the realtime path, kept in case its follow-up never arrives.
     let mut last: Option<Finished> = None;
+    // One budget for the reply's steps, as for an `agent.run()` invocation.
+    let mut retries = ToolRetries::default();
     loop {
         let outcome = match &ctx.source {
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
             ReplySource::Realtime => {
                 let events =
                     player.as_ref().expect("the runtime gives a realtime speech its player");
-                realtime_generation_task(shared, handle, &ctx, events, &shared.queue).await?
+                let wake = &shared.queue;
+                realtime_generation_task(shared, handle, &ctx, events, wake, &mut retries).await?
             }
-            _ => pipeline_reply_task_impl(shared, handle, &ctx).await?,
+            _ => pipeline_reply_task_impl(shared, handle, &ctx, &mut retries).await?,
         };
         match outcome {
             StepOutcome::Done(finished) => return Ok(finished),
@@ -223,6 +227,7 @@ async fn pipeline_reply_task_impl(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
+    retries: &mut ToolRetries,
 ) -> Result<StepOutcome, DriverError> {
     // Taken, not borrowed: no lock across an await, and a second read finds `None`.
     let voice = match &ctx.source {
@@ -251,7 +256,7 @@ async fn pipeline_reply_task_impl(
                 let tools_running = has_tools && !handle.interrupted();
                 step_spoken(shared, handle, handle.interrupted(), has_tools, tools_running, None);
             }
-            let _ = run_tools(shared, handle, ctx, tools, true).await;
+            let _ = run_tools(shared, handle, ctx, tools, true, retries).await;
             return Err(e);
         }
     };
@@ -263,7 +268,7 @@ async fn pipeline_reply_task_impl(
             handle.clear_authorization();
             step_spoken(shared, handle, true, !tools.is_empty(), false, None);
         }
-        let _ = run_tools(shared, handle, ctx, tools, true).await;
+        let _ = run_tools(shared, handle, ctx, tools, true, retries).await;
         let outcome = empty_outcome(shared, ctx, true);
         return Ok(StepOutcome::Done(Finished { outcome, interrupted: true }));
     };
@@ -294,7 +299,8 @@ async fn pipeline_reply_task_impl(
         tools_running,
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
-    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty).await else {
+    let Some(decision) = run_tools(shared, handle, ctx, tools, forwarded_text_empty, retries).await
+    else {
         return Ok(StepOutcome::Done(finished));
     };
     // A drain close during the tools: outputs are committed and no follow-up is requested.
