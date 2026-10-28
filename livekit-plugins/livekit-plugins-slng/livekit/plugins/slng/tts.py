@@ -509,7 +509,7 @@ class TTS(tts.TTS):
     def _is_ws_usable(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         return not bool(getattr(ws, "closed", False))
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
 
         # Connect to WebSocket
@@ -520,12 +520,8 @@ class TTS(tts.TTS):
         }
         headers.update(self._opts.extra_headers)
         connect_started_at = time.perf_counter()
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                model_endpoint,
-                headers=headers,
-            ),
-            timeout,
+        ws = await utils.http_context.ws_connect(
+            session, model_endpoint, headers=headers, conn_options=conn_options
         )
         ws_connect_ms = _elapsed_ms(connect_started_at)
 

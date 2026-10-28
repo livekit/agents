@@ -513,7 +513,7 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         headers = {
             "api-subscription-key": self._opts.api_key,
@@ -527,20 +527,21 @@ class TTS(tts.TTS):
         logger.info("Connecting to Sarvam TTS WebSocket")
 
         try:
-            ws = await asyncio.wait_for(
-                session.ws_connect(
-                    ws_url,
-                    headers=headers,
-                    # Send protocol-level WebSocket PING frames every
-                    # ``_WS_HEARTBEAT_INTERVAL`` seconds. aiohttp handles the
-                    # PONG accounting on its own and will close the connection
-                    # locally if the server stops responding -- this is what
-                    # actually keeps the TCP connection alive while it sits
-                    # idle in the pool (no ``receive()`` call to auto-pong).
-                    heartbeat=_WS_HEARTBEAT_INTERVAL,
-                ),
-                timeout,
+            ws = await utils.http_context.ws_connect(
+                session,
+                ws_url,
+                headers=headers,
+                # Send protocol-level WebSocket PING frames every
+                # ``_WS_HEARTBEAT_INTERVAL`` seconds. aiohttp handles the
+                # PONG accounting on its own and will close the connection
+                # locally if the server stops responding -- this is what
+                # actually keeps the TCP connection alive while it sits
+                # idle in the pool (no ``receive()`` call to auto-pong).
+                heartbeat=_WS_HEARTBEAT_INTERVAL,
+                conn_options=conn_options,
             )
+        except APITimeoutError:
+            raise
         except Exception as e:
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
@@ -1142,10 +1143,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 # Nothing suspends between the pool's get() and here, and every change to a
                 # handshake option invalidates the pool, so this socket was opened with the
                 # TTS's current model and completion setting. Adopt every model-coupled

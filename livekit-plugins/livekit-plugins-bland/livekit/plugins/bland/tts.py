@@ -172,15 +172,14 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         """Open a session and hold it at `ready`, so a turn starts on the first `speak`."""
         try:
-            ws = await asyncio.wait_for(
-                self._ensure_session().ws_connect(
-                    _ws_url(self._opts.base_url),
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                ),
-                timeout,
+            ws = await utils.http_context.ws_connect(
+                self._ensure_session(),
+                _ws_url(self._opts.base_url),
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                conn_options=conn_options,
             )
         except aiohttp.WSServerHandshakeError as e:
             # Bland answers an upgrade carrying no credential with a real 401 rather
@@ -200,7 +199,7 @@ class TTS(tts.TTS):
                 init["controls"] = controls
             await ws.send_str(json.dumps(init))
 
-            msg = await asyncio.wait_for(ws.receive(), timeout)
+            msg = await asyncio.wait_for(ws.receive(), conn_options.read_timeout)
             if msg.type is not aiohttp.WSMsgType.TEXT:
                 raise APIError(f"Bland did not acknowledge init: {msg.type}")
 
@@ -491,10 +490,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cancelled: asyncio.CancelledError | None = None
         try:
-            async with self._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

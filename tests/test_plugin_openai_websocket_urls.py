@@ -16,6 +16,7 @@ class _FakeWebSocket:
 
 class _FakeSession:
     def __init__(self) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.url = ""
 
     async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:

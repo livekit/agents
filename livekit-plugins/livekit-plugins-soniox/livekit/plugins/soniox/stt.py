@@ -296,18 +296,17 @@ class SpeechStream(stt.SpeechStream):
                 translation_dict["language_b"] = tr.language_b
             config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
-        ws = await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                self._stt._base_url,
-                headers={"Authorization": f"Bearer {self._stt._api_key}"},
-                # Without a heartbeat a silently dropped socket (half-open TCP, no
-                # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
-                # forever and the reconnect in `_run` is only ever triggered by that
-                # task ending. aiohttp closes the socket itself when a ping goes
-                # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
-                heartbeat=30.0,
-            ),
-            timeout=self._conn_options.connect_timeout,
+        ws = await utils.http_context.ws_connect(
+            self._ensure_session(),
+            self._stt._base_url,
+            headers={"Authorization": f"Bearer {self._stt._api_key}"},
+            # Without a heartbeat a silently dropped socket (half-open TCP, no
+            # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
+            # forever and the reconnect in `_run` is only ever triggered by that
+            # task ending. aiohttp closes the socket itself when a ping goes
+            # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
+            heartbeat=30.0,
+            conn_options=self._conn_options,
         )
         # Set initial configuration message.
         await ws.send_str(json.dumps(config))

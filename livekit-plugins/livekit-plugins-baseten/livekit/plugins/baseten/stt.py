@@ -634,7 +634,13 @@ class SpeechStream(stt.SpeechStream):
             "Authorization": f"Api-Key {self._api_key}",
         }
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers, ssl=ssl_context)
+        ws = await utils.http_context.ws_connect(
+            self._session,
+            self._model_endpoint,
+            headers=headers,
+            ssl=ssl_context,
+            conn_options=self._conn_options,
+        )
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api

@@ -444,17 +444,16 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    self.ws_url,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                    # is never noticed: recv_task parks on ws.receive() forever, and the
-                    # reconnect in _run is only ever triggered by that task ending.
-                    # Matches the Deepgram and Muse STT plugins.
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                self.ws_url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                # is never noticed: recv_task parks on ws.receive() forever, and the
+                # reconnect in _run is only ever triggered by that task ending.
+                # Matches the Deepgram and Muse STT plugins.
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to simplismart") from None

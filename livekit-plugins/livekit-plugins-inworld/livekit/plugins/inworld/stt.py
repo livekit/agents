@@ -271,12 +271,11 @@ class SpeechStream(stt.SpeechStream):
         ws_url = self._stt._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = ws_url.rstrip("/") + "/" + WS_ENDPOINT
 
-        ws = await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                ws_url,
-                headers={"Authorization": self._stt._authorization},
-            ),
-            timeout=self._conn_options.connect_timeout,
+        ws = await utils.http_context.ws_connect(
+            self._ensure_session(),
+            ws_url,
+            headers={"Authorization": self._stt._authorization},
+            conn_options=self._conn_options,
         )
 
         self._request_id = utils.shortuuid()

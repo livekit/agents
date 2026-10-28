@@ -6,10 +6,12 @@ from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APITimeoutError
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
 from livekit.agents.utils import ConnectionPool
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
+NO_POOL_WAIT = APIConnectOptions(pool_timeout=0)
 
 
 @pytest.mark.asyncio
@@ -17,23 +19,23 @@ async def test_pool_wait_expires_without_interrupting_the_connecting_caller():
     connecting = asyncio.Event()
     release = asyncio.Event()
 
-    async def connect(timeout: float | None):
+    async def connect(conn_options: APIConnectOptions):
         connecting.set()
         await release.wait()
         return DummyConnection(1)
 
     pool = ConnectionPool(connect_cb=connect)
-    first = asyncio.create_task(pool.get(timeout=None))
+    first = asyncio.create_task(pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
     try:
         await connecting.wait()
         with pytest.raises(APITimeoutError) as error:
-            await pool.get(timeout=None, pool_timeout=0)
+            await pool.get(conn_options=NO_POOL_WAIT)
         assert error.value.phase == "pool"
         assert not first.done()
         release.set()
         connection = await first
         pool.put(connection)
-        assert await pool.get(timeout=None, pool_timeout=0) is connection
+        assert await pool.get(conn_options=NO_POOL_WAIT) is connection
     finally:
         release.set()
         await first
@@ -51,7 +53,7 @@ class DummyConnection:
 def dummy_connect_factory():
     counter = 0
 
-    async def dummy_connect(timeout: float):
+    async def dummy_connect(conn_options: APIConnectOptions):
         nonlocal counter
         counter += 1
         return DummyConnection(counter)
@@ -73,14 +75,14 @@ async def test_get_reuses_connection():
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
-    conn1 = await pool.get(timeout=10.0)
+    conn1 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     # Return the connection to the pool
     pool.put(conn1)
 
-    async with pool.connection(timeout=10.0) as conn:
+    async with pool.connection(conn_options=DEFAULT_API_CONNECT_OPTIONS) as conn:
         assert conn is conn1, "Expected conn to be the same connection as conn1"
 
-    conn2 = await pool.get(timeout=10.0)
+    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert conn1 is conn2, "Expected the same connection to be reused when it hasn't expired."
 
 
@@ -89,10 +91,10 @@ async def test_get_creates_new_connection_when_none_available():
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
-    conn1 = await pool.get(timeout=10.0)
+    conn1 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     # Not putting conn1 back means the available pool is empty,
     # so calling get() again should create a new connection.
-    conn2 = await pool.get(timeout=10.0)
+    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert conn1 is not conn2, "Expected a new connection when no available connection exists."
 
 
@@ -101,14 +103,14 @@ async def test_remove_connection():
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
 
-    conn = await pool.get(timeout=10.0)
+    conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(conn)
     # Reset the connection which should remove it from the pool.
     pool.remove(conn)
 
     # Even if we try to put it back, it won't be added because it's not tracked anymore.
     pool.put(conn)
-    new_conn = await pool.get(timeout=10.0)
+    new_conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert new_conn is not conn, "Expected a removed connection to not be reused."
 
 
@@ -118,12 +120,12 @@ async def test_get_expired():
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=1, connect_cb=dummy_connect)
 
-    conn = await pool.get(timeout=10.0)
+    conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(conn)
     # Artificially set the connection's timestamp in the past to simulate expiration.
     pool._connections[conn] = time.time() - 2  # 2 seconds ago (max_session_duration is 1)
 
-    conn2 = await pool.get(timeout=10.0)
+    conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert conn2 is not conn, "Expected a new connection to be returned."
 
 
@@ -131,7 +133,7 @@ async def test_get_expired():
 async def test_prewarm_failure_does_not_leak_api_key_in_logs(caplog):
     secret = "cartesia-secret-api-key-do-not-log"
 
-    async def failing_connect(timeout: float):
+    async def failing_connect(conn_options: APIConnectOptions):
         raise _handshake_error_with_api_key(secret)
 
     pool = ConnectionPool(connect_cb=failing_connect)
@@ -155,7 +157,7 @@ async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
     secret_key = "url-secret-api-key-do-not-log"
     secret_jwt = "url-secret-jwt-token-do-not-log"
 
-    async def failing_connect(timeout: float):
+    async def failing_connect(conn_options: APIConnectOptions):
         raise ConnectionError(f"wss://example.com/ws?api_key={secret_key}&jwt_token={secret_jwt}")
 
     pool = ConnectionPool(connect_cb=failing_connect)
@@ -178,7 +180,7 @@ async def test_prewarm_failure_does_not_leak_url_credentials_in_logs(caplog):
 async def test_prewarm_retries_after_failure():
     attempts = 0
 
-    async def flaky_connect(timeout: float):
+    async def flaky_connect(conn_options: APIConnectOptions):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -223,11 +225,11 @@ async def test_invalidate_does_not_close_a_connection_still_in_use():
     pool, closed = _closing_pool()
 
     # checked out and never returned: something is streaming on it right now
-    in_use = await pool.get(timeout=10.0)
+    in_use = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.invalidate()
 
     # a second acquisition drains the close queue; the in-flight connection must survive
-    other = await pool.get(timeout=10.0)
+    other = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert other is not in_use, "Expected a fresh connection after invalidate()."
     assert in_use not in closed, "invalidate() closed a connection that was still checked out."
 
@@ -236,11 +238,11 @@ async def test_invalidate_does_not_close_a_connection_still_in_use():
 async def test_invalidate_closes_idle_connections_immediately():
     pool, closed = _closing_pool()
 
-    idle = await pool.get(timeout=10.0)
+    idle = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(idle)
     pool.invalidate()
 
-    await pool.get(timeout=10.0)
+    await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert idle in closed, "Expected an idle connection to be closed by the next drain."
 
 
@@ -248,12 +250,12 @@ async def test_invalidate_closes_idle_connections_immediately():
 async def test_retired_connection_is_closed_once_returned():
     pool, closed = _closing_pool()
 
-    in_use = await pool.get(timeout=10.0)
+    in_use = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.invalidate()
     pool.put(in_use)  # the stream finished with it
 
     assert in_use not in pool._available, "A retired connection must not be reused."
-    await pool.get(timeout=10.0)
+    await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert in_use in closed, "Expected a retired connection to be closed once returned."
 
 
@@ -261,11 +263,11 @@ async def test_retired_connection_is_closed_once_returned():
 async def test_retired_connection_is_closed_when_removed_after_an_error():
     pool, closed = _closing_pool()
 
-    in_use = await pool.get(timeout=10.0)
+    in_use = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.invalidate()
     pool.remove(in_use)  # the stream raised; connection() calls remove()
 
-    await pool.get(timeout=10.0)
+    await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert in_use in closed, "Expected a retired connection to be closed when removed."
 
 
@@ -273,7 +275,7 @@ async def test_retired_connection_is_closed_when_removed_after_an_error():
 async def test_aclose_closes_retired_connections_never_returned():
     pool, closed = _closing_pool()
 
-    leaked = await pool.get(timeout=10.0)
+    leaked = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.invalidate()
     await pool.aclose()
 
@@ -285,18 +287,18 @@ async def test_invalidate_mid_stream_lets_the_stream_finish_then_reconnects():
     """The update_options case: options change while one stream is speaking."""
     pool, closed = _closing_pool()
 
-    speaking = await pool.get(timeout=10.0)
+    speaking = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.invalidate()  # e.g. update_options(voice=...) on the TTS
 
     # a new stream starts and must not reuse the old settings
-    fresh = await pool.get(timeout=10.0)
+    fresh = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert fresh is not speaking
     assert speaking not in closed, "The speaking connection was cut off mid-utterance."
 
     # the first stream finishes normally and its connection retires
     pool.put(speaking)
     pool.put(fresh)
-    reused = await pool.get(timeout=10.0)
+    reused = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert reused is fresh, "Expected the post-invalidate connection to be the reusable one."
     assert speaking in closed
 
@@ -309,7 +311,7 @@ async def test_invalidate_during_a_handshake_discards_the_stale_connection():
     counter = 0
     closed: list[DummyConnection] = []
 
-    async def slow_connect(timeout: float):
+    async def slow_connect(conn_options: APIConnectOptions):
         nonlocal counter
         counter += 1
         started.set()
@@ -321,7 +323,7 @@ async def test_invalidate_during_a_handshake_discards_the_stale_connection():
 
     pool = ConnectionPool(connect_cb=slow_connect, close_cb=close_cb)
 
-    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    acquiring = asyncio.create_task(pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
     await started.wait()
     pool.invalidate()  # options changed while the socket was still being negotiated
     release.set()
@@ -343,7 +345,7 @@ async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
     counter = 0
     closed: list[DummyConnection] = []
 
-    async def slow_connect(timeout: float):
+    async def slow_connect(conn_options: APIConnectOptions):
         nonlocal counter
         counter += 1
         started.set()
@@ -387,11 +389,11 @@ async def test_cancelling_a_drain_leaves_the_connection_queued_for_a_later_close
 
     pool = ConnectionPool(connect_cb=dummy_connect_factory(), close_cb=close_cb)
 
-    doomed = await pool.get(timeout=10.0)
+    doomed = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(doomed)
     pool.invalidate()  # idle, so it goes straight to the close queue
 
-    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    acquiring = asyncio.create_task(pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
     await closing.wait()  # inside _maybe_close_connection, popped from _to_close
     acquiring.cancel()
     with pytest.raises(asyncio.CancelledError):

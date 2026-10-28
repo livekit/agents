@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 import pytest
 
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+
 pytestmark = pytest.mark.plugin("deepgram")
 
 
@@ -56,7 +58,7 @@ class _FakePool:
         self.last_acquire_time = 0.0
         self.last_connection_reused = False
 
-    def connection(self, timeout: float):  # noqa: ANN201
+    def connection(self, *, conn_options: APIConnectOptions):  # noqa: ANN201
         ws = self._ws
 
         class _Ctx:
@@ -258,6 +260,7 @@ class _RecordingSession:
     """Records the URLs the v1 TTS connects and posts to, without touching the network."""
 
     def __init__(self) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.urls: list[str] = []
 
     async def ws_connect(self, url: str, **kwargs):  # noqa: ANN201
@@ -274,7 +277,7 @@ async def _request_urls(tts) -> list[str]:  # noqa: ANN001
     from livekit.agents import APIConnectionError
     from livekit.plugins.deepgram.tts import ChunkedStream
 
-    await tts._connect_ws(timeout=5.0)
+    await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
 
     stream = SimpleNamespace(
         _tts=tts,

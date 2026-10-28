@@ -169,13 +169,15 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Murf"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/v1/speech/stream-input?sample_rate={self._opts.sample_rate}&format={self._opts.encoding}&model={self._opts.model}"
         )
         headers = {API_AUTH_HEADER: self._opts.api_key}
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await utils.http_context.ws_connect(
+            session, url, headers=headers, conn_options=conn_options
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -382,10 +384,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

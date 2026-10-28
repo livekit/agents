@@ -255,19 +255,18 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        return await asyncio.wait_for(
-            session.ws_connect(
-                self._opts.get_ws_url("/v1/tts/live"),
-                headers={
-                    "Authorization": f"Bearer {self._opts.api_key}",
-                    "User-Agent": USER_AGENT,
-                    "model": self._opts.model,
-                },
-                heartbeat=30.0,
-            ),
-            timeout,
+        return await utils.http_context.ws_connect(
+            session,
+            self._opts.get_ws_url("/v1/tts/live"),
+            headers={
+                "Authorization": f"Bearer {self._opts.api_key}",
+                "User-Agent": USER_AGENT,
+                "model": self._opts.model,
+            },
+            heartbeat=30.0,
+            conn_options=conn_options,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -493,10 +492,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=request_id)
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 await self._run_ws(ws, output_emitter)
 
         except asyncio.TimeoutError:

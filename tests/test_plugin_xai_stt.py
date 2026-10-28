@@ -20,7 +20,9 @@ from livekit.agents import APIConnectOptions
 pytestmark = pytest.mark.plugin("xai")
 
 # Retry immediately so a reconnect shows up within the test timeout.
-_FAST_RETRY = APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0)
+_FAST_RETRY = APIConnectOptions(
+    max_retry=3, retry_interval=0.01, connect_timeout=1.0, read_timeout=1.0
+)
 
 
 async def _wait_until(predicate, *, timeout: float = 5.0) -> None:
@@ -93,6 +95,7 @@ class _FakeSession:
     """Stands in for the aiohttp session: records connect kwargs, hands out sockets."""
 
     def __init__(self, make_socket) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.closed = False
         self.kwargs: list[dict[str, Any]] = []
         self.sockets: list[Any] = []

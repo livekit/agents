@@ -83,7 +83,7 @@ class _ResponsesWebsocket:
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
-            connect_timeout=self._timeout,
+            conn_options=APIConnectOptions(connect_timeout=self._timeout),
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -91,15 +91,14 @@ class _ResponsesWebsocket:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _create_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         try:
-            return await asyncio.wait_for(
-                self._ensure_http_session().ws_connect(
-                    self._base_url,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    heartbeat=_WS_HEARTBEAT,
-                ),
-                timeout,
+            return await utils.http_context.ws_connect(
+                self._ensure_http_session(),
+                self._base_url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                heartbeat=_WS_HEARTBEAT,
+                conn_options=conn_options,
             )
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to OpenAI Responses WebSocket") from e
@@ -190,9 +189,7 @@ class _ResponsesWebsocket:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(
-                timeout=conn_options.connect_timeout, pool_timeout=conn_options.pool_timeout
-            )
+            ws = await self._pool.get(conn_options=conn_options)
             reused = self._pool.last_connection_reused
             try:
                 async with asyncio.timeout(conn_options.write_timeout):

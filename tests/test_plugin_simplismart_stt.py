@@ -179,6 +179,7 @@ class _FakeSession:
     out sockets, and can be closed by `SpeechStream.aclose`."""
 
     def __init__(self, make_socket) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.closed = False
         self.kwargs: list[dict[str, Any]] = []
         self.sockets: list[Any] = []

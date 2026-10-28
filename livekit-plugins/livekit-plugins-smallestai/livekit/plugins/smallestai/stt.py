@@ -701,19 +701,18 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    self._ws_url(),
-                    headers={
-                        "Authorization": f"Bearer {self._opts.api_key}",
-                        "X-Source": "livekit",
-                        "X-LiveKit-Version": __version__,
-                    },
-                    # Without a heartbeat a half-open socket is never noticed: recv_task
-                    # parks on receive() and the exception-driven reconnect never runs.
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                self._ws_url(),
+                headers={
+                    "Authorization": f"Bearer {self._opts.api_key}",
+                    "X-Source": "livekit",
+                    "X-LiveKit-Version": __version__,
+                },
+                # Without a heartbeat a half-open socket is never noticed: recv_task
+                # parks on receive() and the exception-driven reconnect never runs.
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to Smallest AI STT") from None

@@ -12,7 +12,13 @@ import pytest
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    llm as agents_llm,
+)
 from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
     LLM as ResponsesLLM,
@@ -222,7 +228,7 @@ async def test_create_ws_enables_heartbeat() -> None:
     session.ws_connect = AsyncMock(return_value=fake_ws)
     transport._ensure_http_session = lambda: session  # type: ignore[method-assign]
 
-    assert await transport._create_ws(timeout=1.0) is fake_ws
+    assert await transport._create_ws(DEFAULT_API_CONNECT_OPTIONS) is fake_ws
     _, kwargs = session.ws_connect.call_args
     assert kwargs["heartbeat"] == _WS_HEARTBEAT
 
@@ -249,8 +255,8 @@ async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout
     ws = _RecordingWS({"type": "response.completed"})
     timeouts: list[float] = []
 
-    async def connect(timeout: float) -> _RecordingWS:
-        timeouts.append(timeout)
+    async def connect(conn_options: APIConnectOptions) -> _RecordingWS:
+        timeouts.append(conn_options.connect_timeout)
         return ws
 
     transport._pool._connect_cb = connect  # type: ignore[assignment]
@@ -458,7 +464,7 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         with pytest.raises(APIStatusError) as exc_info:
             async with llm_model.chat(
                 chat_ctx=chat_ctx,
-                conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0),
+                conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0),
             ) as stream:
                 async for _ in stream:
                     pass
@@ -521,7 +527,7 @@ async def _attempts_until_stall(frames: list[dict], *, max_retry: int) -> int:
     with pytest.raises(Exception):  # noqa: PT011, B017
         async with llm_model.chat(
             chat_ctx=chat_ctx,
-            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0, timeout=5.0),
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0),
         ) as stream:
             async for _ in stream:
                 pass

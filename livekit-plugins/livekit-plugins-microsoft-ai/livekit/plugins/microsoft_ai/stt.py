@@ -355,14 +355,13 @@ class SpeechStream(stt.RecognizeStream):
                 self._ws = None
 
     async def _handshake(self) -> None:
-        ws = await asyncio.wait_for(
-            self._stt._client.session().ws_connect(
-                self._stt._client.url,
-                headers=self._stt._client.headers,
-                heartbeat=10.0,
-                max_msg_size=1024 * 1024,
-            ),
-            self._conn_options.connect_timeout,
+        ws = await utils.http_context.ws_connect(
+            self._stt._client.session(),
+            self._stt._client.url,
+            headers=self._stt._client.headers,
+            heartbeat=10.0,
+            max_msg_size=1024 * 1024,
+            conn_options=self._conn_options,
         )
         self._ws = ws
         created = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)

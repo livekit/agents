@@ -247,14 +247,14 @@ class TTS(tts.TTS):
 
         pool_ref: utils.ConnectionPool[AsyncStreamingTTSSession] | None = None
 
-        async def _connect(timeout: float | None) -> AsyncStreamingTTSSession:
+        async def _connect(conn_options: APIConnectOptions) -> AsyncStreamingTTSSession:
             session = AsyncStreamingTTSSession(
                 api_key=opts.api_key,
                 base_url=opts.base_url,
                 allow_insecure_base_url=opts.allow_insecure_base_url,
                 config=config,
             )
-            await session.connect(timeout=timeout)
+            await session.connect(timeout=conn_options.connect_timeout)
             assert pool_ref is not None
             self._start_keepalive(session, pool_ref)
             return session
@@ -452,9 +452,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         deferred_error: APIStatusError | None = None
         cancelled = False
 
-        async with pool.connection(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        ) as session:
+        async with pool.connection(conn_options=self._conn_options) as session:
             await self._tts._stop_keepalive(session)
             reusable = False
             try:

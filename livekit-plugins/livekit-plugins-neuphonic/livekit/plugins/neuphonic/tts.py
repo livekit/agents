@@ -143,7 +143,7 @@ class TTS(tts.TTS):
             tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
             f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
@@ -156,7 +156,9 @@ class TTS(tts.TTS):
         else:
             headers = None
 
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await utils.http_context.ws_connect(
+            session, url, headers=headers, conn_options=conn_options
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -456,9 +458,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
-        async with self._tts._pool.connection(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        ) as ws:
+        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

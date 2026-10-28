@@ -350,7 +350,7 @@ class TTS(tts.TTS):
 
         return self._session
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         url = self._opts.base_url
         if url.startswith("http"):
             url = url.replace("http", "ws", 1)
@@ -358,7 +358,9 @@ class TTS(tts.TTS):
 
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
         session = self._ensure_session()
-        ws = await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        ws = await utils.http_context.ws_connect(
+            session, url, headers=headers, conn_options=conn_options
+        )
 
         # Log WebSocket connection establishment
         logger.debug(f"MiniMax WebSocket connected to {url}")

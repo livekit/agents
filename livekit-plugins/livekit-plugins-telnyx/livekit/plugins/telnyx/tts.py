@@ -190,9 +190,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 output_emitter.push(frame.data.tobytes())
 
         try:
-            ws = await asyncio.wait_for(
-                self._tts._session_manager.ensure_session().ws_connect(url, headers=headers),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._tts._session_manager.ensure_session(),
+                url,
+                headers=headers,
+                conn_options=self._conn_options,
             )
             async with ws:
                 tasks = [

@@ -475,9 +475,7 @@ class STT(stt.STT):
         )
 
         try:
-            async with self._pool.connection(
-                timeout=conn_options.connect_timeout, pool_timeout=conn_options.pool_timeout
-            ) as client:
+            async with self._pool.connection(conn_options=conn_options) as client:
                 raw = await client.recognize(
                     self._build_recognition_request(client, config, frame.data.tobytes()),
                     timeout=None,
@@ -1012,10 +1010,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             audio_pushed = False
             try:
-                async with self._pool.connection(
-                    timeout=self._conn_options.connect_timeout,
-                    pool_timeout=self._conn_options.pool_timeout,
-                ) as client:
+                async with self._pool.connection(conn_options=self._conn_options) as client:
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()

@@ -250,7 +250,7 @@ class _InworldConnection:
         """Timestamp of last context acquisition or release."""
         return self._last_activity
 
-    async def connect(self, *, timeout: float | None = None) -> None:
+    async def connect(self, *, conn_options: APIConnectOptions) -> None:
         """Establish WebSocket connection and start background loops."""
         async with self._connect_lock:
             if self._ws is not None or self._closed:
@@ -258,16 +258,15 @@ class _InworldConnection:
 
             url = urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional")
             request_id = str(uuid.uuid4())
-            self._ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    url,
-                    headers={
-                        "Authorization": self._authorization,
-                        "X-User-Agent": USER_AGENT,
-                        "X-Request-Id": request_id,
-                    },
-                ),
-                timeout,
+            self._ws = await utils.http_context.ws_connect(
+                self._session,
+                url,
+                headers={
+                    "Authorization": self._authorization,
+                    "X-User-Agent": USER_AGENT,
+                    "X-Request-Id": request_id,
+                },
+                conn_options=conn_options,
             )
             logger.debug(
                 "Established Inworld TTS WebSocket connection (shared)",
@@ -284,7 +283,7 @@ class _InworldConnection:
         opts: _TTSOptions,
         timeout: float | None,
         *,
-        connect_timeout: float | None = None,
+        conn_options: APIConnectOptions,
     ) -> tuple[str, asyncio.Future[None]]:
         """Acquire a new context for TTS synthesis.
 
@@ -292,7 +291,7 @@ class _InworldConnection:
         a connection pool. This method will still wait if at capacity, but the pool
         should route to connections with available capacity first.
         """
-        await self.connect(timeout=connect_timeout)
+        await self.connect(conn_options=conn_options)
 
         # Fail fast if connection is closed
         if self._closed or self._ws is None:
@@ -688,7 +687,7 @@ class _ConnectionPool:
         opts: _TTSOptions,
         timeout: float | None,
         *,
-        connect_timeout: float | None = None,
+        conn_options: APIConnectOptions,
     ) -> tuple[str, asyncio.Future[None], _InworldConnection]:
         """Acquire a context from the pool, creating new connections as needed.
 
@@ -744,7 +743,7 @@ class _ConnectionPool:
             if conn:
                 try:
                     ctx_id, waiter = await conn.acquire_context(
-                        emitter, opts, remaining_timeout, connect_timeout=connect_timeout
+                        emitter, opts, remaining_timeout, conn_options=conn_options
                     )
                 except BaseException:
                     # Release reservation since we didn't get a context
@@ -1295,7 +1294,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             emitter=output_emitter,
             opts=self._opts,
             timeout=self._conn_options.pool_timeout,
-            connect_timeout=self._conn_options.connect_timeout,
+            conn_options=self._conn_options,
         )
 
         async def _input_task() -> None:

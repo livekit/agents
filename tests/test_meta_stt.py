@@ -16,7 +16,9 @@ from livekit.plugins.meta import stt as meta_stt
 
 pytestmark = pytest.mark.unit
 
-_TEST_OPTIONS = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=1.0)
+_TEST_OPTIONS = APIConnectOptions(
+    max_retry=0, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+)
 _CLOSE_AFTER_END = object()
 _CLOSE_1011_AFTER_END = object()
 
@@ -100,6 +102,7 @@ class _FakeWebSocket:
 
 class _FakeSession:
     def __init__(self, outcomes: list[_FakeWebSocket | BaseException]) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self._outcomes = deque(outcomes)
         self.connect_calls: list[tuple[str, dict[str, object]]] = []
 
@@ -399,7 +402,9 @@ async def test_rejects_stereo_after_input_is_consumed_without_retry() -> None:
     session = _FakeSession([websocket, _websocket()])
     provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
     stream = provider.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        )
     )
     stream.push_frame(_frame(b"\0" * 7680, num_channels=2))
     stream.end_input()
@@ -793,7 +798,9 @@ async def test_pre_audio_connection_failure_retries_without_losing_input() -> No
     events, _ = await _collect(
         provider,
         b"x" * 3840,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        ),
     )
 
     assert len(session.connect_calls) == 2
@@ -810,7 +817,9 @@ async def test_normal_close_during_handshake_retries() -> None:
 
     events, _ = await _collect(
         provider,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        ),
     )
 
     assert events == []
@@ -823,7 +832,9 @@ async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     session = _FakeSession([first, _websocket()])
     provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
     stream = provider.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        )
     )
     stream.end_input()
 
@@ -848,7 +859,9 @@ async def test_transient_close_during_handshake_retries(close_code: int) -> None
 
     events, _ = await _collect(
         provider,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        ),
     )
 
     assert events == []
@@ -864,7 +877,9 @@ async def test_empty_input_retry_sends_end_stream_on_every_attempt() -> None:
 
     events, _ = await _collect(
         provider,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        ),
     )
 
     assert events == []
@@ -899,7 +914,9 @@ async def test_transient_close_after_audio_consumption_is_not_retried(close_code
     session = _FakeSession([websocket, _websocket()])
     provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
     stream = provider.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        )
     )
     stream.push_frame(_frame(b"x" * 3840))
     stream.end_input()
@@ -923,7 +940,9 @@ async def test_post_consumption_failure_is_not_retried() -> None:
     session = _FakeSession([websocket, _websocket()])
     provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
     stream = provider.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0)
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        )
     )
     stream.push_frame(_frame(b"x" * 3840))
     stream.end_input()

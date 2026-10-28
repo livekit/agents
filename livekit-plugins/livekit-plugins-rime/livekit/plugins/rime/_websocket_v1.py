@@ -32,10 +32,12 @@ from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import (
     APIConnectionError,
+    APIConnectOptions,
     APIError,
     APIStatusError,
     APITimeoutError,
     tts,
+    utils,
 )
 
 from .models import is_mist_model
@@ -312,20 +314,20 @@ async def connect(
     websocket_url: str,
     api_key: str,
     protocol: WebSocketProtocol,
-    timeout: float | None,
+    conn_options: APIConnectOptions,
     allow_custom_endpoint: bool = False,
 ) -> Connection:
-    """Open a v1 socket and consume its one connection-level ready event."""
+    """Open a v1 socket and consume its one connection-level ready event (a response, under
+    ``read_timeout``)."""
     validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
     codec = _codec_for_protocol(protocol)
     try:
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                websocket_url,
-                headers={"Authorization": f"Bearer {api_key}"},
-                protocols=(codec.subprotocol,),
-            ),
-            timeout,
+        ws = await utils.http_context.ws_connect(
+            session,
+            websocket_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            protocols=(codec.subprotocol,),
+            conn_options=conn_options,
         )
         if ws.protocol != codec.subprotocol:
             await ws.close()
@@ -337,7 +339,7 @@ async def connect(
 
         connection = Connection(websocket=ws, codec=codec)
         try:
-            envelope = await _receive_envelope(connection, timeout=timeout)
+            envelope = await _receive_envelope(connection, timeout=conn_options.read_timeout)
             payload = _payload(envelope)
             if payload == "error":
                 raise _rime_error(envelope.error, fallback_request_id=None)

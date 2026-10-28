@@ -388,16 +388,15 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         ws_url = f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}"
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    ws_url,
-                    headers={
-                        API_VERSION_HEADER: API_VERSION,
-                        API_AUTH_HEADER: self._api_key,
-                        "User-Agent": USER_AGENT,
-                    },
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                ws_url,
+                headers={
+                    API_VERSION_HEADER: API_VERSION,
+                    API_AUTH_HEADER: self._api_key,
+                    "User-Agent": USER_AGENT,
+                },
+                conn_options=self._conn_options,
             )
             c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
             logger.debug(

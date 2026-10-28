@@ -127,7 +127,7 @@ class STT(stt.STT):
             close_cb=self._close_ws,
         )
 
-    async def _connect_ws(self, timeout: float | None) -> RealtimeConnection:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> RealtimeConnection:
         rt = RealtimeTranscription(self._client.sdk_configuration)
         http_headers = None
         cfg = self._client.sdk_configuration
@@ -142,7 +142,7 @@ class STT(stt.STT):
                 target_streaming_delay_ms=self._opts.target_streaming_delay_ms,
                 http_headers=http_headers,
             ),
-            timeout=timeout,
+            timeout=conn_options.connect_timeout,
         )
 
     async def _close_ws(self, conn: RealtimeConnection) -> None:
@@ -422,10 +422,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         try:
             while True:
-                async with self._pool.connection(
-                    timeout=self._conn_options.connect_timeout,
-                    pool_timeout=self._conn_options.pool_timeout,
-                ) as connection:
+                async with self._pool.connection(conn_options=self._conn_options) as connection:
                     vad_stream = self._vad.stream() if self._vad else None
 
                     tasks = [

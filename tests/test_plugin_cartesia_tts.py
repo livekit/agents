@@ -12,7 +12,12 @@ from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIConnectionError, APIStatusError
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+)
 
 pytestmark = pytest.mark.plugin("cartesia")
 
@@ -48,7 +53,7 @@ async def test_connect_ws_redacts_api_key_from_handshake_error():
     tts._session = session
 
     with pytest.raises(APIStatusError) as exc_info:
-        await tts._connect_ws(timeout=5.0)
+        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
 
     err = exc_info.value
     assert err.status_code == 401
@@ -71,7 +76,7 @@ async def test_connect_ws_generic_error_does_not_chain_cause():
     tts._session = session
 
     with pytest.raises(APIConnectionError) as exc_info:
-        await tts._connect_ws(timeout=5.0)
+        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
 
     err = exc_info.value
     assert err.__cause__ is None
@@ -137,7 +142,7 @@ class _FakePool:
         self.last_acquire_time = 0.0
         self.last_connection_reused = False
 
-    def connection(self, timeout: float):  # noqa: ANN201
+    def connection(self, *, conn_options: APIConnectOptions):  # noqa: ANN201
         ws = self._ws
 
         class _Ctx:
@@ -163,7 +168,7 @@ async def test_synthesize_skips_stale_frames_from_previous_context():
     tts = TTS(api_key=SECRET_API_KEY)
     tts._pool = _FakePool(_FakeWS())  # type: ignore[assignment]
 
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
     stream.push_text("hello world")
     stream.end_input()
 
@@ -224,7 +229,7 @@ async def test_ws_url_carries_the_updated_api_version():
     tts._ensure_session = lambda: _Session()  # type: ignore[method-assign]
 
     with pytest.raises(APIConnectionError):
-        await tts._connect_ws(timeout=1.0)
+        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS)
 
     assert "cartesia_version=2099-01-01" in captured["url"], (
         f"Expected the new api_version in the handshake URL, got {captured['url']}"

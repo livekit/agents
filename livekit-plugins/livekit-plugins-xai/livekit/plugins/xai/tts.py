@@ -132,7 +132,7 @@ class TTS(tts.TTS):
         return "xAI"
 
     async def _connect_ws(
-        self, timeout: float | None, opts: _TTSOptions
+        self, conn_options: APIConnectOptions, opts: _TTSOptions
     ) -> aiohttp.ClientWebSocketResponse:
         params: dict[str, str | int | float] = {
             "voice": opts.voice,
@@ -149,12 +149,11 @@ class TTS(tts.TTS):
 
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
-            ws = await asyncio.wait_for(
-                self._ensure_session().ws_connect(
-                    url,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                ),
-                timeout,
+            ws = await utils.http_context.ws_connect(
+                self._ensure_session(),
+                url,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                conn_options=conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to xAI") from None
@@ -164,6 +163,8 @@ class TTS(tts.TTS):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APITimeoutError:
+            raise
         except Exception as e:
             raise APIConnectionError(f"failed to connect to xAI ({type(e).__name__})") from None
         return ws
@@ -171,8 +172,10 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
 
-    async def _connect_pooled_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
-        return await self._connect_ws(timeout, self._opts)
+    async def _connect_pooled_ws(
+        self, conn_options: APIConnectOptions
+    ) -> aiohttp.ClientWebSocketResponse:
+        return await self._connect_ws(conn_options, self._opts)
 
     async def _close_pooled_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._close_ws(ws)
@@ -368,9 +371,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
-        async with self._tts._pool.connection(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        ) as ws:
+        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

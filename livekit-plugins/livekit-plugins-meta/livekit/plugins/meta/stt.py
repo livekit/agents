@@ -446,13 +446,12 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    self._url,
-                    max_msg_size=_MAX_MESSAGE_BYTES,
-                    heartbeat=_WS_HEARTBEAT,
-                ),
-                timeout=self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                self._url,
+                max_msg_size=_MAX_MESSAGE_BYTES,
+                heartbeat=_WS_HEARTBEAT,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APITimeoutError("Meta Muse realtime ASR connection timed out") from None

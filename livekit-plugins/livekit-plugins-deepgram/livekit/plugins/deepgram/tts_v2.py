@@ -148,7 +148,7 @@ class TTSv2(tts.TTS):
     def provider(self) -> str:
         return "Deepgram"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         # Streaming only supports linear16 end-to-end, so bit_rate (compressed batch
         # output only) is intentionally not forwarded here.
@@ -158,12 +158,11 @@ class TTSv2(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                _to_deepgram_url(config, self._opts.base_url, websocket=True),
-                headers={"Authorization": f"Token {self._opts.api_key}"},
-            ),
-            timeout,
+        ws = await utils.http_context.ws_connect(
+            session,
+            _to_deepgram_url(config, self._opts.base_url, websocket=True),
+            headers={"Authorization": f"Token {self._opts.api_key}"},
+            conn_options=conn_options,
         )
         ws_headers = {
             k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
@@ -438,9 +437,7 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
                     else:
                         logger.warning("Unknown Deepgram message type: %s", resp)
 
-        async with self._tts._pool.connection(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        ) as ws:
+        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

@@ -368,10 +368,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
         try:
-            async with self._tts._ensure_session().ws_connect(
+            async with await utils.http_context.ws_connect(
+                self._tts._ensure_session(),
                 self._tts._model_endpoint,
                 headers={"Authorization": f"Api-Key {self._tts._api_key}"},
                 ssl=ssl_context,
+                conn_options=self._conn_options,
             ) as ws:
                 await ws.send_json(
                     {

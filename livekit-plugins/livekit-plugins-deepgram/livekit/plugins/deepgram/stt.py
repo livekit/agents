@@ -784,17 +784,16 @@ class SpeechStream(stt.SpeechStream):
             live_config["tag"] = self._opts.tags
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
-                    # without this, a silently dropped socket (a half-open TCP
-                    # connection, no FIN/RST) is never noticed: recv_task parks on
-                    # ws.receive() forever and the reconnect loop below, which is
-                    # exception-driven, never runs. matches stt_v2.
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
+                headers={"Authorization": f"Token {self._api_key}"},
+                # without this, a silently dropped socket (a half-open TCP
+                # connection, no FIN/RST) is never noticed: recv_task parks on
+                # ws.receive() forever and the reconnect loop below, which is
+                # exception-driven, never runs. matches stt_v2.
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None

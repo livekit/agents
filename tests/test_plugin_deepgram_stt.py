@@ -297,6 +297,7 @@ class _RecordingSession:
     """Stands in for the aiohttp session so the connect kwargs are assertable."""
 
     def __init__(self) -> None:
+        self.trace_configs: list[object] = []  # aiohttp request tracing
         self.closed = False
         self.kwargs: dict = {}
         self._ws = _LiveWS()

@@ -146,7 +146,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "AsyncAI"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
         url = self._opts.get_ws_url(f"/text_to_speech/websocket/ws?{query}")
@@ -163,7 +163,7 @@ class TTS(tts.TTS):
 
         if self._opts.language is not None:
             init_payload["language"] = self._opts.language
-        ws = await asyncio.wait_for(session.ws_connect(url), timeout)
+        ws = await utils.http_context.ws_connect(session, url, conn_options=conn_options)
         await ws.send_str(json.dumps(init_payload))
         return ws
 
@@ -338,10 +338,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async_context_id = str(uuid.uuid4())
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),

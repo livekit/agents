@@ -119,13 +119,12 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Resemble"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                RESEMBLE_WEBSOCKET_URL,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-            ),
-            timeout,
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+        return await utils.http_context.ws_connect(
+            self._ensure_session(),
+            RESEMBLE_WEBSOCKET_URL,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            conn_options=conn_options,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -366,9 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.error("Unexpected Resemble message", extra={"lk.pii.data": data})
 
-        async with self._tts._pool.connection(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        ) as ws:
+        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

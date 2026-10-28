@@ -14,7 +14,7 @@ from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIStatusError
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError
 
 pytestmark = pytest.mark.unit
 
@@ -77,6 +77,6 @@ async def test_xai_tts_redacts_api_key_from_handshake_error():
     )
 
     with pytest.raises(APIStatusError) as exc_info:
-        await tts._connect_ws(timeout=5.0, opts=tts._opts)
+        await tts._connect_ws(DEFAULT_API_CONNECT_OPTIONS, opts=tts._opts)
 
     _assert_redacted(exc_info.value)

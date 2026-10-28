@@ -70,8 +70,8 @@ class LegacyWebSocketAdapter:
     def _new_pool(self) -> _Pool:
         websocket_url = self._websocket_url
 
-        async def _connect(timeout: float | None) -> aiohttp.ClientWebSocketResponse:
-            return await self._connect(websocket_url=websocket_url, timeout=timeout)
+        async def _connect(conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+            return await self._connect(websocket_url=websocket_url, conn_options=conn_options)
 
         return utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=_connect,
@@ -81,14 +81,13 @@ class LegacyWebSocketAdapter:
         )
 
     async def _connect(
-        self, *, websocket_url: str, timeout: float | None
+        self, *, websocket_url: str, conn_options: APIConnectOptions
     ) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                websocket_url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-            ),
-            timeout,
+        return await utils.http_context.ws_connect(
+            self._ensure_session(),
+            websocket_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            conn_options=conn_options,
         )
 
     async def _close(self, websocket: aiohttp.ClientWebSocketResponse) -> None:
@@ -242,10 +241,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                     raise APIError("Rime WebSocket request failed")
 
         try:
-            async with self._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as websocket:
+            async with self._pool.connection(conn_options=self._conn_options) as websocket:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_send_task(websocket)),

@@ -895,7 +895,9 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await utils.http_context.ws_connect(
+            self._session, url, headers=headers, conn_options=self._conn_options
+        )
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,

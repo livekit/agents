@@ -896,9 +896,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
             "Connecting to Sarvam realtime STT WebSocket", extra=self._build_log_context()
         )
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(ws_url, headers=headers, heartbeat=30.0),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                ws_url,
+                headers=headers,
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._logger.error(

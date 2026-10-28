@@ -443,7 +443,9 @@ class SpeechStream(stt.SpeechStream):
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
         url = f"{ws_url}?{urlencode(filtered_config, doseq=True)}"
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await utils.http_context.ws_connect(
+            self._session, url, headers=headers, conn_options=self._conn_options
+        )
         logger.info("connected to Fireworks AI STT")
         return ws
 

@@ -270,17 +270,16 @@ class SpeechStream(stt.RecognizeStream):
         headers = {"Authorization": f"Bearer {opts.api_key}"}
 
         try:
-            ws = await asyncio.wait_for(
-                self._stt._session_manager.ensure_session().ws_connect(
-                    url,
-                    headers=headers,
-                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                    # is never noticed: recv_task parks on ws.receive() forever, and the
-                    # retry in _main_task only runs when something raises. Matches the
-                    # Deepgram and Muse STT plugins.
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._stt._session_manager.ensure_session(),
+                url,
+                headers=headers,
+                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                # is never noticed: recv_task parks on ws.receive() forever, and the
+                # retry in _main_task only runs when something raises. Matches the
+                # Deepgram and Muse STT plugins.
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
             logger.debug("Established Telnyx STT WebSocket connection")
             return ws

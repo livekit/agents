@@ -570,7 +570,7 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options()
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         query_params: dict[str, str] = {
             "intent": "transcription",
         }
@@ -592,7 +592,9 @@ class STT(stt.STT):
         session = self._ensure_session()
         # the config is sent once the stream acquires the connection, since the pool also
         # hands back sockets it opened earlier
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        return await utils.http_context.ws_connect(
+            session, url, headers=headers, conn_options=conn_options
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -966,10 +968,7 @@ class SpeechStream(stt.SpeechStream):
             closing_ws = False  # reset the flag
             # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
-            async with self._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 if self._pool.last_connection_reused and not self._opts.languages:
                     # detecting the language needs a session that was never given one, and a
                     # pooled socket carries whatever the stream before it set

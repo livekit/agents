@@ -162,10 +162,32 @@ async def ws_connect(
     **kwargs: Any,
 ) -> aiohttp.ClientWebSocketResponse:
     """``session.ws_connect`` under the pool and connect limits, then the read limit while the
-    handshake response is expected. Messages on the open socket are the caller's protocol."""
+    handshake response is expected. Every frame sent on the open socket waits for the transport
+    under the write limit; what is received is the caller's protocol."""
     async with _phase_limits(session, conn_options, after_connect="read"):
         ws: aiohttp.ClientWebSocketResponse = await session.ws_connect(url, **kwargs)
+    if isinstance(ws, aiohttp.ClientWebSocketResponse):
+        ws._writer = _TimedFrameWriter(ws._writer, conn_options.write_timeout)  # type: ignore[assignment]
     return ws
+
+
+class _TimedFrameWriter:
+    """A websocket's frame writer whose every frame waiting for the transport (a peer that stopped
+    reading) runs under the write limit."""
+
+    def __init__(self, writer: Any, limit: float | None) -> None:
+        self._writer = writer
+        self._limit = limit
+
+    async def send_frame(self, message: bytes, opcode: int, compress: int | None = None) -> None:
+        try:
+            async with asyncio.timeout(self._limit):
+                await self._writer.send_frame(message, opcode, compress)
+        except TimeoutError as e:
+            raise APITimeoutError("write timed out", phase="write") from e
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._writer, name)
 
 
 def _has_system_trust_store() -> bool:

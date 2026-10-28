@@ -609,7 +609,7 @@ async def test_a_rebuild_drops_the_idle_pooled_connection(
     session = _FakeSession()
     instance._session = session  # type: ignore[assignment]
     # a socket the pool holds with no stream attached, as between two speech sessions
-    instance._pool.put(await instance._pool.get(timeout=5))
+    instance._pool.put(await instance._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
     assert not instance._streams
 
     instance.update_options(**change)
@@ -626,7 +626,7 @@ async def test_a_stream_with_its_own_language_takes_its_own_connection() -> None
     instance = _offline_stt(model="gpt-live-transcribe", language="en")
     session = _FakeSession()
     instance._session = session  # type: ignore[assignment]
-    instance._pool.put(await instance._pool.get(timeout=5))
+    instance._pool.put(await instance._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
 
     stream = instance.stream(language=[])
 

@@ -124,7 +124,7 @@ def test_streaming_disables_connection_retries(
     conn_options = stt_streaming.APIConnectOptions(
         max_retry=3,
         retry_interval=1.5,
-        timeout=12.0,
+        read_timeout=12.0,
     )
 
     stt.stream(conn_options=conn_options)
@@ -136,7 +136,7 @@ def test_streaming_disables_connection_retries(
     )
     assert stream_conn_options.max_retry == 0
     assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.timeout == 12.0
+    assert stream_conn_options.read_timeout == 12.0
 
 
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
@@ -1398,7 +1398,7 @@ async def test_streaming_connect_logs_handshake_failure(
     async def _raise_response_error(*args: object, **kwargs: object) -> None:
         raise response_error
 
-    stream._session = SimpleNamespace(ws_connect=_raise_response_error)
+    stream._session = SimpleNamespace(ws_connect=_raise_response_error, trace_configs=[])
 
     with caplog.at_level(logging.ERROR, logger=stt_streaming.logger.name):
         with pytest.raises(stt_streaming.aiohttp.ClientResponseError):

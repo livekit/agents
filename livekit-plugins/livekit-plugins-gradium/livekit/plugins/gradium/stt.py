@@ -413,7 +413,9 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
+        ws = await utils.http_context.ws_connect(
+            self._session, self._model_endpoint, headers=headers, conn_options=self._conn_options
+        )
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {

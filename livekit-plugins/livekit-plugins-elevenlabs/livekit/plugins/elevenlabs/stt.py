@@ -739,12 +739,11 @@ class SpeechStream(stt.SpeechStream):
         ws_url = f"{base_url}/speech-to-text/realtime?{query_string}"
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    ws_url,
-                    headers={AUTHORIZATION_HEADER: self._opts.api_key},
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                ws_url,
+                headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                conn_options=self._conn_options,
             )
         except aiohttp.WSServerHandshakeError as e:
             raise APIStatusError(

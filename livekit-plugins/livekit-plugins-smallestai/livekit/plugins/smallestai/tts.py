@@ -190,17 +190,16 @@ class TTS(tts.TTS):
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                self._opts.ws_url,
-                headers={
-                    "Authorization": f"Bearer {self._opts.api_key}",
-                    "X-Source": "livekit",
-                    "X-LiveKit-Version": __version__,
-                },
-            ),
-            timeout,
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+        return await utils.http_context.ws_connect(
+            self._ensure_session(),
+            self._opts.ws_url,
+            headers={
+                "Authorization": f"Bearer {self._opts.api_key}",
+                "X-Source": "livekit",
+                "X-LiveKit-Version": __version__,
+            },
+            conn_options=conn_options,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -357,10 +356,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ctx_state = {"opened": False, "finalized": False}
 
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 send_task = asyncio.create_task(self._send_task(ws, context_id, ctx_state))
                 recv_task = asyncio.create_task(self._recv_task(ws, output_emitter, ctx_state))
                 # Whether recv_task ended on a protocol-confirmed signal (legacy's

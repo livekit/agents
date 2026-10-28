@@ -1224,12 +1224,8 @@ class SpeechStream(stt.SpeechStream):
             extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
         )
 
-        ws = await asyncio.wait_for(
-            self._session.ws_connect(
-                ws_url,
-                headers=headers,
-            ),
-            self._conn_options.connect_timeout,
+        ws = await utils.http_context.ws_connect(
+            self._session, ws_url, headers=headers, conn_options=self._conn_options
         )
 
         # Store WebSocket reference for cleanup - ensure it's always cleaned up

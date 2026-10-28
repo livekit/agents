@@ -5,6 +5,7 @@ from typing import Any
 
 import aiohttp
 import pytest
+from aiohttp import web
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
 from livekit.agents.utils import http_context
@@ -145,3 +146,35 @@ async def test_unanswered_websocket_handshake_expires_under_the_read_limit() -> 
 async def _get(session: aiohttp.ClientSession, url: str, options: APIConnectOptions) -> bytes:
     async with http_context.request(session, "GET", url, conn_options=options) as response:
         return await response.read()
+
+
+async def test_a_websocket_peer_that_stops_reading_expires_under_the_write_limit() -> None:
+    # a streaming plugin pushes audio to a peer that stopped reading (its buffers full): without
+    # the write limit the send waits forever and the stream wedges
+    async def handle(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await asyncio.Event().wait()  # never receives
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    try:
+        async with aiohttp.ClientSession() as session:
+            ws = await http_context.ws_connect(
+                session, f"ws://127.0.0.1:{port}/", conn_options=_only("write", 0.2)
+            )
+            try:
+                with pytest.raises(APITimeoutError) as error:
+                    for _ in range(1024):
+                        await ws.send_bytes(bytes(1024 * 1024))
+                assert error.value.phase == "write"
+            finally:
+                await ws.close()  # its close frame is bounded by the same limit
+    finally:
+        await runner.cleanup()

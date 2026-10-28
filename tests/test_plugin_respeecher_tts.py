@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
 from livekit.plugins.respeecher import TTS
 
 pytestmark = pytest.mark.plugin("respeecher")
@@ -65,11 +66,13 @@ async def test_changing_model_closes_the_idle_pooled_connection(closed: list[_Fa
     """An idle socket opened for the old model is closed, not left open until aclose()."""
     tts = TTS(api_key="test-key", model=EN)
 
-    old = await tts._pool.get(timeout=10.0)
+    old = await tts._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     tts._pool.put(old)  # finished with it: idle in the pool
 
     tts.update_options(model=UA)
-    new = await tts._pool.get(timeout=10.0)  # next acquisition drains the pool
+    new = await tts._pool.get(
+        conn_options=DEFAULT_API_CONNECT_OPTIONS
+    )  # next acquisition drains the pool
 
     assert new is not old
     assert new.model == UA, "the next connection must be opened for the new model"
@@ -81,14 +84,16 @@ async def test_changing_model_lets_an_in_use_connection_finish(closed: list[_Fak
     """A socket a stream is still using survives the change, and is closed once returned."""
     tts = TTS(api_key="test-key", model=EN)
 
-    in_use = await tts._pool.get(timeout=10.0)  # checked out, never returned yet
+    in_use = await tts._pool.get(
+        conn_options=DEFAULT_API_CONNECT_OPTIONS
+    )  # checked out, never returned yet
     tts.update_options(model=UA)
-    await tts._pool.get(timeout=10.0)
+    await tts._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     assert in_use not in closed, "changing the model severed a stream in flight"
 
     tts._pool.put(in_use)  # the stream finished with it
-    await tts._pool.get(timeout=10.0)
+    await tts._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert in_use in closed, "the returned old-model socket was never closed"
 
 
@@ -97,10 +102,10 @@ async def test_same_model_keeps_the_pooled_connection(closed: list[_FakeWS]) -> 
     """Re-setting the current model must not throw away a warm connection."""
     tts = TTS(api_key="test-key", model=EN)
 
-    warm = await tts._pool.get(timeout=10.0)
+    warm = await tts._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     tts._pool.put(warm)
 
     tts.update_options(model=EN)
 
-    assert await tts._pool.get(timeout=10.0) is warm
+    assert await tts._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS) is warm
     assert closed == []

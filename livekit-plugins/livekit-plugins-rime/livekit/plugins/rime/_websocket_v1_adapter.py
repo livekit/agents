@@ -104,13 +104,13 @@ class WebSocketV1Adapter:
     def _new_pool(self) -> _Pool:
         websocket_v1_url = self._websocket_v1_url
 
-        async def _connect(timeout: float | None) -> _websocket_v1.Connection:
+        async def _connect(conn_options: APIConnectOptions) -> _websocket_v1.Connection:
             return await _websocket_v1.connect(
                 self._ensure_session(),
                 websocket_url=websocket_v1_url,
                 api_key=self._api_key,
                 protocol=self._websocket_protocol,
-                timeout=timeout,
+                conn_options=conn_options,
                 allow_custom_endpoint=self._allow_custom_endpoint,
             )
 
@@ -231,9 +231,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
             language=self._options.language,
         )
 
-        connection = await self._pool.get(
-            timeout=self._conn_options.connect_timeout, pool_timeout=self._conn_options.pool_timeout
-        )
+        connection = await self._pool.get(conn_options=self._conn_options)
         reusable = False
         try:
             result = await _websocket_v1.run_context(

@@ -287,9 +287,8 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
-            return await asyncio.wait_for(
-                self._session.ws_connect(self._stt._base_url),
-                self._conn_options.connect_timeout,
+            return await utils.http_context.ws_connect(
+                self._session, self._stt._base_url, conn_options=self._conn_options
             )
         except (
             aiohttp.ClientConnectorError,

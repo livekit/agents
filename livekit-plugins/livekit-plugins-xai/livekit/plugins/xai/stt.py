@@ -445,18 +445,17 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(self._opts.keyterm):
             params.extend(("keyterm", term) for term in self._opts.keyterm)
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    XAI_WEBSOCKET_URL,
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    params=params,
-                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
-                    # is never noticed: recv_task parks on ws.receive() forever, and the
-                    # retry in _main_task only runs when something raises. Matches the
-                    # Deepgram and Muse STT plugins.
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                XAI_WEBSOCKET_URL,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                params=params,
+                # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                # is never noticed: recv_task parks on ws.receive() forever, and the
+                # retry in _main_task only runs when something raises. Matches the
+                # Deepgram and Muse STT plugins.
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to xAI") from None

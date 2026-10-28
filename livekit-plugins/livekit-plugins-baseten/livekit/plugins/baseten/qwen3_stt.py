@@ -265,12 +265,11 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
 
     async def _run(self) -> None:
         try:
-            ws = await asyncio.wait_for(
-                self._backend._ensure_session().ws_connect(
-                    self._backend._model_endpoint,
-                    headers={"Authorization": f"Api-Key {self._backend._api_key}"},
-                ),
-                timeout=self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._backend._ensure_session(),
+                self._backend._model_endpoint,
+                headers={"Authorization": f"Api-Key {self._backend._api_key}"},
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -278,6 +277,8 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APITimeoutError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 

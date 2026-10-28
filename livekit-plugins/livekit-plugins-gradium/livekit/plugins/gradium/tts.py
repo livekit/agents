@@ -119,13 +119,12 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                self._model_endpoint,
-                headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
-            ),
-            timeout,
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
+        return await utils.http_context.ws_connect(
+            self._ensure_session(),
+            self._model_endpoint,
+            headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
+            conn_options=conn_options,
         )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:

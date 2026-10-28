@@ -621,13 +621,12 @@ class SpeechStreamv2(stt.SpeechStream):
         live_config = self._live_config()
 
         try:
-            ws = await asyncio.wait_for(
-                self._session.ws_connect(
-                    _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
-                    headers={"Authorization": f"Token {self._api_key}"},
-                    heartbeat=30.0,
-                ),
-                self._conn_options.connect_timeout,
+            ws = await utils.http_context.ws_connect(
+                self._session,
+                _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
+                headers={"Authorization": f"Token {self._api_key}"},
+                heartbeat=30.0,
+                conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
             raise APIConnectionError("failed to connect to deepgram") from None

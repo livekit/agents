@@ -238,14 +238,14 @@ async def test_connection_pool_exclusively_checks_out_websockets(
     synth = TTS(api_key="test-key")
     pool = synth._pool_for(synth._opts)
 
-    first = await pool.get(timeout=1.0)
-    second = await pool.get(timeout=1.0)
+    first = await pool.get(conn_options=APIConnectOptions())
+    second = await pool.get(conn_options=APIConnectOptions())
     assert first is not second
     assert len(connected) == 2
 
     pool.put(first)
     pool.put(second)
-    reused = await pool.get(timeout=1.0)
+    reused = await pool.get(conn_options=APIConnectOptions())
     assert reused in {first, second}
     pool.put(reused)
     await synth.aclose()
@@ -391,7 +391,9 @@ async def test_stream_retry_uses_fresh_attempt_state(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
     synth = TTS(api_key="test-key")
     stream = synth.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=0.1)
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=0.1, read_timeout=0.1
+        )
     )
     stream.push_text("Hello.")
     stream.end_input()
@@ -438,7 +440,9 @@ async def test_stream_does_not_retry_after_partial_audio(
     monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
     synth = TTS(api_key="test-key")
     stream = synth.stream(
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=0.1)
+        conn_options=APIConnectOptions(
+            max_retry=3, retry_interval=0.0, connect_timeout=0.1, read_timeout=0.1
+        )
     )
     stream.push_text("Hello.")
     stream.end_input()
@@ -500,13 +504,17 @@ async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
     synth = TTS(api_key="test-key")
 
-    interrupted = synth.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+    interrupted = synth.stream(
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
+    )
     interrupted.push_text("First reply.")
     interrupted.end_input()
     await anext(interrupted)
     await asyncio.wait_for(interrupted.aclose(), timeout=0.5)
 
-    completed = synth.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+    completed = synth.stream(
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
+    )
     completed.push_text("Second reply.")
     completed.end_input()
     frames = [event.frame async for event in completed]
@@ -556,7 +564,10 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
 
     http_session = FakeSession()
     synth = TTS(api_key="test-key", http_session=http_session)  # type: ignore[arg-type]
-    stream = synth.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.25))
+    stream = synth.synthesize(
+        "Hello.",
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.25, read_timeout=0.25),
+    )
 
     frames = [event.frame async for event in stream]
     assert frames
@@ -600,7 +611,10 @@ async def test_http_stream_rejects_non_audio_success_response() -> None:
             return FakeResponse()
 
     synth = TTS(api_key="test-key", http_session=FakeSession())  # type: ignore[arg-type]
-    stream = synth.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.25))
+    stream = synth.synthesize(
+        "Hello.",
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.25, read_timeout=0.25),
+    )
 
     with pytest.raises(APIStatusError, match="non-audio") as exc_info:
         async for _ in stream:

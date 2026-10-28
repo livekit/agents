@@ -211,19 +211,18 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Cartesia"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
         try:
-            ws = await asyncio.wait_for(
-                session.ws_connect(
-                    url,
-                    headers={
-                        "User-Agent": USER_AGENT,
-                        API_AUTH_HEADER: self._opts.api_key,
-                    },
-                ),
-                timeout,
+            ws = await utils.http_context.ws_connect(
+                session,
+                url,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    API_AUTH_HEADER: self._opts.api_key,
+                },
+                conn_options=conn_options,
             )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -548,10 +547,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         cartesia_context_id = utils.shortuuid()
         try:
-            async with self._tts._pool.connection(
-                timeout=self._conn_options.connect_timeout,
-                pool_timeout=self._conn_options.pool_timeout,
-            ) as ws:
+            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
