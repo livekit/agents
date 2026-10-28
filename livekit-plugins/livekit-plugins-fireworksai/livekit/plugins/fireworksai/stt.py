@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -41,12 +42,33 @@ from .log import logger
 _STREAMING_PATH = "/audio/transcriptions/streaming"
 
 
+class _Word(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    word: str = ""
+    is_final: bool = False
+
+
+class _Segment(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    id: int
+    text: str
+    words: list[_Word] = Field(default_factory=list[_Word])
+
+
+class _StreamEvent(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    segments: list[_Segment] = Field(default_factory=list[_Segment])
+
+
 class _PeriodicCollector:
     def __init__(self, duration: float, callback: Callable[[float], None]):
         self._duration = duration
         self._callback = callback
         self._collected_value = 0.0
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
     async def push(self, value: float) -> None:
@@ -85,7 +107,7 @@ class STTOptions:
     prompt: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     skip_vad: NotGivenOr[bool] = NOT_GIVEN
-    vad_kwargs: NotGivenOr[dict] = NOT_GIVEN
+    vad_kwargs: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN
     text_timeout_seconds: float = 1.0
     response_format: str = "verbose_json"
     timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN
@@ -103,7 +125,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
-        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         text_timeout_seconds: float = 1.0,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
         response_format: str = "verbose_json",
@@ -223,7 +245,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
-        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -276,7 +298,7 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._api_key = api_key
         self._session = http_session
-        self._transcript_state: dict[str, str] = {}
+        self._transcript_state: dict[int, str] = {}
         self._reconnect_event = asyncio.Event()
         self._speaking = False
         self._final_segments_length: dict[int, int] = {}
@@ -294,7 +316,7 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         skip_vad: NotGivenOr[bool] = NOT_GIVEN,
-        vad_kwargs: NotGivenOr[dict] = NOT_GIVEN,
+        vad_kwargs: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         text_timeout_seconds: NotGivenOr[float] = NOT_GIVEN,
         timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -449,27 +471,28 @@ class SpeechStream(stt.SpeechStream):
         logger.info("connected to Fireworks AI STT")
         return ws
 
-    def _process_stream_event(self, data: dict) -> None:
-        if "segments" in data and data["segments"]:
-            latest_segment = max(data["segments"], key=lambda s: s["id"])
-            max_segment_id = latest_segment["id"]
+    def _process_stream_event(self, data: object) -> None:
+        event = _StreamEvent.model_validate(data)
+        if event.segments:
+            latest_segment = max(event.segments, key=lambda segment: segment.id)
+            max_segment_id = latest_segment.id
 
-            for segment in data["segments"]:
-                segment_id = segment["id"]
+            for segment in event.segments:
+                segment_id = segment.id
                 if segment_id < self._last_final_segment_id:
                     continue
 
                 if segment_id == self._last_final_segment_id:
                     finalized_word_count = self._final_segments_length.get(segment_id, 0)
-                    words = segment.get("words", [])
-                    if isinstance(words, list) and finalized_word_count < len(words):
+                    words = segment.words
+                    if finalized_word_count < len(words):
                         new_words = words[finalized_word_count:]
-                        new_text = " ".join(w["word"] for w in new_words if "word" in w).strip()
+                        new_text = " ".join(word.word for word in new_words).strip()
                         self._transcript_state[segment_id] = new_text
                     elif segment_id in self._transcript_state:
                         del self._transcript_state[segment_id]
                 else:
-                    self._transcript_state[segment["id"]] = segment["text"]
+                    self._transcript_state[segment.id] = segment.text
 
             for local_segment_id in list(self._transcript_state.keys()):
                 if local_segment_id > max_segment_id:
@@ -477,7 +500,7 @@ class SpeechStream(stt.SpeechStream):
 
             # The state dictionary may not be sorted, so we must sort it by the segment ID
             # before joining the text.
-            sorted_segments = sorted(self._transcript_state.items(), key=lambda item: int(item[0]))
+            sorted_segments = sorted(self._transcript_state.items(), key=lambda item: item[0])
             full_transcript = " ".join([text for _, text in sorted_segments])
 
             if not full_transcript:
@@ -489,10 +512,10 @@ class SpeechStream(stt.SpeechStream):
                 self.send(start_event)
 
             is_final = False
-            words = latest_segment.get("words")
-            if words and isinstance(words, list) and words:
+            words = latest_segment.words
+            if words:
                 last_word = words[-1]
-                if isinstance(last_word, dict) and last_word.get("is_final") is True:
+                if last_word.is_final:
                     is_final = True
 
             if is_final:
@@ -507,9 +530,8 @@ class SpeechStream(stt.SpeechStream):
                 self.send(final_event)
                 self._transcript_state.clear()
                 self._last_final_segment_id = max_segment_id
-                words = latest_segment.get("words")
-                if isinstance(words, list):
-                    self._final_segments_length[max_segment_id] = len(words)
+                words = latest_segment.words
+                self._final_segments_length[max_segment_id] = len(words)
             else:
                 interim_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.INTERIM_TRANSCRIPT,

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 from livekit.agents import (
@@ -55,6 +56,27 @@ WS_ENDPOINT = "stt/v1/transcribe:streamBidirectional"
 # assemblyai/universal-streaming-multilingual, soniox/stt-rt-v4, etc.).
 # No validation is done here — pass any model string through so new models work
 # without a plugin update.
+
+
+class _Transcription(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    transcript: str = ""
+    is_final: bool = Field(default=False, alias="isFinal")
+    voice_profile: object = Field(default=None, alias="voiceProfile")
+
+
+class _TranscriptionResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    speech_started: object = Field(default=None, alias="speechStarted")
+    transcription: _Transcription | None = None
+
+
+class _StreamEvent(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    result: _TranscriptionResult = Field(default_factory=_TranscriptionResult)
 
 
 @dataclass
@@ -240,9 +262,9 @@ class SpeechStream(stt.SpeechStream):
             self._stt._http_session = utils.http_context.http_session()
         return self._stt._http_session
 
-    def _build_transcribe_config(self) -> dict:
+    def _build_transcribe_config(self) -> dict[str, object]:
         opts = self._stt._opts
-        config: dict = {
+        config: dict[str, object] = {
             "modelId": opts.model,
             "audioEncoding": "LINEAR16",
             "sampleRateHertz": opts.sample_rate,
@@ -258,7 +280,7 @@ class SpeechStream(stt.SpeechStream):
 
         config["endOfTurnConfidenceThreshold"] = opts.end_of_turn_confidence_threshold
 
-        inworld_v1_config: dict = {
+        inworld_v1_config: dict[str, object] = {
             "minEndOfTurnSilenceWhenConfident": opts.min_end_of_turn_silence_when_confident,
         }
         if utils.is_given(opts.vad_threshold):
@@ -402,10 +424,10 @@ class SpeechStream(stt.SpeechStream):
             logger.error(f"Unexpected error receiving messages: {e}")
             raise
 
-    def _process_stream_event(self, data: dict) -> None:
-        result = data.get("result", {})
+    def _process_stream_event(self, data: object) -> None:
+        result = _StreamEvent.model_validate(data).result
 
-        if "speechStarted" in result and not self._speaking:
+        if "speech_started" in result.model_fields_set and not self._speaking:
             self._speaking = True
             self.send(
                 stt.SpeechEvent(
@@ -415,13 +437,13 @@ class SpeechStream(stt.SpeechStream):
             )
             return
 
-        t = result.get("transcription", {})
+        t = result.transcription
         if not t:
             return
 
-        text = t.get("transcript", "")
-        is_final = t.get("isFinal", False)
-        voice_profile = t.get("voiceProfile")
+        text = t.transcript
+        is_final = t.is_final
+        voice_profile = t.voice_profile
 
         # An empty-text final (VAD false positive, unrecognizable noise) must still
         # reach the END_OF_SPEECH emission below — otherwise _speaking stays True

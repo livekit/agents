@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Generic, TypeVar
 from urllib.parse import urlencode
 
@@ -38,25 +38,25 @@ class PeriodicCollector(Generic[T]):
         self._last_flush_time = time.monotonic()
 
 
-def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
-    # don't modify the original opts
-    opts = opts.copy()
-    if opts.get("keywords"):
-        # convert keywords to a list of "keyword:intensifier"
-        opts["keywords"] = [
-            f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
-        ]
-    if opts.get("replace"):
-        # convert replace dict to a list of "term:replacement"
-        # https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-replace
-        opts["replace"] = [f"{term}:{replacement}" for term, replacement in opts["replace"].items()]
-
-    # lowercase bools
-    opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}
+def _to_deepgram_url(
+    opts: Mapping[str, object],
+    base_url: str,
+    *,
+    websocket: bool,
+    keywords: Sequence[tuple[str, float]] | None = None,
+    replace: Mapping[str, str] | None = None,
+) -> str:
+    query = {
+        key: str(value).lower() if isinstance(value, bool) else value for key, value in opts.items()
+    }
+    if keywords:
+        query["keywords"] = [f"{keyword}:{intensifier}" for keyword, intensifier in keywords]
+    if replace:
+        query["replace"] = [f"{term}:{replacement}" for term, replacement in replace.items()]
 
     if websocket and base_url.startswith("http"):
         base_url = base_url.replace("http", "ws", 1)
 
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
-    return f"{base_url}?{urlencode(opts, doseq=True)}"
+    return f"{base_url}?{urlencode(query, doseq=True)}"

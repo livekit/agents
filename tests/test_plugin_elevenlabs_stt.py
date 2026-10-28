@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock, patch
 
 import aiohttp
 import pytest
@@ -44,8 +45,7 @@ def _new_stream(
     secondary_languages: list[str] | Any = NOT_GIVEN,
 ) -> elevenlabs_stt.SpeechStream:
     # mirrors what STT.__init__ stores: both language options are normalized on the way in
-    stream = object.__new__(elevenlabs_stt.SpeechStream)
-    stream._opts = elevenlabs_stt.STTOptions(
+    opts = elevenlabs_stt.STTOptions(
         model_id="scribe_v2_realtime",
         api_key="test-key",
         base_url=elevenlabs_stt.API_BASE_URL_V1,
@@ -63,11 +63,20 @@ def _new_stream(
         enable_logging=True,
         previous_text=None,
     )
-    stream._language = LanguageCode(language) if language else None
+
+    def do_not_start(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("asyncio.create_task", side_effect=do_not_start):
+        stream = elevenlabs_stt.SpeechStream(
+            stt=elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime"),
+            opts=opts,
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            language=LanguageCode(language) if language else None,
+            http_session=MagicMock(),
+        )
     stream._event_ch = _EventSink()
-    stream._speaking = False
-    stream._last_partial_text = ""
-    stream._start_time_offset = 0.0
     return stream
 
 
@@ -253,44 +262,30 @@ async def test_connect_ws_includes_enable_logging(enable_logging: bool, expected
     stream = _new_stream()
     stream._opts.enable_logging = enable_logging
 
-    class _ConnOptions:
-        timeout = 5.0
-
-    stream._conn_options = _ConnOptions()
-
-    captured: dict[str, object] = {}
-
-    class _FakeSession:
-        async def ws_connect(self, url: str, **kwargs: object) -> object:
-            captured["url"] = url
-            return object()
-
-    stream._session = _FakeSession()
-
-    await stream._connect_ws()
-
-    assert f"enable_logging={expected}" in captured["url"]
+    url = await _connect_ws_url(stream)
+    assert f"enable_logging={expected}" in url
 
 
 async def _connect_ws_url(stream: elevenlabs_stt.SpeechStream) -> str:
-    """Run _connect_ws against a fake session and return the realtime connect URL."""
+    """Capture the URL from a real local WebSocket handshake."""
+    captured: list[str] = []
 
-    class _ConnOptions:
-        timeout = 5.0
+    async def connect(request: web.Request) -> web.WebSocketResponse:
+        captured.append(request.raw_path)
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for _ in socket:
+            pass
+        return socket
 
-    stream._conn_options = _ConnOptions()
-
-    captured: dict[str, str] = {}
-
-    class _FakeSession:
-        async def ws_connect(self, url: str, **kwargs: object) -> object:
-            captured["url"] = url
-            return object()
-
-    stream._session = _FakeSession()
-
-    await stream._connect_ws()
-    return captured["url"]
+    app = web.Application()
+    app.router.add_get("/{path:.*}", connect)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        stream._opts.base_url = str(server.make_url("/")).rstrip("/")
+        stream._session = session
+        socket = await stream._connect_ws()
+        await socket.close()
+    return captured[0]
 
 
 async def test_connect_ws_includes_keyterms() -> None:

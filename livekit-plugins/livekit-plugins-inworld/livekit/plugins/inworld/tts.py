@@ -28,6 +28,7 @@ from typing import Any, Literal, cast, get_args
 from urllib.parse import urljoin
 
 import aiohttp
+from pydantic import TypeAdapter
 
 from livekit.agents import tokenize, tts, utils
 from livekit.agents._exceptions import (
@@ -74,13 +75,13 @@ DeliveryMode = Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREAT
 DEFAULT_TIMESTAMP_TRANSPORT_STRATEGY: TimestampTransportStrategy = "ASYNC"
 
 
-def _validate_str_param(value: object, name: str, literal_type: Any) -> None:
+def _validate_str_param(value: object, name: str, literal_type: object) -> None:
     valid = get_args(literal_type)
     if not isinstance(value, str) or value not in valid:
         raise ValueError(f"Invalid {name}: {value!r}. Must be one of {sorted(valid)}")
 
 
-def _resolve_text_normalization(value: Any) -> _TextNormalizationStr:
+def _resolve_text_normalization(value: object) -> _TextNormalizationStr:
     if isinstance(value, bool):
         return "ON" if value else "OFF"
     _validate_str_param(value, "text_normalization", _TextNormalizationStr)
@@ -1139,7 +1140,7 @@ class TTS(tts.TTS):
             await self._pool.aclose()
             self._pool = None
 
-    async def list_voices(self, language: str | None = None) -> list[dict[str, Any]]:
+    async def list_voices(self, language: str | None = None) -> list[dict[str, object]]:
         """
         List all available voices in the workspace associated with the API key.
 
@@ -1147,7 +1148,7 @@ class TTS(tts.TTS):
             language (str, optional): ISO 639-1 language code to filter voices (e.g., 'en', 'es', 'fr').
         """
         url = urljoin(self._base_url, "tts/v1/voices")
-        params = {}
+        params: dict[str, str] = {}
         if language:
             params["filter"] = f"language={language}"
 
@@ -1170,7 +1171,7 @@ class TTS(tts.TTS):
                 )
 
             data = await resp.json()
-            return cast(list[dict[str, Any]], data.get("voices", []))
+            return TypeAdapter(list[dict[str, object]]).validate_python(data.get("voices", []))
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -1180,6 +1181,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        x_request_id = str(uuid.uuid4())
         try:
             audio_config: dict[str, Any] = {
                 "audioEncoding": self._opts.encoding,
@@ -1205,7 +1207,6 @@ class ChunkedStream(tts.ChunkedStream):
                 body_params["deliveryMode"] = self._opts.delivery_mode
             body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
-            x_request_id = str(uuid.uuid4())
             async with utils.http_context.request(
                 self._tts._ensure_session(),
                 "POST",

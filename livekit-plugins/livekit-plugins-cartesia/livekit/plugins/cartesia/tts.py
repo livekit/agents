@@ -586,7 +586,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         voice["embedding"] = opts.voice
 
     if opts.api_version == API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS:
-        voice_controls: dict = {}
+        voice_controls: dict[str, float | str | list[str]] = {}
         if opts.speed:
             voice_controls["speed"] = opts.speed
 

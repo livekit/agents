@@ -22,10 +22,11 @@ import os
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import urlencode
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -44,6 +45,35 @@ from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
+
+
+class _Word(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    confidence: float = 0.0
+
+
+class _StreamEvent(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str
+    id: str | None = None
+    expires_at: int | None = None
+    timestamp: float | None = None
+    audio_duration_seconds: float | None = None
+    session_duration_seconds: float | None = None
+    words: list[_Word] = Field(default_factory=list[_Word])
+    end_of_turn: bool = False
+    end_of_turn_confidence: float | None = None
+    turn_is_formatted: bool = False
+    utterance: str = ""
+    transcript: str = ""
+    language_code: str = "en"
+    language_confidence: float | None = None
+    speaker_label: str | None = None
 
 
 @dataclass
@@ -556,7 +586,7 @@ class SpeechStream(stt.SpeechStream):
         self._base_url = base_url
         self._speech_duration: float = 0
         self._last_preflight_start_time: float = 0
-        self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._config_update_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
         self._last_frame_sent_at: float | None = None
@@ -635,7 +665,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.interruption_delay = interruption_delay
 
         # Send UpdateConfiguration message over the active websocket
-        config_msg: dict = {"type": "UpdateConfiguration"}
+        config_msg: dict[str, object] = {"type": "UpdateConfiguration"}
         if is_given(prompt):
             config_msg["prompt"] = prompt
         if is_given(agent_context):
@@ -899,17 +929,17 @@ class SpeechStream(stt.SpeechStream):
             self._session, url, headers=headers, conn_options=self._conn_options
         )
         logger.debug(
-            "AssemblyAI WebSocket connected status=%s",
-            ws._response.status if ws._response is not None else None,
+            "AssemblyAI WebSocket connected",
         )
         return ws
 
-    def _process_stream_event(self, data: dict) -> None:
-        message_type = data.get("type")
+    def _process_stream_event(self, data: object) -> None:
+        event = _StreamEvent.model_validate(data)
+        message_type = event.type
 
         if message_type == "Begin":
-            self._session_id = data.get("id")
-            self._expires_at = data.get("expires_at")
+            self._session_id = event.id
+            self._expires_at = event.expires_at
             logger.info(
                 "AssemblyAI session started id=%s expires_at=%s",
                 self._session_id,
@@ -923,7 +953,7 @@ class SpeechStream(stt.SpeechStream):
             # relative ms. Convert to wall-clock by adding self.start_time
             # (the stream's wall-clock anchor) so the framework records an
             # accurate _speech_start_time instead of message arrival.
-            timestamp_ms = data.get("timestamp")
+            timestamp_ms = event.timestamp
             speech_start_time: float | None = None
             if timestamp_ms is not None:
                 speech_start_time = self.start_time + timestamp_ms / 1000
@@ -936,8 +966,8 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "Termination":
-            audio_duration = data.get("audio_duration_seconds")
-            session_duration = data.get("session_duration_seconds")
+            audio_duration = event.audio_duration_seconds
+            session_duration = event.session_duration_seconds
             logger.debug(
                 "AssemblyAI session terminated session=%s audio_duration=%ss session_duration=%ss",
                 self._session_id,
@@ -953,17 +983,17 @@ class SpeechStream(stt.SpeechStream):
                 self._session_id,
             )
             return
-        words = data.get("words", [])
-        end_of_turn = data.get("end_of_turn", False)
-        end_of_turn_confidence = data.get("end_of_turn_confidence")
-        turn_is_formatted = data.get("turn_is_formatted", False)
-        utterance = data.get("utterance", "")
-        transcript = data.get("transcript", "")
-        language = LanguageCode(data.get("language_code", "en"))
-        language_confidence = data.get("language_confidence")
+        words = event.words
+        end_of_turn = event.end_of_turn
+        end_of_turn_confidence = event.end_of_turn_confidence
+        turn_is_formatted = event.turn_is_formatted
+        utterance = event.utterance
+        transcript = event.transcript
+        language = LanguageCode(event.language_code)
+        language_confidence = event.language_confidence
 
         # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
-        speaker_label = data.get("speaker_label")
+        speaker_label = event.speaker_label
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
 
         # Surface the server's per-turn scores on SpeechData.metadata, reachable
@@ -984,7 +1014,7 @@ class SpeechStream(stt.SpeechStream):
         # the `language_code` on the same message. The confidence score for the detected
         # language, between 0 (low confidence) and 1 (high confidence). Only populated when
         # language detection is enabled and an utterance is complete or turn is final.
-        turn_metadata: dict[str, Any] = {}
+        turn_metadata: dict[str, float] = {}
         if end_of_turn_confidence is not None:
             turn_metadata["end_of_turn_confidence"] = end_of_turn_confidence
         if language_confidence is not None:
@@ -1000,11 +1030,11 @@ class SpeechStream(stt.SpeechStream):
         # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
         timed_words: list[TimedString] = [
             TimedString(
-                text=word.get("text", ""),
-                start_time=word.get("start", 0) / 1000 + self.start_time_offset,
-                end_time=word.get("end", 0) / 1000 + self.start_time_offset,
+                text=word.text,
+                start_time=word.start / 1000 + self.start_time_offset,
+                end_time=word.end / 1000 + self.start_time_offset,
                 start_time_offset=self.start_time_offset,
-                confidence=word.get("confidence", 0),
+                confidence=word.confidence,
             )
             for word in words
         ]
@@ -1102,8 +1132,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
             if words:
-                first_word_start = words[0].get("start", 0)
-                last_word_end = words[-1].get("end", 0)
+                first_word_start = words[0].start
+                last_word_end = words[-1].end
                 logger.debug(
                     "turn speech_duration=%.3fs session=%s (from word timestamps)",
                     (last_word_end - first_word_start) / 1000,

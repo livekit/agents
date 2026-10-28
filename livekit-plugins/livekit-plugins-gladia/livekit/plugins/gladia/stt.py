@@ -47,7 +47,14 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector
 from .log import logger
-from .models import GladiaModels
+from .models import (
+    GladiaModels,
+    LiveSession,
+    StreamMessage,
+    TranscriptionUtterance,
+    TranscriptMessage,
+    TranslationMessage,
+)
 from .version import __version__
 
 BASE_URL = "https://api.gladia.io/v2/live"
@@ -132,7 +139,7 @@ class STTOptions:
         default_factory=TranslationConfiguration
     )
     energy_filter: AudioEnergyFilter | bool = False
-    custom_vocabulary: list[str | dict] | None = None
+    custom_vocabulary: list[str | dict[str, object]] | None = None
     custom_spelling: dict[str, list[str]] | None = None
     pre_processing: PreProcessingConfiguration = dataclasses.field(
         default_factory=PreProcessingConfiguration
@@ -229,7 +236,7 @@ class STT(stt.STT):
         translation_context_adaptation: bool = False,
         translation_context: str | None = None,
         translation_informal: bool = False,
-        custom_vocabulary: list[str | dict] | None = None,
+        custom_vocabulary: list[str | dict[str, object]] | None = None,
         custom_spelling: dict[str, list[str]] | None = None,
         pre_processing_audio_enhancer: bool = False,
         pre_processing_speech_threshold: float = 0.6,
@@ -359,8 +366,8 @@ class STT(stt.STT):
         try:
             # Initialize a session with Gladia
             session_response = await self._init_live_session(streaming_config, conn_options)
-            session_id = session_response["id"]
-            session_url = session_response["url"]
+            session_id = session_response.id
+            session_url = session_response.url
 
             # Connect to the WebSocket
             receive_timeout = conn_options.read_timeout
@@ -389,28 +396,23 @@ class STT(stt.STT):
                 await ws.send_str(json.dumps({"type": "stop_recording"}))
 
                 # Wait for final transcript
-                utterances = []
+                utterances: list[TranscriptionUtterance] = []
 
                 # Receive messages until we get the post_final_transcript message
                 try:
                     # Set a timeout for waiting for the final results after sending stop_recording
                     async for msg in ws:
                         if msg.type == aiohttp.WSMsgType.TEXT:
-                            data = json.loads(msg.data)
-                            # Collect final utterances
-                            if data["type"] == "transcript" and data["data"]["is_final"]:
-                                utterance = data["data"]["utterance"]
-                                utterances.append(utterance)
-                            # Check for translation as the final result if enabled
-                            elif (
-                                data["type"] == "translation" and config.translation_config.enabled
-                            ):
-                                pass
-                            elif data["type"] == "post_final_transcript":
+                            message = StreamMessage.model_validate_json(msg.data)
+                            if message.type == "transcript":
+                                transcript = TranscriptMessage.model_validate(message.data)
+                                if transcript.is_final:
+                                    utterances.append(transcript.utterance)
+                            elif message.type == "post_final_transcript":
                                 break
-                            elif data["type"] == "error":
+                            elif message.type == "error":
                                 raise APIConnectionError(
-                                    f"Gladia WebSocket error: {data.get('data')}"
+                                    f"Gladia WebSocket error: {message.data}"
                                 ) from None
 
                         elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -454,7 +456,7 @@ class STT(stt.STT):
                 message=e.message,
                 status_code=e.status,
                 request_id=e.headers.get("X-Request-ID") if e.headers else None,
-                body=await e.response.text() if hasattr(e, "response") else None,
+                body=None,
             ) from e
         except aiohttp.ClientError as e:
             # General client errors (connection refused, DNS resolution etc.)
@@ -469,7 +471,9 @@ class STT(stt.STT):
             )  # Use logger.exception to include stack trace
             raise APIConnectionError(f"An unexpected error occurred: {e}") from e
 
-    async def _init_live_session(self, config: dict, conn_options: APIConnectOptions) -> dict:
+    async def _init_live_session(
+        self, config: dict[str, Any], conn_options: APIConnectOptions
+    ) -> LiveSession:
         """Initialize a live transcription session with Gladia."""
         try:
             url = f"{self._base_url}?{urlencode({'region': config['region']})}"
@@ -490,36 +494,36 @@ class STT(stt.STT):
                         request_id=None,
                         body=await res.text(),
                     )
-                return await res.json()  # type: ignore
+                return LiveSession.model_validate(await res.json())
         except Exception as e:
             logger.exception(f"Failed to initialize Gladia session: {e}")
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
-        self, utterances: list[dict], session_id: str, languages: list[str] | None
+        self, utterances: list[TranscriptionUtterance], session_id: str, languages: list[str] | None
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
         alternatives = []
 
         # Process each utterance into a SpeechData object
         for utterance in utterances:
-            text = utterance.get("text", "").strip()
-            words = utterance.get("words", [])
+            text = utterance.text.strip()
+            words = utterance.words
             if text:
                 alternatives.append(
                     stt.SpeechData(
                         language=LanguageCode(
-                            utterance.get("language", languages[0] if languages else "en")
+                            utterance.language or (languages[0] if languages else "en")
                         ),
-                        start_time=utterance.get("start", 0),
-                        end_time=utterance.get("end", 0),
-                        confidence=utterance.get("confidence", 1.0),
+                        start_time=utterance.start,
+                        end_time=utterance.end,
+                        confidence=utterance.confidence,
                         text=text,
                         words=[
                             TimedString(
-                                text=word.get("word", ""),
-                                start_time=word.get("start", 0),
-                                end_time=word.get("end", 0),
+                                text=word.word,
+                                start_time=word.start,
+                                end_time=word.end,
                             )
                             for word in words
                         ],
@@ -586,7 +590,7 @@ class STT(stt.STT):
         translation_context_adaptation: bool | None = None,
         translation_context: str | None = None,
         translation_informal: bool | None = None,
-        custom_vocabulary: list[str | dict] | None = None,
+        custom_vocabulary: list[str | dict[str, object]] | None = None,
         custom_spelling: dict[str, list[str]] | None = None,
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
@@ -771,7 +775,7 @@ class SpeechStream(stt.SpeechStream):
         translation_context_adaptation: bool | None = None,
         translation_context: str | None = None,
         translation_informal: bool | None = None,
-        custom_vocabulary: list[str | dict] | None = None,
+        custom_vocabulary: list[str | dict[str, object]] | None = None,
         custom_spelling: dict[str, list[str]] | None = None,
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
@@ -871,8 +875,8 @@ class SpeechStream(stt.SpeechStream):
             try:
                 # Initialize the Gladia session
                 session_info = await self._init_live_session()
-                session_url = session_info["url"]
-                self._request_id = session_info["id"]
+                session_url = session_info.url
+                self._request_id = session_info.id
 
                 # Reset backoff on success
                 backoff_time = 1.0
@@ -917,7 +921,7 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     raise APIStatusError(f"Error in speech stream: {e}", retryable=True) from e
 
-    async def _init_live_session(self) -> dict:
+    async def _init_live_session(self) -> LiveSession:
         """Initialize a live session with Gladia."""
         streaming_config = _build_streaming_config(self._opts)
         try:
@@ -934,7 +938,7 @@ class SpeechStream(stt.SpeechStream):
                 conn_options=self._conn_options,
             ) as res:
                 res.raise_for_status()
-                return await res.json()  # type: ignore
+                return LiveSession.model_validate(await res.json())
 
         except Exception as e:
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
@@ -1023,13 +1027,15 @@ class SpeechStream(stt.SpeechStream):
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 
-    def _process_gladia_message(self, data: dict) -> None:
+    def _process_gladia_message(self, data: object) -> None:
         """Process messages from Gladia WebSocket."""
-        if data["type"] == "transcript":
-            is_final = data["data"]["is_final"]
-            utterance = data["data"]["utterance"]
-            text = utterance.get("text", "").strip()
-            words = utterance.get("words", [])
+        message = StreamMessage.model_validate(data)
+        if message.type == "transcript":
+            transcript = TranscriptMessage.model_validate(message.data)
+            is_final = transcript.is_final
+            utterance = transcript.utterance
+            text = utterance.text.strip()
+            words = utterance.words
 
             if not self._speaking and text:
                 self._speaking = True
@@ -1041,25 +1047,25 @@ class SpeechStream(stt.SpeechStream):
 
             if text:
                 language = LanguageCode(
-                    utterance.get(
-                        "language",
+                    utterance.language
+                    or (
                         self._opts.language_config.languages[0]
                         if self._opts.language_config.languages
-                        else "en",
+                        else "en"
                     )
                 )
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0) + self.start_time_offset,
-                    end_time=utterance.get("end", 0) + self.start_time_offset,
-                    confidence=utterance.get("confidence", 1.0),
+                    start_time=utterance.start + self.start_time_offset,
+                    end_time=utterance.end + self.start_time_offset,
+                    confidence=utterance.confidence,
                     text=text,
                     words=[
                         TimedString(
-                            text=word.get("word", ""),
-                            start_time=word.get("start", 0) + self.start_time_offset,
-                            end_time=word.get("end", 0) + self.start_time_offset,
+                            text=word.word,
+                            start_time=word.start + self.start_time_offset,
+                            end_time=word.end + self.start_time_offset,
                             start_time_offset=self.start_time_offset,
                         )
                         for word in words
@@ -1097,14 +1103,14 @@ class SpeechStream(stt.SpeechStream):
                     )
                     self.send(event)
 
-        elif data["type"] == "translation":
+        elif message.type == "translation":
             # Process translation messages according to Gladia's documentation:
             # https://docs.gladia.io/reference/realtime-messages/translation
-            if self._opts.translation_config.enabled and "data" in data:
-                translation_data = data["data"]
+            if self._opts.translation_config.enabled:
+                translation_data = TranslationMessage.model_validate(message.data)
 
                 # Extract translated utterance
-                translated_utterance = translation_data.get("translated_utterance", {})
+                translated_utterance = translation_data.translated_utterance
                 if not translated_utterance:
                     logger.warning(
                         "No translated_utterance in translation message",
@@ -1113,17 +1119,17 @@ class SpeechStream(stt.SpeechStream):
                     return
 
                 # Get language information
-                target_language = translation_data.get("target_language", "")
-                language = translated_utterance.get("language", target_language)
+                target_language = translation_data.target_language
+                language = LanguageCode(translated_utterance.language or target_language)
 
                 # Get original/input language and text from the original utterance
-                original_utterance = translation_data.get("utterance", {})
-                original_language = original_utterance.get("language", "")
-                original_text = original_utterance.get("text", "") or None
+                original_utterance = translation_data.utterance
+                original_language = original_utterance.language
+                original_text = original_utterance.text or None
 
                 # Get the translated text
-                translated_text = translated_utterance.get("text", "").strip()
-                words = translated_utterance.get("words", [])
+                translated_text = translated_utterance.text.strip()
+                words = translated_utterance.words
 
                 if translated_text and language:
                     # Create speech data for the translation
@@ -1133,15 +1139,15 @@ class SpeechStream(stt.SpeechStream):
                         if original_language
                         else None,
                         source_texts=[original_text or ""] if original_language else None,
-                        start_time=translated_utterance.get("start", 0) + self.start_time_offset,
-                        end_time=translated_utterance.get("end", 0) + self.start_time_offset,
-                        confidence=translated_utterance.get("confidence", 1.0),
+                        start_time=translated_utterance.start + self.start_time_offset,
+                        end_time=translated_utterance.end + self.start_time_offset,
+                        confidence=translated_utterance.confidence,
                         text=translated_text,  # Use the translated text
                         words=[
                             TimedString(
-                                text=word.get("word", ""),
-                                start_time=word.get("start", 0) + self.start_time_offset,
-                                end_time=word.get("end", 0) + self.start_time_offset,
+                                text=word.word,
+                                start_time=word.start + self.start_time_offset,
+                                end_time=word.end + self.start_time_offset,
                                 start_time_offset=self.start_time_offset,
                             )
                             for word in words
@@ -1165,7 +1171,7 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
 
-        elif data["type"] == "post_final_transcript":
+        elif message.type == "post_final_transcript":
             # This is sent at the end of a session
             # We now tie END_OF_SPEECH to the emission of the relevant FINAL_TRANSCRIPT
             # (either original if no translation, or translated if translation is enabled).

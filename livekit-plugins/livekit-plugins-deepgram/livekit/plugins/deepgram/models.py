@@ -1,5 +1,7 @@
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 DeepgramModels = Literal[
     "nova-general",
     "nova-phonecall",
@@ -150,3 +152,69 @@ TTSModels = Literal[
 # documented example and kept open via `FluxTTSModels | str` so new voices
 # work without a code change.
 FluxTTSModels = Literal["flux-alexis-en"]
+
+
+class TranscriptionWord(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    word: str = ""
+    punctuated_word: str | None = None
+    start: float = 0.0
+    end: float = 0.0
+    confidence: float | None = None
+    speaker: int | None = None
+
+
+class TranscriptionAlternative(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    transcript: str
+    confidence: float
+    words: list[TranscriptionWord] = Field(default_factory=list[TranscriptionWord])
+    languages: list[str] = Field(default_factory=list[str])
+
+
+class TranscriptionChannel(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    alternatives: list[TranscriptionAlternative] = Field(
+        default_factory=list[TranscriptionAlternative]
+    )
+    detected_language: str = ""
+
+
+class TranscriptionMetadata(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    request_id: str = ""
+
+
+class TranscriptionResults(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    channels: list[TranscriptionChannel] = Field(default_factory=list[TranscriptionChannel])
+
+
+class TranscriptionResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str = ""
+    metadata: TranscriptionMetadata = Field(default_factory=TranscriptionMetadata)
+    channel: TranscriptionChannel = Field(default_factory=TranscriptionChannel)
+    results: TranscriptionResults = Field(default_factory=TranscriptionResults)
+    is_final: bool = False
+    speech_final: bool = False
+
+
+class FluxResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str = ""
+    request_id: str | None = None
+    event: str = ""
+    transcript: str = ""
+    words: list[TranscriptionWord] = Field(default_factory=list[TranscriptionWord])
+    languages: list[str] = Field(default_factory=list[str])
+    audio_window_start: float = 0.0
+    audio_window_end: float = 0.0
+    description: str | None = None

@@ -20,6 +20,7 @@ import json
 import math
 import os
 import weakref
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote
@@ -44,13 +45,13 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
-from .models import STTRealtimeSampleRates
+from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWord
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
 
 
-def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
+def _speech_confidence(words: Sequence[object] | None) -> float:
     """Aggregate ElevenLabs per-word logprobs into a [0, 1] transcription confidence.
 
     Scribe returns a natural-log probability (``logprob``) per token; we average the
@@ -59,10 +60,9 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
     """
     if not words:
         return 0.0
+    parsed_words = (STTWord.model_validate(word) for word in words)
     logprobs = [
-        w["logprob"]
-        for w in words
-        if w.get("type") == "word" and isinstance(w.get("logprob"), (int, float))
+        word.logprob for word in parsed_words if word.type == "word" and word.logprob is not None
     ]
     if not logprobs:
         return 0.0
@@ -321,16 +321,16 @@ class STT(stt.STT):
                         request_id=trace_id_from_headers(response.headers),
                         body=body,
                     )
-                response_json = await response.json()
-                extracted_text = response_json.get("text")
-                language_code = response_json.get("language_code")
+                response_data = STTBatchResponse.model_validate(await response.json())
+                extracted_text = response_data.text
+                language_code = response_data.language_code
                 speaker_id = None
-                start_time, end_time = 0, 0
-                words = response_json.get("words")
+                start_time, end_time = 0.0, 0.0
+                words = response_data.words
                 if words:
-                    speaker_id = words[0].get("speaker_id", None)
-                    start_time = min(w.get("start", 0) for w in words)
-                    end_time = max(w.get("end", 0) for w in words)
+                    speaker_id = words[0].speaker_id
+                    start_time = min(word.start for word in words)
+                    end_time = max(word.end for word in words)
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -363,7 +363,7 @@ class STT(stt.STT):
         start_time: float,
         end_time: float,
         speaker_id: str | None,
-        words: list[dict[str, Any]] | None = None,
+        words: list[STTWord] | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
@@ -377,9 +377,9 @@ class STT(stt.STT):
                     confidence=_speech_confidence(words),
                     words=[
                         TimedString(
-                            text=word.get("text", ""),
-                            start_time=word.get("start", 0),
-                            end_time=word.get("end", 0),
+                            text=word.text,
+                            start_time=word.start,
+                            end_time=word.end,
                         )
                         for word in words
                     ]
@@ -756,14 +756,15 @@ class SpeechStream(stt.SpeechStream):
 
         return ws
 
-    def _process_stream_event(self, data: dict) -> None:
+    def _process_stream_event(self, data: object) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
-        message_type = data.get("message_type")
-        text = data.get("text", "")
-        words = data.get("words", [])
-        start_time = words[0].get("start", 0) if words else 0
-        end_time = words[-1].get("end", 0) if words else 0
-        language_code = data.get("language_code") or self._language
+        response = STTResponse.model_validate(data)
+        message_type = response.message_type
+        text = response.text
+        words = response.words or []
+        start_time = words[0].start if words else 0
+        end_time = words[-1].end if words else 0
+        language_code = response.language_code or self._language
 
         normalized_language = LanguageCode(language_code) if language_code else LanguageCode("en")
 
@@ -778,9 +779,9 @@ class SpeechStream(stt.SpeechStream):
         if words and self._opts.include_timestamps:
             speech_data.words = [
                 TimedString(
-                    text=word.get("text", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
+                    text=word.text,
+                    start_time=word.start + self.start_time_offset,
+                    end_time=word.end + self.start_time_offset,
                     start_time_offset=self.start_time_offset,
                 )
                 for word in words
@@ -839,7 +840,7 @@ class SpeechStream(stt.SpeechStream):
 
         elif message_type == "session_started":
             # Session initialization message - informational only
-            session_id = data.get("session_id", "unknown")
+            session_id = response.session_id
             logger.debug("Session started with ID: %s", session_id)
 
         # Error handling for known ElevenLabs error types
@@ -850,8 +851,8 @@ class SpeechStream(stt.SpeechStream):
             "input_error",
             "error",
         ):
-            error_msg = data.get("message", "Unknown error")
-            error_details = data.get("details", "")
+            error_msg = response.message
+            error_details = response.details
             details_suffix = " - " + error_details if error_details else ""
             logger.error(
                 "ElevenLabs STT error [%s]: %s%s",

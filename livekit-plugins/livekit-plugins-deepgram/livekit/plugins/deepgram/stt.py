@@ -23,7 +23,6 @@ import weakref
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
 
@@ -47,7 +46,7 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
-from .models import DeepgramLanguages, DeepgramModels
+from .models import DeepgramLanguages, DeepgramModels, TranscriptionResponse, TranscriptionWord
 
 
 @dataclass
@@ -248,12 +247,11 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
 
-        recognize_config = {
+        recognize_config: dict[str, object] = {
             "model": str(config.model),
             "punctuate": config.punctuate,
             "detect_language": config.detect_language,
             "smart_format": config.smart_format,
-            "keywords": self._opts.keywords,
             "profanity_filter": config.profanity_filter,
             "numerals": config.numerals,
             "mip_opt_out": config.mip_opt_out,
@@ -272,7 +270,12 @@ class STT(stt.STT):
             async with utils.http_context.request(
                 self._ensure_session(),
                 "POST",
-                url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
+                url=_to_deepgram_url(
+                    recognize_config,
+                    self._opts.endpoint_url,
+                    websocket=False,
+                    keywords=self._opts.keywords,
+                ),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
                     "Authorization": f"Token {self._api_key}",
@@ -744,7 +747,7 @@ class SpeechStream(stt.SpeechStream):
                         self._reported_duration = 0.0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        live_config: dict[str, Any] = {
+        live_config: dict[str, object] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
             "smart_format": self._opts.smart_format,
@@ -762,16 +765,12 @@ class SpeechStream(stt.SpeechStream):
         }
         if self._opts.enable_diarization:
             live_config["diarize"] = True
-        if self._opts.keywords:
-            live_config["keywords"] = self._opts.keywords
         if self._opts.keyterm:
             live_config["keyterm"] = self._opts.keyterm
         if self._opts.utterance_end_ms is not None:
             live_config["utterance_end_ms"] = self._opts.utterance_end_ms
         if self._opts.dictation:
             live_config["dictation"] = True
-        if self._opts.replace:
-            live_config["replace"] = self._opts.replace
         if self._opts.search:
             live_config["search"] = self._opts.search
 
@@ -786,7 +785,13 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await utils.http_context.ws_connect(
                 self._session,
-                _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
+                _to_deepgram_url(
+                    live_config,
+                    base_url=self._opts.endpoint_url,
+                    websocket=True,
+                    keywords=self._opts.keywords,
+                    replace=self._opts.replace,
+                ),
                 headers={"Authorization": f"Token {self._api_key}"},
                 # without this, a silently dropped socket (a half-open TCP
                 # connection, no FIN/RST) is never noticed: recv_task parks on
@@ -827,10 +832,11 @@ class SpeechStream(stt.SpeechStream):
         )
         self.send(usage_event)
 
-    def _process_stream_event(self, data: dict) -> None:
+    def _process_stream_event(self, data: object) -> None:
+        event = TranscriptionResponse.model_validate(data)
         assert self._opts.language is not None
 
-        if data["type"] == "SpeechStarted":
+        if event.type == "SpeechStarted":
             # This is a normal case. Deepgram's SpeechStarted events
             # are not correlated with speech_final or utterance end.
             # It's possible that we receive two in a row without an endpoint
@@ -845,16 +851,16 @@ class SpeechStream(stt.SpeechStream):
         # see this page:
         # https://developers.deepgram.com/docs/understand-endpointing-interim-results#using-endpointing-speech_final
         # for more information about the different types of events
-        elif data["type"] == "Results":
-            metadata = data["metadata"]
-            request_id = metadata["request_id"]
-            is_final_transcript = data["is_final"]
-            is_endpoint = data["speech_final"]
+        elif event.type == "Results":
+            metadata = event.metadata
+            request_id = metadata.request_id
+            is_final_transcript = event.is_final
+            is_endpoint = event.speech_final
             self._request_id = request_id
 
             alts = live_transcription_to_speech_data(
                 self._opts.language,
-                data,
+                event,
                 is_final=is_final_transcript,
                 start_time_offset=self.start_time_offset,
                 use_punctuated_word=self._opts.punctuate or self._opts.smart_format,
@@ -891,52 +897,54 @@ class SpeechStream(stt.SpeechStream):
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                 self._on_end_of_speech()
 
-        elif data["type"] == "UtteranceEnd":
+        elif event.type == "UtteranceEnd":
             # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
             # https://developers.deepgram.com/docs/understand-endpointing-interim-results
             if self._speaking:
                 self._speaking = False
                 self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                 self._on_end_of_speech()
-        elif data["type"] == "Metadata":
+        elif event.type == "Metadata":
             pass  # metadata is too noisy
         else:
             logger.warning("received unexpected message from deepgram", extra={"lk.pii.data": data})
 
 
-def _word_text(word: dict, *, use_punctuated_word: bool) -> str:
+def _word_text(word: object, *, use_punctuated_word: bool) -> str:
     """Return the word form matching the transcript the caller asked Deepgram for.
 
     Deepgram returns `word` (lowercase, unpunctuated) and, when the request formats the
     transcript, `punctuated_word` alongside it. `SpeechData.text` comes from
-    `alt["transcript"]`, so the word list follows the same formatting to stay consistent
+    `alt.transcript`, so the word list follows the same formatting to stay consistent
     with the text it belongs to.
 
     Both `punctuate` and `smart_format` produce a formatted transcript, so callers pass
     `punctuate or smart_format` rather than either alone. Falls back to `word` if the key
     is missing, which is what Deepgram sends when neither option is set.
     """
-    raw: str = word.get("word", "")
+    parsed_word = TranscriptionWord.model_validate(word)
+    raw = parsed_word.word
     if not use_punctuated_word:
         return raw
-    punctuated: str = word.get("punctuated_word") or raw
+    punctuated: str = parsed_word.punctuated_word or raw
     return punctuated
 
 
 def live_transcription_to_speech_data(
     language: str,
-    data: dict,
+    data: object,
     *,
     is_final: bool,
     start_time_offset: float,
     use_punctuated_word: bool = True,
 ) -> list[stt.SpeechData]:
-    dg_alts = data["channel"]["alternatives"]
+    response = TranscriptionResponse.model_validate(data)
+    dg_alts = response.channel.alternatives
 
     speech_data = []
     for alt in dg_alts:
         if is_final:
-            speakers = [word["speaker"] for word in alt["words"] if "speaker" in word]
+            speakers = [word.speaker for word in alt.words if word.speaker is not None]
             speaker = Counter(speakers).most_common(1)[0][0] if speakers else None
         else:
             # interim result doesn't have correct speaker information?
@@ -944,44 +952,45 @@ def live_transcription_to_speech_data(
 
         sd = stt.SpeechData(
             language=LanguageCode(language),
-            start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
-            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0) + start_time_offset,
-            confidence=alt["confidence"],
-            text=alt["transcript"],
+            start_time=next((word.start for word in alt.words), 0) + start_time_offset,
+            end_time=(alt.words[-1].end if alt.words else 0) + start_time_offset,
+            confidence=alt.confidence,
+            text=alt.transcript,
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
                     text=_word_text(word, use_punctuated_word=use_punctuated_word),
-                    start_time=word.get("start", 0) + start_time_offset,
-                    end_time=word.get("end", 0) + start_time_offset,
-                    confidence=word.get("confidence", NOT_GIVEN),
+                    start_time=word.start + start_time_offset,
+                    end_time=word.end + start_time_offset,
+                    confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
                     start_time_offset=start_time_offset,
                 )
-                for word in alt["words"]
+                for word in alt.words
             ]
-            if alt["words"]
+            if alt.words
             else None,
         )
-        if language == "multi" and "languages" in alt:
-            sd.language = LanguageCode(alt["languages"][0])  # TODO: handle multiple languages
+        if language == "multi" and alt.languages:
+            sd.language = LanguageCode(alt.languages[0])  # TODO: handle multiple languages
         speech_data.append(sd)
     return speech_data
 
 
 def prerecorded_transcription_to_speech_event(
     language: str | None,  # language should be None when 'detect_language' is enabled
-    data: dict,
+    data: object,
     *,
     use_punctuated_word: bool = True,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
-    request_id = data["metadata"]["request_id"]
-    channel: dict = data["results"]["channels"][0]
-    dg_alts = channel["alternatives"]
+    response = TranscriptionResponse.model_validate(data)
+    request_id = response.metadata.request_id
+    channel = response.results.channels[0]
+    dg_alts = channel.alternatives
 
     # Use the detected language if enabled
     # https://developers.deepgram.com/docs/language-detection
-    detected_language = LanguageCode(channel.get("detected_language", ""))
+    detected_language = LanguageCode(channel.detected_language)
 
     return stt.SpeechEvent(
         request_id=request_id,
@@ -989,18 +998,18 @@ def prerecorded_transcription_to_speech_event(
         alternatives=[
             stt.SpeechData(
                 language=LanguageCode(language or detected_language),
-                start_time=alt["words"][0]["start"] if alt["words"] else 0,
-                end_time=alt["words"][-1]["end"] if alt["words"] else 0,
-                confidence=alt["confidence"],
-                text=alt["transcript"],
+                start_time=alt.words[0].start if alt.words else 0,
+                end_time=alt.words[-1].end if alt.words else 0,
+                confidence=alt.confidence,
+                text=alt.transcript,
                 words=[
                     TimedString(
                         text=_word_text(word, use_punctuated_word=use_punctuated_word),
-                        start_time=word.get("start", 0),
-                        end_time=word.get("end", 0),
-                        confidence=word.get("confidence", NOT_GIVEN),
+                        start_time=word.start,
+                        end_time=word.end,
+                        confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
                     )
-                    for word in alt["words"]
+                    for word in alt.words
                 ],
             )
             for alt in dg_alts

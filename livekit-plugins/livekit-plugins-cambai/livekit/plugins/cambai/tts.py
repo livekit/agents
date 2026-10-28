@@ -55,7 +55,7 @@ class TTS(tts.TTS):
         *,
         api_key: str | None = None,
         base_url: str = API_BASE_URL,
-        credentials_info: NotGivenOr[dict] = NOT_GIVEN,  # Future Vertex AI
+        credentials_info: NotGivenOr[dict[str, object]] = NOT_GIVEN,  # Future Vertex AI
         credentials_file: NotGivenOr[str] = NOT_GIVEN,  # Future Vertex AI
         voice_id: int = DEFAULT_VOICE_ID,
         language: str = DEFAULT_LANGUAGE,
@@ -191,7 +191,7 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type = "audio/aac"
 
         # Build request payload
-        payload: dict = {
+        payload: dict[str, object] = {
             "text": self._input_text,
             "voice_id": self._opts.voice_id,
             "language": self._opts.language,

@@ -19,9 +19,9 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -47,7 +47,7 @@ class _TTSOptions:
     voice_id: str | None
     pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
-    json_config: dict[str, Any] | None = None
+    json_config: dict[str, JsonValue] | None = None
 
 
 class TTS(tts.TTS):
@@ -60,7 +60,7 @@ class TTS(tts.TTS):
         voice: str | None = None,
         voice_id: str | None = "4SZHfMpw-p46Ywgs",
         pronunciation_id: str | None = None,
-        json_config: dict[str, Any] | None = None,
+        json_config: dict[str, JsonValue] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
     ) -> None:
@@ -142,7 +142,7 @@ class TTS(tts.TTS):
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        json_config: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        json_config: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -204,7 +204,7 @@ class ChunkedStream(tts.ChunkedStream):
                     mime_type="audio/pcm",
                 )
 
-                setup_msg: dict[str, Any] = {
+                setup_msg: dict[str, JsonValue] = {
                     "type": "setup",
                     "model_name": self._model_name,
                     "output_format": "pcm",
@@ -328,7 +328,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            setup_msg: dict[str, Any] = {
+            setup_msg: dict[str, JsonValue] = {
                 "type": "setup",
                 "model_name": self._tts._model_name,
                 "output_format": "pcm",

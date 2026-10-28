@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 import aiohttp
+from pydantic import TypeAdapter
 
 from livekit import rtc
 from livekit.agents import (
@@ -102,6 +103,7 @@ def _string(event: dict[str, object], key: str, *, nonempty: bool = False) -> st
 def _provider_error(event: dict[str, object]) -> APIError:
     error = event.get("error")
     if isinstance(error, dict):
+        error = TypeAdapter(dict[str, object]).validate_python(error)
         status = error.get("status_code")
         if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
             return status_error("STT", status)
@@ -384,7 +386,7 @@ class SpeechStream(stt.RecognizeStream):
         if message.type != aiohttp.WSMsgType.TEXT or not isinstance(message.data, (str, bytes)):
             raise APIError("Microsoft AI STT expected a JSON text event", retryable=False)
         try:
-            event = json.loads(message.data)
+            event = TypeAdapter(dict[str, object]).validate_json(message.data)
         except (json.JSONDecodeError, UnicodeDecodeError):
             raise APIError("Microsoft AI STT sent malformed JSON", retryable=False) from None
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):

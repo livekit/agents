@@ -1,5 +1,7 @@
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 GladiaModels = Literal["solaria-1"]
 
 GladiaLanguages = Literal[
@@ -119,3 +121,51 @@ GladiaLanguages = Literal[
     "yo",
     "zu",
 ]
+
+
+class TranscriptionWord(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    word: str = ""
+    start: float = 0.0
+    end: float = 0.0
+
+
+class TranscriptionUtterance(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    text: str = ""
+    language: str | None = None
+    start: float = 0.0
+    end: float = 0.0
+    confidence: float = 1.0
+    words: list[TranscriptionWord] = Field(default_factory=list[TranscriptionWord])
+
+
+class TranscriptMessage(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    is_final: bool
+    utterance: TranscriptionUtterance
+
+
+class TranslationMessage(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    translated_utterance: TranscriptionUtterance | None = None
+    utterance: TranscriptionUtterance = Field(default_factory=TranscriptionUtterance)
+    target_language: str = ""
+
+
+class StreamMessage(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str
+    data: object = None
+
+
+class LiveSession(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    id: str
+    url: str

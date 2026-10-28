@@ -43,7 +43,7 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
-from .models import V2Models
+from .models import FluxResponse, V2Models
 
 FluxRedaction = Literal["numbers", "aggressive_numbers"]
 
@@ -659,7 +659,7 @@ class SpeechStreamv2(stt.SpeechStream):
         )
         self.send(usage_event)
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
+    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: object) -> None:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
             event = stt.SpeechEvent(
@@ -669,14 +669,15 @@ class SpeechStreamv2(stt.SpeechStream):
             )
             self.send(event)
 
-    def _process_stream_event(self, data: dict) -> None:
+    def _process_stream_event(self, data: object) -> None:
+        event = FluxResponse.model_validate(data)
         assert self._opts.language is not None
 
-        if request_id := data.get("request_id"):
+        if request_id := event.request_id:
             self._request_id = request_id
 
-        if data["type"] == "TurnInfo":
-            event_type = data["event"]
+        if event.type == "TurnInfo":
+            event_type = event.event
 
             if event_type == "StartOfTurn":
                 if self._speaking:
@@ -718,46 +719,47 @@ class SpeechStreamv2(stt.SpeechStream):
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self.send(end_event)
 
-        elif data["type"] == "ConfigureSuccess":
+        elif event.type == "ConfigureSuccess":
             logger.debug("deepgram applied Configure update", extra={"lk.pii.data": data})
 
-        elif data["type"] == "ConfigureFailure":
+        elif event.type == "ConfigureFailure":
             logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
 
-        elif data["type"] == "Error":
+        elif event.type == "Error":
             logger.warning("deepgram sent an error", extra={"lk.pii.data": data})
-            desc = data.get("description") or "unknown error from deepgram"
+            desc = event.description or "unknown error from deepgram"
             code = -1
             raise APIStatusError(message=desc, status_code=code)
 
 
 def _parse_transcription(
-    language: str, data: dict[str, Any], start_time_offset: float
+    language: str, data: object, start_time_offset: float
 ) -> list[stt.SpeechData]:
-    transcript = data.get("transcript")
-    words = data.get("words")
+    response = FluxResponse.model_validate(data)
+    transcript = response.transcript
+    words = response.words
     if not words:
         return []
-    confidence = sum(word["confidence"] for word in words) / len(words) if words else 0
+    confidence = sum((word.confidence or 0.0) for word in words) / len(words) if words else 0
 
-    detected_languages = data.get("languages") or []
+    detected_languages = response.languages
     primary_language = (
         LanguageCode(detected_languages[0]) if detected_languages else LanguageCode(language)
     )
 
     sd = stt.SpeechData(
         language=primary_language,
-        start_time=data.get("audio_window_start", 0) + start_time_offset,
-        end_time=data.get("audio_window_end", 0) + start_time_offset,
+        start_time=response.audio_window_start + start_time_offset,
+        end_time=response.audio_window_end + start_time_offset,
         confidence=confidence,
         text=transcript or "",
         source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
         words=[
             TimedString(
-                text=word.get("word", ""),
-                start_time=word.get("start", 0) + start_time_offset,
-                end_time=word.get("end", 0) + start_time_offset,
-                confidence=word["confidence"],
+                text=word.word,
+                start_time=word.start + start_time_offset,
+                end_time=word.end + start_time_offset,
+                confidence=(word.confidence or 0.0),
                 start_time_offset=start_time_offset,
             )
             for word in words

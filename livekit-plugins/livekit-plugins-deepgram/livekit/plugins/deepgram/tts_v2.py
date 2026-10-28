@@ -152,7 +152,7 @@ class TTSv2(tts.TTS):
         session = self._ensure_session()
         # Streaming only supports linear16 end-to-end, so bit_rate (compressed batch
         # output only) is intentionally not forwarded here.
-        config: dict = {
+        config: dict[str, str | float | int | bool] = {
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
@@ -265,7 +265,7 @@ class ChunkedStreamv2(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            http_params: dict = {
+            http_params: dict[str, str | float | int | bool] = {
                 "encoding": self._opts.encoding,
                 "container": "none",
                 "model": self._opts.model,

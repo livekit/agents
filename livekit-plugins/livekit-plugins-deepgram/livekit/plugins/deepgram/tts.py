@@ -132,7 +132,7 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, conn_options: APIConnectOptions) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        config: dict = {
+        config: dict[str, str | float | int | bool] = {
             "encoding": self._opts.encoding,
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
@@ -259,7 +259,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            http_params: dict = {
+            http_params: dict[str, str | float | int | bool] = {
                 "encoding": self._opts.encoding,
                 "container": "none",
                 "model": self._opts.model,

@@ -218,8 +218,8 @@ class TTS(tts.TTS):
 # ---------------------------------------------------------------------------
 
 
-def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
-    audio_config: dict = {
+def _build_payload(opts: GnaniTTSOptions, text: str) -> dict[str, object]:
+    audio_config: dict[str, object] = {
         "sample_rate": opts.sample_rate,
         "encoding": opts.encoding,
         "num_channels": opts.num_channels,

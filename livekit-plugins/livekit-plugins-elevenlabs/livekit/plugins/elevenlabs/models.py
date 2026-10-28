@@ -1,5 +1,7 @@
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
+
 TTSModels = Literal[
     "eleven_monolingual_v1",
     "eleven_multilingual_v1",
@@ -55,3 +57,34 @@ STTRealtimeSampleRates = Literal[
     44100,
     48000,
 ]
+
+
+class STTWord(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    text: str = ""
+    start: float = 0.0
+    end: float = 0.0
+    type: str = ""
+    logprob: float | None = None
+    speaker_id: str | None = None
+
+
+class STTResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    message_type: str = ""
+    text: str = ""
+    language_code: str | None = None
+    words: list[STTWord] | None = None
+    session_id: str = "unknown"
+    message: str = "Unknown error"
+    details: str = ""
+
+
+class STTBatchResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    text: str
+    language_code: str | None = None
+    words: list[STTWord] | None = None

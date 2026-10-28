@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 import aiohttp
+from pydantic import TypeAdapter
 
 from livekit.agents import APIStatusError, Plugin
 
@@ -32,7 +33,7 @@ async def list_voices(
     *,
     api_key: str | None = None,
     base_url: str = API_BASE_URL,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     List available voices from Camb.ai.
 
@@ -64,8 +65,8 @@ async def list_voices(
                     body=content,
                 )
 
-            voice_list = await resp.json()
-            voices = []
+            voice_list = TypeAdapter(list[dict[str, object]]).validate_python(await resp.json())
+            voices: list[dict[str, object]] = []
 
             for voice in voice_list:
                 voice_id = voice.get("id")
@@ -73,7 +74,7 @@ async def list_voices(
                     continue
 
                 gender_int = voice.get("gender")
-                gender = GENDER_MAP.get(gender_int) if gender_int is not None else None
+                gender = GENDER_MAP.get(gender_int) if isinstance(gender_int, int) else None
 
                 voices.append(
                     {

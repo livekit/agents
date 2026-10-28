@@ -777,8 +777,8 @@ class _Connection:
 
         self._context_data: dict[str, _StreamData] = {}
 
-        self._send_task: asyncio.Task | None = None
-        self._recv_task: asyncio.Task | None = None
+        self._send_task: asyncio.Task[None] | None = None
+        self._recv_task: asyncio.Task[None] | None = None
         self._closed = False
 
     @property
