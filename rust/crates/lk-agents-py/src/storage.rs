@@ -8,10 +8,8 @@
 //! of its model, validated by the class from the JSON the crate serialised. Python never sees SQL.
 //! Every async method is an awaitable on the host loop.
 //!
-//! Errors are the exceptions of plan 5.2 and 13.5, all under `StorageError`: `ThreadNotFound`,
-//! `VersionConflict`, `NotSerializable`, `TooLarge`, `StorageUnavailable` (retryable) and
-//! `RunRejected` (the `reject` policy, with `running_task_id`); a turn the host cancelled raises
-//! `asyncio.CancelledError`; any other failure is a plain `StorageError`.
+//! Errors raise the `livekit.agents.storage` classes `lk_agents_abi::storage::StorageError`
+//! declares.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,12 +27,10 @@ use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value
 use crate::turn::PyThread;
 use lk_agents_host_derive::Host;
 use lk_agents_runtime::storage::agentdb::{
-    AgentDbOptions, AgentDbStorage, StreamReader, Streams, TokenMinter, service_error,
-    thread_error,
+    AgentDbOptions, AgentDbStorage, StreamReader, Streams, TokenMinter, service_error, thread_error,
 };
 use lk_agents_runtime::storage::engine::LeaseTiming;
 use lk_agents_storage::StorageError as CoreError;
-use pyo3::exceptions::asyncio::CancelledError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
@@ -42,72 +38,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pyo3::create_exception!(
-    _core,
-    StorageError,
-    PyRuntimeError,
-    "A session storage failure (plan 5.2)."
-);
-pyo3::create_exception!(
-    _core,
-    ThreadNotFound,
-    StorageError,
-    "An id the threads service does not know, or a database agent-db does not have."
-);
-pyo3::create_exception!(
-    _core,
-    VersionConflict,
-    StorageError,
-    "A fenced commit matched no row: the lane moved past the version the run loaded."
-);
-pyo3::create_exception!(
-    _core,
-    NotSerializable,
-    StorageError,
-    "A field that could not be serialized; the message names it."
-);
-pyo3::create_exception!(
-    _core,
-    TooLarge,
-    StorageError,
-    "A value over its size limit; the message names what and the limit."
-);
-pyo3::create_exception!(
-    _core,
-    StorageUnavailable,
-    StorageError,
-    "Retryable: the connection was lost, the lease lapsed, or a transaction was discarded by a reconnect."
-);
-pyo3::create_exception!(
-    _core,
-    RunRejected,
-    StorageError,
-    "The reject policy refused the message while a turn runs; `running_task_id` names the turn when the journal does."
-);
-
-pub(crate) fn to_py_err(e: CoreError) -> PyErr {
-    let msg = e.to_string();
-    match e {
-        CoreError::ThreadNotFound(_) => ThreadNotFound::new_err(msg),
-        CoreError::VersionConflict { .. } => VersionConflict::new_err(msg),
-        CoreError::NotSerializable(..) => NotSerializable::new_err(msg),
-        CoreError::TooLarge { .. } => TooLarge::new_err(msg),
-        CoreError::Unavailable(_) => StorageUnavailable::new_err(msg),
-        CoreError::Invalid(_) => PyValueError::new_err(msg),
-        CoreError::RunRejected { running_task_id } => {
-            let err = RunRejected::new_err(msg);
-            // the attribute the Python `RunRejected` carries; set on the instance, so the
-            // exception's text stays the plain sentence
-            Python::attach(|py| {
-                let _ = err.value(py).setattr("running_task_id", running_task_id);
-            });
-            err
-        }
-        // the handler was cancelled from Python: the door sees the exception it raised
-        CoreError::Cancelled(_) => CancelledError::new_err(msg),
-        _ => StorageError::new_err(msg),
-    }
-}
+/// A storage failure as the `livekit.agents.storage` exception the ABI declares for it.
+pub(crate) use lk_agents_abi::storage::storage_error_to_py as to_py_err;
 
 /// A request into the crate's serde type: a pydantic model (its JSON dump) or a dict in the
 /// model's shape; a malformed one is a `ValueError` naming the field.
@@ -130,7 +62,7 @@ pub(crate) fn parse_request<T: DeserializeOwned>(
 
 /// A plain result (a bool, a number, a string, or nothing) as its Python value.
 pub(crate) fn result<T: Serialize>(py: Python<'_>, v: &T) -> PyResult<Py<PyAny>> {
-    let v = serde_json::to_value(v).map_err(|e| StorageError::new_err(e.to_string()))?;
+    let v = serde_json::to_value(v).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok(value_to_py(py, &v)?.unbind())
 }
 
@@ -151,7 +83,7 @@ pub(crate) fn model<T: Serialize>(
     name: &str,
     v: &T,
 ) -> PyResult<Py<PyAny>> {
-    let v = serde_json::to_value(v).map_err(|e| StorageError::new_err(e.to_string()))?;
+    let v = serde_json::to_value(v).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     validate(py, &model_class(py, module, name)?, &v)
 }
 
@@ -178,7 +110,7 @@ pub(crate) fn models<T: Serialize>(
     let class = model_class(py, module, name)?;
     let out = PyList::empty(py);
     for item in items {
-        let v = serde_json::to_value(&item).map_err(|e| StorageError::new_err(e.to_string()))?;
+        let v = serde_json::to_value(&item).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         out.append(validate(py, &class, &v)?)?;
     }
     Ok(out.into_any().unbind())
@@ -783,57 +715,10 @@ lk_agents_abi::register_host!(class PyStorage);
 lk_agents_abi::register_host!(class PyStreams);
 lk_agents_abi::register_host!(class PyStreamReader);
 lk_agents_abi::register_host!(class PyThreads);
-lk_agents_abi::register_host!(exception StorageError);
-lk_agents_abi::register_host!(exception ThreadNotFound);
-lk_agents_abi::register_host!(exception VersionConflict);
-lk_agents_abi::register_host!(exception NotSerializable);
-lk_agents_abi::register_host!(exception TooLarge);
-lk_agents_abi::register_host!(exception StorageUnavailable);
-lk_agents_abi::register_host!(exception RunRejected);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn core_errors_map_to_their_exceptions() {
-        type Class = fn(Python<'_>) -> Bound<'_, pyo3::types::PyType>;
-        Python::initialize();
-        Python::attach(|py| {
-            let cases: [(CoreError, Class); 6] = [
-                (CoreError::ThreadNotFound("x".into()), |py| py.get_type::<ThreadNotFound>()),
-                (CoreError::VersionConflict { lane: "l".into(), expected: 1 }, |py| {
-                    py.get_type::<VersionConflict>()
-                }),
-                (CoreError::NotSerializable("state".into(), "deps".into()), |py| {
-                    py.get_type::<NotSerializable>()
-                }),
-                (CoreError::TooLarge { what: "state".into(), limit: 1 }, |py| {
-                    py.get_type::<TooLarge>()
-                }),
-                (CoreError::Unavailable("lost".into()), |py| py.get_type::<StorageUnavailable>()),
-                (CoreError::Server { code: "exec".into(), message: "m".into() }, |py| {
-                    py.get_type::<StorageError>()
-                }),
-            ];
-            for (err, class) in cases {
-                let e = to_py_err(err);
-                assert!(e.get_type(py).is(class(py)), "{e}");
-                assert!(e.is_instance_of::<StorageError>(py));
-            }
-            assert!(to_py_err(CoreError::Invalid("x".into())).is_instance_of::<PyValueError>(py));
-            let rejected =
-                to_py_err(CoreError::RunRejected { running_task_id: Some("AST_1".into()) });
-            assert!(rejected.is_instance_of::<RunRejected>(py));
-            assert!(rejected.is_instance_of::<StorageError>(py));
-            let running: Option<String> =
-                rejected.value(py).getattr("running_task_id").unwrap().extract().unwrap();
-            assert_eq!(running.as_deref(), Some("AST_1"));
-            assert!(
-                to_py_err(CoreError::Cancelled("x".into())).is_instance_of::<CancelledError>(py)
-            );
-        });
-    }
 
     // Catches: a request that does not deserialize raising the storage error instead of a
     // `ValueError` that names the field, a model crossing as its object rather than its dump, or

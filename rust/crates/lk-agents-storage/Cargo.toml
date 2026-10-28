@@ -17,13 +17,14 @@ doctest = false
 # `Host` for the row records, so their pydantic twins come from `lk-agents-codegen`, and their
 # `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
+# `StorageError`, declared with the host vocabulary where every exported type lives.
+lk-agents-abi = { path = "../lk-agents-abi" }
 # The chat items and the thread schema: `livekit.agent` records only.
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
 a2a.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
-thiserror.workspace = true
 # The `sqlite` feature: statements executed on a caller-owned connection (the local backend's
 # files, the simulation's in-memory database).
 rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }

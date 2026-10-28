@@ -378,29 +378,6 @@ class Threads:
     ) -> Awaitable[list[ThreadTask]]:
         """The thread's background tasks, oldest first, of one ``status`` when given."""
 
-class StorageError(RuntimeError):
-    """A session storage failure (plan 5.2)."""
-
-class ThreadNotFound(StorageError):
-    """An id the threads service does not know, or a database agent-db does not have."""
-
-class VersionConflict(StorageError):
-    """A fenced commit matched no row: the lane moved past the version the run loaded."""
-
-class NotSerializable(StorageError):
-    """A field that could not be serialized; the message names it."""
-
-class TooLarge(StorageError):
-    """A value over its size limit; the message names what and the limit."""
-
-class StorageUnavailable(StorageError):
-    """Retryable: the connection was lost, the lease lapsed, or a transaction was discarded."""
-
-class RunRejected(StorageError):
-    """The ``reject`` policy refused the message while a turn runs."""
-
-    running_task_id: str | None
-
 # --- turn.rs -------------------------------------------------------------------------------------
 
 class Thread:

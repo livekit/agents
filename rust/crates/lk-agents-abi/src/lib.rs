@@ -27,6 +27,7 @@ pub mod metrics;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod resources;
+pub mod storage;
 pub mod stt;
 pub mod telemetry;
 pub mod tokenize;

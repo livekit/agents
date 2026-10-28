@@ -1,6 +1,6 @@
 """What crosses ``_core``'s storage boundary (plan 5.2, 13.8), as a developer reads it.
 
-The errors are ``_core``'s own classes; the rows, records and the turn's context are the generated
+The errors are ``errors.py``'s classes; the rows, records and the turn's context are the generated
 models of ``_generated/storage*.py``. This module holds the two things that are JSON on one side
 and Python on the other: a chat item (``ChatItem`` against its protobuf JSON) and a lane's
 JSON data held in the state column. Application fields are loaded and saved explicitly.
@@ -18,7 +18,10 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
-from .._core import (
+from .._generated.storage_run import ItemRow
+from .._proto import decode_chat_item, encode_chat_item
+from ..llm import ChatContext, ChatItem
+from .errors import (
     NotSerializable,
     RunRejected,
     StorageError,
@@ -27,9 +30,6 @@ from .._core import (
     TooLarge,
     VersionConflict,
 )
-from .._generated.storage_run import ItemRow
-from .._proto import decode_chat_item, encode_chat_item
-from ..llm import ChatContext, ChatItem
 
 S = TypeVar("S")
 
