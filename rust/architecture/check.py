@@ -83,7 +83,8 @@ def dependency_violations(metadata: dict) -> set[str]:
         allowed = {
             "lk-agents-abi": set(),
             "lk-agents-core": {"lk-agents-abi"},
-            "lk-agents-voice": {"lk-agents-abi", "lk-agents-core"},
+            "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
+            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media"},
             "lk-agents-a2a": {"lk-agents-abi", "lk-agents-storage"},
             "lk-agents-fuzz": PURE - {"lk-agents-rtc"},
             "lk-agents-runtime": PURE - {"lk-agents-rtc"},

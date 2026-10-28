@@ -90,13 +90,11 @@
   "dependency:lk-agents-worker:futures-task",
   "dependency:lk-agents-worker:futures-util",
   "direction:lk-agents-fuzz:lk-agents-rtc",
-  "direction:lk-agents-inference:lk-agents-media",
   "direction:lk-agents-py:lk-agents-a2a",
   "direction:lk-agents-py:lk-agents-inference",
   "direction:lk-agents-py:lk-agents-media",
   "direction:lk-agents-py:lk-agents-rtc",
   "direction:lk-agents-py:lk-agents-storage",
   "direction:lk-agents-py:lk-agents-voice",
-  "direction:lk-agents-voice:lk-agents-media",
   "direction:lk-agents-voice:lk-agents-rtc"
 ]

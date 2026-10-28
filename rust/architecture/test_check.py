@@ -112,7 +112,8 @@ class DependencyContracts(unittest.TestCase):
             dependency_violations(
                 metadata(
                     {
-                        "lk-agents-voice": ["lk-agents-core", "lk-agents-abi"],
+                        "lk-agents-voice": ["lk-agents-core", "lk-agents-abi", "lk-agents-media"],
+                        "lk-agents-inference": ["lk-agents-abi", "lk-agents-media"],
                         "lk-agents-core": ["lk-agents-abi", "livekit-protocol"],
                         "lk-agents-a2a": ["lk-agents-storage"],
                         "lk-agents-fuzz": ["lk-agents-voice", "lk-agents-abi"],
