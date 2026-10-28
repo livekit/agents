@@ -15,6 +15,8 @@ required-environments = [
 
 [tool.uv.sources]
 livekit-agents-next = { workspace = true }
+# Match the protocol schema consumed by the local Rust SDK.
+livekit-protocol = { path = "../python-sdks/livekit-protocol", editable = true }
 # python-sdks main has the agent grants, not yet released to PyPI; an archive, since git clones fail on LFS
 livekit-api = { url = "https://github.com/livekit/python-sdks/archive/bdeadbacc75ece1274c55e02d3da9a34c8bde5b8.tar.gz", subdirectory = "livekit-api" }
 livekit-plugins-anam = { workspace = true }
