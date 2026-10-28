@@ -48,7 +48,7 @@ class _RecordingWS:
             raise ConnectionResetError("Cannot write to closing transport")
         self.sent = data
 
-    async def receive(self) -> _FakeWSMsg:
+    async def receive(self, timeout: float | None = None) -> _FakeWSMsg:
         self.receive_calls += 1
         if self.receive_calls > 1:
             raise AssertionError("terminal response must not read another WebSocket frame")
@@ -393,7 +393,9 @@ class _ReplayResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self, payload: dict, *, receive_timeout: float | None = None
+    ):
         self.attempts += 1
 
         async def _replay():  # noqa: ANN202
@@ -492,7 +494,9 @@ class _StallingResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self, payload: dict, *, receive_timeout: float | None = None
+    ):
         self.attempts += 1
         frames = self._frames
 
@@ -555,8 +559,12 @@ class _UsageResponsesWS:
 
     def __init__(self, frames: list[dict]) -> None:
         self._frames = frames
+        self.receive_timeouts: list[float | None] = []
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self, payload: dict, *, receive_timeout: float | None = None
+    ):
+        self.receive_timeouts.append(receive_timeout)
         frames = self._frames
 
         async def _replay():  # noqa: ANN202
@@ -567,6 +575,36 @@ class _UsageResponsesWS:
 
     async def aclose(self) -> None:
         pass
+
+
+async def test_plugin_stream_has_no_ws_receive_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [None]
 
 
 async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:

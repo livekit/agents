@@ -98,7 +98,9 @@ class ResponsesWebsocket:
     async def aclose(self) -> None:
         await self._pool.aclose()
 
-    async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
+    async def generate_response(
+        self, msg: dict, *, receive_timeout: float | None = None
+    ) -> AsyncGenerator[dict, None]:
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -125,7 +127,12 @@ class ResponsesWebsocket:
         completed = False
         try:
             while True:
-                raw_msg = await ws.receive()
+                try:
+                    raw_msg = await ws.receive(timeout=receive_timeout)
+                except asyncio.TimeoutError as e:
+                    raise APITimeoutError(
+                        "timed out waiting for a Responses WebSocket event"
+                    ) from e
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
                     exc = raw_msg.data
                     status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
@@ -278,7 +285,9 @@ class ResponsesLLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(payload):
+                async for raw_event in self._llm._ws.generate_response(
+                    payload, receive_timeout=self._ws_receive_timeout()
+                ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)
                     if chunk is not None and chunk.has_response():
@@ -327,6 +336,10 @@ class ResponsesLLMStream(llm.LLMStream):
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
+
+    def _ws_receive_timeout(self) -> float | None:
+        """Seconds to wait for each WebSocket event; None waits as long as the socket lives."""
+        return None
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         # Strip prompt_cache_retention from any response object before validation:
