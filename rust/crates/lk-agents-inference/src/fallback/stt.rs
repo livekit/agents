@@ -78,7 +78,7 @@ impl InputTee {
     }
 
     /// How much audio is held while no stream is serving: the bound of every reconnect.
-    pub const PREROLL_FRAMES: usize = lk_agents_abi::stt::retry::HELD_FRAMES;
+    pub const PREROLL_FRAMES: usize = lk_agents_abi::stt::HELD_FRAMES;
 
     /// Replays what arrived while no stream served (as the reference's `_input_ch` buffers), then
     /// ends it if the caller already finished.

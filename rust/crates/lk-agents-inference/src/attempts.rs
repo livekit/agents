@@ -29,9 +29,6 @@ pub const ATTEMPT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// a silent attempt never holds the whole window, even when the caller set no limits.
 const RETIREMENT_ATTEMPTS: u32 = 3;
 
-/// The first retry waits this long, the next ones `retry_interval` (`APIConnectOptions`).
-const FIRST_RETRY_INTERVAL: Duration = Duration::from_millis(100);
-
 /// The resolved per-request policy. `None` disables a limit. There is no pool limit: the
 /// gateway transport has no pool capacity, so a request never waits for a connection slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,9 +72,13 @@ pub enum AttemptFailure {
 impl AttemptFailure {
     pub fn into_error(self) -> ApiError {
         match self {
-            AttemptFailure::Rejected { status, message, request_id } => ApiError::from_http(&message, status, request_id),
+            AttemptFailure::Rejected { status, message, request_id } => {
+                ApiError::from_http(&message, status, request_id)
+            }
             AttemptFailure::Connection(message) => ApiError::connection(Some(message)),
-            AttemptFailure::Malformed(message) => ApiError::connection(Some(format!("malformed response: {message}"))),
+            AttemptFailure::Malformed(message) => {
+                ApiError::connection(Some(format!("malformed response: {message}")))
+            }
         }
     }
 }
@@ -102,8 +103,14 @@ pub enum AttemptStep {
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     /// Backing off before `attempt`.
-    Waiting { attempt: u32, at: Ts },
-    Attempting { attempt: u32, stage: Stage },
+    Waiting {
+        attempt: u32,
+        at: Ts,
+    },
+    Attempting {
+        attempt: u32,
+        stage: Stage,
+    },
     /// The outcome is decided; launched attempts may still owe their release.
     Settled,
 }
@@ -127,6 +134,7 @@ pub struct Attempts {
     /// No caller takes the outcome: retrying until an answer or the total deadline.
     retiring: bool,
     next_attempt: u32,
+    failures: u32,
     /// Launched attempts not yet closed, with their cleanup deadline once asked to stop or done.
     open: BTreeMap<u32, Option<Ts>>,
 }
@@ -142,9 +150,16 @@ impl Attempts {
             unresolved: false,
             retiring: false,
             next_attempt: 0,
+            failures: 0,
             open: BTreeMap::new(),
         };
-        attempts.launch(0, now, steps);
+        if attempts.total_deadline.is_some_and(|deadline| deadline <= now) {
+            steps.push(AttemptStep::GiveUp(
+                ApiError::timed_out(TimeoutPhase::Total).with_retryable(false),
+            ));
+        } else {
+            attempts.launch(0, now, steps);
+        }
         attempts
     }
 
@@ -182,7 +197,9 @@ impl Attempts {
     pub fn wake_at(&self, expecting: Option<Ts>) -> Option<Ts> {
         let phase = match self.phase {
             Phase::Waiting { at, .. } => Some(at),
-            Phase::Attempting { stage, .. } => self.stage_deadline(stage, expecting).map(|(at, _)| at),
+            Phase::Attempting { stage, .. } => {
+                self.stage_deadline(stage, expecting).map(|(at, _)| at)
+            }
             Phase::Settled => None,
         };
         let total = self.total_deadline.filter(|_| !self.is_decided());
@@ -190,12 +207,16 @@ impl Attempts {
     }
 
     pub fn connected(&mut self, attempt: u32, now: Ts) {
-        self.advance(attempt, |stage| matches!(stage, Stage::Connecting { .. }).then_some(Stage::Writing { since: now }));
+        self.advance(attempt, |stage| {
+            matches!(stage, Stage::Connecting { .. }).then_some(Stage::Writing { since: now })
+        });
     }
 
     pub fn written(&mut self, attempt: u32, now: Ts) {
         self.advance(attempt, |stage| match stage {
-            Stage::Connecting { .. } | Stage::Writing { .. } => Some(Stage::Reading { last_progress: now }),
+            Stage::Connecting { .. } | Stage::Writing { .. } => {
+                Some(Stage::Reading { last_progress: now })
+            }
             Stage::Reading { .. } => None,
         });
     }
@@ -217,7 +238,13 @@ impl Attempts {
     }
 
     /// `attempt` failed; only the current attempt's failure decides anything.
-    pub fn failed(&mut self, attempt: u32, failure: AttemptFailure, now: Ts, steps: &mut Vec<AttemptStep>) {
+    pub fn failed(
+        &mut self,
+        attempt: u32,
+        failure: AttemptFailure,
+        now: Ts,
+        steps: &mut Vec<AttemptStep>,
+    ) {
         if self.current() == Some(attempt) {
             // A final rejection answers the operation (a replay gets it too); a retryable one
             // leaves an earlier attempt's effect unknown; a cut or unreadable answer is none.
@@ -228,9 +255,48 @@ impl Attempts {
             } else if !error.retryable {
                 self.unresolved = false;
             }
-            self.close_attempt(attempt, now);
-            self.fail(attempt, error, now, steps);
+            self.failed_error(attempt, error, now, steps);
         }
+    }
+
+    /// A provider already adapted its failure at the boundary. Preserve its retryability and
+    /// phase rather than converting it back through a transport failure.
+    pub fn failed_error(
+        &mut self,
+        attempt: u32,
+        error: ApiError,
+        now: Ts,
+        steps: &mut Vec<AttemptStep>,
+    ) {
+        if self.current() != Some(attempt) {
+            return;
+        }
+        self.close_attempt(attempt, now);
+        self.fail(attempt, error, now, steps);
+    }
+
+    /// A long-lived recognition completed one utterance. Its next failure gets a fresh retry
+    /// allowance; the operation's acceptance deadline and attempt identities stay unchanged.
+    pub fn reset_retries(&mut self) {
+        self.failures = 0;
+    }
+
+    /// An enclosing request owns reopen decisions. Phase and cleanup observations stay local.
+    pub fn disable_retries(&mut self) {
+        self.policy.max_retry = 0;
+    }
+
+    /// Consecutive retries consumed by the current recognition allowance.
+    pub fn retries(&self) -> u32 {
+        self.failures
+    }
+
+    /// A parent operation may only shorten the deadline inherited by this request.
+    pub fn constrain_deadline(&mut self, deadline: Option<Ts>) {
+        self.total_deadline = match (self.total_deadline, deadline) {
+            (Some(own), Some(parent)) => Some(own.min(parent)),
+            (own, parent) => own.or(parent),
+        };
     }
 
     /// The attempt's transport resources are released. Closed before reporting an outcome: the
@@ -275,13 +341,20 @@ impl Attempts {
             *limit = Some(limit.map_or(attempt_limit, |t| t.min(attempt_limit)));
         }
         if self.is_decided() {
-            self.phase = Phase::Waiting { attempt: self.next_attempt, at: now.saturating_add(self.policy.retry_interval) };
+            self.phase = Phase::Waiting {
+                attempt: self.next_attempt,
+                at: now.saturating_add(self.policy.retry_interval),
+            };
         }
     }
 
     pub fn wake(&mut self, now: Ts, expecting: Option<Ts>, steps: &mut Vec<AttemptStep>) {
-        let expired: Vec<u32> =
-            self.open.iter().filter(|(_, deadline)| deadline.is_some_and(|d| d <= now)).map(|(a, _)| *a).collect();
+        let expired: Vec<u32> = self
+            .open
+            .iter()
+            .filter(|(_, deadline)| deadline.is_some_and(|d| d <= now))
+            .map(|(a, _)| *a)
+            .collect();
         for attempt in expired {
             // Reported once; the runtime keeps owning the attempt.
             self.open.remove(&attempt);
@@ -338,7 +411,10 @@ impl Attempts {
 
     /// The current attempt's request may have reached the server.
     fn sent(&self) -> bool {
-        matches!(self.phase, Phase::Attempting { stage: Stage::Writing { .. } | Stage::Reading { .. }, .. })
+        matches!(
+            self.phase,
+            Phase::Attempting { stage: Stage::Writing { .. } | Stage::Reading { .. }, .. }
+        )
     }
 
     fn advance(&mut self, attempt: u32, next: impl FnOnce(Stage) -> Option<Stage>) {
@@ -354,8 +430,13 @@ impl Attempts {
     /// never outlives the total deadline, whose own wake ends the request.
     fn fail(&mut self, attempt: u32, error: ApiError, now: Ts, steps: &mut Vec<AttemptStep>) {
         let retryable = error.retryable && !self.replay_unsafe;
-        if retryable && attempt < self.policy.max_retry {
-            let delay = if attempt == 0 { FIRST_RETRY_INTERVAL } else { self.policy.retry_interval };
+        if retryable && self.failures < self.policy.max_retry {
+            let delay = if self.failures == 0 {
+                Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
+            } else {
+                self.policy.retry_interval
+            };
+            self.failures += 1;
             self.phase = Phase::Waiting { attempt: attempt + 1, at: now.saturating_add(delay) };
             steps.push(AttemptStep::Retry { attempt, error });
         } else {
@@ -367,8 +448,12 @@ impl Attempts {
     fn stage_deadline(&self, stage: Stage, expecting: Option<Ts>) -> Option<(Ts, TimeoutPhase)> {
         let p = &self.policy;
         match stage {
-            Stage::Connecting { since } => p.connect_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Connect)),
-            Stage::Writing { since } => p.write_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Write)),
+            Stage::Connecting { since } => {
+                p.connect_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Connect))
+            }
+            Stage::Writing { since } => {
+                p.write_timeout.map(|t| (since.saturating_add(t), TimeoutPhase::Write))
+            }
             Stage::Reading { last_progress } => {
                 let waiting_since = expecting?.max(last_progress);
                 p.read_timeout.map(|t| (waiting_since.saturating_add(t), TimeoutPhase::Read))

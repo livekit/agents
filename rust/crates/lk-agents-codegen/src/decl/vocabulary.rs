@@ -59,6 +59,8 @@ pub enum Value {
     Text(String),
     /// A Rust type or path.
     Rust(syn::Type),
+    /// A declaration macro's native diagnostic, evaluated by the conversion it generates.
+    Expression(syn::Expr),
     Literal(Literal),
 }
 
@@ -110,6 +112,10 @@ pub fn rust(at: &str, entries: &[Entry], key: &str) -> Result<Option<syn::Type>,
     match find(entries, key).map(|e| &e.value) {
         None => Ok(None),
         Some(Some(Value::Rust(t))) => Ok(Some(t.clone())),
+        Some(Some(Value::Expression(expr))) => Err(format!(
+            "{at}: `{key}` takes a Rust type or path, found expression `{}`",
+            quote::quote!(#expr),
+        )),
         Some(_) => Err(format!("{at}: `{key}` takes a Rust type or path, unquoted")),
     }
 }
@@ -132,7 +138,9 @@ fn entries(tokens: proc_macro2::TokenStream) -> syn::Result<Vec<Entry>> {
             .ok_or_else(|| meta.error("a key is one word"))?;
         if meta.input.peek(syn::Token![=]) {
             let value = meta.value()?;
-            let parsed = if value.peek(syn::LitStr) {
+            let parsed = if key == "msg" {
+                Value::Expression(value.parse::<syn::Expr>()?)
+            } else if value.peek(syn::LitStr) {
                 Value::Text(value.parse::<syn::LitStr>()?.value())
             } else if value.peek(syn::Lit) || value.peek(syn::Token![-]) {
                 Value::Literal(literal(&value.parse::<syn::Expr>()?)?)

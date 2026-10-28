@@ -37,6 +37,7 @@ pub mod process;
 pub mod source;
 pub mod storage;
 pub mod sse;
+pub mod stt;
 pub mod task;
 pub mod telemetry;
 pub mod token;

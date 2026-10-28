@@ -138,7 +138,17 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     let mut args = Vec::new();
     for q in &m.params {
         moved.push_str(&format!("        let {}_arg = {};\n", q.name, owned(q)));
-        args.push(to_host(&format!("{}_arg", q.name), &q.ty, &at)?);
+        let value = to_host(&format!("{}_arg", q.name), &q.ty, &at)?;
+        if m.kind == ProxyCall::Notify && matches!(q.ty, Ty::Error(_)) {
+            // A later raise may consume the captured host exception before this notice drains.
+            moved.push_str(&format!(
+                "        let {name}_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {{ Ok(({value}).unbind()) }}) {{\n            Ok(value) => value,\n            Err(error) => {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{error}}\");\n                return;\n            }}\n        }};\n",
+                name = q.name,
+            ));
+            args.push(format!("{}_arg.into_bound(py)", q.name));
+        } else {
+            args.push(value);
+        }
     }
     let bound = match (m.kind, p.bound()) {
         (ProxyCall::Await, Some(b)) => {
@@ -262,7 +272,6 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{v})?"),
         Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{v})?.into_any()"),
-        Ty::Error(e) => format!("({})({v}).into_value(py).into_bound(py).into_any()", e.with),
         // A host class the framework does not generate: built from the record's fields.
         Ty::Record(Record { host: HostForm::External { module, name }, .. }) => format!(
             "py.import({module:?})?.getattr({name:?})?.call((), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"

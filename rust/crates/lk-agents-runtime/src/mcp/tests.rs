@@ -103,6 +103,10 @@ impl McpTransport for Peer {
 }
 
 async fn connected() -> (Arc<McpSession>, Arc<Peer>) {
+    connected_with_timeout(30.0).await
+}
+
+async fn connected_with_timeout(timeout: f64) -> (Arc<McpSession>, Arc<Peer>) {
     let (send, replies) = mpsc::channel(16);
     let peer = Arc::new(Peer {
         replies: Mutex::new(replies),
@@ -114,7 +118,7 @@ async fn connected() -> (Arc<McpSession>, Arc<Peer>) {
         release_close: Notify::new(),
         fail_receive: Notify::new(),
     });
-    let session = Arc::new(McpSession::new(30.0));
+    let session = Arc::new(McpSession::new(timeout).unwrap());
     session.connect_host(peer.clone(), None).await.unwrap();
     (session, peer)
 }
@@ -223,4 +227,19 @@ async fn cancelling_a_host_progress_callback_without_a_receipt_is_incomplete() {
     session.close().await;
     assert!(matches!(call.await.unwrap(), Err(McpError::Cancelled(_))));
     assert_eq!(session.cleanup().status, McpCleanupStatus::Incomplete);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_zero_request_timeout_expires_instead_of_disabling_the_limit() {
+    let (session, _) = connected_with_timeout(0.0).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        session.call_tool("wait".into(), Default::default(), None, None),
+    )
+    .await;
+    session.close().await;
+    assert!(
+        matches!(result, Ok(Err(McpError::Timeout { timeout, .. })) if timeout.is_zero()),
+        "zero timeout left the request pending: {result:?}"
+    );
 }

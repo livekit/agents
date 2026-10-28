@@ -61,6 +61,9 @@ pub enum McpError {
     #[error("transport_type must be 'sse' or 'streamable_http', got '{0}'")]
     #[host(kind = "ValueError")]
     InvalidTransport(String),
+    #[error("{0} must be a finite number of seconds >= 0")]
+    #[host(kind = "ValueError")]
+    InvalidTimeout(String),
     #[error("MCP protocol error {code}: {message}")]
     Protocol {
         code: i32,
@@ -173,7 +176,7 @@ pub trait McpProgress: Send + Sync {
 #[async_trait::async_trait]
 pub trait McpSession: Send + Sync + Sized + 'static {
     #[host(new)]
-    fn new(client_session_timeout_seconds: f64) -> Self;
+    fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError>;
     #[host(getter)]
     fn connected(&self) -> bool;
     #[host(call)]
@@ -239,4 +242,16 @@ pub trait McpTools {
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
     #[host(function, name = "mcp_check_result")]
     fn check_result(result: serde_json::Value) -> Result<(), McpError>;
+}
+
+/// Validate a scalar MCP deadline with the shared connection-policy duration range.
+pub fn timeout_duration(field: &str, seconds: f64) -> Result<std::time::Duration, McpError> {
+    crate::types::connect::duration_from_seconds(seconds)
+        .ok_or_else(|| McpError::InvalidTimeout(field.to_owned()))
+}
+
+/// Validate public MCP constructor arguments before a transport can be opened.
+#[crate::host(export(name = "_core_mcp_timeout_check", pid = false))]
+pub fn mcp_timeout_check(field: &str, seconds: f64) -> Result<(), McpError> {
+    timeout_duration(field, seconds).map(|_| ())
 }

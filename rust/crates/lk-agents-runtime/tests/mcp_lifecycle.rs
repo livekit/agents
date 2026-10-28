@@ -84,7 +84,7 @@ async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
 #[tokio::test]
 async fn mcp_real_server_lifecycle_stdio() -> Result {
     let peer = Peer::new("stdio");
-    let session = Arc::new(McpSession::new(30.0));
+    let session = Arc::new(McpSession::new(30.0)?);
     let result = async {
         session.connect_stdio(peer.python.clone(), peer.args("stdio"), Vec::new(), None).await?;
         exercise(session.clone(), &peer).await?;
@@ -115,7 +115,7 @@ async fn mcp_real_server_lifecycle_http() -> Result {
         .args(peer.args("http"))
         .kill_on_drop(true)
         .spawn()?;
-    let session = Arc::new(McpSession::new(30.0));
+    let session = Arc::new(McpSession::new(30.0)?);
     let result = async {
         let url = peer.receipt("url").await?;
         session.connect_http(url, Vec::new(), "streamable_http".into(), 5.0, 30.0).await?;
@@ -135,7 +135,7 @@ async fn mcp_http_failed_session_delete_is_incomplete_cleanup() -> Result {
         .args(peer.args("http_delete_failure"))
         .kill_on_drop(true)
         .spawn()?;
-    let session = McpSession::new(30.0);
+    let session = McpSession::new(30.0)?;
     let result = async {
         session
             .connect_http(

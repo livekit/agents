@@ -97,3 +97,38 @@ async def test_each_flush_ends_a_segment_and_later_text_starts_the_next() -> Non
         stream.end_input()
         assert [frame async for frame in stream]
     assert provider.sent == ["first", "second"]
+
+
+class _FailedStreamTTS(_StreamingTTS):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = _CONN
+    ) -> tts.ChunkedStream:
+        return self._synthesize_with_stream(text, conn_options=conn_options)
+
+    def stream(self, *, conn_options: APIConnectOptions = _CONN) -> tts.SynthesizeStream:
+        return _FailedStream(tts=self, conn_options=conn_options)
+
+
+class _FailedStream(tts.SynthesizeStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        assert isinstance(self._tts, _FailedStreamTTS)
+        self._tts.attempts += 1
+        raise APIConnectionError("failure before any audio")
+
+
+async def test_batch_over_stream_uses_one_retry_budget() -> None:
+    provider = _FailedStreamTTS()
+    try:
+        with pytest.raises(APIConnectionError):
+            async with provider.synthesize(
+                "hello", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+            ) as stream:
+                async for _ in stream:
+                    pytest.fail("the provider failed before producing audio")
+        assert provider.attempts == 2
+    finally:
+        await provider.aclose()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents.llm.mcp import MCPServer, MCPTool, MCPToolset
+from livekit.agents.llm.mcp import MCPServer, MCPServerHTTP, MCPServerStdio, MCPTool, MCPToolset
 
 pytestmark = pytest.mark.unit
 
@@ -62,3 +62,13 @@ async def test_parent_close_failure_still_closes_the_mcp_session(
         await toolset.aclose()
     assert server.closes == 1
     assert not server.initialized
+
+
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf"), 1e300])
+@pytest.mark.parametrize("field", ["timeout", "sse_read_timeout", "client_session_timeout_seconds"])
+def test_invalid_mcp_timeout_fails_at_construction(field: str, bad: float) -> None:
+    with pytest.raises(ValueError, match=field):
+        MCPServerHTTP("http://127.0.0.1:1/mcp", **{field: bad})
+    if field == "client_session_timeout_seconds":
+        with pytest.raises(ValueError, match=field):
+            MCPServerStdio("never-launched", [], client_session_timeout_seconds=bad)

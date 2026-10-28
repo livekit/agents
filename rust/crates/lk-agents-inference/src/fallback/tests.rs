@@ -625,3 +625,87 @@ async fn a_recovery_result_after_its_request_deadline_cannot_restore_health() {
     assert!(!rig.chain.is_available(0), "an expired operation cannot change provider health");
     rig.chain.close().await;
 }
+
+struct HeldSpawner {
+    runtime: TokioSpawner,
+    queued: tokio::sync::mpsc::Sender<()>,
+    release: Arc<Semaphore>,
+}
+
+impl Spawner for HeldSpawner {
+    fn spawn(&self, future: BoxFuture<'static, ()>) -> lk_agents_abi::AbortHandle {
+        self.queued.try_send(()).expect("one queued provider attempt");
+        let release = self.release.clone();
+        self.runtime.spawn(Box::pin(async move {
+            let _permit = release.acquire().await.expect("held task released");
+            future.await;
+        }))
+    }
+}
+
+#[tokio::test]
+async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_is_cancelled() {
+    use crate::fallback::chain::ChainCall;
+    use std::task::Poll;
+
+    for cancel_before_execution in [false, true] {
+        let backend = Fake::new("held", &[Step::Serve]);
+        let clock = Arc::new(VirtualClock::new());
+        let release = Arc::new(Semaphore::new(0));
+        let (queued, mut scheduled) = tokio::sync::mpsc::channel(1);
+        let spawner = Arc::new(HeldSpawner {
+            runtime: TokioSpawner::current(),
+            queued,
+            release: release.clone(),
+        });
+        let chain = FallbackChain::new(
+            vec![backend.clone()],
+            ChainPolicy::llm_defaults(),
+            clock.clone(),
+            spawner,
+            Arc::new(Recorder::default()),
+        )
+        .unwrap();
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let request = "request".to_owned();
+        let mut state = ();
+        let mut run = Box::pin(chain.run_cancellable(
+            &request,
+            ChainCall {
+                conn_options: ApiConnectOptions { total_timeout: Some(1.0), ..caller() },
+                accepted_at: clock.now(),
+                slot: RecoverySlot::OneShot,
+            },
+            &mut state,
+            stopped,
+            |_, _, _, _, _| Box::pin(async { Attempt::Served(()) }),
+        ));
+        // Accept and authorize the attempt, then hold its actual provider task in the executor.
+        std::future::poll_fn(|cx| {
+            assert!(run.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        scheduled.recv().await.expect("the inner attempt was scheduled");
+        if cancel_before_execution {
+            stop.send(true).unwrap();
+        } else {
+            clock.advance(Duration::from_secs(2));
+        }
+        release.add_permits(1);
+        let error = run.await.unwrap_err();
+        assert!(
+            backend.opened.lock().unwrap().is_empty(),
+            "queued task performed provider I/O after revocation"
+        );
+        assert_eq!(
+            error.api_kind(),
+            Some(if cancel_before_execution {
+                lk_agents_abi::errors::ApiErrorKind::Cancelled
+            } else {
+                lk_agents_abi::errors::ApiErrorKind::Timeout
+            }),
+        );
+        chain.close().await;
+    }
+}

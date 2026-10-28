@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Awaitable, Callable
@@ -12,7 +11,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel
 
 from . import _core
-from ._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from ._exceptions import APIConnectionError, APIError, APIStatusError
 from .log import logger
 
 if TYPE_CHECKING:
@@ -57,21 +56,68 @@ def overrides(obj: Any, base: type, *names: str) -> bool:
     return any(getattr(type(obj), n) is not getattr(base, n) for n in names)
 
 
-class Attempts:
-    """A provider call's attempts under ``conn``, retried as the core decides
-    (``_core.provider_retry``), each failure an ``error`` event.
+_pending_cleanup: set[asyncio.Future[Any]] = set()
 
-    A call the framework opened itself (``core``) runs once and reports nothing: the core retries
-    it and reports its failures to the provider.
-    """
+
+async def cancel_and_wait_bounded(*tasks: asyncio.Future[Any], timeout: float) -> bool:
+    """Cancel on the owning loop, retaining cleanup after the native settlement limit."""
+
+    def settled(finished: asyncio.Future[Any]) -> None:
+        _pending_cleanup.discard(finished)
+        if not finished.cancelled():
+            finished.exception()
+
+    for task in tasks:
+        _pending_cleanup.add(task)
+        task.add_done_callback(settled)
+        if not task.done() and (not isinstance(task, asyncio.Task) or not task.cancelling()):
+            task.cancel()
+    if not tasks:
+        return True
+    _, pending = await asyncio.wait(tasks, timeout=timeout)
+    return not pending
+
+
+def _now_ns() -> int:
+    return int(asyncio.get_running_loop().time() * 1e9)
+
+
+class Attempts:
+    """Execute host callbacks as the shared supplied-time attempt machine authorizes them."""
 
     def __init__(self, kind: str, conn: Any, emit_error: Callable[[Exception, bool], None]) -> None:
         self.kind = kind
         self.conn = conn
         self.emit_error = emit_error
         self.core = False
-        self.count = 0
-        """Failed attempts since the last success; a stream resets it on a final transcript."""
+        self._request = _core.ProviderAttempts(kind, conn, _now_ns())
+        self._changed = asyncio.Event()
+
+    @property
+    def core(self) -> bool:
+        return self._core
+
+    @core.setter
+    def core(self, value: bool) -> None:
+        self._core = value
+        if value:
+            self._request.external_retry_owner()
+
+    @property
+    def cleanup_timeout(self) -> float:
+        return self._request.cleanup_timeout
+
+    def expect_response(self) -> None:
+        self._request.expect_response(_now_ns())
+        self._changed.set()
+
+    def input_ended(self) -> None:
+        self._request.input_ended(_now_ns())
+        self._changed.set()
+
+    def observe(self, event: Any) -> None:
+        self._request.observe(event, _now_ns())
+        self._changed.set()
 
     async def run(
         self,
@@ -80,52 +126,76 @@ class Attempts:
         produced: Callable[[], bool] = lambda: False,
         again: Callable[[], None] = lambda: None,
     ) -> _T:
-        """``attempt`` until it succeeds or ``conn.total_timeout`` expires; ``produced``: the
-        failed attempt delivered output, ``again``: called before each retry."""
-        # the core owns the total deadline of the attempts it retries
-        deadline = contextlib.nullcontext() if self.core else self.conn.total_deadline()
-        try:
-            async with deadline:
-                return await self._attempts(attempt, produced, again)
-        except APITimeoutError as e:
-            if e.phase == "total":
-                self.emit_error(e, False)
-            raise
-
-    async def _attempts(
-        self,
-        attempt: Callable[[], Awaitable[_T]],
-        produced: Callable[[], bool],
-        again: Callable[[], None],
-    ) -> _T:
-        while True:
+        if self.core:
             try:
-                return await attempt()
-            except Exception as e:
-                action, delay, message = _core.provider_retry(
-                    self.kind,
-                    0 if self.core else self.conn.max_retry,
-                    self.conn.retry_interval,
-                    self.count,
-                    isinstance(e, APIError) and e.retryable,
-                    e.status_code if isinstance(e, APIStatusError) else None,
-                    produced(),
-                )
-                if action == "stop":
-                    return cast(_T, None)
-                if self.core:
-                    raise
-                self.emit_error(e, action == "retry")
-                if action == "exhausted":
-                    if isinstance(e, APITimeoutError):
+                if not self._request.ready(_now_ns()):
+                    raise RuntimeError("provider request has no pending attempt")
+                value = await self._execute(attempt)
+                self._request.succeeded(_now_ns())
+                return value
+            finally:
+                self._request.cancel(_now_ns())
+        retrying = False
+        try:
+            while True:
+                while not self._request.ready(_now_ns()):
+                    at = self._request.wake_at()
+                    if at is None:
+                        raise RuntimeError("provider request has no pending attempt")
+                    await asyncio.sleep(max(0.0, (at - _now_ns()) / 1e9))
+                if retrying:
+                    again()
+                try:
+                    value = await self._execute(attempt)
+                    self._request.succeeded(_now_ns())
+                    return value
+                except Exception as error:
+                    action, delay, message = self._request.failure(
+                        isinstance(error, APIError) and error.retryable,
+                        error.status_code if isinstance(error, APIStatusError) else None,
+                        produced(),
+                        _now_ns(),
+                    )
+                    if action == "stop":
+                        return cast(_T, None)
+                    if action == "exhausted":
+                        raise APIConnectionError(message or str(error)) from error
+                    if action == "raise":
                         raise
-                    raise APIConnectionError(message or str(e)) from e
-                if action == "raise":
-                    raise
-                logger.warning(f"{self.kind} attempt failed: {e}, retrying in {delay}s")
-                await asyncio.sleep(delay)
-                self.count += 1
-                again()
+                    self.emit_error(error, True)
+                    logger.warning(f"{self.kind} attempt failed: {error}, retrying in {delay}s")
+                    retrying = True
+        except Exception as error:
+            self.emit_error(error, False)
+            raise
+        finally:
+            self._request.cancel(_now_ns())
+
+    async def _execute(self, attempt: Callable[[], Awaitable[_T]]) -> _T:
+        async def invoke() -> _T:
+            return await attempt()
+
+        task = asyncio.create_task(invoke())
+        changed = asyncio.create_task(self._changed.wait())
+        try:
+            while True:
+                at = self._request.wake_at()
+                timeout = None if at is None else max(0.0, (at - _now_ns()) / 1e9)
+                await asyncio.wait(
+                    (task, changed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                # Time and observations return to the core before a result is accepted.
+                self._request.ready(_now_ns())
+                if task.done():
+                    return task.result()
+                if changed.done():
+                    self._changed.clear()
+                    changed = asyncio.create_task(self._changed.wait())
+        finally:
+            if not await cancel_and_wait_bounded(task, changed, timeout=self.cleanup_timeout):
+                logger.error(
+                    "provider cleanup incomplete; its host task retains ownership until settlement"
+                )
 
 
 async def pump(

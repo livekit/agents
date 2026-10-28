@@ -14,7 +14,6 @@ use rmcp::transport::{StreamableHttpClientTransport, Transport};
 use tokio::sync::Notify;
 
 use super::http_client::CleanupClient;
-use super::session::secs;
 use super::{McpCleanup, McpCleanupStatus, McpError, McpTransport, conn};
 use lk_agents_abi::llm::mcp::McpInvocation;
 
@@ -387,8 +386,8 @@ pub(super) async fn connect_http(
     url: String,
     headers: Vec<(String, String)>,
     transport: &str,
-    timeout: f64,
-    read_timeout: f64,
+    timeout: Duration,
+    read_timeout: Duration,
     receipt: Arc<TransportReceipt>,
 ) -> Result<HttpConnection, McpError> {
     lk_agents_inference::transport::install_tls_provider();
@@ -401,17 +400,14 @@ pub(super) async fn connect_http(
             ))
         })
         .collect::<Result<reqwest::header::HeaderMap, McpError>>()?;
-    let mut client = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .retry(reqwest::retry::never())
         .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::limited(20));
-    if let Some(timeout) = secs(timeout) {
-        client = client.connect_timeout(timeout);
-    }
-    if let Some(timeout) = secs(read_timeout) {
-        client = client.read_timeout(timeout);
-    }
-    let client = client.build().map_err(conn)?;
+        .redirect(reqwest::redirect::Policy::limited(20))
+        .connect_timeout(timeout)
+        .read_timeout(read_timeout)
+        .build()
+        .map_err(conn)?;
     match super::http_transport(&url, Some(transport))? {
         super::HttpTransport::StreamableHttp => {
             Ok(HttpConnection::Streamable(StreamableHttpClientTransport::with_client(

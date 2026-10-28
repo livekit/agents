@@ -9,6 +9,7 @@ use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase}
 use lk_agents_abi::resources::ResourceId;
 
 use super::policy::ChainPolicy;
+use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 #[derive(Debug, Default)]
 pub struct FallbackHealth {
@@ -116,7 +117,7 @@ pub struct ChainRequest {
     modality: Modality,
     entries: Vec<(usize, ResourceId, String)>,
     cursor: usize,
-    used: u32,
+    attempts: Option<Attempts>,
     next_attempt: u64,
     phase: Phase,
     policy: ChainPolicy,
@@ -141,7 +142,7 @@ impl ChainRequest {
             modality,
             entries,
             cursor: 0,
-            used: 0,
+            attempts: None,
             next_attempt: 0,
             phase: Phase::Ready,
             policy,
@@ -159,7 +160,7 @@ impl ChainRequest {
             return Vec::new();
         }
         if matches!(event, ChainEvent::Cancel) {
-            let mut effects = self.cancel_active();
+            let mut effects = self.cancel_active(now);
             self.phase = Phase::Finished;
             effects.push(ChainEffect::Finished(Err(ApiError::status(
                 "fallback cancelled",
@@ -171,7 +172,7 @@ impl ChainRequest {
             return effects;
         }
         if self.deadline.is_some_and(|deadline| now >= deadline) {
-            let mut effects = self.cancel_active();
+            let mut effects = self.cancel_active(now);
             self.phase = Phase::Finished;
             effects.push(ChainEffect::Finished(Err(ApiError::timed_out(TimeoutPhase::Total)
                 .with_retryable(false)
@@ -180,12 +181,18 @@ impl ChainRequest {
         }
         match event {
             ChainEvent::Wake => match self.phase {
-                Phase::Ready => self.launch(),
-                Phase::Waiting(at) if now >= at => self.launch(),
+                Phase::Ready => self.launch(now),
+                Phase::Waiting(at) if now >= at => self.retry(now),
                 _ => Vec::new(),
             },
             ChainEvent::Succeeded { attempt } if matches!(self.phase, Phase::Active(id) if id == attempt) =>
             {
+                if let Some(attempts) = &mut self.attempts {
+                    if let Some(id) = attempts.current() {
+                        attempts.succeeded(id, now);
+                        attempts.closed(id, now, &mut Vec::new());
+                    }
+                }
                 self.phase = Phase::Finished;
                 vec![ChainEffect::Finished(Ok(()))]
             }
@@ -197,12 +204,23 @@ impl ChainRequest {
                     self.phase = Phase::Finished;
                     return vec![ChainEffect::Finished(Err(error.into_final()))];
                 }
-                let next_backend =
-                    !error.retryable() || self.used > self.policy.max_retry_per_backend;
-                if next_backend {
-                    self.cursor += 1;
-                    self.used = 0;
+                let attempts = self.attempts.as_mut().expect("active backend attempts");
+                let id = attempts.current().expect("active attempt");
+                let mut steps = Vec::new();
+                let api_error = match &error {
+                    ProviderError::Local(error) => error.clone(),
+                    _ => ApiError::connection(Some(error.message().to_owned()))
+                        .with_retryable(error.retryable()),
+                };
+                attempts.failed_error(id, api_error, now, &mut steps);
+                attempts.closed(id, now, &mut steps);
+                if steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
+                    let at = attempts.wake_at(None).expect("retry wake");
+                    self.phase = Phase::Waiting(at);
+                    return vec![ChainEffect::WakeAt(at)];
                 }
+                self.cursor += 1;
+                self.attempts = None;
                 if self.cursor >= self.entries.len() {
                     self.phase = Phase::Finished;
                     let detail = self
@@ -223,28 +241,50 @@ impl ChainRequest {
                     .with_retryable(false)
                     .into()))];
                 }
-                let retry_at = now.saturating_add(Duration::from_secs_f64(if next_backend {
-                    0.0
-                } else {
-                    self.policy.retry_interval.unwrap_or(0.0)
-                }));
-                self.phase = Phase::Waiting(retry_at);
-                vec![ChainEffect::WakeAt(
-                    self.deadline.map_or(retry_at, |deadline| deadline.min(retry_at)),
-                )]
+                self.phase = Phase::Ready;
+                vec![ChainEffect::WakeAt(now)]
             }
             _ => Vec::new(),
         }
     }
 
-    fn cancel_active(&self) -> Vec<ChainEffect> {
+    fn cancel_active(&mut self, now: Ts) -> Vec<ChainEffect> {
+        if let Some(attempts) = &mut self.attempts {
+            attempts.cancel(now, &mut Vec::new());
+        }
         match self.phase {
             Phase::Active(attempt) => vec![ChainEffect::Cancel { attempt }],
             _ => Vec::new(),
         }
     }
 
-    fn launch(&mut self) -> Vec<ChainEffect> {
+    fn retry(&mut self, now: Ts) -> Vec<ChainEffect> {
+        let attempts = self.attempts.as_mut().expect("waiting backend attempts");
+        let mut steps = Vec::new();
+        attempts.wake(now, None, &mut steps);
+        if steps.iter().any(|step| matches!(step, AttemptStep::Launch(_))) {
+            self.launch_effect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn launch(&mut self, now: Ts) -> Vec<ChainEffect> {
+        let policy = RequestPolicy {
+            connect_timeout: None,
+            write_timeout: None,
+            read_timeout: None,
+            total_timeout: None,
+            max_retry: self.policy.max_retry_per_backend,
+            retry_interval: Duration::from_secs_f64(self.policy.retry_interval.unwrap_or(0.0)),
+        };
+        let mut attempts = Attempts::start(policy, now, &mut Vec::new());
+        attempts.constrain_deadline(self.deadline);
+        self.attempts = Some(attempts);
+        self.launch_effect()
+    }
+
+    fn launch_effect(&mut self) -> Vec<ChainEffect> {
         let Some((index, backend, _)) = self.entries.get(self.cursor).cloned() else {
             self.phase = Phase::Finished;
             return vec![ChainEffect::Finished(Err(ApiError::connection(Some(
@@ -252,7 +292,6 @@ impl ChainRequest {
             ))
             .into()))];
         };
-        self.used += 1;
         self.next_attempt += 1;
         let attempt = self.next_attempt;
         self.phase = Phase::Active(attempt);

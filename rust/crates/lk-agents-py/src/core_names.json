@@ -94,6 +94,7 @@
     "ProcSupervisor",
     "ProcessPoolOptions",
     "ProcessStartOptions",
+    "ProviderAttempts",
     "RealtimeFallbackModel",
     "RecordingOptions",
     "Reply",

@@ -15,7 +15,7 @@ use lk_agents_abi::metrics::base::InterruptionMetrics;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{self, RequestKind, RetryDecision};
 use lk_agents_abi::{Clock, HostRef};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::headers::HeaderProvider;
@@ -160,7 +160,8 @@ impl AdaptiveInterruptionDetector {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().unwrap().push(Arc::downgrade(&reconnect));
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (input_tx, input_rx) = mpsc::channel(INPUT_CAPACITY);
+        let (input_failure, _) = watch::channel(None);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let closed = Arc::new(AtomicBool::new(false));
 
@@ -172,6 +173,12 @@ impl AdaptiveInterruptionDetector {
             stream_events: event_tx,
             reconnect: reconnect.clone(),
             closed: closed.clone(),
+            input_failure: input_failure.clone(),
+        };
+        let input_tx = InterruptionInput {
+            sender: input_tx,
+            bytes: Arc::new(Semaphore::new(INPUT_BYTES)),
+            failure: input_failure,
         };
         let task = tokio::spawn(main_task(ctx, input_rx));
         InterruptionStream { input_tx: Some(input_tx), event_rx, reconnect, closed, task }
@@ -204,9 +211,20 @@ struct StreamContext {
     reconnect: Arc<Notify>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: Arc<AtomicBool>,
+    input_failure: watch::Sender<Option<ApiError>>,
 }
 
 impl StreamContext {
+    async fn input_failed(&self) -> StreamError {
+        let mut failure = self.input_failure.subscribe();
+        loop {
+            if let Some(error) = failure.borrow_and_update().clone() {
+                return StreamError { request: None, error, body: None };
+            }
+            let _ = failure.changed().await;
+        }
+    }
+
     fn wall(&self) -> f64 {
         self.clock.wall().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs_f64()
     }
@@ -262,11 +280,74 @@ impl StreamContext {
     }
 }
 
+// Five seconds of 20 ms input plus control events; retained audio is also bounded by bytes.
+const INPUT_CAPACITY: usize = 256;
+const INPUT_BYTES: usize = 2 * 1024 * 1024;
+
+struct QueuedInput {
+    event: InputEvent,
+    _bytes: OwnedSemaphorePermit,
+}
+
+/// The stream's synchronous input half. Saturation is terminal: silently losing a speech
+/// boundary or an audio frame would leave the detector deciding against a different sequence.
+#[derive(Clone)]
+pub struct InterruptionInput {
+    sender: mpsc::Sender<QueuedInput>,
+    bytes: Arc<Semaphore>,
+    failure: watch::Sender<Option<ApiError>>,
+}
+
+impl InterruptionInput {
+    pub fn send(&self, event: InputEvent) -> Result<(), StreamClosed> {
+        if self.failure.borrow().is_some() {
+            return Err(StreamClosed::CapacityExceeded);
+        }
+        if self.sender.is_closed() {
+            return Err(StreamClosed::InputEnded);
+        }
+        let bytes = match &event {
+            InputEvent::Audio(frame) => frame.data.len(),
+            _ => 0,
+        };
+        let reservation = u32::try_from(bytes)
+            .ok()
+            .filter(|&bytes| bytes as usize <= INPUT_BYTES)
+            .and_then(|bytes| self.bytes.clone().try_acquire_many_owned(bytes).ok());
+        let Some(reservation) = reservation else {
+            return Err(self.overloaded());
+        };
+        self.sender.try_send(QueuedInput { event, _bytes: reservation }).map_err(
+            |error| match error {
+                mpsc::error::TrySendError::Full(_) => self.overloaded(),
+                mpsc::error::TrySendError::Closed(_) => StreamClosed::InputEnded,
+            },
+        )
+    }
+
+    fn overloaded(&self) -> StreamClosed {
+        self.failure.send_replace(Some(
+            ApiError::new("interruption input queue capacity exceeded").with_retryable(false),
+        ));
+        StreamClosed::CapacityExceeded
+    }
+}
+
+async fn while_input_open<F: std::future::Future>(
+    ctx: &StreamContext,
+    future: F,
+) -> Result<F::Output, StreamError> {
+    use futures_util::future::{Either, select};
+    match select(Box::pin(ctx.input_failed()), Box::pin(future)).await {
+        Either::Left((error, _)) => Err(error),
+        Either::Right((value, _)) => Ok(value),
+    }
+}
+
 /// `InterruptionWebSocketStream`, from the caller's side.
 pub struct InterruptionStream {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// `Option` so `end_input()` can drop the sender (`self._input_ch.close()`).
-    input_tx: Option<mpsc::UnboundedSender<InputEvent>>,
+    input_tx: Option<InterruptionInput>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     event_rx: mpsc::UnboundedReceiver<StreamEvent>,
     reconnect: Arc<Notify>,
@@ -282,6 +363,14 @@ pub enum StreamClosed {
     Closed,
     #[error("livekit.agents.inference.interruption.InterruptionWebSocketStream input ended")]
     InputEnded,
+    #[error("interruption input queue capacity exceeded")]
+    CapacityExceeded,
+}
+
+impl From<StreamClosed> for lk_agents_abi::errors::ProviderError {
+    fn from(error: StreamClosed) -> Self {
+        ApiError::new(error.to_string()).with_retryable(false).into()
+    }
 }
 
 impl InterruptionStream {
@@ -292,7 +381,7 @@ impl InterruptionStream {
             return Err(StreamClosed::Closed);
         }
         let tx = self.input_tx.as_ref().ok_or(StreamClosed::InputEnded)?;
-        tx.send(ev).map_err(|_| StreamClosed::InputEnded)
+        tx.send(ev)
     }
 
     /// `flush()`.
@@ -300,16 +389,15 @@ impl InterruptionStream {
         self.push(InputEvent::Flush)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// A clone of the input sender, for pushing from another thread than the one reading
     /// verdicts. A holder must drop it when it ends input, or the stream's task parks forever.
-    pub fn sender(&self) -> Option<mpsc::UnboundedSender<InputEvent>> {
+    pub fn sender(&self) -> Option<InterruptionInput> {
         self.input_tx.clone()
     }
 
-    /// `end_input()`: flush, then close the input channel.
+    /// Close input after all accepted events. The core's flush is a no-op, so EOF does not
+    /// consume another queue entry (including when the last accepted event filled the queue).
     pub fn end_input(&mut self) -> Result<(), StreamClosed> {
-        self.flush()?;
         self.input_tx = None;
         Ok(())
     }
@@ -366,8 +454,7 @@ async fn join_task(
 /// `_main_task` (`inference/interruption.py:462`): the retry ladder around [`run`].
 async fn main_task(
     ctx: StreamContext,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    input_rx: mpsc::UnboundedReceiver<InputEvent>,
+    input_rx: mpsc::Receiver<QueuedInput>,
 ) -> Result<(), ApiError> {
     let result = main_task_inner(&ctx, input_rx).await;
     // `self._task.add_done_callback(lambda _: self._event_ch.close())` -- the consumer has to stop
@@ -379,8 +466,7 @@ async fn main_task(
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 async fn main_task_inner(
     ctx: &StreamContext,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    mut input_rx: mpsc::UnboundedReceiver<InputEvent>,
+    mut input_rx: mpsc::Receiver<QueuedInput>,
 ) -> Result<(), ApiError> {
     let mut num_retries = 0u32;
     loop {
@@ -410,7 +496,10 @@ async fn main_task_inner(
                 ctx.emit_error(err.request, err.error, true);
                 // On the session's clock.
                 let resume = ctx.clock.now().saturating_add(Duration::from_secs_f64(after));
-                ctx.clock.wait_until(resume).await;
+                if let Err(error) = while_input_open(ctx, ctx.clock.wait_until(resume)).await {
+                    ctx.emit_error(error.request, error.error.clone(), false);
+                    return Err(error.error);
+                }
                 num_retries += 1;
             }
         }
@@ -422,7 +511,7 @@ async fn main_task_inner(
 /// if `update_options` asked for a reconnect.
 async fn run(
     ctx: &StreamContext,
-    input_rx: &mut mpsc::UnboundedReceiver<InputEvent>,
+    input_rx: &mut mpsc::Receiver<QueuedInput>,
 ) -> Result<(), StreamError> {
     // The core outlives a reconnect, as in the reference: a mid-turn `update_options` keeps the
     // buffered agent audio.
@@ -444,7 +533,7 @@ async fn run(
 /// One connection's lifetime. `Ok(true)` means "reconnect", `Ok(false)` means "the input ended".
 async fn run_once(
     ctx: &StreamContext,
-    input_rx: &mut mpsc::UnboundedReceiver<InputEvent>,
+    input_rx: &mut mpsc::Receiver<QueuedInput>,
     core: &Arc<Mutex<InterruptionCore>>,
     socket: Socket,
 ) -> Result<bool, StreamError> {
@@ -481,6 +570,7 @@ async fn run_once(
             // another request.
             biased;
 
+            error = ctx.input_failed() => break Err(error),
             _ = inference_deadline => {
                 let outcome = core.lock().unwrap().handle(
                     InterruptionEvent::Deadline, ctx.clock.now(), ctx.wall(),
@@ -512,7 +602,8 @@ async fn run_once(
             }
             _ = ctx.reconnect.notified() => break Ok(true),
             ev = input_rx.recv(), if input_open => match ev {
-                Some(ev) => {
+                Some(queued) => {
+                    let ev = queued.event;
                     let wall = ctx.wall();
                     let outcome = {
                         let mut core = core.lock().unwrap();
@@ -693,38 +784,153 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
 
     let deadline = ctx.config.conn_options.connect_deadline(ctx.clock.now());
     let connect = ctx.config.transport.connect(&url, headers);
-    let (sender, receiver) = match lk_agents_abi::before(&*ctx.clock, deadline, connect).await {
-        Err(_) | Ok(Err(TransportError::Timeout)) => {
-            return Err(StreamError {
-                request: None,
-                error: connect_error(ConnectFailure::Timeout),
-                body: None,
-            });
-        }
-        Ok(Err(TransportError::Status { status, .. })) => {
-            return Err(StreamError {
-                request: None,
-                error: connect_error(ConnectFailure::Http { status }),
-                body: None,
-            });
-        }
-        Ok(Err(_other)) => {
-            return Err(StreamError {
-                request: None,
-                error: connect_error(ConnectFailure::Transport),
-                body: None,
-            });
-        }
-        Ok(Ok(halves)) => halves,
-    };
+    let (sender, receiver) =
+        match while_input_open(ctx, lk_agents_abi::before(&*ctx.clock, deadline, connect)).await? {
+            Err(_) | Ok(Err(TransportError::Timeout)) => {
+                return Err(StreamError {
+                    request: None,
+                    error: connect_error(ConnectFailure::Timeout),
+                    body: None,
+                });
+            }
+            Ok(Err(TransportError::Status { status, .. })) => {
+                return Err(StreamError {
+                    request: None,
+                    error: connect_error(ConnectFailure::Http { status }),
+                    body: None,
+                });
+            }
+            Ok(Err(_other)) => {
+                return Err(StreamError {
+                    request: None,
+                    error: connect_error(ConnectFailure::Transport),
+                    body: None,
+                });
+            }
+            Ok(Ok(halves)) => halves,
+        };
 
     let create = ClientMessage::SessionCreate { settings };
     let json = serde_json::to_string(&create)
         .expect("SessionCreateSettings is plain data with no non-finite defaults");
-    if sender.send_text(json).await.is_err() {
-        // `await ws.close()` before raising, or the half-open socket lingers through the retries.
-        sender.close().await;
-        return Err(StreamError { request: None, error: session_create_failed(), body: None });
+    match while_input_open(ctx, sender.send_text(json)).await {
+        Ok(Ok(())) => {}
+        outcome => {
+            sender.close().await;
+            return Err(match outcome {
+                Err(error) => error,
+                _ => StreamError { request: None, error: session_create_failed(), body: None },
+            });
+        }
     }
     Ok(Socket { sender, receiver })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interruption::{
+        AUDIO_PREFIX_DURATION, DETECTION_INTERVAL, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
+        OverlapStart, REMOTE_INFERENCE_TIMEOUT,
+    };
+    use crate::testkit::FakeWs;
+
+    fn detector(transport: Arc<FakeWs>) -> AdaptiveInterruptionDetector {
+        let opts = InterruptionOptions::new(
+            Some(0.7),
+            MIN_INTERRUPTION_DURATION,
+            MAX_AUDIO_DURATION,
+            AUDIO_PREFIX_DURATION,
+            DETECTION_INTERVAL,
+            REMOTE_INFERENCE_TIMEOUT,
+            "ws://localhost".into(),
+            "key".into(),
+            "secret".into(),
+        )
+        .unwrap();
+        AdaptiveInterruptionDetector::new(
+            opts,
+            ConnectionConfig { transport, ..Default::default() },
+            Arc::new(lk_agents_abi::RealClock::new()),
+        )
+        .0
+    }
+
+    #[tokio::test]
+    async fn stalled_input_refuses_overload_and_releases_the_detector_to_fallback() {
+        let audio_bytes = 16_000 * 3 * 2;
+        let cases = [
+            (InputEvent::Flush, INPUT_CAPACITY + 1),
+            (
+                InputEvent::Audio(lk_agents_abi::AudioFrame {
+                    data: vec![0; audio_bytes].into(),
+                    sample_rate: 16_000,
+                    num_channels: 1,
+                    samples_per_channel: 48_000,
+                }),
+                INPUT_BYTES / audio_bytes + 1,
+            ),
+        ];
+        for (input, count) in cases {
+            let detector = detector(Arc::new(FakeWs::hanging()));
+            let mut stream = detector.private_stream_once(None);
+            let refused = (0..count).any(|_| stream.push(input.clone()).is_err());
+            if !refused {
+                stream.aclose().await.unwrap();
+                panic!("a stalled interruption stream accepted unbounded input");
+            }
+            let event = lk_agents_abi::timeout(
+                &lk_agents_abi::RealClock::new(),
+                Duration::from_secs(1),
+                stream.recv_event(),
+            )
+            .await
+            .expect("queue failure must reach the caller without waiting for connect timeout");
+            assert!(matches!(event, Some(StreamEvent::Error(error))
+                if !error.recoverable && error.error.message.contains("capacity")));
+            assert!(stream.finish().await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn end_input_sends_accepted_audio_before_session_close() {
+        let peer = Arc::new(FakeWs::new(Vec::new()).keep_open());
+        let detector = detector(peer.clone());
+        let mut stream = detector.private_stream_once(None);
+        stream.push(InputEvent::AgentSpeechStarted).unwrap();
+        stream
+            .push(InputEvent::OverlapSpeechStarted(OverlapStart {
+                speech_duration: 0.0,
+                started_at: 1.0,
+                user_speaking_span: None,
+            }))
+            .unwrap();
+        stream
+            .push(InputEvent::Audio(lk_agents_abi::AudioFrame {
+                data: vec![0; 3200].into(),
+                sample_rate: 16_000,
+                num_channels: 1,
+                samples_per_channel: 1600,
+            }))
+            .unwrap();
+        for _ in 3..INPUT_CAPACITY {
+            stream.flush().unwrap();
+        }
+        stream.end_input().unwrap();
+        lk_agents_abi::timeout(
+            &lk_agents_abi::RealClock::new(),
+            Duration::from_secs(1),
+            stream.finish(),
+        )
+        .await
+        .expect("accepted input must drain before close")
+        .unwrap();
+        let sent = peer.sent();
+        assert_eq!(sent.len(), 3, "create, accepted inference, then close: {sent:?}");
+        assert!(sent[1].starts_with('<'), "accepted audio was discarded: {sent:?}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&sent[2]).unwrap()["type"],
+            serde_json::json!("session.close")
+        );
+    }
 }

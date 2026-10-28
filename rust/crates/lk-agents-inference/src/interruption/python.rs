@@ -259,7 +259,7 @@ pub struct InterruptionDetectorStream {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The input half. Synchronous so 50 fps pushes never queue behind a verdict. Dropped by
     /// `end_input`, which lets the receive half observe the end.
-    sender: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<InputEvent>>>>,
+    sender: Arc<std::sync::Mutex<Option<super::transport::InterruptionInput>>>,
 }
 
 register_class!(InterruptionDetectorStream);
@@ -331,7 +331,6 @@ impl InterruptionDetectorStream {
         match sender {
             None => Ok(()), // already ended: idempotent, like the reference's
             Some(sender) => {
-                let _ = sender.send(InputEvent::Flush);
                 drop(sender);
                 let inner = Arc::clone(&self.inner);
                 // The stream's own sender is behind the async lock; queued, since `end_input` is sync.
@@ -382,9 +381,9 @@ impl InterruptionDetectorStream {
         let guard = self.sender.lock().unwrap_or_else(|p| p.into_inner());
         match guard.as_ref() {
             None => Err(PyRuntimeError::new_err("this interruption stream has ended its input")),
-            Some(sender) => sender
-                .send(ev)
-                .map_err(|_| PyRuntimeError::new_err("this interruption stream is closed")),
+            Some(sender) => {
+                sender.send(ev).map_err(|error| PyRuntimeError::new_err(error.to_string()))
+            }
         }
     }
 }

@@ -350,9 +350,11 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self.input = aio.Chan[rtc.AudioFrame | RecognizeStream.Flush]()
+        self.input = aio.Chan[rtc.AudioFrame | RecognizeStream.Flush](
+            maxsize=256, _on_receive=self._input_received, _on_eof=self._input_ended
+        )
         """The audio ``_run`` reads, a ``Flush`` at the end of each segment."""
-        self._event_ch = aio.Chan[SpeechEvent]()
+        self._event_ch = aio.Chan[SpeechEvent](maxsize=64)
         self._start_time = time.time()
         self._start_time_offset = 0.0
         self._context: BaseModel | None = None
@@ -398,6 +400,13 @@ class RecognizeStream(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
+    def _input_received(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:
+        if isinstance(item, self.Flush):
+            self._core_attempts.expect_response()
+
+    def _input_ended(self) -> None:
+        self._core_attempts.input_ended()
+
     async def _main_task(self) -> None:
         started = time.time()
 
@@ -417,8 +426,8 @@ class RecognizeStream(ABC):
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized."""
-        self._check_input_not_ended()
         self._check_not_closed()
+        self._check_input_not_ended()
         if self._pushed_sr and self._pushed_sr != frame.sample_rate:
             raise ValueError("the sample rate of the input frames must be consistent")
         self._pushed_sr = frame.sample_rate
@@ -431,8 +440,8 @@ class RecognizeStream(ABC):
 
     def flush(self) -> None:
         """Mark the end of the current segment."""
-        self._check_input_not_ended()
         self._check_not_closed()
+        self._check_input_not_ended()
         if self._resampler:
             for frame in self._resampler.flush():
                 self.input.send_nowait(frame)
@@ -446,7 +455,10 @@ class RecognizeStream(ABC):
     async def aclose(self) -> None:
         """Close the stream immediately."""
         self.input.close()
-        await aio.cancel_and_wait(self._task)
+        self._event_ch.close()
+        await _bindings.cancel_and_wait_bounded(
+            self._task, timeout=self._core_attempts.cleanup_timeout
+        )
 
     async def __anext__(self) -> SpeechEvent:
         try:
@@ -462,10 +474,8 @@ class RecognizeStream(ABC):
 
     def send(self, event: SpeechEvent) -> None:
         """Hand ``event`` to the reader."""
-        record, final = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
-        if final:
-            # a recognition succeeded: the retry budget starts over
-            self._core_attempts.count = 0
+        self._core_attempts.observe(event)
+        record, _ = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
         _bindings.emit_metrics(self._stt, "STTMetrics", record)
         self._event_ch.send_nowait(event)
 
@@ -475,6 +485,8 @@ class RecognizeStream(ABC):
         return self._event_ch.closed
 
     def _check_not_closed(self) -> None:
+        if self._task.done() and not self._task.cancelled() and (error := self._task.exception()):
+            raise error
         if self.closed:
             cls = type(self)
             raise RuntimeError(f"{cls.__module__}.{cls.__name__} is closed")

@@ -40,6 +40,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type ProviderAttempts = lk_agents_inference::provider::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;

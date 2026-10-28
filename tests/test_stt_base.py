@@ -44,8 +44,9 @@ class _DummyStream(RecognizeStream):
         self._run_count += 1
         if self._fail_first_run and self._run_count == 1:
             raise APIConnectionError("fake failure to trigger retry")
-        # emit a final and exit so _main_task can complete normally
-        self._event_ch.send_nowait(
+        async for _ in self.input:
+            pass
+        self.send(
             SpeechEvent(
                 type=SpeechEventType.FINAL_TRANSCRIPT,
                 alternatives=[SpeechData(language="", text="hello")],
@@ -118,6 +119,7 @@ async def test_start_time_reseeded_on_retry() -> None:
     # by assigning a sentinel value before the task picks up.
     sentinel = 1.0
     stream.start_time = sentinel
+    stream.end_input()
 
     # Let the main task run: it should retry past the first-run APIError, and
     # on each attempt re-seed start_time to a fresh time.time() value before
@@ -205,11 +207,9 @@ async def test_recognize_returns_the_first_success_without_retrying() -> None:
     assert event.alternatives[0].text == "hello"
 
 
-async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.real_time
+async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final() -> None:
     frame = silence_frame(duration=0.1, sample_rate=16_000)
-    monkeypatch.setattr("livekit.agents.stt.stream_adapter.utils.merge_frames", lambda _: frame)
     speech = FakeUserSpeech(
         start_time=0.0,
         end_time=0.1,
@@ -260,6 +260,8 @@ class _FlappingStream(RecognizeStream):
         await asyncio.sleep(self._uptime)
         if self.runs <= self._drops:
             raise APIConnectionError("socket dropped")
+        async for _ in self.input:
+            pass
 
 
 async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_timeout() -> None:
@@ -267,6 +269,7 @@ async def test_retry_budget_resets_after_an_attempt_that_outlived_the_connect_ti
     # keeps an idle socket (Cartesia closes it every ~3 minutes) from exhausting the budget
     drops = DEFAULT_API_CONNECT_OPTIONS.max_retry * 3
     stream = _FlappingStream(stt=_DummySTT(), uptime=180.0, drops=drops)
+    stream.end_input()
     try:
         await stream._task
         assert stream.runs == drops + 1

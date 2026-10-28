@@ -38,7 +38,10 @@ fn cancelled(attempt: u32) -> LlmRequestEffect {
 }
 
 fn text(content: &str) -> WireChunk {
-    serde_json::from_value(serde_json::json!({"id": "c", "choices": [{"delta": {"content": content}}]})).unwrap()
+    serde_json::from_value(
+        serde_json::json!({"id": "c", "choices": [{"delta": {"content": content}}]}),
+    )
+    .unwrap()
 }
 
 fn failure() -> AttemptFailure {
@@ -75,10 +78,16 @@ fn failures_before_output_are_retried_max_retry_times_with_backoff() {
             assert!(request.is_settled());
             return;
         }
-        assert!(matches!(effects.as_slice(), [LlmRequestEffect::AttemptFailed { .. }]), "{effects:?}");
+        assert!(
+            matches!(effects.as_slice(), [LlmRequestEffect::AttemptFailed { .. }]),
+            "{effects:?}"
+        );
         let backoff = if attempt == 0 { 100 } else { 2_000 };
         let due = now.saturating_add(Duration::from_millis(backoff));
-        assert_eq!(request.handle(LlmRequestEvent::Wake, due.saturating_sub(Duration::from_millis(1))), vec![]);
+        assert_eq!(
+            request.handle(LlmRequestEvent::Wake, due.saturating_sub(Duration::from_millis(1))),
+            vec![]
+        );
         assert_eq!(request.handle(LlmRequestEvent::Wake, due), vec![started(attempt + 1)]);
         now = due;
     }
@@ -90,7 +99,9 @@ fn a_failure_after_visible_output_ends_the_request_unretryable() {
     let mut request = start(policy());
     reading(&mut request, 0, at(0));
     let effects = request.handle(LlmRequestEvent::Chunk { attempt: 0, chunk: text("Hel") }, at(5));
-    assert!(matches!(effects.as_slice(), [LlmRequestEffect::Deliver(chunk)] if chunk.has_response()));
+    assert!(
+        matches!(effects.as_slice(), [LlmRequestEffect::Deliver(chunk)] if chunk.has_response())
+    );
     let effects = request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(6));
     let err = finished(&effects).unwrap().clone().unwrap_err();
     assert!(!err.retryable);
@@ -100,14 +111,20 @@ fn a_failure_after_visible_output_ends_the_request_unretryable() {
 // Catches: status retry rules lost in the machine: a 401 retried, a 429 not.
 #[test]
 fn a_rejection_is_retried_only_when_its_status_is_transient() {
-    let reject = |status| AttemptFailure::Rejected { status, message: "no".into(), request_id: None };
+    let reject =
+        |status| AttemptFailure::Rejected { status, message: "no".into(), request_id: None };
     let mut request = start(policy());
-    let effects = request.handle(LlmRequestEvent::Failed { attempt: 0, failure: reject(429) }, at(0));
+    let effects =
+        request.handle(LlmRequestEvent::Failed { attempt: 0, failure: reject(429) }, at(0));
     assert!(matches!(effects.as_slice(), [LlmRequestEffect::AttemptFailed { .. }]));
     request.handle(LlmRequestEvent::Wake, at(100));
-    let effects = request.handle(LlmRequestEvent::Failed { attempt: 1, failure: reject(401) }, at(100));
+    let effects =
+        request.handle(LlmRequestEvent::Failed { attempt: 1, failure: reject(401) }, at(100));
     let err = finished(&effects).unwrap().clone().unwrap_err();
-    assert_eq!((err.kind, err.status_code, err.retryable), (ApiErrorKind::Status, Some(401), false));
+    assert_eq!(
+        (err.kind, err.status_code, err.retryable),
+        (ApiErrorKind::Status, Some(401), false)
+    );
 }
 
 // Catches: a read timer that counts the consumer's own pauses (backpressure) as remote
@@ -133,21 +150,27 @@ fn the_read_limit_counts_remote_silence_only_while_the_consumer_waits() {
 // Catches: one timer for the whole exchange, or a timeout reported without its phase.
 #[test]
 fn connect_and_write_limits_report_their_own_phase() {
-    let mut request = start(RequestPolicy { write_timeout: Some(Duration::from_secs(3)), ..policy() });
+    let mut request =
+        start(RequestPolicy { write_timeout: Some(Duration::from_secs(3)), ..policy() });
     let effects = request.handle(LlmRequestEvent::Wake, at(10_000));
     assert_eq!(effects[0], cancelled(0));
-    assert!(matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Connect)));
+    assert!(
+        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Connect))
+    );
     request.handle(LlmRequestEvent::Wake, at(10_100));
     request.handle(LlmRequestEvent::Connected { attempt: 1 }, at(11_000));
     assert_eq!(request.wake_at(), Some(at(14_000)));
     let effects = request.handle(LlmRequestEvent::Wake, at(14_000));
-    assert!(matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Write)));
+    assert!(
+        matches!(&effects[1], LlmRequestEffect::AttemptFailed { error, .. } if error.phase == Some(TimeoutPhase::Write))
+    );
 }
 
 // Catches: a total deadline reset by retries or progress, or an attempt launched after it.
 #[test]
 fn the_total_limit_spans_every_attempt_and_stops_the_request() {
-    let mut request = start(RequestPolicy { total_timeout: Some(Duration::from_secs(3)), ..policy() });
+    let mut request =
+        start(RequestPolicy { total_timeout: Some(Duration::from_secs(3)), ..policy() });
     request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(0));
     request.handle(LlmRequestEvent::Wake, at(100));
     reading(&mut request, 1, at(100));
@@ -158,7 +181,10 @@ fn the_total_limit_spans_every_attempt_and_stops_the_request() {
     let err = finished(&effects).unwrap().clone().unwrap_err();
     assert_eq!((err.phase, err.retryable), (Some(TimeoutPhase::Total), false));
     request.handle(LlmRequestEvent::Failed { attempt: 1, failure: failure() }, at(3_001));
-    assert!(request.handle(LlmRequestEvent::Wake, at(9_000)).iter().all(|e| !matches!(e, LlmRequestEffect::LlmRequestStart { .. } | LlmRequestEffect::Finished(_))));
+    assert!(request.handle(LlmRequestEvent::Wake, at(9_000)).iter().all(|e| !matches!(
+        e,
+        LlmRequestEffect::LlmRequestStart { .. } | LlmRequestEffect::Finished(_)
+    )));
 }
 
 // Catches: a cancelled request that still retries, reports an outcome, or forgets the cleanup of
@@ -168,7 +194,10 @@ fn cancel_stops_the_attempt_and_waits_for_its_cleanup() {
     let mut request = start(policy());
     assert_eq!(request.handle(LlmRequestEvent::Cancel, at(10)), vec![cancelled(0)]);
     assert!(!request.is_settled(), "the attempt still owes its release");
-    assert_eq!(request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(11)), vec![]);
+    assert_eq!(
+        request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(11)),
+        vec![]
+    );
     assert_eq!(request.handle(LlmRequestEvent::AttemptClosed { attempt: 0 }, at(12)), vec![]);
     assert!(request.is_settled());
     assert_eq!(request.wake_at(), None);
@@ -180,11 +209,18 @@ fn a_superseded_attempts_events_are_ignored() {
     let mut request = start(policy());
     request.handle(LlmRequestEvent::Failed { attempt: 0, failure: failure() }, at(0));
     request.handle(LlmRequestEvent::Wake, at(100));
-    assert_eq!(request.handle(LlmRequestEvent::Chunk { attempt: 0, chunk: text("stale") }, at(101)), vec![]);
+    assert_eq!(
+        request.handle(LlmRequestEvent::Chunk { attempt: 0, chunk: text("stale") }, at(101)),
+        vec![]
+    );
     assert_eq!(request.handle(LlmRequestEvent::Ended { attempt: 0 }, at(102)), vec![]);
-    let effects = request.handle(LlmRequestEvent::Chunk { attempt: 1, chunk: text("fresh") }, at(103));
+    let effects =
+        request.handle(LlmRequestEvent::Chunk { attempt: 1, chunk: text("fresh") }, at(103));
     assert_eq!(effects.len(), 1);
-    assert_eq!(request.handle(LlmRequestEvent::Ended { attempt: 1 }, at(104)), vec![LlmRequestEffect::Finished(Ok(()))]);
+    assert_eq!(
+        request.handle(LlmRequestEvent::Ended { attempt: 1 }, at(104)),
+        vec![LlmRequestEffect::Finished(Ok(()))]
+    );
 }
 
 // Catches: an attempt that never settles reported as clean termination, or reported forever
@@ -195,7 +231,10 @@ fn a_missed_cleanup_deadline_is_reported_once() {
     request.handle(LlmRequestEvent::Cancel, at(0));
     let due = at(0).saturating_add(ATTEMPT_CLEANUP_TIMEOUT);
     assert_eq!(request.wake_at(), Some(due));
-    assert_eq!(request.handle(LlmRequestEvent::Wake, due), vec![LlmRequestEffect::CleanupIncomplete { request_id: ID, attempt: 0 }]);
+    assert_eq!(
+        request.handle(LlmRequestEvent::Wake, due),
+        vec![LlmRequestEffect::CleanupIncomplete { request_id: ID, attempt: 0 }]
+    );
     assert_eq!(request.wake_at(), None);
 }
 
@@ -207,4 +246,20 @@ fn an_attempt_closed_without_an_outcome_fails() {
     let effects = request.handle(LlmRequestEvent::AttemptClosed { attempt: 0 }, at(5));
     assert_eq!(finished(&effects).unwrap().clone().unwrap_err().kind, ApiErrorKind::Connection);
     assert!(request.is_settled());
+}
+
+#[test]
+fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
+    let (_request, effects) = LlmRequest::start(
+        ID,
+        LLM,
+        RequestPolicy { total_timeout: Some(Duration::ZERO), ..policy() },
+        ("<think>", "</think>"),
+        at(0),
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(effect, LlmRequestEffect::LlmRequestStart { .. }))
+    );
+    let error = finished(&effects).expect("terminal outcome").as_ref().unwrap_err();
+    assert_eq!(error.phase, Some(TimeoutPhase::Total));
 }

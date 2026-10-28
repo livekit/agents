@@ -165,7 +165,7 @@ class FakeRecognizeStream(RecognizeStream):
         return self._attempt
 
     def send_fake_transcript(self, transcript: str, is_final: bool = True) -> None:
-        self._event_ch.send_nowait(
+        self.send(
             SpeechEvent(
                 type=SpeechEventType.FINAL_TRANSCRIPT
                 if is_final
@@ -183,10 +183,10 @@ class FakeRecognizeStream(RecognizeStream):
 
         if self._stt._fake_require_audio:
             got_audio = False
-            async for data in self._input_ch:
+            async for data in self.input:
                 if isinstance(data, rtc.AudioFrame):
                     got_audio = True
-                elif isinstance(data, self._FlushSentinel) and got_audio:
+                elif isinstance(data, self.Flush) and got_audio:
                     if self._stt._fake_transcript is not None:
                         self.send_fake_transcript(self._stt._fake_transcript)
                     got_audio = False
@@ -196,7 +196,7 @@ class FakeRecognizeStream(RecognizeStream):
 
             await self._fake_user_speech_task()
 
-            async for _ in self._input_ch:
+            async for _ in self.input:
                 pass
 
         if self._stt._fake_exception is not None:
@@ -207,7 +207,7 @@ class FakeRecognizeStream(RecognizeStream):
             return
 
         # start from when the first frame is pushed
-        await self._input_ch.recv()
+        await self.input.recv()
         start_time = time.perf_counter()
 
         def curr_time() -> float:

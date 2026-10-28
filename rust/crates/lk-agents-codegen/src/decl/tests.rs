@@ -813,3 +813,50 @@ fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
         assert!(llm.contains(want), "{want}\n{llm}");
     }
 }
+
+#[test]
+fn bound_provider_proxies_use_the_declared_native_wrapper_path() {
+    for (wrapper, expected) in [
+        ("crate::llm::class::Retrying", "::lk_agents_abi::llm::class::Retrying"),
+        ("lk_agents_runtime::stt::RetryingStt", "::lk_agents_runtime::stt::RetryingStt"),
+        ("RuntimeRetry", "::lk_agents_runtime::stt::RetryingStt"),
+    ] {
+        let source = format!(
+            "pub struct Retrying; use lk_agents_runtime::stt::RetryingStt as RuntimeRetry; {}",
+            proxy(&format!(
+                "#[host(bind(wrap = {wrapper}))] fn with_conn(&self, conn: &Report) -> Option<std::sync::Arc<dyn Callbacks>> {{ None }}"
+            ))
+        );
+        let decls = read(&source).expect("native wrapper resolves");
+        assert_eq!(decls.proxies[0].methods[0].wrap.as_deref(), Some(expected));
+        let emitted = crate::adapter::emit(&decls).expect("wrapper emits");
+        let adapter = &emitted.iter().find(|o| o.path == "llm.rs").unwrap().text;
+        assert!(adapter.contains(&format!("Some({expected}::bound(")), "{adapter}");
+    }
+    for invalid in ["lk_agents_runtime::stt::RetryingStt<Report>", "&Report"] {
+        let source = proxy(&format!(
+            "#[host(bind(wrap = {invalid}))] fn with_conn(&self, conn: &Report) -> Option<std::sync::Arc<dyn Callbacks>> {{ None }}"
+        ));
+        let error = read(&source).expect_err("invalid wrapper shape is refused");
+        assert!(error.contains("Callbacks::with_conn"), "{error}");
+    }
+}
+
+#[test]
+fn declared_classes_consume_string_enums_with_native_error_expressions() {
+    let source = format!(
+        "{} {}",
+        r#"
+        #[crate::host(string)]
+        #[crate::host(wire_strs(err = UnknownKind, msg = UnknownKind(s.to_owned())))]
+        pub enum Kind { Batch, Stream }
+        "#,
+        class("#[host(new)] fn new(kind: Kind) -> Self;")
+    );
+    let decls = read(&source).expect("string enum with its native diagnostic resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
+    assert!(llm.contains("fn new(kind: ::lk_agents_abi::llm::class::Kind)"), "{llm}");
+    let stubs = crate::class_stub::emit(&decls).expect("stubs");
+    assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
+}

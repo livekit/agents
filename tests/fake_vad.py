@@ -48,7 +48,7 @@ class FakeVADStream(VADStream):
         if self._vad._start_time is None:
             # the clock starts with the first frame; the fake input pushes one burst, so a
             # later stream must not wait for another
-            async for input_frame in self._input_ch:
+            async for input_frame in self.input:
                 if isinstance(input_frame, rtc.AudioFrame):
                     break
             else:
@@ -79,7 +79,7 @@ class FakeVADStream(VADStream):
             await asyncio.sleep(next_end_of_speech_time - current_time())
             self._send_vad_event(VADEventType.END_OF_SPEECH, fake_speech, current_time())
 
-        async for _ in self._input_ch:
+        async for _ in self.input:
             # wait for the input to be ended
             pass
 
@@ -92,7 +92,7 @@ class FakeVADStream(VADStream):
         else:
             raw_accumulated_speech = 0.0
             raw_accumulated_silence = curr_time - fake_speech.end_time
-        self._event_ch.send_nowait(
+        self.send(
             VADEvent(
                 type=type,
                 samples_index=0,

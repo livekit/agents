@@ -11,6 +11,7 @@ use crate::Ts;
 /// A field outside its declared range, named by its path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("conn_options.{field} {requirement}")]
+#[crate::host(error(kind = "ValueError"))]
 pub struct ApiConnectOptionsError {
     pub field: &'static str,
     pub requirement: &'static str,
@@ -61,7 +62,7 @@ impl ApiConnectOptions {
     /// built only from a validated value.
     pub fn validate(&self) -> Result<(), ApiConnectOptionsError> {
         let seconds = |field, value: f64| {
-            if value.is_finite() && value >= 0.0 && value <= MAX_SECONDS {
+            if duration_from_seconds(value).is_some() {
                 Ok(())
             } else {
                 Err(ApiConnectOptionsError {
@@ -123,6 +124,13 @@ impl ApiConnectOptions {
 /// `seconds` (validated) after `start`; `None` disables the limit.
 fn after(start: Ts, seconds: Option<f64>) -> Option<Ts> {
     seconds.map(|seconds| start.saturating_add(Duration::from_secs_f64(seconds)))
+}
+
+/// A finite, non-negative duration within the connection policy's supported range.
+/// Zero remains an armed limit; callers reject `None` rather than disabling a timeout.
+pub fn duration_from_seconds(seconds: f64) -> Option<Duration> {
+    (seconds.is_finite() && seconds >= 0.0 && seconds <= MAX_SECONDS)
+        .then(|| Duration::from_secs_f64(seconds))
 }
 
 /// The largest duration accepted: a century, far below what `Duration::from_secs_f64` overflows on.

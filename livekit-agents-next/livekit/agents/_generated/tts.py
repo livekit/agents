@@ -569,7 +569,8 @@ class _ChunkedStreamFromStream(ChunkedStream):
             stream=False,
         )
         async with self._tts.stream(conn_options=self._conn_options) as stream:
-            stream._core_attempts.core = self._core_attempts.core
+            # The batch operation owns retries; reopening this child is one attempt.
+            stream._core_attempts.core = True
             stream.push_text(self._input_text)
             stream.end_input()
             async for ev in stream:

@@ -109,16 +109,23 @@ impl ::lk_agents_abi::Stt for SttProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
+        let error_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> { Ok((::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?).unbind()) }) {
+            Ok(value) => value,
+            Err(error) => {
+                ::lk_agents_abi::python::log::warn!("Stt._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         let context = ::std::clone::Clone::clone(&self.context);
         self.notifier.notify(context, "Stt._core_failed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))(error_arg).into_value(py).into_bound(py).into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [error_arg.into_bound(py), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
             Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
 
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Stt>> {
-        Some(::lk_agents_abi::stt::retry::RetryingStt::bound(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }), conn, ::lk_agents_runtime::process::host_clock()))
+        Some(::lk_agents_runtime::stt::RetryingStt::bound(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }), conn, ::lk_agents_runtime::process::host_clock()))
     }
 
     async fn recognize(&self, buffer: &[::lk_agents_abi::AudioFrame], language: Option<&::lk_agents_abi::LanguageCode>) -> ::std::result::Result<::lk_agents_abi::SpeechEvent, ::lk_agents_abi::errors::ProviderError> {

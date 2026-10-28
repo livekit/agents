@@ -29,15 +29,16 @@ fn request(deadline: Option<Ts>) -> ChainRequest {
 fn fallback_chain_vectors_execute_allowances_and_retain_every_failure() {
     let mut request = request(None);
     for (attempt, index) in [(1, 0), (2, 0), (3, 1), (4, 1)] {
+        let now = Ts::from_nanos((attempt - 1) * 100_000_000);
         assert_eq!(
-            request.handle(ChainEvent::Wake, at(0)),
+            request.handle(ChainEvent::Wake, now),
             vec![ChainEffect::SttStreamOpen {
                 attempt,
                 index,
                 stt: ResourceId(if index == 0 { 10 } else { 20 })
             }]
         );
-        let effects = request.handle(fail(attempt), at(0));
+        let effects = request.handle(fail(attempt), now);
         if attempt == 4 {
             let ChainEffect::Finished(Err(error)) = &effects[0] else { panic!("not failed") };
             for i in 1..=4 {
@@ -72,4 +73,19 @@ fn fallback_single_health_authority_isolates_instances_and_rejects_stale_probes(
     assert!(health.is_available(other));
     assert!(health.recovered(shared, health.probe_generation(shared)));
     assert!(health.is_available(shared));
+}
+
+#[test]
+fn fallback_retries_share_the_request_attempt_backoff() {
+    let mut request = request(None);
+    request.handle(ChainEvent::Wake, at(0));
+    assert_eq!(
+        request.handle(fail(1), at(0)),
+        vec![ChainEffect::WakeAt(Ts::from_nanos(100_000_000))]
+    );
+    assert!(request.handle(ChainEvent::Wake, Ts::from_nanos(99_000_000)).is_empty());
+    assert!(matches!(
+        request.handle(ChainEvent::Wake, Ts::from_nanos(100_000_000))[0],
+        ChainEffect::SttStreamOpen { index: 0, .. }
+    ));
 }

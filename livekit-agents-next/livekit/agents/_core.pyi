@@ -359,6 +359,9 @@ from ._generated._core_text_session import (
     _core_persist_text_session_state as _core_persist_text_session_state,
     _core_restore_text_session_state as _core_restore_text_session_state,
 )
+from ._generated._core_types import (
+    ProviderAttempts as ProviderAttempts,
+)
 from ._generated._core_worker import (
     ExitSignals as ExitSignals,
     cpu_count as cpu_count,

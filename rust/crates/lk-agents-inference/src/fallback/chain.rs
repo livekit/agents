@@ -2,6 +2,7 @@
 //! share. Scanned from index 0 on every request (`llm:274`), so a recovered primary takes the next
 //! one; probes re-issue the real request (`llm:174-200`, `stt:201-235`, `tts:504-531`).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
@@ -344,7 +345,9 @@ impl<B: Backend> FallbackChain<B> {
             deadline,
             &self.status.lock().expect("chain status").health,
         );
-        let mut effects = request.handle(ChainEvent::Wake, started);
+        let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, started).into();
+        let mut active: Option<(u64, usize, u64, RunningAttempt<T, S>)> = None;
+        let mut served = None;
         let recover_conn = conn_options_for_attempt(caller_conn, &self.policy);
         for index in self.order() {
             if !self.is_available(index) {
@@ -352,68 +355,138 @@ impl<B: Backend> FallbackChain<B> {
             }
         }
         loop {
-            let Some(effect) = effects.pop() else {
-                effects = request.handle(ChainEvent::Wake, self.clock.now());
+            let Some(effect) = effects.pop_front() else {
+                let Some((id, index, attempt_id, running)) = active.as_mut() else {
+                    effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
+                    continue;
+                };
+                let mut closed = self.stop.subscribe();
+                let observation =
+                    running.observe(self.clock.as_ref(), deadline, &mut cancel, &mut closed).await;
+                let event = match observation {
+                    AttemptObservation::Interrupted(event) => event,
+                    AttemptObservation::Completed(outcome, updated_state) => {
+                        if let Some(updated_state) = updated_state {
+                            *state = updated_state;
+                        }
+                        match outcome {
+                            Attempt::Served(value) => {
+                                served = Some((value, *index, *attempt_id));
+                                if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
+                                    ChainEvent::Cancel
+                                } else {
+                                    ChainEvent::Succeeded { attempt: *id }
+                                }
+                            }
+                            Attempt::Failed { error, produced_output } => {
+                                if error.api_kind() != Some(ApiErrorKind::Cancelled)
+                                    && !(error.api_kind() == Some(ApiErrorKind::Timeout)
+                                        && deadline.is_some_and(|at| self.clock.now() >= at))
+                                {
+                                    self.select(*index, 0);
+                                    self.set_available(*index, false);
+                                }
+                                if !produced_output
+                                    && !self.closed.load(Ordering::SeqCst)
+                                    && !*cancel.borrow()
+                                {
+                                    self.try_recovery(*index, slot, req, &recover_conn, deadline);
+                                }
+                                ChainEvent::Failed { attempt: *id, error, produced_output }
+                            }
+                        }
+                    }
+                };
+                if matches!(event, ChainEvent::Succeeded { .. } | ChainEvent::Failed { .. })
+                    || served.is_some()
+                {
+                    active = None;
+                }
+                effects.extend(request.handle(event, self.clock.now()));
                 continue;
             };
             match effect {
                 ChainEffect::Finished(result) => {
-                    return result.map(|()| unreachable!("success returns its value"));
+                    result?;
+                    let (value, index, attempt_id) =
+                        served.take().expect("successful attempt outcome");
+                    self.mark_serving(index);
+                    self.select(index, attempt_id);
+                    self.set_available(index, true);
+                    return Ok(ChainOutcome::Served(value));
                 }
                 ChainEffect::WakeAt(at) => {
                     let mut closed = self.stop.subscribe();
                     let clock = self.clock.clone();
                     let wake = wait_until(clock.as_ref(), at, &mut cancel, &mut closed).await;
-                    effects = request.handle(
+                    effects.extend(request.handle(
                         if wake { ChainEvent::Wake } else { ChainEvent::Cancel },
                         self.clock.now(),
-                    );
+                    ));
                 }
                 ChainEffect::LlmRequestStart { attempt: id, index, .. }
                 | ChainEffect::SttStreamOpen { attempt: id, index, .. }
                 | ChainEffect::TtsSynthesisStart { attempt: id, index, .. } => {
                     if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
-                        effects = request.handle(ChainEvent::Cancel, self.clock.now());
+                        effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
                         continue;
                     }
                     // Recheck supplied time immediately before executing an authorized launch.
                     if deadline.is_some_and(|at| self.clock.now() >= at) {
-                        effects = request.handle(ChainEvent::Wake, self.clock.now());
+                        effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
                         continue;
                     }
                     let attempt_id = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
                     self.select(index, attempt_id);
                     let mut conn = conn_options_for_attempt(caller_conn, &self.policy);
-                    let remaining = deadline
-                        .map(|at| at.saturating_duration_since(self.clock.now()).as_secs_f64());
-                    conn.total_timeout = match (conn.total_timeout, remaining) {
-                        (Some(attempt), Some(total)) => Some(attempt.min(total)),
-                        (attempt, total) => attempt.or(total),
-                    };
+                    let clock = self.clock.clone();
+                    let closed = self.stop.subscribe();
                     let backend = Arc::clone(&self.entries[index]);
                     let request_input = req.clone();
                     let mut attempt_state = state.clone();
                     let attempt_fn = attempt.clone();
                     let (stop_tx, stop_rx) = watch::channel(false);
-                    let mut closed = self.stop.subscribe();
-                    let clock = self.clock.clone();
-                    let attempt_deadline = deadline;
                     let (result_tx, result_rx) = oneshot::channel();
                     let (done_tx, done) = oneshot::channel();
                     let handle = self.spawner.spawn_unboxed(async move {
                         let _done = done_tx;
-                        let outcome = match backend.open(&request_input, &conn).await {
-                            Ok(session) => {
-                                attempt_fn(
-                                    index,
-                                    backend.as_ref(),
-                                    session,
-                                    &mut attempt_state,
-                                    stop_rx,
-                                )
-                                .await
+                        // Admission can outlive its authorization while the executor is busy.
+                        let now = clock.now();
+                        let outcome = if *stop_rx.borrow() || *closed.borrow() {
+                            Attempt::Failed {
+                                error: ApiError::status("fallback cancelled", 499, None, None)
+                                    .into(),
+                                produced_output: false,
                             }
-                            Err(error) => Attempt::Failed { error, produced_output: false },
+                        } else if deadline.is_some_and(|at| now >= at) {
+                            Attempt::Failed {
+                                error: ApiError::timed_out(
+                                    lk_agents_abi::errors::TimeoutPhase::Total,
+                                )
+                                .with_retryable(false)
+                                .into(),
+                                produced_output: false,
+                            }
+                        } else {
+                            let remaining =
+                                deadline.map(|at| at.saturating_duration_since(now).as_secs_f64());
+                            conn.total_timeout = match (conn.total_timeout, remaining) {
+                                (Some(attempt), Some(total)) => Some(attempt.min(total)),
+                                (attempt, total) => attempt.or(total),
+                            };
+                            match backend.open(&request_input, &conn).await {
+                                Ok(session) => {
+                                    attempt_fn(
+                                        index,
+                                        backend.as_ref(),
+                                        session,
+                                        &mut attempt_state,
+                                        stop_rx,
+                                    )
+                                    .await
+                                }
+                                Err(error) => Attempt::Failed { error, produced_output: false },
+                            }
                         };
                         let _ = result_tx.send((outcome, attempt_state));
                     });
@@ -423,59 +496,21 @@ impl<B: Backend> FallbackChain<B> {
                         active.retain(|probe| !probe.handle.is_finished());
                         active.push(Probe { handle, done });
                     }
-                    let (outcome, updated_state) = execute_attempt(
-                        result_rx,
-                        clock.as_ref(),
-                        attempt_deadline,
-                        &mut cancel,
-                        &mut closed,
-                        stop_tx,
-                    )
-                    .await;
-                    if let Some(updated_state) = updated_state {
+                    active = Some((
+                        id,
+                        index,
+                        attempt_id,
+                        RunningAttempt { result: result_rx, stop: stop_tx },
+                    ));
+                }
+                ChainEffect::Cancel { attempt } => {
+                    if let Some((id, _, _, running)) = active.as_mut()
+                        && *id == attempt
+                        && let Some(updated_state) = running.cancel(self.clock.as_ref()).await
+                    {
                         *state = updated_state;
                     }
-                    match outcome {
-                        Attempt::Served(value) => {
-                            let event = if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
-                                ChainEvent::Cancel
-                            } else {
-                                ChainEvent::Succeeded { attempt: id }
-                            };
-                            let terminal = request.handle(event, self.clock.now());
-                            if let Some(ChainEffect::Finished(Err(error))) = terminal
-                                .into_iter()
-                                .find(|effect| matches!(effect, ChainEffect::Finished(_)))
-                            {
-                                return Err(error);
-                            }
-                            self.mark_serving(index);
-                            self.select(index, attempt_id);
-                            self.set_available(index, true);
-                            return Ok(ChainOutcome::Served(value));
-                        }
-                        Attempt::Failed { error, produced_output } => {
-                            if error.api_kind() != Some(ApiErrorKind::Cancelled)
-                                && !(error.api_kind() == Some(ApiErrorKind::Timeout)
-                                    && deadline.is_some_and(|at| self.clock.now() >= at))
-                            {
-                                self.select(index, 0);
-                                self.set_available(index, false);
-                            }
-                            effects = request.handle(
-                                ChainEvent::Failed { attempt: id, error, produced_output },
-                                self.clock.now(),
-                            );
-                            if !produced_output
-                                && !self.closed.load(Ordering::SeqCst)
-                                && !*cancel.borrow()
-                            {
-                                self.try_recovery(index, slot, req, &recover_conn, deadline);
-                            }
-                        }
-                    }
                 }
-                ChainEffect::Cancel { .. } => {}
             }
         }
     }
@@ -671,57 +706,74 @@ async fn wait_until(
     matches!(select(Box::pin(clock.wait_until(at)), Box::pin(stop)).await, Either::Left(_))
 }
 
-async fn execute_attempt<T, S>(
+enum AttemptObservation<T, S> {
+    Completed(Attempt<T>, Option<S>),
+    Interrupted(ChainEvent),
+}
+
+/// The runtime owns an exchange until settlement; only a core Cancel effect signals its stop.
+struct RunningAttempt<T, S> {
     result: oneshot::Receiver<(Attempt<T>, S)>,
-    clock: &dyn Clock,
-    deadline: Option<Ts>,
-    cancel: &mut watch::Receiver<bool>,
-    closed: &mut watch::Receiver<bool>,
     stop: watch::Sender<bool>,
-) -> (Attempt<T>, Option<S>) {
-    use futures_util::future::{Either, select};
-    let limit = async {
-        match deadline {
-            Some(at) => clock.wait_until(at).await,
-            None => std::future::pending().await,
+}
+
+impl<T, S> RunningAttempt<T, S> {
+    async fn observe(
+        &mut self,
+        clock: &dyn Clock,
+        deadline: Option<Ts>,
+        cancel: &mut watch::Receiver<bool>,
+        closed: &mut watch::Receiver<bool>,
+    ) -> AttemptObservation<T, S> {
+        use futures_util::future::{Either, select};
+        if *cancel.borrow() || *closed.borrow() {
+            return AttemptObservation::Interrupted(ChainEvent::Cancel);
         }
-    };
-    let cancellation = select(Box::pin(cancel.changed()), Box::pin(closed.changed()));
-    let interruption = select(Box::pin(limit), Box::pin(cancellation));
-    let (error, mut result) = match select(Box::pin(result), Box::pin(interruption)).await {
-        Either::Left((Ok((outcome, state)), _)) => return (outcome, Some(state)),
-        Either::Left((Err(_), _)) => {
-            return (
+        let limit = async {
+            match deadline {
+                Some(at) => clock.wait_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        let cancellation = select(Box::pin(cancel.changed()), Box::pin(closed.changed()));
+        let interruption = select(Box::pin(limit), Box::pin(cancellation));
+        match select(Box::pin(&mut self.result), Box::pin(interruption)).await {
+            Either::Left((Ok((outcome, state)), _)) => {
+                AttemptObservation::Completed(outcome, Some(state))
+            }
+            Either::Left((Err(_), _)) => AttemptObservation::Completed(
                 Attempt::Failed {
                     error: ApiError::connection(Some("fallback attempt lost its outcome".into()))
                         .into(),
                     produced_output: true,
                 },
                 None,
+            ),
+            Either::Right((Either::Left(_), _)) => {
+                AttemptObservation::Interrupted(ChainEvent::Wake)
+            }
+            Either::Right((Either::Right(_), _)) => {
+                AttemptObservation::Interrupted(ChainEvent::Cancel)
+            }
+        }
+    }
+
+    async fn cancel(&mut self, clock: &dyn Clock) -> Option<S> {
+        let _ = self.stop.send(true);
+        let mut settled = None;
+        let cleanup = lk_agents_abi::Closed::bounded(
+            clock,
+            super::channel::teardown_deadline(clock),
+            async {
+                settled = (&mut self.result).await.ok();
+            },
+        )
+        .await;
+        if cleanup == lk_agents_abi::Closed::TimedOut {
+            log::error!(
+                "fallback attempt cleanup incomplete; task retains ownership until settlement"
             );
         }
-        Either::Right((reason, result)) => {
-            let error = match reason {
-                Either::Left(_) => ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total),
-                Either::Right(_) => ApiError::status("fallback cancelled", 499, None, None),
-            };
-            (error, result)
-        }
-    };
-    let _ = stop.send(true);
-    let mut settled = None;
-    let cleanup =
-        lk_agents_abi::Closed::bounded(clock, super::channel::teardown_deadline(clock), async {
-            settled = (&mut result).await.ok();
-        })
-        .await;
-    let (produced_output, state) = match settled {
-        Some((Attempt::Failed { produced_output, .. }, state)) => (produced_output, Some(state)),
-        Some((_, state)) => (true, Some(state)),
-        None => (true, None),
-    };
-    if cleanup == lk_agents_abi::Closed::TimedOut {
-        log::error!("fallback attempt cleanup incomplete; task retains ownership until settlement");
+        settled.map(|(_, state)| state)
     }
-    (Attempt::Failed { error: error.into(), produced_output }, state)
 }

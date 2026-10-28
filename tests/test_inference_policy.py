@@ -55,6 +55,8 @@ class _PolicySTT(stt.STT[Never]):
 
 class _Speech(stt.RecognizeStream):
     async def _run(self) -> None:
+        async for _ in self.input:
+            pass
         self.send(stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT))
 
 
@@ -360,3 +362,49 @@ async def test_fallback_completion_forwards_the_call_policy() -> None:
         assert provider.calls[0].max_retry == 0
     finally:
         await fallback.aclose()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_native_tts_public_calls_have_one_retry_owner(streaming: bool) -> None:
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.agents import APIError
+
+    requests = 0
+
+    async def gateway(request: web.Request) -> web.Response:
+        nonlocal requests
+        requests += 1
+        return web.Response(status=503, text="controlled unavailable gateway")
+
+    app = web.Application()
+    app.router.add_get("/tts", gateway)
+    async with TestServer(app) as server:
+        provider = inference.TTS(
+            model="cartesia/sonic-3",
+            api_key="k",
+            api_secret="s",
+            base_url=str(server.make_url("")).rstrip("/"),
+        )
+        conn = APIConnectOptions(max_retry=1, retry_interval=0, total_timeout=2)
+        source = (
+            provider.stream(conn_options=conn)
+            if streaming
+            else provider.synthesize(
+                "hello",
+                conn_options=conn,
+            )
+        )
+        try:
+            with pytest.raises(APIError):
+                async with source:
+                    if streaming:
+                        source.push_text("hello")
+                        source.end_input()
+                    async for _ in source:
+                        pytest.fail("an unavailable gateway cannot produce audio")
+            assert requests == 2
+        finally:
+            await source.aclose()
+            await provider.aclose()

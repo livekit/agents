@@ -193,9 +193,9 @@ class MCPServerHTTP(MCPServer):
             URL path ends with ``/mcp``, else SSE.
         allowed_tools: The tool names exposed; all when ``None``.
         headers: HTTP headers sent with every request.
-        timeout: The connect timeout, in seconds.
-        sse_read_timeout: The read timeout, in seconds.
-        client_session_timeout_seconds: The timeout of one request, in seconds.
+        timeout: The connect timeout in finite, non-negative seconds; zero expires immediately.
+        sse_read_timeout: The read timeout in finite, non-negative seconds.
+        client_session_timeout_seconds: The timeout of one request in finite, non-negative seconds.
         tool_result_resolver: Turns a tool's result into what the model reads.
     """
 
@@ -215,6 +215,8 @@ class MCPServerHTTP(MCPServer):
             client_session_timeout_seconds=client_session_timeout_seconds,
             tool_result_resolver=tool_result_resolver,
         )
+        _core._core_mcp_timeout_check("timeout", timeout)
+        _core._core_mcp_timeout_check("sse_read_timeout", sse_read_timeout)
         self.url = url
         self.headers = headers or {}
         self._timeout = timeout

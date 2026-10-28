@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort};
+use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, timeout_duration};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use rmcp::handler::client::progress::ProgressDispatcher;
@@ -145,7 +145,7 @@ impl Connection {
 }
 
 pub struct McpSession {
-    timeout: Option<Duration>,
+    timeout: Duration,
     connection: Mutex<Option<Arc<Connection>>>,
     previous: Mutex<Option<Arc<Connection>>>,
     initializing: Mutex<Option<Arc<TransportReceipt>>>,
@@ -157,9 +157,12 @@ pub struct McpSession {
 
 #[async_trait::async_trait]
 impl McpSessionPort for McpSession {
-    fn new(client_session_timeout_seconds: f64) -> Self {
-        Self {
-            timeout: secs(client_session_timeout_seconds),
+    fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError> {
+        Ok(Self {
+            timeout: timeout_duration(
+                "client_session_timeout_seconds",
+                client_session_timeout_seconds,
+            )?,
             connection: Mutex::default(),
             previous: Mutex::default(),
             initializing: Mutex::default(),
@@ -167,7 +170,7 @@ impl McpSessionPort for McpSession {
             cancel: Mutex::new(CancellationToken::new()),
             cache: Mutex::default(),
             allowed: Mutex::default(),
-        }
+        })
     }
     fn connected(&self) -> bool {
         self.connection
@@ -191,6 +194,8 @@ impl McpSessionPort for McpSession {
         timeout: f64,
         sse_read_timeout: f64,
     ) -> Result<(), McpError> {
+        let timeout = timeout_duration("timeout", timeout)?;
+        let sse_read_timeout = timeout_duration("sse_read_timeout", sse_read_timeout)?;
         let _connecting = self.connecting.lock().await;
         if self.connected() {
             return Ok(());
@@ -404,7 +409,7 @@ impl McpSession {
     }
     fn options(&self) -> PeerRequestOptions {
         let mut options = PeerRequestOptions::no_options();
-        options.timeout = self.timeout;
+        options.timeout = Some(self.timeout);
         options
     }
     async fn request(
@@ -426,10 +431,6 @@ impl Drop for McpSession {
             connection.close();
         }
     }
-}
-
-pub(super) fn secs(x: f64) -> Option<Duration> {
-    if x > 0.0 { Duration::try_from_secs_f64(x).ok() } else { None }
 }
 
 pub(super) fn service_error(error: ServiceError) -> McpError {

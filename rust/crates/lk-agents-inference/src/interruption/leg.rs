@@ -13,10 +13,8 @@ use super::{
 };
 
 pub struct InterruptionLeg {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    /// The input half, cloned out of the stream: synchronous and unbounded, since `signal` may not
-    /// block.
-    input: tokio::sync::mpsc::UnboundedSender<InputEvent>,
+    /// The input half, cloned out of the stream: synchronous, bounded and explicit on overload.
+    input: super::transport::InterruptionInput,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Held across an await by `next_event`, hence a `tokio` mutex.
     stream: tokio::sync::Mutex<InterruptionStream>,
@@ -129,20 +127,16 @@ fn verdict(ev: &OverlappingSpeechEvent, anchor: WallAnchor) -> OverlapVerdict {
 
 /// The detector's audio leg, as the loop's fan-out sees it. `AudioWindow::push_frame` resamples to
 /// 16 kHz itself.
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-struct InterruptionAudioSink(tokio::sync::mpsc::UnboundedSender<InputEvent>);
+struct InterruptionAudioSink(super::transport::InterruptionInput);
 
 impl StreamSink<AudioFrame> for InterruptionAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
-        // `Ok(())` even when the send fails: a dead detector falls back to VAD-only interruption.
-        let _ = self.0.send(InputEvent::Audio(frame));
-        Ok(())
+        self.0.send(InputEvent::Audio(frame)).map_err(Into::into)
     }
 
     fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
         // `_FlushSentinel`, forwarded so both channels carry the same sequence.
-        let _ = self.0.send(InputEvent::Flush);
-        Ok(())
+        self.0.send(InputEvent::Flush).map_err(Into::into)
     }
 
     fn end_input(&self) {

@@ -195,6 +195,11 @@ impl Resolver<'_> {
                                     .map_err(|e| format!("{at}: {e}"))?,
                             )
                         }
+                        Shape::Named { found: Found::External(path), args }
+                            if args.is_empty() && path.len() > 1 =>
+                        {
+                            Some(format!("::{}", path.join("::")))
+                        }
                         _ => return Err(format!("{at}: bind(wrap = T) names a crate type")),
                     },
                 }

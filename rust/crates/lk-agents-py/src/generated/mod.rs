@@ -19,6 +19,7 @@ pub mod telemetry;
 pub mod text_session;
 pub mod tts;
 pub mod turn;
+pub mod types;
 pub mod vad;
 pub mod voice;
 pub mod worker;
@@ -59,6 +60,7 @@ pub trait Implementations: 'static {
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
     type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
+    type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
@@ -112,6 +114,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::_core_TelemetryWorker>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
+    m.add_class::<types::ProviderAttempts>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;

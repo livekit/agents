@@ -176,7 +176,7 @@ pub trait Stt: Send + Sync {
     // its per-attempt retry budget and timeout. `None`: the provider takes no per-call options,
     // and the chain uses it as it is. A host STT is retried by the core (`RetryingStt`).
     #[python(conn)]
-    #[host(bind(wrap = crate::stt::retry::RetryingStt))]
+    #[host(bind(wrap = lk_agents_runtime::stt::RetryingStt))]
     fn with_conn_options(&self, _conn: &ApiConnectOptions) -> Option<std::sync::Arc<dyn Stt>> {
         None
     }

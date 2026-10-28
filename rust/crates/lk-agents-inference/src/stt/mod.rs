@@ -18,6 +18,7 @@ mod python;
 pub mod wire;
 
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
+use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
@@ -28,7 +29,6 @@ use base64::Engine as _;
 use lifecycle::{SttEffect, SttEvent, SttProtocol};
 use lk_agents_abi::AudioByteStream;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::types::retry::{RequestKind, RetryDecision, decide};
 use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
@@ -712,48 +712,69 @@ impl Pump {
     /// audio pushed meanwhile still queued. An attempt that outlived the connect limit had
     /// connected, so the budget restarts.
     async fn run(mut self) {
-        let mut retries = 0u32;
+        let mut policy = RequestPolicy::from_options(&self.opts.conn_options);
+        // The socket adapter observes phase progress within each attempt. Reopening it has one
+        // retry owner and retains the operation's original acceptance deadline.
+        policy.connect_timeout = None;
+        policy.write_timeout = None;
+        policy.read_timeout = None;
+        let mut steps = Vec::new();
+        let mut attempts = Attempts::start(policy, self.accepted, &mut steps);
         let mut last_start = self.clock.now();
         loop {
             if *self.stop.borrow() {
+                attempts.cancel(self.clock.now(), &mut Vec::new());
                 return;
             }
             let started = self.clock.now();
+            attempts.wake(started, None, &mut steps);
+            if let Some(error) = steps.iter().find_map(|step| match step {
+                AttemptStep::GiveUp(error) => Some(error.clone()),
+                _ => None,
+            }) {
+                self.failed(error).await;
+                return;
+            }
+            steps.clear();
+            let Some(id) = attempts.current() else { return };
             self.offset += started.saturating_duration_since(last_start).as_secs_f64();
             last_start = started;
-            let Err(err) = self.attempt().await else { return };
-            let lasted = self.clock.now().saturating_duration_since(started);
-            if self.opts.conn_options.attempt_connected(lasted.as_secs_f64()) {
-                retries = 0;
+            let Err(error) = self.attempt().await else {
+                attempts.succeeded(id, self.clock.now());
+                attempts.closed(id, self.clock.now(), &mut Vec::new());
+                return;
+            };
+            let now = self.clock.now();
+            if self
+                .opts
+                .conn_options
+                .attempt_connected(now.saturating_duration_since(started).as_secs_f64())
+            {
+                attempts.reset_retries();
             }
-            let decision = decide(
-                RequestKind::SttStream,
-                &self.opts.conn_options,
-                retries,
-                err.retryable,
-                err.status_code,
-                false,
-            );
-            match decision {
-                RetryDecision::Retry(delay) => {
-                    log::warn!(
-                        target: "livekit.agents",
-                        stt = "livekit.agents.inference.stt.STT", attempt = retries;
-                        "failed to recognize speech: {err}, retrying in {delay}s"
-                    );
-                    let at =
-                        self.clock.now().saturating_add(Duration::from_secs_f64(delay.max(0.0)));
-                    self.clock.wait_until(at).await;
-                    retries += 1;
-                }
-                RetryDecision::Exhausted(message) => {
-                    self.failed(ApiError::connection(Some(message))).await;
-                    return;
-                }
-                RetryDecision::Stop | RetryDecision::Raise => {
-                    self.failed(err).await;
-                    return;
-                }
+            steps.clear();
+            attempts.failed_error(id, error.clone(), now, &mut steps);
+            attempts.closed(id, now, &mut steps);
+            if !steps.iter().any(|step| matches!(step, AttemptStep::Retry { .. })) {
+                let error = if error.retryable && self.opts.conn_options.max_retry > 0 {
+                    ApiError::connection(Some(format!(
+                        "failed to recognize speech after {} attempts: {error}",
+                        attempts.retries()
+                    )))
+                } else {
+                    error
+                };
+                self.failed(error).await;
+                return;
+            }
+            let at = attempts.wake_at(None).expect("authorized retry wake");
+            use futures_util::future::{Either, select};
+            if matches!(
+                select(Box::pin(self.clock.wait_until(at)), Box::pin(self.stop.changed())).await,
+                Either::Right(_)
+            ) {
+                attempts.cancel(self.clock.now(), &mut Vec::new());
+                return;
             }
         }
     }

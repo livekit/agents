@@ -160,7 +160,7 @@ impl McpSession {
     #[pyo3(signature = (client_session_timeout_seconds))]
     fn new(client_session_timeout_seconds: f64) -> PyResult<McpSession> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds);
+        let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(McpSession(::std::sync::Arc::new(out)))
     }
 
@@ -576,10 +576,17 @@ impl ::lk_agents_abi::Llm for LlmProxy {
     fn failed(&self, error: ::lk_agents_abi::errors::ProviderError, recoverable: bool) {
         let host = ::std::sync::Arc::clone(&self.host);
         let error_arg = error;
+        let error_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> { Ok((::pyo3::IntoPyObjectExt::into_bound_py_any(error_arg, py)?).unbind()) }) {
+            Ok(value) => value,
+            Err(error) => {
+                ::lk_agents_abi::python::log::warn!("Llm._core_failed failed: {error}");
+                return;
+            }
+        };
         let recoverable_arg = recoverable;
         let context = ::std::clone::Clone::clone(&self.context);
         self.notifier.notify(context, "Llm._core_failed", move |py| {
-            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))(error_arg).into_value(py).into_bound(py).into_any(), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [error_arg.into_bound(py), ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?];
             Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
         });
     }
