@@ -120,7 +120,7 @@ impl Resolver<'_> {
             form,
             name,
             rust_name: tr.ident.to_string(),
-            trait_path: krate.extern_path(self.module, item),
+            trait_path: krate.extern_path(self.module, item).map_err(|e| format!("{at}: {e}"))?,
             family: module.path.first().cloned().ok_or_else(|| {
                 format!("{at}: a class is declared in a subject module, not the crate root")
             })?,
@@ -260,25 +260,39 @@ impl Resolver<'_> {
         let k = self.krate;
         let attrs = item_attrs(&k.modules[*module].items[*item]);
         let entries = voc::read(attrs).map_err(|e| format!("{at}: {e}"))?;
-        let rust = k.extern_path(*module, *item);
-        let with = voc::find(&entries, "error")
-            .and_then(|e| voc::rust(at, &e.nested, "with").transpose())
-            .transpose()?
-            .ok_or_else(|| {
-                format!("{at}: `{rust}` declares no conversion: #[host(error(with = path))]")
-            })?;
+        let rust = k.extern_path(*module, *item).map_err(|e| format!("{at}: {e}"))?;
         if !args.is_empty() {
             return Err(format!("{at}: a declared error is a concrete type"));
         }
-        // `with` is written in the error's module: resolve it there.
-        let syn::Type::Path(p) = &with else {
-            return Err(format!("{at}: `with` is a function path"));
-        };
-        let found = k.resolve(*module, &p.path)?;
-        let with = match found {
-            Found::Item { module, item } => k.extern_path(module, item),
-            other => {
-                return Err(format!("{at}: `with` names {other:?}, not a function of the crate"));
+        let declared = voc::find(&entries, "error").ok_or_else(|| {
+            format!("{at}: `{rust}` declares no conversion: #[host(error(with = path))] or #[host(error(kind = \"ValueError\"))]")
+        })?;
+        let with = match (
+            voc::rust(at, &declared.nested, "with")?,
+            voc::text(at, &declared.nested, "kind")?,
+        ) {
+            // `with` is written in the error's module: resolve it there.
+            (Some(syn::Type::Path(p)), None) => match k.resolve(*module, &p.path)? {
+                Found::Item { module, item } => {
+                    k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?
+                }
+                other => {
+                    return Err(format!(
+                        "{at}: `with` names {other:?}, not a function of the crate"
+                    ));
+                }
+            },
+            // A builtin exception carrying the error's message.
+            (None, Some(kind)) if BUILTIN_ERRORS.contains(&kind.as_str()) => {
+                format!(
+                    "|e: {rust}| ::pyo3::exceptions::Py{kind}::new_err(::std::string::ToString::to_string(&e))"
+                )
+            }
+            _ => {
+                return Err(format!(
+                    "{at}: `{rust}` declares its conversion as one of `with = path` or `kind = \"<{}>\"`",
+                    BUILTIN_ERRORS.join("|")
+                ));
             }
         };
         Ok(ErrorDecl { rust, with })
@@ -461,7 +475,11 @@ impl Resolver<'_> {
                 )
                 .is_ok_and(|metas| metas.iter().any(|m| m.path().is_ident("provider")))
         });
-        Ok(Ty::Proxy { rust: k.extern_path(module, item), host, generic })
+        Ok(Ty::Proxy {
+            rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
+            host,
+            generic,
+        })
     }
 
     /// A crate type, by its declaration: a `#[derive(Host)]` record with its `#[binding]`
@@ -469,7 +487,7 @@ impl Resolver<'_> {
     fn declared(&self, module: usize, item: usize, at: &str) -> Result<Ty, String> {
         let k = self.krate;
         let it = &k.modules[module].items[item];
-        let rust = k.extern_path(module, item);
+        let rust = k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?;
         let ident = k.item_name(module, item);
         let attrs = item_attrs(it);
         let entries = voc::read(attrs).map_err(|e| format!("{at}: {e}"))?;
@@ -550,6 +568,9 @@ impl Resolver<'_> {
         ))
     }
 }
+
+/// The Python builtins an error may declare as its `kind`.
+const BUILTIN_ERRORS: &[&str] = &["ValueError", "TypeError", "RuntimeError", "KeyError"];
 
 fn shared(r: &syn::Receiver) -> bool {
     r.reference.is_some() && r.mutability.is_none()

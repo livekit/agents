@@ -82,6 +82,7 @@ mod tests {
         Python::attach(|py| {
             let m = PyModule::new(py, "_core").unwrap();
             register_all(&m).unwrap();
+            crate::generated::register(&m).unwrap();
             let mut names: Vec<String> = m
                 .dir()
                 .unwrap()

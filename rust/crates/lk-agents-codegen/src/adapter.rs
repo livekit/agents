@@ -56,8 +56,9 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     out.push(Out { path: "mod.rs".into(), text: root });
     for family in &sorted {
         let classes: Vec<&Class> = decls.classes.iter().filter(|c| c.family == *family).collect();
-        let mut text =
-            format!("{HEADER}//!\n//! The `{family}` classes.\n\nuse pyo3::prelude::*;\n");
+        let mut text = format!(
+            "{HEADER}//!\n//! The `{family}` classes.\n\n// A host signature takes the parameters it declares.\n#![allow(clippy::too_many_arguments)]\n\nuse pyo3::prelude::*;\n"
+        );
         for c in classes {
             text.push('\n');
             text.push_str(&class(c)?);
@@ -160,6 +161,8 @@ fn method(c: &Class, m: &Method) -> Result<String, String> {
         }
         _ => {
             let needs_py = ret_ty.contains("'py");
+            // A function is registered from `mod.rs`.
+            let vis = if m.kind == MethodKind::Function { "pub " } else { "" };
             let generics = if needs_py { "<'py>" } else { "" };
             let this = match m.kind {
                 MethodKind::New | MethodKind::Function => None,
@@ -177,9 +180,16 @@ fn method(c: &Class, m: &Method) -> Result<String, String> {
                 "{call}({}){err}",
                 this.into_iter().chain(passed).collect::<Vec<_>>().join(", ")
             );
+            let body = if m.ret.ok == Ty::Unit {
+                format!("{ind}    {value};\n{ind}    Ok(())\n")
+            } else {
+                format!(
+                    "{ind}    let out = {value};\n{ind}    Ok({})\n",
+                    wrap.replace("{}", "out").replace("{py}", "py")
+                )
+            };
             s.push_str(&format!(
-                "{ind}fn {fn_name}{generics}({all_args}) -> PyResult<{ret_ty}> {{\n{ind}    ::lk_agents_abi::python::check_pid()?;\n{prelude}{ind}    let out = {value};\n{ind}    Ok({})\n{ind}}}\n",
-                wrap.replace("{}", "out").replace("{py}", "py")
+                "{ind}{vis}fn {fn_name}{generics}({all_args}) -> PyResult<{ret_ty}> {{\n{ind}    ::lk_agents_abi::python::check_pid()?;\n{prelude}{body}{ind}}}\n"
             ));
         }
     }

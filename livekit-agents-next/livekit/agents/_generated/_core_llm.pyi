@@ -68,3 +68,14 @@ class InferenceLlm:
 class InferenceLlmChunks:
     async def recv(self) -> dict[str, object] | None: ...
     async def aclose(self) -> None: ...
+
+class LlmChoiceParser:
+    """Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
+    the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+    """
+    def __init__(self, model: str) -> None: ...
+    def parse(self, id: str, choice: object) -> dict[str, object] | None:
+        """The chunk `choice` (one streamed choice of completion `id`) completes, if any."""
+
+def llm_usage_chunk(chunk: object) -> dict[str, object] | None:
+    """The usage chunk of a streamed completion chunk, when it reports usage."""

@@ -12,11 +12,15 @@ pub mod llm;
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
+    type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
+    type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
 }
 
 /// Adds every declared class to `_core`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
+    m.add_class::<llm::LlmChoiceParser>()?;
+    m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
     Ok(())
 }

@@ -6,8 +6,6 @@
 pub mod lifecycle;
 pub mod models;
 pub mod parse;
-#[cfg(feature = "python")]
-pub(crate) mod python;
 pub mod request;
 
 use crate::abi::{ChatRequest, Llm, LlmStream, ToolSpec};
@@ -35,36 +33,6 @@ pub struct LlmOptions {
     /// `X-LiveKit-Inference-Priority`.
     pub inference_class: Option<String>,
     pub extra_kwargs: serde_json::Map<String, serde_json::Value>,
-}
-
-/// `_core.InferenceLlm`'s keyword constructor: [`LlmOptions`] as the host passes them, in its order.
-#[lk_agents_abi::host(client(class = crate::llm::python::InferenceLlm, positional = model))]
-#[derive(Debug, Clone)]
-pub struct LlmClientConfig {
-    pub model: String,
-    pub base_url: String,
-    pub api_key: String,
-    pub api_secret: String,
-    #[host(kwarg(default = None))]
-    pub provider: Option<String>,
-    #[host(kwarg(default = None))]
-    pub inference_class: Option<String>,
-    #[host(kwarg(default = None))]
-    pub extra_kwargs: Option<crate::extra::ExtraKwargs>,
-}
-
-impl From<LlmClientConfig> for LlmOptions {
-    fn from(c: LlmClientConfig) -> Self {
-        LlmOptions {
-            model: c.model,
-            base_url: c.base_url,
-            api_key: c.api_key,
-            api_secret: c.api_secret,
-            provider: c.provider,
-            inference_class: c.inference_class,
-            extra_kwargs: c.extra_kwargs.unwrap_or_default().0,
-        }
-    }
 }
 
 /// `_log_rate_limited`'s destination; the host owns the logger (§1.10).
@@ -433,6 +401,7 @@ mod tests {
     use super::*;
     use crate::testkit::{FakeHttp, NoImages};
     use lk_agents_abi::errors::ApiErrorKind;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::Mutex;
 
     fn opts() -> LlmOptions {
@@ -572,9 +541,11 @@ mod tests {
     }
 
     // Catches: losing the quota snapshot on a 429.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_429_reports_the_quota_snapshot_the_gateway_stamped() {
         type Logged = (String, Vec<(&'static str, String)>);
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Recorder(Mutex<Vec<Logged>>);
         impl RateLimitLog for Recorder {
             fn rate_limited(&self, model: &str, _: Option<&str>, quota: &[(&'static str, String)]) {

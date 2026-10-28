@@ -9,6 +9,10 @@ const ERRORS: &str = r#"
 #[crate::host(error(with = crate::errors::raise))]
 pub struct ApiError;
 pub fn raise(_: ApiError) {}
+#[crate::host(error(kind = "ValueError"))]
+pub struct Bad;
+#[crate::host(error(kind = "MyError"))]
+pub struct Worse;
 "#;
 
 const CHAT: &str = r#"
@@ -45,7 +49,8 @@ fn read(llm: &str) -> Result<Declarations, String> {
         "lk_agents_abi",
         &[
             ("lib.rs", LIB),
-            ("errors.rs", ERRORS),
+            ("errors.rs", "mod api;\npub use api::*;"),
+            ("errors/api.rs", ERRORS),
             ("llm.rs", "pub mod chat; pub mod class;"),
             ("llm/chat.rs", CHAT),
             ("llm/class.rs", llm),
@@ -69,8 +74,9 @@ fn refuse(body: &str) -> String {
 
 // Catches: an alias read by its name instead of what it stands for (`Extra` as a record, `Res<T>`
 // without its bound argument), a re-exported record not found through `pub use`, a source taken
-// from the signature instead of its declaration, or the error's conversion not resolved in the
-// error's own module.
+// from the signature instead of its declaration, the error's conversion not resolved in the
+// error's own module, or a path through a private module (`errors::api`) that another crate
+// cannot name: each item is written by its shortest public path.
 #[test]
 fn aliases_generics_reexports_and_declared_kinds_resolve() {
     let decls = read(&class(
@@ -100,7 +106,7 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
     let Ty::List(item) = &chat.params[0].ty else { panic!("{:?}", chat.params[0].ty) };
     assert!(chat.params[0].by_ref);
     assert!(
-        matches!(&**item, Ty::Record(r) if r.rust == "::lk_agents_abi::llm::chat::Item" && r.extract && r.emit && r.host == HostForm::CoreClass("Item".into()))
+        matches!(&**item, Ty::Record(r) if r.rust == "::lk_agents_abi::Item" && r.extract && r.emit && r.host == HostForm::CoreClass("Item".into()))
     );
     assert!(
         matches!(&chat.params[1].ty, Ty::Optional(p) if matches!(&**p, Ty::Proxy { host, .. } if host == "livekit.agents.llm.LLM"))
@@ -153,6 +159,12 @@ fn directions_and_errors_are_declared_or_refused() {
     assert!(err.contains("not returned to the host"), "{err}");
     let err = refuse("#[host(call)] fn f(&self) -> Result<String, std::fmt::Error>;");
     assert!(err.contains("Native::f") && err.contains("not an ABI declaration"), "{err}");
+    let err = refuse("#[host(call)] fn f(&self) -> Result<String, crate::errors::Worse>;");
+    assert!(err.contains("Native::f") && err.contains("`with = path` or `kind"), "{err}");
+    let decls = read(&class("#[host(call)] fn f(&self) -> Result<String, crate::errors::Bad>;"))
+        .expect("resolves");
+    let with = &decls.classes[0].methods[0].ret.err.as_ref().expect("declared").with;
+    assert!(with.contains("PyValueError::new_err"), "{with}");
 }
 
 // Catches: a method's kind guessed from its signature (an `async fn` declared `call`, a `&mut
@@ -270,7 +282,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
             && llm.contains("(&mut self.0, &id)"),
         "{llm}"
     );
-    assert!(llm.contains("#[pyfunction]\n#[pyo3(signature = (chunk))]\nfn llm_usage_chunk(chunk: Bound<'_, PyAny>)"), "{llm}");
+    assert!(llm.contains("#[pyfunction]\n#[pyo3(signature = (chunk))]\npub fn llm_usage_chunk(chunk: Bound<'_, PyAny>)"), "{llm}");
     let root = &out.iter().find(|o| o.path == "mod.rs").expect("mod.rs").text;
     assert!(
         root.contains("m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;")

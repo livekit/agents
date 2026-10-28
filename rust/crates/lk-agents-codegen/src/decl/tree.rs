@@ -12,7 +12,10 @@ pub struct Module {
     pub file: String,
     pub items: Vec<syn::Item>,
     parent: Option<usize>,
-    uses: Vec<Use>,
+    /// Declared `pub mod` (the root is public): another crate can name what is inside.
+    public: bool,
+    /// Each `use` and whether it is `pub use`.
+    uses: Vec<(Use, bool)>,
 }
 
 enum Use {
@@ -56,7 +59,7 @@ impl Crate {
         let lib = format!("{dir}/src/lib.rs");
         let text = std::fs::read_to_string(root.join(&lib)).map_err(|e| format!("{lib}: {e}"))?;
         let file = syn::parse_file(&text).map_err(|e| format!("{lib}: {e}"))?;
-        krate.add(root, Vec::new(), lib, format!("{dir}/src"), file.items, None)?;
+        krate.add(root, Vec::new(), lib, format!("{dir}/src"), file.items, None, true)?;
         Ok(krate)
     }
 
@@ -85,6 +88,7 @@ impl Crate {
         dir: String,
         items: Vec<syn::Item>,
         parent: Option<usize>,
+        public: bool,
     ) -> Result<usize, String> {
         let index = self.modules.len();
         let uses = items
@@ -93,13 +97,17 @@ impl Crate {
                 syn::Item::Use(u) if !test_only(&u.attrs) => Some(u),
                 _ => None,
             })
-            .flat_map(|u| flatten_use(&u.tree, Vec::new()))
+            .flat_map(|u| {
+                let public = is_pub(&u.vis);
+                flatten_use(&u.tree, Vec::new()).into_iter().map(move |use_| (use_, public))
+            })
             .collect();
         self.modules.push(Module {
             path: path.clone(),
             file: file.clone(),
             items: Vec::new(),
             parent,
+            public,
             uses,
         });
         let mut kept = Vec::new();
@@ -112,6 +120,7 @@ impl Crate {
                 continue;
             }
             let name = m.ident.to_string();
+            let child_public = is_pub(&m.vis);
             let mut child = path.clone();
             child.push(name.clone());
             match &m.content {
@@ -123,6 +132,7 @@ impl Crate {
                         format!("{dir}/{name}"),
                         inner.clone(),
                         Some(index),
+                        child_public,
                     )?;
                 }
                 None => {
@@ -131,7 +141,15 @@ impl Crate {
                         .map_err(|e| format!("{child_file}: {e}"))?;
                     let parsed =
                         syn::parse_file(&text).map_err(|e| format!("{child_file}: {e}"))?;
-                    self.add(root, child, child_file, child_dir, parsed.items, Some(index))?;
+                    self.add(
+                        root,
+                        child,
+                        child_file,
+                        child_dir,
+                        parsed.items,
+                        Some(index),
+                        child_public,
+                    )?;
                 }
             }
             kept.push(item);
@@ -228,14 +246,14 @@ impl Crate {
             }
             return Ok(Some(Found::Item { module, item }));
         }
-        for u in &m.uses {
+        for (u, _) in &m.uses {
             if let Use::Name { name: n, path } = u
                 && n == name
             {
                 return self.walk(module, path, seen).map(Some);
             }
         }
-        for u in &m.uses {
+        for (u, _) in &m.uses {
             if let Use::Glob(path) = u
                 && let Found::Module(target) = self.walk(module, path, seen)?
                 && let Some(found) = self.lookup(target, name, seen)?
@@ -274,12 +292,59 @@ impl Crate {
         item_ident(&self.modules[module].items[item]).unwrap_or_default()
     }
 
-    /// The item's path as another crate writes it: `::lk_agents_abi::llm::llm::Llm`.
-    pub fn extern_path(&self, module: usize, item: usize) -> String {
-        let mut path = vec![String::new(), self.name.clone()];
-        path.extend(self.modules[module].path.iter().cloned());
-        path.push(self.item_name(module, item));
-        path.join("::")
+    /// The item's shortest public path as another crate writes it
+    /// (`::lk_agents_abi::errors::ApiError`, re-exported from a private `api` module): its own
+    /// module when every module on the way is `pub`, else the nearest `pub use` of it.
+    pub fn extern_path(&self, module: usize, item: usize) -> Result<String, String> {
+        let name = self.item_name(module, item);
+        let target = Found::Item { module, item };
+        let own = is_pub(item_vis(&self.modules[module].items[item]));
+        // Breadth first from the root through public modules: the first hit is the shortest.
+        let mut queue = std::collections::VecDeque::from([0]);
+        while let Some(m) = queue.pop_front() {
+            let at = &self.modules[m];
+            let reexported = at.uses.iter().filter(|(_, public)| *public).find_map(|(u, _)| {
+                let alias = match u {
+                    Use::Name { name, .. } => name.as_str(),
+                    Use::Glob(_) => name.as_str(),
+                };
+                let found = self.lookup(m, alias, &mut Vec::new()).ok().flatten()?;
+                (found == target).then(|| alias.to_owned())
+            });
+            if let Some(alias) = (m == module && own).then(|| name.clone()).or(reexported) {
+                let mut path = vec![String::new(), self.name.clone()];
+                path.extend(at.path.iter().cloned());
+                path.push(alias);
+                return Ok(path.join("::"));
+            }
+            queue.extend(
+                (0..self.modules.len())
+                    .filter(|c| self.modules[*c].parent == Some(m) && self.modules[*c].public),
+            );
+        }
+        Err(format!(
+            "`{name}` of `{}` is not reachable from outside the crate",
+            self.display(module)
+        ))
+    }
+}
+
+fn is_pub(vis: &syn::Visibility) -> bool {
+    matches!(vis, syn::Visibility::Public(_))
+}
+
+fn item_vis(item: &syn::Item) -> &syn::Visibility {
+    match item {
+        syn::Item::Struct(i) => &i.vis,
+        syn::Item::Enum(i) => &i.vis,
+        syn::Item::Trait(i) => &i.vis,
+        syn::Item::Type(i) => &i.vis,
+        syn::Item::Fn(i) => &i.vis,
+        syn::Item::Const(i) => &i.vis,
+        syn::Item::Static(i) => &i.vis,
+        syn::Item::Mod(i) => &i.vis,
+        syn::Item::Union(i) => &i.vis,
+        _ => &syn::Visibility::Inherited,
     }
 }
 

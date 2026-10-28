@@ -120,7 +120,8 @@ pub struct Ret {
     pub err: Option<ErrorDecl>,
 }
 
-/// `#[host(error(with = path))]`: the error converts through that function of its own crate.
+/// `#[host(error(..))]`: `with` is the expression converting the error to the host's
+/// (a function of the error's crate, or a builtin exception carrying its message).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrorDecl {
     pub rust: String,

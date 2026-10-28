@@ -13,6 +13,7 @@
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |
 //! | error type | `error(with = path)` | `Result<_, E>` raises through `path(E) -> PyErr` |
+//! | error type | `error(kind = "ValueError")` | `Result<_, E>` raises that builtin with E's message |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
 //!

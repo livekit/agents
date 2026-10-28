@@ -5,6 +5,9 @@
 //!
 //! The `llm` classes.
 
+// A host signature takes the parameters it declares.
+#![allow(clippy::too_many_arguments)]
+
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
@@ -23,7 +26,7 @@ impl InferenceLlm {
     fn new(model: ::std::string::String, provider: ::std::option::Option<::std::string::String>, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, inference_class: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
         ::lk_agents_abi::python::check_pid()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
-        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs).map_err(::lk_agents_abi::errors::api::api_error_to_py)?;
+        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs).map_err(::lk_agents_abi::errors::api_error_to_py)?;
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
 
@@ -33,7 +36,7 @@ impl InferenceLlm {
     #[pyo3(signature = (headers, reporter = None))]
     fn identified(&self, headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>, reporter: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
         ::lk_agents_abi::python::check_pid()?;
-        let reporter = reporter.map(|v| <dyn ::lk_agents_abi::llm::llm::Llm as ::lk_agents_abi::python::HostProxy>::from_host(&v, None)).transpose()?;
+        let reporter = reporter.map(|v| <dyn ::lk_agents_abi::Llm as ::lk_agents_abi::python::HostProxy>::from_host(&v, None)).transpose()?;
         let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::identified(&self.0, headers, reporter);
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
@@ -58,37 +61,37 @@ impl InferenceLlm {
     fn update_options(&self, model: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
-        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::update_options(&self.0, model, extra_kwargs);
-        Ok(out)
+        <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::update_options(&self.0, model, extra_kwargs);
+        Ok(())
     }
 
     /// Opens a completion of `items`; no I/O until the first pull. `headers` identify the
     /// caller's job, read in its context.
     #[pyo3(signature = (items, *, tools, conn_options, parallel_tool_calls = None, tool_choice = None, response_format = None, extra_kwargs = None, headers = None))]
-    fn chat(&self, items: ::std::vec::Vec<::lk_agents_abi::llm::chat_context::ChatItem>, tools: ::std::vec::Vec<::lk_agents_abi::llm::llm::ToolSpec>, conn_options: ::lk_agents_abi::types::connect::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::llm::llm::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
+    fn chat(&self, items: ::std::vec::Vec<::lk_agents_abi::ChatItem>, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, conn_options: ::lk_agents_abi::ApiConnectOptions, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>, response_format: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, headers: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>) -> PyResult<InferenceLlmChunks> {
         ::lk_agents_abi::python::check_pid()?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
-        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(::lk_agents_abi::errors::api::api_error_to_py)?;
+        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(::lk_agents_abi::errors::api_error_to_py)?;
         Ok(InferenceLlmChunks(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 }
 
-// Wherever the host passes a `::lk_agents_abi::llm::llm::Llm`, an instance of this class is itself.
+// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
 ::lk_agents_abi::python::inventory::submit! {
     ::lk_agents_abi::python::HostNative {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::llm::Llm>(),
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
         read: |obj| {
             let this = obj.cast::<InferenceLlm>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::llm::Llm> = this.get().0.clone();
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Llm> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
     }
 }
 
-/// One stream of `::lk_agents_abi::llm::events::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
+/// One stream of `::lk_agents_abi::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "InferenceLlmChunks", module = "livekit.agents._core")]
-pub struct InferenceLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::llm::events::LlmChunk>);
+pub struct InferenceLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::LlmChunk>);
 
 #[pymethods]
 impl InferenceLlmChunks {
@@ -101,4 +104,45 @@ impl InferenceLlmChunks {
         ::lk_agents_abi::python::check_pid()?;
         self.0.aclose(py)
     }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
+type LlmChoiceParserImpl = <crate::Selected as super::Implementations>::ChoiceParser;
+
+/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
+/// the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+#[pyclass(name = "LlmChoiceParser", module = "livekit.agents._core")]
+pub struct LlmChoiceParser(LlmChoiceParserImpl);
+
+#[pymethods]
+impl LlmChoiceParser {
+    #[new]
+    #[pyo3(signature = (model))]
+    fn new(model: ::std::string::String) -> PyResult<LlmChoiceParser> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::new(model);
+        Ok(LlmChoiceParser(out))
+    }
+
+    /// The chunk `choice` (one streamed choice of completion `id`) completes, if any.
+    #[pyo3(signature = (id, choice))]
+    fn parse(&mut self, id: ::std::string::String, choice: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let choice = ::lk_agents_abi::python::value_from_py(&choice, "choice")?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
+type CompletionWireImpl = <crate::Selected as super::Implementations>::CompletionWire;
+
+/// The usage chunk of a streamed completion chunk, when it reports usage.
+#[pyfunction]
+#[pyo3(signature = (chunk))]
+pub fn llm_usage_chunk(chunk: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let chunk = ::lk_agents_abi::python::value_from_py(&chunk, "chunk")?;
+    let out = <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+    Ok(out)
 }

@@ -69,3 +69,29 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] headers: Option<Vec<(String, String)>>,
     ) -> Result<Self::Chunks, ApiError>;
 }
+
+/// A provider payload that is not its declared wire shape.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidPayload(pub String);
+
+/// Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
+/// the model's thinking tags: `inference.LLMStream` over a plugin's own client.
+#[crate::host(class(name = "LlmChoiceParser"))]
+pub trait ChoiceParser: Send + Sized + 'static {
+    #[host(new)]
+    fn new(model: String) -> Self;
+
+    /// The chunk `choice` (one streamed choice of completion `id`) completes, if any.
+    #[host(call)]
+    fn parse(&mut self, id: String, choice: serde_json::Value) -> Result<Option<LlmChunk>, InvalidPayload>;
+}
+
+/// The completion wire rules `inference.LLMStream` applies around a plugin's own client.
+#[crate::host(functions)]
+pub trait CompletionWire {
+    /// The usage chunk of a streamed completion chunk, when it reports usage.
+    #[host(function)]
+    fn llm_usage_chunk(chunk: serde_json::Value) -> Result<Option<LlmChunk>, InvalidPayload>;
+}

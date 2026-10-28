@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
 from typing import Any, Literal, cast, get_args
 
@@ -128,23 +129,24 @@ class LLM(llm.LLM):
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
-        creds = Credentials.resolve(base_url, api_key, api_secret)
+        self._model_name = model
+        self._provider_name = provider
+        self._creds = Credentials.resolve(base_url, api_key, api_secret)
         self._inference_class = inference_class
-        self._config = {
-            "model": model,
-            "base_url": creds.base_url,
-            "api_key": creds.api_key,
-            "api_secret": creds.api_secret,
-            "provider": provider,
-            "inference_class": inference_class,
-            "extra_kwargs": dict(extra_kwargs or {}),
-        }
+        self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
 
     @functools.cached_property
     def _native(self) -> _core.InferenceLlm:
         # built on first use, after a fork: nothing of the core starts at construction
-        config = dict(self._config)
-        return _core.InferenceLlm(config.pop("model"), **config)
+        return _core.InferenceLlm(
+            self._model_name,
+            provider=self._provider_name,
+            base_url=self._creds.base_url,
+            api_key=self._creds.api_key,
+            api_secret=self._creds.api_secret,
+            inference_class=self._inference_class,
+            extra_kwargs=self._extra_kwargs,
+        )
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
@@ -157,7 +159,7 @@ class LLM(llm.LLM):
     def _core_native(self) -> _core.InferenceLlm:
         """The client as a session of the current job holds it: its requests carry that job."""
         headers = get_inference_headers(inference_class=self._inference_class)
-        return self._native.identified(list(headers.items()), self)  # type: ignore[no-any-return]
+        return self._native.identified(list(headers.items()), self)
 
     def update_options(
         self,
@@ -173,7 +175,7 @@ class LLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        return self._native.model  # type: ignore[no-any-return]
+        return self._native.model
 
     @property
     def provider(self) -> str:
@@ -202,7 +204,7 @@ class LLM(llm.LLM):
                 if is_given(parallel_tool_calls)
                 else None,
                 "tool_choice": tool_choice if is_given(tool_choice) else None,
-                "response_format": llm_utils.to_openai_response_format(response_format)  # type: ignore[arg-type]
+                "response_format": llm_utils.to_openai_response_format(response_format)
                 if is_given(response_format)
                 else None,
                 "extra_kwargs": extra_kwargs if is_given(extra_kwargs) else None,
@@ -212,9 +214,13 @@ class LLM(llm.LLM):
 
 
 class _GatewayStream(llm.LLMStream):
-    def __init__(self, llm: LLM, *, request: dict[str, Any], **kwargs: Any) -> None:
-        super().__init__(llm, **kwargs)
+    def __init__(
+        self, llm: LLM, *, request: dict[str, Any], conn_options: APIConnectOptions, **kwargs: Any
+    ) -> None:
+        # The native request retries per `conn_options`; the base's loop runs `_run` once.
+        super().__init__(llm, conn_options=dataclasses.replace(conn_options, max_retry=0), **kwargs)
         self._native_llm = llm._native
+        self._request_conn_options = conn_options
         self._request = request
 
     async def _run(self) -> None:
@@ -223,7 +229,7 @@ class _GatewayStream(llm.LLMStream):
         native = self._native_llm.chat(
             to_core_items(self._chat_ctx.items),
             tools=tool_specs(self._tools),
-            timeout=self._conn_options.timeout,
+            conn_options=self._request_conn_options,
             **self._request,
         )
         try:
@@ -268,8 +274,10 @@ class LLMStream(llm.LLMStream):
         try:
             messages, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
             schemas = self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema)
-            _core.llm_normalize_tool_choice(self._extra_kwargs, bool(self._tools))
-            headers = self._extra_kwargs.setdefault("extra_headers", {})
+            extra = dict(self._extra_kwargs)
+            if not self._tools:
+                extra.pop("tool_choice", None)  # a tool choice without tools is refused
+            headers = extra.setdefault("extra_headers", {})
             headers.update(get_inference_headers(inference_class=self._inference_class))
             if self._provider:
                 headers[HEADER_INFERENCE_PROVIDER] = self._provider
@@ -281,7 +289,7 @@ class LLMStream(llm.LLMStream):
                 stream_options={"include_usage": True},
                 stream=True,
                 timeout=httpx.Timeout(self._conn_options.timeout),
-                **self._extra_kwargs,
+                **extra,
             )
             async with stream:
                 async for chunk in stream:

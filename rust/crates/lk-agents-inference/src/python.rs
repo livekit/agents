@@ -3,20 +3,9 @@
 
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError};
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
-
-use crate::native::ReqwestTransport;
-
-/// One HTTPS client for the process, built on first use: nothing may start at import.
-pub(crate) fn transport() -> PyResult<Arc<ReqwestTransport>> {
-    static TRANSPORT: std::sync::OnceLock<Result<Arc<ReqwestTransport>, String>> = std::sync::OnceLock::new();
-    TRANSPORT
-        .get_or_init(|| ReqwestTransport::new().map(Arc::new).map_err(|e| e.to_string()))
-        .clone()
-        .map_err(|e| PyRuntimeError::new_err(format!("could not build the HTTPS client: {e}")))
-}
 
 /// The per-request connect options of a native client. `max_retry` only reaches the gateway's
 /// session setup (`retries`, which the gateway runs server-side); the host's base classes own the

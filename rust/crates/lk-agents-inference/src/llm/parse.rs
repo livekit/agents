@@ -2,6 +2,7 @@
 //! branches are truthiness tests on strings providers routinely send empty.
 
 use lk_agents_abi::tokenize::{FilterState, strip_thinking_tokens};
+use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{ChoiceDelta, Extra, FunctionToolCall, LlmChunk, Role};
 use serde::Deserialize;
 
@@ -260,6 +261,39 @@ pub fn usage_chunk(chunk: &WireChunk) -> Option<LlmChunk> {
         }),
         ..Default::default()
     })
+}
+
+/// `_core.LlmChoiceParser`: one completion's accumulator and its model's thinking-tag filter.
+pub struct ChoiceParser {
+    accumulator: ChoiceAccumulator,
+    filter: TagFilter,
+}
+
+impl lk_agents_abi::llm::inference::ChoiceParser for ChoiceParser {
+    fn new(model: String) -> Self {
+        ChoiceParser { accumulator: ChoiceAccumulator::new(), filter: TagFilter::for_model(&model) }
+    }
+
+    fn parse(
+        &mut self,
+        id: String,
+        choice: serde_json::Value,
+    ) -> Result<Option<LlmChunk>, InvalidPayload> {
+        let choice: WireChoice =
+            serde_json::from_value(choice).map_err(|e| InvalidPayload(format!("choice: {e}")))?;
+        Ok(self.accumulator.parse_choice(&id, &choice, &mut self.filter))
+    }
+}
+
+/// `_core`'s completion wire functions.
+pub struct CompletionWire;
+
+impl lk_agents_abi::llm::inference::CompletionWire for CompletionWire {
+    fn llm_usage_chunk(chunk: serde_json::Value) -> Result<Option<LlmChunk>, InvalidPayload> {
+        let chunk: WireChunk =
+            serde_json::from_value(chunk).map_err(|e| InvalidPayload(format!("chunk: {e}")))?;
+        Ok(usage_chunk(&chunk))
+    }
 }
 
 #[cfg(test)]

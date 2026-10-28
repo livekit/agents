@@ -173,7 +173,7 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
             syn::Item::Trait(tr) => {
                 let Some(m) = host_attr_strict(label, &tr.attrs)? else { continue };
                 // A native-only trait has no host surface to describe; a class is `decl`'s.
-                if m.first().is_some_and(|x| matches!(x.key.split('.').next(), Some("native" | "class"))) {
+                if m.first().is_some_and(|x| matches!(x.key.split('.').next(), Some("native" | "class" | "functions"))) {
                     continue;
                 }
                 want_head(&format!("{label}: trait {}", tr.ident), &m, "proxy")?;

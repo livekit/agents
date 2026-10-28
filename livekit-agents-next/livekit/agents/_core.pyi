@@ -1,8 +1,9 @@
 """Type stub for ``livekit.agents._core``, the pyo3 extension built from ``rust/crates/lk-agents-py``.
 
-Two files make the stub. ``_generated/_core_classes.pyi`` (star-imported below) is written by
-``cargo run -p lk-agents-codegen -- --write`` (from ``rust/``) for every ``_core`` class and
-function the binding generates. This file is hand-written and carries the rest: the classes of
+The generated stubs are star-imported below, written by ``cargo run -p lk-agents-codegen --
+--write`` (from ``rust/``): ``_generated/_core_classes.pyi`` for the bindings expanded in place,
+``_generated/_core_<subject>.pyi`` for the declared classes and functions. This file is
+hand-written and carries the rest: the classes of
 ``lk-agents-py/src/{runtime,storage,turn}.rs``, whose requests and results are the pydantic models
 of ``_generated/storage*.py``. The full name list is ``rust/crates/lk-agents-py/src/core_names.json``.
 """
@@ -16,6 +17,7 @@ from typing import Any, Protocol
 
 from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem
+from ._generated._core_llm import *  # noqa: F401, F403
 from ._generated.storage import DatabaseInfo, EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
 from ._generated.storage_threads import ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
@@ -137,9 +139,9 @@ class ProcHostProtocol(Protocol):
     def _core_log(
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
     ) -> None: ...
-    def _core_is_alive(self) -> bool: ...
-    def _core_kill(self) -> None: ...
-    def _sample_memory_mb(self) -> tuple[float, str]: ...
+    async def _core_launched(self) -> None: ...
+    async def _core_launch_failed(self, cause: str) -> None: ...
+    async def _core_completed(self, exitcode: int) -> None: ...
 
 class ProcSupervisor:
     """The worker's side of one job process, over the socket ``fd`` it owns."""
@@ -164,9 +166,11 @@ class ProcSupervisor:
         when late (a process is then killed)."""
     @property
     def initialized(self) -> bool: ...
-    def run(self, joined: Awaitable[None], host: Any) -> asyncio.Future[None]:
-        """The process from its initialization to its exit (``joined``): the supervision, then
-        ``host._core_reap()`` gives its exit code."""
+    def _core_launched_process(
+        self, pid: int, sentinel: int, method: str, owned: list[int]
+    ) -> None: ...
+    def run(self, joined: Awaitable[None], host: ProcHostProtocol) -> asyncio.Future[None]:
+        """Owns the bootstrap operation and native process through OS exit and reaping."""
     def aclose(self) -> Awaitable[None]: ...
     def kill(self) -> Awaitable[None]: ...
     def start_job(self, fields: dict[str, Any]) -> Awaitable[None]:
@@ -179,7 +183,9 @@ class IpcClient:
     ``initialize(http_proxy)``), then the parent's messages served to a host: it starts one job
     and acks the shutdown."""
 
-    def __init__(self, fd: int, initialize: Callable[[str | None], None]) -> None: ...
+    def __init__(
+        self, fd: int, initialize: Callable[[str | None], None], *, process: bool = False
+    ) -> None: ...
     @property
     def asyncio_debug(self) -> bool: ...
     def serve(self, host: Any) -> Awaitable[None]: ...
@@ -248,7 +254,7 @@ class ProcPool:
     emits the pool's events."""
 
     def __init__(
-        self, host: Any, *, num_idle_processes: int, initialize_timeout: float
+        self, host: Any, *, num_idle_processes: int, initialize_timeout: float, close_timeout: float
     ) -> None: ...
     @property
     def processes(self) -> list[Any]: ...
