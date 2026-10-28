@@ -82,6 +82,12 @@ fn observe(step: Step, ids: &mut Vec<String>) {
     }
 }
 
+fn execute_retirements(machine: &mut RealtimeMachine) {
+    while let Some(mut retirement) = machine.take_context_retirement() {
+        while !retirement.advance(64) {}
+    }
+}
+
 fn drain(
     machines: &mut [RealtimeMachine],
     samples: &mut Samples,
@@ -91,6 +97,9 @@ fn drain(
     for (step, observed) in first.into_iter().zip(&mut ids) {
         observe(step, observed);
     }
+    for machine in &mut *machines {
+        execute_retirements(machine);
+    }
     while machines.iter().any(RealtimeMachine::context_work_pending) {
         for (machine, observed) in machines.iter_mut().zip(&mut ids) {
             if machine.context_work_pending() {
@@ -98,6 +107,7 @@ fn drain(
                     samples.step("continue_context", || machine.continue_context(Ts::ZERO)),
                     observed,
                 );
+                execute_retirements(machine);
             }
             assert!(samples.step("tick", || machine.tick(Ts::ZERO)).frames.is_empty());
         }
@@ -164,6 +174,14 @@ fn realtime_context_step_budget() {
                 .map(|machine| samples.step("reconnect", || machine.reconnect(Ts::ZERO)))
                 .collect();
             check_history(drain(&mut machines, &mut samples, first), count + 1);
+            while samples.cpu.len() < 1_000 {
+                samples.phase = "repeated_reconnect";
+                let first = machines
+                    .iter_mut()
+                    .map(|machine| samples.step("reconnect", || machine.reconnect(Ts::ZERO)))
+                    .collect();
+                check_history(drain(&mut machines, &mut samples, first), count + 1);
+            }
             samples.cpu.sort_unstable();
             samples.wall.sort_unstable();
             let index = (samples.cpu.len() * 999 / 1000).min(samples.cpu.len() - 1);

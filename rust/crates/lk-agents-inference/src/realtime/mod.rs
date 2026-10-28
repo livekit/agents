@@ -15,6 +15,8 @@ pub use lk_agents_abi::llm::realtime::{
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
     Modalities, RealtimeCapabilities, RealtimeError, RealtimeModelError, TextDelta, TokenUsage,
 };
-pub use machine::{OptionsPatch, Outgoing, RealtimeMachine, SessionOptions, Step};
+pub use machine::{
+    ContextRetirement, OptionsPatch, Outgoing, RealtimeMachine, SessionOptions, Step,
+};
 pub use protocol::Incoming;
 pub use remote::{RemoteChatContext, RemoteError};

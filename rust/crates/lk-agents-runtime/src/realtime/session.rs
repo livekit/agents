@@ -194,7 +194,7 @@ impl NativeRealtime {
         let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.retain(|s| match s.upgrade() {
             Some(tx) => {
-                tx.send(Cmd::Options(patch.clone()));
+                tx.send(Cmd::Options(Box::new(patch.clone())));
                 true
             }
             None => false,
@@ -221,7 +221,7 @@ pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDe
 /// What a session's pump is told: the core's commands, the model's option changes, and the close.
 pub(crate) enum Cmd {
     Core(Command),
-    Options(OptionsPatch),
+    Options(Box<OptionsPatch>),
     Close,
 }
 
@@ -298,6 +298,9 @@ impl NativeRealtime {
             caps: std::sync::Mutex::new(caps),
             closing: tokio::sync::Notify::new(),
             cleanup: std::sync::Mutex::new(None),
+            retirement: std::sync::Mutex::new(None),
+            retirement_wake: Arc::new(tokio::sync::Notify::new()),
+            retirement_closing: std::sync::atomic::AtomicBool::new(false),
         });
         let commands = Arc::new(super::queue::Ingress {
             commands: cmd_tx,
@@ -344,6 +347,9 @@ pub(super) struct Shared {
     pub(super) closing: tokio::sync::Notify,
     cleanup: std::sync::Mutex<Option<lk_agents_inference::realtime::ConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
+    retirement: std::sync::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
+    retirement_wake: Arc<tokio::sync::Notify>,
+    retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
 }
@@ -357,7 +363,7 @@ impl Shared {
         *cleanup =
             Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation });
         drop(cleanup);
-        log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime transport cleanup did not settle within its deadline");
+        log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime cleanup did not settle within its deadline");
     }
 }
 
@@ -392,12 +398,12 @@ impl SessionHandle {
 
     /// Never blocks and never fails loudly (`send_event` suppresses `ChanClosed`).
     pub fn send(&self, cmd: Command) {
-        let _ = self.commands.send(Cmd::Core(cmd));
+        self.commands.send(Cmd::Core(cmd));
     }
 
     /// `RealtimeSession.update_options`.
     pub fn update_options(&self, patch: OptionsPatch) {
-        let _ = self.commands.send(Cmd::Options(patch));
+        self.commands.send(Cmd::Options(Box::new(patch)));
     }
 
     pub fn push_audio(&self, frame: lk_agents_abi::AudioFrame) {
@@ -426,17 +432,16 @@ impl SessionHandle {
         self.send(Command::Interrupt(lk_agents_abi::llm::realtime::Interrupt {
             response_id: None,
         }));
-        let _ = self.commands.send(Cmd::Close);
+        self.commands.send(Cmd::Close);
         self.shared.closing.notify_one();
         let done = self.done.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(done) = done {
-            if lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done)
+        if let Some(done) = done
+            && lk_agents_abi::timeout(&*self.clock, lk_agents_abi::HOST_TEARDOWN_TIMEOUT, done)
                 .await
                 .is_err()
-            {
-                let generation = self.shared.machine.lock().await.connection_generation();
-                self.shared.incomplete_cleanup(generation, &self.commands.label);
-            }
+        {
+            let generation = self.shared.machine.lock().await.connection_generation();
+            self.shared.incomplete_cleanup(generation, &self.commands.label);
         }
         self.abort.abort();
         self.commands.events.finish();
@@ -462,6 +467,8 @@ impl Pump {
     /// options' budget, until a terminal error or a close.
     async fn run(self, commands: mpsc::Receiver<Cmd>) {
         self.run_loop(commands).await;
+        self.close().await;
+        self.wait_for_retirement().await;
         self.events.finish();
     }
 
@@ -639,7 +646,7 @@ impl Pump {
                 .chain(connection.next_deadline())
                 .min();
             let sleep = deadline.map(|at| self.clock.wait_until(at));
-            let context_work_pending = self.shared.machine.lock().await.context_work_pending();
+            let context_work_pending = self.shared.machine.lock().await.context_pages_pending();
 
             let mut step = tokio::select! {
                 biased;
@@ -697,7 +704,7 @@ impl Pump {
                     }
                     Some(Cmd::Options(patch)) => {
                         let mut m = self.shared.machine.lock().await;
-                        let step = m.update_options(patch);
+                        let step = m.update_options(*patch);
                         *self.shared.caps.lock().unwrap_or_else(|e| e.into_inner()) = m.capabilities();
                         step
                     }
@@ -747,6 +754,15 @@ impl Pump {
                 self.events.fail(self.clock.now(), &self.label, error);
             }
         }
+        self.shared.retirement_closing.store(true, std::sync::atomic::Ordering::Release);
+        self.wake_retirement();
+    }
+
+    async fn wait_for_retirement(&self) {
+        let done = self.shared.retirement.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(mut done) = done {
+            let _ = done.wait_for(|settled| *settled).await;
+        }
     }
 
     fn dispatch(
@@ -754,6 +770,7 @@ impl Pump {
         step: Step,
         outgoing: &mpsc::Sender<Vec<lk_agents_inference::realtime::machine::Outgoing>>,
     ) -> Result<(), ApiError> {
+        self.wake_retirement();
         if !step.frames.is_empty() {
             outgoing.try_send(step.frames).map_err(|_| {
                 ApiError::new("realtime write backlog exceeded").with_retryable(false)
@@ -866,3 +883,8 @@ impl lk_agents_abi::RealtimeSession for SessionHandle {
         SessionHandle::aclose(self).await
     }
 }
+
+#[cfg(test)]
+mod retirement_tests;
+
+mod retirement;

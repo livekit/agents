@@ -1,6 +1,8 @@
 //! Realtime contracts observed at the synchronous typed boundary.
 
 use super::*;
+
+mod server_items;
 use crate::realtime::dialect::OPENAI;
 use crate::realtime::protocol::Incoming;
 use lk_agents_abi::llm::realtime::{GenerateReply, PushItem, UpdateChatCtx};
@@ -232,9 +234,17 @@ fn long_context(count: usize) -> ChatContext {
     ChatContext::new((0..count).map(|id| message(&id.to_string())).collect())
 }
 
+fn retire_context(m: &mut RealtimeMachine) {
+    while let Some(mut retirement) = m.take_context_retirement() {
+        while !retirement.advance(64) {}
+    }
+}
+
 fn finish_context(m: &mut RealtimeMachine, now: Ts, mut first: Step) -> Step {
+    retire_context(m);
     while m.context_work_pending() {
         let page = m.continue_context(now);
+        retire_context(m);
         assert!(page.frames.len() <= 64, "one submission must fit a context page");
         first.merge(page);
     }
@@ -242,8 +252,10 @@ fn finish_context(m: &mut RealtimeMachine, now: Ts, mut first: Step) -> Step {
 }
 
 fn first_context_page(m: &mut RealtimeMachine, mut page: Step) -> Step {
+    retire_context(m);
     while page.frames.is_empty() && m.context_work_pending() {
         page = m.continue_context(at(0));
+        retire_context(m);
     }
     assert!(!page.frames.is_empty());
     assert!(page.frames.len() <= 64);
@@ -458,4 +470,195 @@ fn replay_media_capacity_is_refused_explicitly_by_command_count_and_bytes() {
         assert!(rejected.events.iter().any(|event| matches!(event,
             Event::Error(error) if error.message.contains("media capacity exceeded"))));
     }
+}
+
+#[test]
+fn superseding_partial_edits_preserves_content_that_has_not_been_submitted() {
+    let text = |value: &str| -> ChatItem {
+        ChatMessage::text("a", Role::User, value, SystemTime::UNIX_EPOCH).into()
+    };
+    let mut m = machine();
+    m.open(at(0));
+    let old = m.command(
+        at(0),
+        Command::PushItem(PushItem { item: Box::new(text("old")), reply_required: false }),
+    );
+    assert_eq!(creates(&old), ["a"]);
+    let mut target = ChatContext::new(vec![text("new")]);
+    target.items.extend((0..300).map(|id| message(&format!("new-{id}"))));
+    let first =
+        m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target.clone() }));
+    let first = first_context_page(&mut m, first);
+    assert!(
+        first.frames.iter().all(|frame| !matches!(frame,
+            Outgoing::ItemCreate { item, .. } if item.id() == "a"
+        )),
+        "the schedule must supersede before a's new content is submitted"
+    );
+    let superseded = m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target }));
+    let superseded = finish_context(&mut m, at(1), superseded);
+    assert!(superseded.frames.iter().any(|frame| matches!(frame,
+        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().text_content().as_deref() == Some("new")
+    )), "a prepared but unsent edit was mistaken for the submitted conversation");
+}
+
+#[test]
+fn an_older_create_ack_cannot_discard_the_newer_unconfirmed_replacement() {
+    let text = |value: &str| -> ChatItem {
+        ChatMessage::text("a", Role::User, value, SystemTime::UNIX_EPOCH).into()
+    };
+    let mut m = machine();
+    m.open(at(0));
+    m.command(
+        at(0),
+        Command::PushItem(PushItem { item: Box::new(text("old")), reply_required: false }),
+    );
+    let update = m.command(
+        at(1),
+        Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: ChatContext::new(vec![text("new")]) }),
+    );
+    let _ = finish_context(&mut m, at(1), update);
+    m.incoming_on(
+        m.connection_generation(),
+        at(1),
+        Incoming::ItemAdded { previous_item_id: None, item: text("old") },
+    );
+    m.incoming_on(m.connection_generation(), at(1), Incoming::ItemDeleted { item_id: "a".into() });
+    let _ = finish_context(&mut m, at(1), Step::default());
+    // The writer may lose the socket after the acknowledged delete but before the replacement.
+    let replay = m.reconnect(at(2));
+    let replay = finish_context(&mut m, at(2), replay);
+    assert!(replay.frames.iter().any(|frame| matches!(frame,
+        Outgoing::ItemCreate { item, .. } if item.id() == "a" && item.as_message().unwrap().text_content().as_deref() == Some("new")
+    )), "the older create receipt settled a newer replacement on the same item");
+}
+
+#[test]
+fn server_items_arriving_between_preparation_pages_are_reconciled_once() {
+    let mut m = machine();
+    m.open(at(0));
+    let initial =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(260) }));
+    let initial = finish_context(&mut m, at(0), initial);
+    acknowledge_page(&mut m, initial);
+    let update =
+        m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(261) }));
+    assert!(update.frames.is_empty(), "the schedule must interrupt context preparation");
+    acknowledge(&mut m, at(1), "unsolicited", Some("50"));
+    let update = finish_context(&mut m, at(1), update);
+    assert_eq!(creates(&update), ["260"]);
+    assert_eq!(update.frames.iter().filter(|frame| matches!(frame, Outgoing::ItemDelete { item_id, .. } if item_id == "unsolicited")).count(), 1);
+    for frame in update.frames {
+        match frame {
+            Outgoing::ItemCreate { item, previous_item_id, .. } => {
+                m.incoming_on(
+                    m.connection_generation(),
+                    at(2),
+                    Incoming::ItemAdded {
+                        previous_item_id: previous_item_id.filter(|id| id != "root"),
+                        item,
+                    },
+                );
+            }
+            Outgoing::ItemDelete { item_id, .. } => {
+                m.incoming_on(m.connection_generation(), at(2), Incoming::ItemDeleted { item_id });
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        m.chat_ctx().items.iter().map(ChatItem::id).collect::<Vec<_>>(),
+        (0..261).map(|id| id.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn reconnecting_during_edit_preparation_replays_the_complete_new_intent() {
+    let mut m = machine();
+    m.open(at(0));
+    let initial =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(260) }));
+    let initial = finish_context(&mut m, at(0), initial);
+    acknowledge_page(&mut m, initial);
+    let mut target = long_context(260);
+    target.items.reverse();
+    target.items.push(message("new"));
+    let update =
+        m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target.clone() }));
+    assert!(update.frames.is_empty());
+    let old_generation = m.connection_generation();
+    m.reconnect(at(2));
+    let replay = m.reconnect(at(3));
+    m.incoming_on(
+        old_generation,
+        at(3),
+        Incoming::ItemAdded { previous_item_id: None, item: message("stale") },
+    );
+    let replay = finish_context(&mut m, at(3), replay);
+    assert_eq!(creates(&replay), target.items.iter().map(ChatItem::id).collect::<Vec<_>>());
+    assert!(m.chat_ctx().is_empty());
+}
+
+#[test]
+fn superseding_between_an_edit_delete_and_create_preserves_the_replacement() {
+    let mut m = machine();
+    m.open(at(0));
+    let initial =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(4) }));
+    let initial = finish_context(&mut m, at(0), initial);
+    acknowledge_page(&mut m, initial);
+    retire_context(&mut m);
+    let mut target = long_context(4);
+    for item in &mut target.items {
+        item.as_message_mut().unwrap().content =
+            vec![lk_agents_abi::ChatContent::Text("edited".into())];
+    }
+    target.items.push(message("tail"));
+    let page = m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target.clone() }));
+    let removed = match page.frames.last() {
+        Some(Outgoing::ItemDelete { item_id, .. }) => item_id.clone(),
+        other => panic!("the schedule must cut after an edit delete: {other:?}"),
+    };
+    let replacement = m.command(at(1), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target }));
+    let replacement = finish_context(&mut m, at(1), replacement);
+    assert!(replacement.frames.iter().any(|frame| matches!(frame,
+        Outgoing::ItemCreate { item, .. } if item.id() == removed && item.as_message().unwrap().raw_text_content().as_deref() == Some("edited")
+    )));
+    let replay = m.reconnect(at(2));
+    let replay = finish_context(&mut m, at(2), replay);
+    assert_eq!(creates(&replay), ["0", "1", "2", "3", "tail"]);
+    assert!(replay.frames.iter().all(|frame| !matches!(frame,
+        Outgoing::ItemCreate { item, .. } if item.id() != "tail" && item.as_message().unwrap().raw_text_content().as_deref() != Some("edited")
+    )));
+}
+
+#[test]
+fn delete_receipts_cannot_grow_retained_payloads_while_cleanup_admission_is_blocked() {
+    let mut m = machine();
+    m.open(at(0));
+    let initial =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(1_000) }));
+    let initial = finish_context(&mut m, at(0), initial);
+    acknowledge_page(&mut m, initial);
+    retire_context(&mut m);
+    let mut overloaded = false;
+    for id in 0..300 {
+        let step = m.incoming_on(
+            m.connection_generation(),
+            at(1),
+            Incoming::ItemDeleted { item_id: id.to_string() },
+        );
+        if let Some(error) = step.fatal {
+            assert_eq!(error.message, "realtime context retirement capacity exceeded");
+            overloaded = true;
+            break;
+        }
+    }
+    assert!(overloaded, "blocked cleanup must stop accepting a stream of deleted histories");
+    assert!(
+        m.has_context_retirement(),
+        "overload must retain the rejected work for the cleanup owner"
+    );
+    retire_context(&mut m);
+    assert!(!m.has_context_retirement());
 }

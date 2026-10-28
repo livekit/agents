@@ -1,14 +1,10 @@
-//! `llm/remote_chat_context.py` -- the mirror of what the server believes, diffed against the
-//! agent's context to produce the edit script. A `Vec` rather than the reference's linked list:
-//! it is read whole on every update. The id map, the `previous_item_id: None` => head convention
-//! and both `ValueError` cases are preserved.
+//! The acknowledged server conversation, ordered by links and indexed by item identity.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use lk_agents_abi::{ChatContext, ChatItem};
 
-/// The two `ValueError`s the reference raises; callers log them.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RemoteError {
     #[error("Item with ID {0} already exists.")]
@@ -19,86 +15,90 @@ pub enum RemoteError {
     UnknownItem(String),
 }
 
-/// `RemoteChatContext`.
+#[derive(Debug, Clone)]
+struct RemoteItem {
+    item: ChatItem,
+    previous: Option<Arc<str>>,
+    next: Option<Arc<str>>,
+}
+
+/// Insertion and acknowledgement never shift or rebuild the retained history.
 #[derive(Debug, Clone, Default)]
 pub struct RemoteChatContext {
-    items: Vec<ChatItem>,
+    nodes: BTreeMap<Arc<str>, RemoteItem>,
+    calls: BTreeMap<String, usize>,
+    head: Option<Arc<str>>,
+    tail: Option<Arc<str>>,
     revision: u64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// id -> index, rebuilt on every structural change.
-    index: HashMap<String, usize>,
 }
+
+pub struct RemoteItems<'a> {
+    context: &'a RemoteChatContext,
+    front: Option<&'a str>,
+    back: Option<&'a str>,
+    remaining: usize,
+}
+
+impl<'a> Iterator for RemoteItems<'a> {
+    type Item = &'a ChatItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let node = &self.context.nodes[self.front?];
+        self.front = node.next.as_deref();
+        self.remaining -= 1;
+        Some(&node.item)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl DoubleEndedIterator for RemoteItems<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let node = &self.context.nodes[self.back?];
+        self.back = node.previous.as_deref();
+        self.remaining -= 1;
+        Some(&node.item)
+    }
+}
+
+impl ExactSizeIterator for RemoteItems<'_> {}
 
 impl RemoteChatContext {
     pub fn new() -> Self {
         Self::default()
     }
 
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub(crate) fn retained_units(&self) -> usize {
+        self.nodes.len() + self.calls.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
     pub fn to_chat_ctx(&self) -> ChatContext {
-        ChatContext::new(self.items.clone())
+        ChatContext::new(self.items().cloned().collect())
     }
 
-    pub(crate) fn into_chat_ctx(self) -> ChatContext {
-        ChatContext::new(self.items)
-    }
-
-    /// Apply a desired update over the acknowledged mirror without losing unsolicited server
-    /// items. New items follow their nearest surviving target predecessor, before server-only
-    /// items that followed that predecessor. Index links avoid repeatedly shifting the history.
-    pub(crate) fn with_update(
-        &self,
-        target: &ChatContext,
-        touched: &std::collections::BTreeSet<String>,
-        tail_creates: &std::collections::BTreeSet<String>,
-    ) -> ChatContext {
-        let mut nodes: Vec<(&ChatItem, Option<usize>)> = Vec::new();
-        let mut positions = std::collections::BTreeMap::new();
-        for item in self.items.iter().filter(|item| !touched.contains(item.id())) {
-            let index = nodes.len();
-            if let Some((_, next)) = nodes.last_mut() {
-                *next = Some(index);
-            }
-            positions.insert(item.id(), index);
-            nodes.push((item, None));
+    pub fn items(&self) -> RemoteItems<'_> {
+        RemoteItems {
+            context: self,
+            front: self.head.as_deref(),
+            back: self.tail.as_deref(),
+            remaining: self.nodes.len(),
         }
-        let mut head = (!nodes.is_empty()).then_some(0);
-        let mut previous = None;
-        let mut tail = nodes.len().checked_sub(1);
-        for item in &target.items {
-            if let Some(&index) = positions.get(item.id()) {
-                previous = Some(index);
-                continue;
-            }
-            if !touched.contains(item.id()) {
-                continue;
-            }
-            if tail_creates.contains(item.id()) {
-                previous = tail;
-            }
-            let next = previous.map_or(head, |index| nodes[index].1);
-            let index = nodes.len();
-            nodes.push((item, next));
-            if next.is_none() {
-                tail = Some(index);
-            }
-            if let Some(previous) = previous {
-                nodes[previous].1 = Some(index);
-            } else {
-                head = Some(index);
-            }
-            positions.insert(item.id(), index);
-            previous = Some(index);
-        }
-        let mut items = Vec::with_capacity(nodes.len());
-        while let Some(index) = head {
-            items.push(nodes[index].0.clone());
-            head = nodes[index].1;
-        }
-        ChatContext::new(items)
-    }
-
-    pub fn items(&self) -> &[ChatItem] {
-        &self.items
     }
 
     pub(crate) fn revision(&self) -> u64 {
@@ -106,61 +106,105 @@ impl RemoteChatContext {
     }
 
     pub fn get(&self, item_id: &str) -> Option<&ChatItem> {
-        self.index.get(item_id).map(|&i| &self.items[i])
+        self.nodes.get(item_id).map(|node| &node.item)
+    }
+
+    pub(crate) fn contains_call(&self, call_id: &str) -> bool {
+        self.calls.contains_key(call_id)
     }
 
     pub fn get_mut(&mut self, item_id: &str) -> Option<&mut ChatItem> {
-        let i = *self.index.get(item_id)?;
+        let node = self.nodes.get_mut(item_id)?;
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
-        Some(&mut self.items[i])
+        Some(&mut node.item)
     }
 
-    /// `tail_id` -- the last item's id. The fallback anchor when `conversation.item.added` names a
-    /// deleted item.
     pub fn tail_id(&self) -> Option<&str> {
-        self.items.last().map(ChatItem::id)
+        self.tail.as_deref()
     }
 
-    /// `insert(previous_item_id, message)`. `None` inserts at the head (the wire's `"root"`).
+    pub(crate) fn first_id(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
+    pub(crate) fn previous_id(&self, id: &str) -> Option<&str> {
+        self.nodes.get(id)?.previous.as_deref()
+    }
+
+    pub(crate) fn next_id(&self, id: &str) -> Option<&str> {
+        self.nodes.get(id)?.next.as_deref()
+    }
+
     pub fn insert(
         &mut self,
         previous_item_id: Option<&str>,
         item: ChatItem,
     ) -> Result<(), RemoteError> {
-        let id = item.id().to_owned();
-        if self.index.contains_key(&id) {
-            return Err(RemoteError::DuplicateId(id));
+        if self.nodes.contains_key(item.id()) {
+            return Err(RemoteError::DuplicateId(item.id().to_owned()));
         }
-
-        let at = match previous_item_id {
-            None => 0,
-            Some(prev) => match self.index.get(prev) {
-                Some(&i) => i + 1,
-                None => return Err(RemoteError::UnknownAnchor(prev.to_owned())),
-            },
+        let previous = match previous_item_id {
+            None => None,
+            Some(id) => Some(
+                self.nodes
+                    .get_key_value(id)
+                    .ok_or_else(|| RemoteError::UnknownAnchor(id.to_owned()))?
+                    .0
+                    .clone(),
+            ),
         };
-
-        self.items.insert(at, item);
-        self.reindex_from(at);
+        let next =
+            previous.as_deref().map_or_else(|| self.head.clone(), |id| self.nodes[id].next.clone());
+        let id: Arc<str> = Arc::from(item.id());
+        if let Some(previous) = previous.as_deref() {
+            self.nodes.get_mut(previous).unwrap().next = Some(id.clone());
+        } else {
+            self.head = Some(id.clone());
+        }
+        if let Some(next) = next.as_deref() {
+            self.nodes.get_mut(next).unwrap().previous = Some(id.clone());
+        } else {
+            self.tail = Some(id.clone());
+        }
+        if let ChatItem::FunctionCall(call) = &item {
+            *self.calls.entry(call.call_id.clone()).or_default() += 1;
+        }
+        self.nodes.insert(id, RemoteItem { item, previous, next });
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(())
     }
 
     pub fn delete(&mut self, item_id: &str) -> Result<ChatItem, RemoteError> {
-        let Some(&at) = self.index.get(item_id) else {
-            return Err(RemoteError::UnknownItem(item_id.to_owned()));
-        };
-        let removed = self.items.remove(at);
-        self.index.remove(item_id);
-        self.reindex_from(at);
+        let node = self
+            .nodes
+            .remove(item_id)
+            .ok_or_else(|| RemoteError::UnknownItem(item_id.to_owned()))?;
+        if let Some(previous) = node.previous.as_deref() {
+            self.nodes.get_mut(previous).unwrap().next = node.next.clone();
+        } else {
+            self.head = node.next.clone();
+        }
+        if let Some(next) = node.next.as_deref() {
+            self.nodes.get_mut(next).unwrap().previous = node.previous;
+        } else {
+            self.tail = node.previous;
+        }
+        if let ChatItem::FunctionCall(call) = &node.item
+            && let Some(count) = self.calls.get_mut(&call.call_id)
+        {
+            *count -= 1;
+            if *count == 0 {
+                self.calls.remove(&call.call_id);
+            }
+        }
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
-        Ok(removed)
+        Ok(node.item)
     }
 
-    fn reindex_from(&mut self, from: usize) {
-        for (i, item) in self.items.iter().enumerate().skip(from) {
-            self.index.insert(item.id().to_owned(), i);
-        }
+    /// A retired conversation is consumed one item at a time, without flattening its index.
+    pub(crate) fn pop_front(&mut self) -> Option<ChatItem> {
+        let id = self.head.clone()?;
+        self.delete(&id).ok()
     }
 }
 
@@ -170,7 +214,7 @@ mod tests {
     use crate::realtime::testfix::msg;
 
     fn ids(ctx: &RemoteChatContext) -> Vec<&str> {
-        ctx.items().iter().map(ChatItem::id).collect()
+        ctx.items().map(ChatItem::id).collect()
     }
 
     // Catches: a `delete` that forgets to repair the index map.

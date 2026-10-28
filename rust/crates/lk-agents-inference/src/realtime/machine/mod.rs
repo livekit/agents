@@ -21,9 +21,10 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 mod context;
-use context::{CtxUpdate, DeferredCommand};
+use context::{CtxUpdate, DeferredCommand, Retired, RetirementQueue};
 mod effects;
 mod incoming;
+pub use context::ContextRetirement;
 pub use effects::Outgoing;
 mod options;
 pub use options::{OptionsPatch, SessionOptions};
@@ -57,6 +58,7 @@ pub struct RealtimeMachine {
     first_token_at: Option<Ts>,
 
     remote: RemoteChatContext,
+    desired: RemoteChatContext,
     tools: Arc<Vec<ToolSpec>>,
 
     generation: Generation,
@@ -88,6 +90,9 @@ pub struct RealtimeMachine {
     stale_say: BTreeMap<String, Ts>,
 
     ctx_update: Option<CtxUpdate>,
+    retired: RetirementQueue,
+    discarded_context_items: Vec<ChatItem>,
+    pending_context: Option<ChatContext>,
 
     // Per-connection input turn state, discarded on reconnect.
     transcript_acc: BTreeMap<String, BTreeMap<usize, String>>,
@@ -137,6 +142,7 @@ impl RealtimeMachine {
             response_created_at: None,
             first_token_at: None,
             remote: RemoteChatContext::new(),
+            desired: RemoteChatContext::new(),
             tools: Arc::new(Vec::new()),
             generation: Generation::None,
             closed_messages: BTreeSet::new(),
@@ -149,6 +155,9 @@ impl RealtimeMachine {
             say_tags: VecDeque::new(),
             stale_say: BTreeMap::new(),
             ctx_update: None,
+            retired: RetirementQueue::default(),
+            discarded_context_items: Vec::new(),
+            pending_context: None,
             transcript_acc: BTreeMap::new(),
             speech_started_at: BTreeMap::new(),
             held: None,
@@ -359,6 +368,7 @@ impl RealtimeMachine {
             return step;
         }
         step.merge(self.incoming(now, msg));
+        self.enforce_retirement_capacity(now, &mut step);
         step
     }
 
@@ -479,11 +489,24 @@ impl RealtimeMachine {
                 error: RealtimeError::new("realtime session closed"),
             }));
         }
-        self.ctx_update = None;
+        if let Some(update) = self.ctx_update.take() {
+            self.retired.push_back(Retired::Update(update));
+        }
+        if let Some(target) = self.pending_context.take() {
+            self.retired.push_back(Retired::Context(target));
+        }
+        if self.desired.revision() != 0 {
+            self.retired.push_back(Retired::Remote(std::mem::take(&mut self.desired)));
+        }
+        if self.remote.revision() != 0 {
+            self.retired.push_back(Retired::Remote(std::mem::take(&mut self.remote)));
+        }
         self.reply_deadlines.clear();
         self.reply_frames.clear();
         self.deferred_replies.clear();
-        self.deferred_commands.clear();
+        if !self.deferred_commands.is_empty() {
+            self.retired.push_back(Retired::Deferred(std::mem::take(&mut self.deferred_commands)));
+        }
         self.deferred_media_bytes = 0;
         self.deferred_media_count = 0;
         self.say_frames.clear();
@@ -579,12 +602,17 @@ impl RealtimeMachine {
             && self.context_work_pending()
             && matches!(
                 &cmd,
-                Command::PushAudio(_) | Command::CommitAudio(_) | Command::ClearAudio(_)
+                Command::PushAudio(_)
+                    | Command::CommitAudio(_)
+                    | Command::ClearAudio(_)
+                    | Command::Truncate(_)
             )
         {
             return self.queue_context_media(now, cmd);
         }
-        self.apply_command(now, cmd)
+        let mut step = self.apply_command(now, cmd);
+        self.enforce_retirement_capacity(now, &mut step);
+        step
     }
 
     fn apply_command(&mut self, now: Ts, cmd: Command) -> Step {
@@ -769,7 +797,7 @@ impl RealtimeMachine {
             }) => {
                 // A message a context update took out of the conversation has nothing left to
                 // cut: the server would refuse it (`item_truncate_invalid_item_id`).
-                if self.expected_ctx().get_by_id(&message_id).is_none() {
+                if self.desired.get(&message_id).is_none() {
                     return Step::default();
                 }
                 if has_audio && audio_end_ms > 0 {
@@ -782,22 +810,18 @@ impl RealtimeMachine {
                         audio_end_ms,
                     });
                 }
-                // Interrupted before any audio played (deleted), or text-only (rewritten): a
-                // conversation edit, tracked like any, so a later update does not do it again.
-                let mut ctx = self.expected_ctx();
-                let Some(idx) = ctx.index_by_id(&message_id) else { return Step::default() };
-                match audio_transcript.filter(|_| !has_audio) {
-                    Some(transcript) => {
-                        if let Some(m) = ctx.items[idx].as_message_mut() {
-                            m.content = vec![lk_agents_abi::ChatContent::Text(transcript)];
-                        }
-                    }
-                    None if has_audio => {
-                        ctx.items.remove(idx);
-                    }
-                    None => return Step::default(),
+                if !has_audio && audio_transcript.is_none() {
+                    return Step::default();
                 }
-                self.update_ctx(now, ctx)
+                self.truncate_ctx(
+                    now,
+                    lk_agents_abi::llm::realtime::Truncate {
+                        message_id,
+                        has_audio,
+                        audio_end_ms,
+                        audio_transcript,
+                    },
+                )
             }
         }
     }
@@ -874,6 +898,12 @@ impl RealtimeMachine {
             m.content.push(lk_agents_abi::ChatContent::Text(t.transcript.clone()));
             m.transcript_confidence = t.confidence;
         }
+        if !self.ctx_update.as_ref().is_some_and(|update| update.touched.contains(&t.item_id))
+            && let Some(ChatItem::Message(message)) = self.desired.get_mut(&t.item_id)
+        {
+            message.content.push(lk_agents_abi::ChatContent::Text(t.transcript.clone()));
+            message.transcript_confidence = t.confidence;
+        }
         Step::event(Event::InputTranscription(InputTranscription {
             item_id: t.item_id.clone(),
             transcript: t.transcript,
@@ -891,6 +921,11 @@ impl RealtimeMachine {
         // mirror's text first or the item holds one copy per commit.
         if let Some(ChatItem::Message(m)) = self.remote.get_mut(&t.item_id) {
             m.content.retain(|c| !matches!(c, lk_agents_abi::ChatContent::Text(_)));
+        }
+        if let Some(ChatItem::Message(message)) = self.desired.get_mut(&t.item_id) {
+            message
+                .content
+                .retain(|content| !matches!(content, lk_agents_abi::ChatContent::Text(_)));
         }
         self.finalize_transcript(t)
     }

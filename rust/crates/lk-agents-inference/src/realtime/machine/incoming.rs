@@ -109,10 +109,8 @@ impl RealtimeMachine {
                 // xAI acks a delete with `item_id: ""`: resolve it against the oldest in-flight
                 // delete, or `update_chat_ctx` burns its 5 s timeout.
                 if item_id.is_empty() && self.dialect.repair_empty_delete_item_id {
-                    let oldest = self
-                        .ctx_update
-                        .as_ref()
-                        .and_then(|c| c.awaiting_delete.iter().min().cloned());
+                    let oldest =
+                        self.ctx_update.as_ref().and_then(|c| c.awaiting_delete.first().cloned());
                     match oldest {
                         Some(id) => item_id = id,
                         None => return Step::default(),
@@ -120,9 +118,16 @@ impl RealtimeMachine {
                 }
                 self.transcript_acc.remove(&item_id);
                 self.speech_started_at.remove(&item_id);
-                let before = self.remote.revision();
-                let _ = self.remote.delete(&item_id);
-                self.context_acknowledged(before, true, &item_id);
+                let awaiting = self
+                    .ctx_update
+                    .as_ref()
+                    .is_some_and(|update| update.awaiting_delete.contains(&item_id));
+                if !awaiting && let Ok(item) = self.desired.delete(&item_id) {
+                    self.discard_context_item(item);
+                }
+                if let Ok(item) = self.remote.delete(&item_id) {
+                    self.discard_context_item(item);
+                }
                 self.settle_ctx_item(true, &item_id)
             }
 
@@ -338,8 +343,10 @@ impl RealtimeMachine {
         }
         let mut step = Step::default();
         let id = item.id().to_owned();
-        let before = self.remote.revision();
-        if self.remote.insert(previous_item_id.as_deref(), item.clone()).is_ok() {
+        let awaiting =
+            self.ctx_update.as_ref().is_some_and(|update| update.awaiting_create.contains(&id));
+        let added = self.remote.insert(previous_item_id.as_deref(), item.clone()).is_ok();
+        if added {
             step.events.push(Event::RemoteItemAdded(
                 lk_agents_abi::llm::realtime::RemoteItemAdded {
                     previous_item_id,
@@ -347,7 +354,9 @@ impl RealtimeMachine {
                 },
             ));
         }
-        self.context_acknowledged(before, false, &id);
+        if added && !awaiting && self.desired.get(&id).is_none() {
+            step.merge(self.place_server_item(_now, &id));
+        }
         step.merge(self.settle_ctx_item(false, &id));
         step
     }
@@ -403,6 +412,9 @@ impl RealtimeMachine {
             && let Some(ChatItem::FunctionCall(remote)) = self.remote.get_mut(&call.id)
         {
             remote.arguments = call.arguments.clone();
+            if let Some(ChatItem::FunctionCall(desired)) = self.desired.get_mut(&call.id) {
+                desired.arguments = call.arguments.clone();
+            }
         }
         if !matches!(self.generation, Generation::Active { .. }) {
             return Step::default();
@@ -486,6 +498,9 @@ impl RealtimeMachine {
             // The agent's answer joins the mirror, and from there the next turn's context.
             if let Some(ChatItem::Message(remote)) = self.remote.get_mut(id) {
                 remote.content.push(lk_agents_abi::ChatContent::Text(m.transcript.clone()));
+                if let Some(ChatItem::Message(desired)) = self.desired.get_mut(id) {
+                    desired.content.push(lk_agents_abi::ChatContent::Text(m.transcript.clone()));
+                }
             }
             if m.open {
                 step.events.push(Event::MessageDone(MessageDone {
@@ -535,31 +550,35 @@ impl RealtimeMachine {
             // A rejected item event gets no `deleted`/`added` reply; settle it here or
             // `update_chat_ctx` stalls.
             if let Some(update) = &mut self.ctx_update
-                && let Some((is_delete, item_id)) = update.by_event_id.remove(event_id)
+                && let Some((is_delete, item_id, sequence)) = update.by_event_id.remove(event_id)
             {
+                if err.code.as_deref() != Some("item_create_duplicate_item_id") {
+                    self.reject_ctx_item(is_delete, &item_id, sequence);
+                }
                 let confirmed = if !is_delete
                     && err.code.as_deref() == Some("item_create_duplicate_item_id")
+                    && self.ctx_event_is_latest(&item_id, sequence)
                     && self.remote.get(&item_id).is_none()
                 {
-                    update.target.items.iter().position(|item| item.id() == item_id).map(
-                        |position| {
-                            let previous = update.target.items[..position]
-                                .iter()
-                                .rev()
-                                .find(|item| self.remote.get(item.id()).is_some())
-                                .map(|item| item.id().to_owned());
-                            (previous, update.target.items[position].clone())
-                        },
-                    )
+                    self.desired.get(&item_id).map(|item| {
+                        (self.desired.previous_id(&item_id).map(str::to_owned), item.clone())
+                    })
                 } else {
                     None
                 };
                 if let Some((previous, item)) = confirmed {
                     // A duplicate rejection confirms existence even when the original added
                     // acknowledgement was lost. Install it before settling the desired state.
-                    step.merge(self.on_item_added(now, previous, item));
+                    if self.remote.insert(previous.as_deref(), item.clone()).is_ok() {
+                        step.events.push(Event::RemoteItemAdded(
+                            lk_agents_abi::llm::realtime::RemoteItemAdded {
+                                previous_item_id: previous,
+                                item: Box::new(item),
+                            },
+                        ));
+                    }
                 }
-                step.merge(self.settle_ctx_item(is_delete, &item_id));
+                step.merge(self.settle_ctx_event(is_delete, &item_id, Some(sequence)));
                 if !fatal {
                     return step;
                 }

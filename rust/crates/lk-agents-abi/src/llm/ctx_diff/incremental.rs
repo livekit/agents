@@ -32,6 +32,7 @@ pub struct ChatContextDiff {
     kept: BTreeSet<String>,
     repeated: Vec<RepeatedRange>,
     row: Option<RepeatedRows>,
+    spare_rows: Option<RowsStorage>,
     previous_id: Option<String>,
     operations: DiffOps,
 }
@@ -52,6 +53,7 @@ impl Default for ChatContextDiff {
             kept: BTreeSet::new(),
             repeated: Vec::new(),
             row: None,
+            spare_rows: None,
             previous_id: None,
             operations: DiffOps::default(),
         }
@@ -139,6 +141,7 @@ impl ChatContextDiff {
                             let range = rows.range;
                             let middle = range.old_start + (range.old_end - range.old_start) / 2;
                             let split = range.new_start + rows.split;
+                            self.spare_rows = Some(rows.storage);
                             self.repeated.push(RepeatedRange {
                                 old_start: middle,
                                 old_end: range.old_end,
@@ -167,7 +170,10 @@ impl ChatContextDiff {
                                 });
                             }
                         } else {
-                            self.row = Some(RepeatedRows::new(range));
+                            let storage = self.spare_rows.take().unwrap_or_else(|| {
+                                RowsStorage::new(range.new_end - range.new_start + 1)
+                            });
+                            self.row = Some(RepeatedRows::new(range, storage));
                         }
                     } else {
                         self.cursor = 0;
@@ -217,6 +223,22 @@ impl ChatContextDiff {
         std::mem::take(&mut self.operations)
     }
 
+    /// Constant-time storage estimate for deciding whether cleanup can share an admitted batch.
+    pub fn retained_units(&self) -> usize {
+        self.old_by_id.len()
+            + self.positions.len()
+            + self.kept.len()
+            + self.tails.capacity()
+            + self.tail_items.capacity()
+            + self.previous.capacity()
+            + self.repeated.capacity()
+            + self.operations.to_remove.capacity()
+            + self.operations.to_create.capacity()
+            + self.operations.to_update.capacity()
+            + self.row.as_ref().map_or(0, |row| row.storage.capacity())
+            + self.spare_rows.as_ref().map_or(0, RowsStorage::capacity)
+    }
+
     /// Release owned identity keys below the same continuation budget as preparation.
     pub fn retire_step(&mut self) -> bool {
         self.operations.to_remove.pop().is_some()
@@ -240,8 +262,7 @@ struct RepeatedRange {
 #[derive(Debug)]
 struct RepeatedRows {
     range: RepeatedRange,
-    left: Vec<usize>,
-    right: Vec<usize>,
+    storage: RowsStorage,
     reverse: bool,
     row: usize,
     column: usize,
@@ -251,12 +272,31 @@ struct RepeatedRows {
     longest: usize,
 }
 
+#[derive(Debug)]
+struct RowsStorage {
+    left: Vec<usize>,
+    right: Vec<usize>,
+}
+
+impl RowsStorage {
+    fn new(width: usize) -> Self {
+        Self { left: Vec::with_capacity(width), right: Vec::with_capacity(width) }
+    }
+
+    fn capacity(&self) -> usize {
+        self.left.capacity() + self.right.capacity()
+    }
+}
+
 impl RepeatedRows {
-    fn new(range: RepeatedRange) -> Self {
+    fn new(range: RepeatedRange, mut storage: RowsStorage) -> Self {
+        // Every child range fits the original rows. Clearing scalar slots retains the two
+        // allocations; zero initialization is budgeted below instead of freeing in a step.
+        storage.left.clear();
+        storage.right.clear();
         Self {
             range,
-            left: Vec::new(),
-            right: Vec::new(),
+            storage,
             reverse: false,
             row: 0,
             column: 0,
@@ -269,12 +309,12 @@ impl RepeatedRows {
 
     fn advance(&mut self, old: &ChatContext, new: &ChatContext) -> bool {
         let width = self.range.new_end - self.range.new_start;
-        if self.left.len() <= width {
-            self.left.push(0);
+        if self.storage.left.len() <= width {
+            self.storage.left.push(0);
             return false;
         }
-        if self.right.len() <= width {
-            self.right.push(0);
+        if self.storage.right.len() <= width {
+            self.storage.right.push(0);
             return false;
         }
         let middle = self.range.old_start + (self.range.old_end - self.range.old_start) / 2;
@@ -291,7 +331,8 @@ impl RepeatedRows {
             } else {
                 self.range.new_start + self.column
             };
-            let lengths = if self.reverse { &mut self.right } else { &mut self.left };
+            let lengths =
+                if self.reverse { &mut self.storage.right } else { &mut self.storage.left };
             let previous = lengths[self.column + 1];
             lengths[self.column + 1] = if old.items[old_at].id() == new.items[new_at].id() {
                 self.diagonal + 1
@@ -313,7 +354,8 @@ impl RepeatedRows {
             return false;
         }
         if self.split_at <= width {
-            let length = self.left[self.split_at] + self.right[width - self.split_at];
+            let length =
+                self.storage.left[self.split_at] + self.storage.right[width - self.split_at];
             if length > self.longest {
                 self.longest = length;
                 self.split = self.split_at;

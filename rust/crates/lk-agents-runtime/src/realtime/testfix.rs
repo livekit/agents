@@ -72,7 +72,13 @@ impl RealtimeMachine {
         }
     }
     fn render(&mut self, now: Ts, mut step: CoreStep) -> Step {
-        while self.core.context_work_pending() {
+        loop {
+            while let Some(mut retirement) = self.core.take_context_retirement() {
+                while !retirement.advance(64) {}
+            }
+            if !self.core.context_work_pending() {
+                break;
+            }
             let more = self.core.continue_context(now);
             step.frames.extend(more.frames);
             step.events.extend(more.events);
