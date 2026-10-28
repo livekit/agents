@@ -16,6 +16,7 @@ from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
 from .job_proc_lazy_main import ProcStartArgs, proc_main
+from .stdio_capture import ChildStdio
 from .supervised_proc import SupervisedProc, SupervisedProcKind
 
 
@@ -92,7 +93,9 @@ class ProcJobExecutor(SupervisedProc):
     def running_job(self) -> RunningJobInfo | None:
         return self._running_job
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
+    def _create_process(
+        self, cch: socket.socket, log_cch: socket.socket, stdio: ChildStdio | None
+    ) -> mp.Process:
         levels = {}
         root = logging.getLogger()
         levels["root"] = root.level
@@ -109,6 +112,7 @@ class ProcJobExecutor(SupervisedProc):
             session_end_timeout=self._session_end_timeout,
             log_cch=log_cch,
             mp_cch=cch,
+            stdio=stdio,
             user_arguments=self._user_args,
             logger_levels=levels,
         )
