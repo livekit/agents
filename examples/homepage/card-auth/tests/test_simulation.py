@@ -11,7 +11,7 @@ def caller(card: str) -> Identity:
 
 
 async def verified_bank() -> Bank:
-    bank = Bank(lookup_seconds=0)
+    bank = Bank()
     await bank.authenticate(caller("1111"))
     return bank
 
@@ -29,7 +29,7 @@ async def test_saying_the_card_is_locked_without_locking_it_fails():
 
 
 async def test_a_lockout_needs_three_failed_checks():
-    bank = Bank(lookup_seconds=0)
+    bank = Bank()
     for _ in range(2):
         await bank.authenticate(caller("0000"))
     assert grade(bank, {"failed_checks": 3, "locked_out": True}, TODAY) == [

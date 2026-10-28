@@ -29,7 +29,7 @@ def agent(monkeypatch: pytest.MonkeyPatch, published: dict) -> CardServices:
         published.setdefault(f"{key}_history", []).append(value)
         published[key] = value
 
-    return CardServices(Bank(publish=publish, lookup_seconds=0))
+    return CardServices(Bank(publish=publish))
 
 
 async def verify(agent, **overrides) -> dict:

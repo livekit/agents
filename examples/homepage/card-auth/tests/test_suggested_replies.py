@@ -122,7 +122,7 @@ async def test_an_interrupted_reply_leaves_the_line_up():
 
 
 async def test_script_walks_from_the_reason_for_calling_to_goodbye():
-    bank = Bank(lookup_seconds=0)
+    bank = Bank()
 
     first = caller_script(bank)
     assert SAMPLE_NAME in first and "April 22, 1990" in first
@@ -146,7 +146,7 @@ async def test_script_walks_from_the_reason_for_calling_to_goodbye():
 
 
 async def test_script_says_goodbye_once_the_caller_is_locked_out():
-    bank = Bank(lookup_seconds=0)
+    bank = Bank()
     for _ in range(3):
         await bank.authenticate(Identity(SAMPLE_NAME, SAMPLE_BIRTH_DATE, "0000"))
 

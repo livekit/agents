@@ -23,7 +23,7 @@ async def bank(published: dict) -> Bank:
     async def publish(key, value):
         published[key] = value
 
-    bank = Bank(publish=publish, lookup_seconds=0)
+    bank = Bank(publish=publish)
     await bank.open_alert()
     return bank
 

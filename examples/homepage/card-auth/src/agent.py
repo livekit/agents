@@ -9,11 +9,13 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    UserStateChangedEvent,
     cli,
     inference,
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.voice import SpeechHandle
 from livekit.plugins import ai_coustics
 
 from bank import Bank
@@ -37,6 +39,10 @@ load_dotenv(".env.local")
 
 AGENT_NAME = "card-verification"
 MODELS = {"voice": f"openai/{VOICE_MODEL}", "backend": f"openai/{BACKEND_MODEL}"}
+STILL_THERE = "The line has gone quiet. Ask in a few words whether they're still there, and nothing else."
+SILENT_GOODBYE = (
+    "The line stayed quiet. Say a short goodbye and nothing else: the call is ending."
+)
 
 server = AgentServer()
 
@@ -83,6 +89,10 @@ async def card_verification(ctx: JobContext) -> None:
     )
     if outbound:
         await bank.open_alert()
+    session.on("close", lambda _: ctx.delete_room())
+    if not ctx.is_fake_job():
+        # a live line: the console's text turns have no silence to check on
+        check_in_when_user_away(session)
     SuggestedReplies(
         session,
         ctx.room,
@@ -139,6 +149,33 @@ async def _answered(room: rtc.Room, caller: rtc.RemoteParticipant) -> bool:
 def _masked(number: str) -> str | None:
     digits = "".join(c for c in number if c.isdigit())
     return f"•••-{digits[-4:]}" if len(digits) >= 4 else None
+
+
+def check_in_when_user_away(session: AgentSession) -> None:
+    """Asks once whether the caller's still there when the line goes quiet, and says goodbye
+    if it stays quiet. The voice model speaks for itself, so it's told what to say, and handles
+    barge-in itself, so a caller who comes back during the goodbye stays on."""
+    quiet_spells = 0
+
+    def hang_up_unless_back(goodbye: SpeechHandle) -> None:
+        if quiet_spells == 2 and not goodbye.interrupted:
+            session.shutdown()
+
+    def on_user_state(ev: UserStateChangedEvent) -> None:
+        nonlocal quiet_spells
+        if ev.new_state == "speaking":
+            quiet_spells = 0
+        elif ev.new_state == "away":
+            quiet_spells += 1
+            if quiet_spells == 1:
+                session.generate_reply(instructions=STILL_THERE)
+                session.reset_away_timer()
+            elif quiet_spells == 2:
+                session.generate_reply(instructions=SILENT_GOODBYE).add_done_callback(
+                    hang_up_unless_back
+                )
+
+    session.on("user_state_changed", on_user_state)
 
 
 if __name__ == "__main__":
