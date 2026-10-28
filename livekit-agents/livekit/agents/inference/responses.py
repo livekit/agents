@@ -111,8 +111,10 @@ class LLM(llm.LLM):
     ``inference_class`` and the other upgrade headers are fixed per connection.
 
     ``stream_idle_timeout`` bounds the silence between Responses events once a request is
-    sent, over both WebSocket and HTTP. ``None`` uses ``conn_options.timeout``; raise it for
-    models that reason or run hosted tools for long stretches without emitting events.
+    sent, over both WebSocket and HTTP. WebSocket pings don't count as events; the gateway's
+    keepalive frames do, and the gateway bounds upstream silence itself. ``None`` uses
+    ``conn_options.timeout``; raise it for models that reason or run hosted tools for long
+    stretches without emitting events.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool

@@ -109,8 +109,9 @@ class LLM(llm.LLM):
         breakpoints, and models before GPT-5.6 reject it the same way.
 
         ``stream_idle_timeout`` bounds the silence between Responses events once a request is
-        sent, over both WebSocket and HTTP. ``None`` uses ``conn_options.timeout``; raise it for
-        models that reason or run hosted tools for long stretches without emitting events.
+        sent, over both WebSocket and HTTP; WebSocket pings don't count as events. ``None`` uses
+        ``conn_options.timeout``; raise it for models that reason or run hosted tools for long
+        stretches without emitting events.
         """
         super().__init__()
 

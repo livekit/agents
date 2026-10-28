@@ -135,14 +135,11 @@ class ResponsesWebsocket:
 
         ws = await self._acquire_and_send(data, connect_timeout)
         completed = False
+        loop = asyncio.get_running_loop()
+        deadline = _next_deadline(loop, receive_timeout)
         try:
             while True:
-                try:
-                    raw_msg = await ws.receive(timeout=receive_timeout)
-                except asyncio.TimeoutError as e:
-                    raise APITimeoutError(
-                        "timed out waiting for a Responses WebSocket event"
-                    ) from e
+                raw_msg = await _receive_before(loop, ws, deadline)
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
                     exc = raw_msg.data
                     status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
@@ -162,6 +159,7 @@ class ResponsesWebsocket:
                 if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
+                deadline = _next_deadline(loop, receive_timeout)
                 event = json.loads(raw_msg.data)
                 yield event
                 if event["type"] in [
@@ -201,6 +199,25 @@ class ResponsesWebsocket:
                 self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
                 raise
         raise APIConnectionError("failed to send request over WebSocket") from last_exc
+
+
+def _next_deadline(loop: asyncio.AbstractEventLoop, timeout: float | None) -> float | None:
+    return None if timeout is None else loop.time() + timeout
+
+
+async def _receive_before(
+    loop: asyncio.AbstractEventLoop,
+    ws: aiohttp.ClientWebSocketResponse,
+    deadline: float | None,
+) -> aiohttp.WSMessage:
+    # receive(timeout=...) restarts its timer on every frame, including the heartbeat
+    # pongs it consumes internally, so it can't bound the silence between events
+    if deadline is None:
+        return await ws.receive()
+    try:
+        return await asyncio.wait_for(ws.receive(), max(deadline - loop.time(), 0))
+    except asyncio.TimeoutError as e:
+        raise APITimeoutError("timed out waiting for a Responses WebSocket event") from e
 
 
 class _ResponsesOptions(Protocol):
@@ -253,7 +270,7 @@ class ResponsesLLMStream(llm.LLMStream):
         self._full_chat_ctx = full_chat_ctx.copy()
 
     def _idle_timeout(self) -> float:
-        # pings never reach receive(), so only Responses events reset this
+        # only text frames reset this; transport pings and pongs don't
         if self._llm._stream_idle_timeout is not None:
             return self._llm._stream_idle_timeout
         return self._conn_options.timeout
