@@ -1,10 +1,13 @@
 """The server must detect bad clients and preserve real WebSocket behavior."""
 
 import asyncio
+from dataclasses import replace
 
 import aiohttp
 import pytest
 
+from .discovery import provider_by_name
+from .drivers import make_audio_segments, open_stream, push_audio
 from .protocol import Protocol, Provider
 from .server import Segment, STTServer, json_message
 
@@ -30,6 +33,51 @@ class Example(Protocol):
 
 
 CASE = Provider("example", Example, lambda *_: None, ("harness self-test",))
+
+
+async def test_disconnect_check_rejects_an_open_connection():
+    async with STTServer(CASE) as server:
+        async with aiohttp.ClientSession() as client:
+            async with client.ws_connect(server.ws_url) as socket:
+                await server.connected.wait()
+                with pytest.raises(AssertionError, match="connections remain open"):
+                    await server.wait_for_disconnects(timeout=0.01)
+                await socket.close()
+                await server.wait_for_disconnects()
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("owner", ["stream", "pool"])
+async def test_driver_detects_leaks_before_server_cleanup(monkeypatch, owner):
+    provider = provider_by_name("deepgram" if owner == "stream" else "openai")
+    original_factory = provider.create_stt
+    cleanup = []
+
+    async def leave_open():
+        pass
+
+    def create_stt(server, monkeypatch):
+        instance = original_factory(server, monkeypatch)
+        if owner == "pool":
+            cleanup.append(instance.aclose)
+            monkeypatch.setattr(instance, "aclose", leave_open)
+        return instance
+
+    provider = replace(provider, create_stt=create_stt)
+    server = STTServer(provider)
+    wait_for_disconnects = server.wait_for_disconnects
+    monkeypatch.setattr(server, "wait_for_disconnects", lambda: wait_for_disconnects(timeout=0.05))
+    try:
+        with pytest.raises(AssertionError, match="connections remain open"):
+            async with open_stream(provider, monkeypatch, server=server) as (stream, _, _, _, _):
+                push_audio(stream, provider, make_audio_segments(provider)[0])
+                await asyncio.wait_for(server.audio_received.wait(), 1)
+                if owner == "stream":
+                    cleanup.append(stream.aclose)
+                    monkeypatch.setattr(stream, "aclose", leave_open)
+    finally:
+        for close in cleanup:
+            await close()
 
 
 @pytest.mark.parametrize("audio", [b"wrong", b"part"])

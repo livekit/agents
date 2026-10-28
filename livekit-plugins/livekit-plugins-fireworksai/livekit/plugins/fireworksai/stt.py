@@ -351,10 +351,7 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
-                except asyncio.TimeoutError:
-                    continue
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,

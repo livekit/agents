@@ -110,6 +110,8 @@ PROVIDERS = (
         create_stt,
         ("https://docs.mistral.ai/studio/audio/speech-to-text/transcribe-in-realtime",),
         uses_websocket_monitor=False,
+        pools_connections=True,
+        supports_prewarm=True,
         completion_on_close=False,
         live_constructor="livekit.plugins.mistralai.stt:STT",
         required_env=("MISTRAL_API_KEY",),

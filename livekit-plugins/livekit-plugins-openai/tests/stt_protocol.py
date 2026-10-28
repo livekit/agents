@@ -106,6 +106,7 @@ PROVIDERS = (
         create_stt,
         (__doc__.splitlines()[2],),
         sample_rate=24000,
+        pools_connections=True,
         transport_fixture=TransportFixture(
             "openai",
             plugin("openai.stt"),
@@ -134,6 +135,7 @@ PROVIDERS = (
         server_vad,
         (__doc__.splitlines()[2],),
         sample_rate=24000,
+        pools_connections=True,
         completion_on_close=False,
     ),
 )

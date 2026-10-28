@@ -37,11 +37,17 @@ def create_sdk_fixture(monkeypatch):
                     raise response
                 yield response
 
-    monkeypatch.setattr(
-        module.auth,
-        "create_riva_auth",
-        lambda **kw: NS(channel=NS(close=lambda: responses.put(None))),
-    )
+    def create_auth(**kwargs):
+        connection = server.track_connection()
+
+        def close():
+            connection.closed = True
+            server.stream_closed = True
+            responses.put(None)
+
+        return NS(channel=NS(close=close))
+
+    monkeypatch.setattr(module.auth, "create_riva_auth", create_auth)
     monkeypatch.setattr(module.riva.client, "ASRService", lambda auth: Service())
     provider = module.STT(api_key="test")
     server.connected.set()

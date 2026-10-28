@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from livekit.agents import utils
 
@@ -17,6 +18,13 @@ class Server:
         self.final = None
         self.terminal = None
         self.closed = False
+        self.stream_closed = False
+        self.connections = []
+
+    def track_connection(self):
+        connection = SimpleNamespace(closed=False)
+        self.connections.append(connection)
+        return connection
 
     def stop(self):
         self.stopped.set()
@@ -57,6 +65,7 @@ class Server:
             await utils.aio.gracefully_cancel(self.consumer)
 
     def cancel(self):
+        self.stream_closed = True
         if self.consumer is not None:
             self.consumer.cancel()
 
@@ -68,6 +77,7 @@ class Pool:
     def __init__(self, server, client=None):
         self.server = server
         self.client = server if client is None else client
+        self.resource = server.track_connection()
 
     @asynccontextmanager
     async def connection(self, *, timeout):
@@ -75,6 +85,7 @@ class Pool:
         yield self.client
 
     async def aclose(self):
+        self.resource.closed = True
         await self.server.close()
 
     def remove(self, connection):

@@ -11,6 +11,18 @@ def create_sdk_fixture(monkeypatch):
     server = Server()
     from livekit.plugins.aws import stt as module
 
+    class HTTPClient(module.AWSCRTHTTPClient):
+        def __init__(self):
+            super().__init__()
+            self.connection = server.track_connection()
+
+        async def close(self):
+            await super().close()
+            self.connection.closed = True
+            server.stream_closed = True
+
+    monkeypatch.setattr(module, "AWSCRTHTTPClient", HTTPClient)
+
     class Audio:
         async def send(self, event):
             await server.send_audio(event.value.audio_chunk)

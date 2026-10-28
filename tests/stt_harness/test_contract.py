@@ -4,6 +4,7 @@ uv run pytest tests/stt_harness/test_contract.py --unit -k deepgram
 """
 
 import asyncio
+import logging
 from dataclasses import replace
 
 import pytest
@@ -135,6 +136,20 @@ async def test_cancel_does_not_emit_error_or_retry(provider, monkeypatch, draini
         await asyncio.wait_for(collector, 1)
         assert not errors
         assert len(server.connections) == 1
+
+
+@pytest.mark.parametrize(
+    "provider", [p for p in PROVIDERS if p.supports_prewarm], ids=lambda p: p.name
+)
+async def test_plugin_close_releases_prewarmed_connections(provider, monkeypatch):
+    async with STTServer(provider) as server:
+        instance = provider.create_stt(server, monkeypatch)
+        try:
+            instance.prewarm()
+            await asyncio.wait_for(server.connected.wait(), 1)
+        finally:
+            await instance.aclose()
+            await server.wait_for_disconnects()
 
 
 @pytest.mark.parametrize("failure", ["close", "abort", "silent", "final_then_close"])
@@ -344,9 +359,11 @@ async def test_server_ping_is_answered(provider, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "provider", [p for p in PROVIDERS if p.name == "deepgram"], ids=lambda p: p.name
+    "provider",
+    [p for p in PROVIDERS if p.name in {"deepgram", "assemblyai", "fireworksai", "gradium"}],
+    ids=lambda p: p.name,
 )
-async def test_quiet_server_stays_connected_when_pings_are_answered(provider, monkeypatch):
+async def test_quiet_server_stays_connected_when_pings_are_answered(provider, monkeypatch, caplog):
     if not provider.uses_websocket_monitor:
         pytest.skip("Provider owns heartbeat; its default timing needs transport-specific coverage")
     server = STTServer(provider, segments=make_audio_segments(provider))
@@ -360,11 +377,13 @@ async def test_quiet_server_stays_connected_when_pings_are_answered(provider, mo
     ):
         push_audio(stream, provider, make_audio_segments(provider)[0])
         await asyncio.wait_for(server.audio_received.wait(), 1)
+        caplog.clear()
         await asyncio.sleep(0.6)
         assert server.connections[0].pings >= 2
         assert not collector.done()
         assert not errors
         assert len(server.connections) == 1
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
 async def test_failure_has_a_bounded_retry_budget(provider, monkeypatch):

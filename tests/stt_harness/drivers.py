@@ -68,14 +68,21 @@ async def open_stream(provider, monkeypatch, *, server=None, max_retry=0, fallba
         finally:
             # Abort may discard audio that the scenario has not pushed yet.
             server.allow_partial_input = True
-            await stream.aclose()
-            await utils.aio.gracefully_cancel(collector)
-            await instance.aclose()
-            if fallback:
+            try:
+                try:
+                    await stream.aclose()
+                    await utils.aio.gracefully_cancel(collector)
+                finally:
+                    if fallback:
+                        # Recovery streams belong to the adapter, not to this stream.
+                        await instance.aclose()
+                if not provider.pools_connections:
+                    await server.wait_for_disconnects()
+            finally:
                 await primary.aclose()
-                await backup.aclose()
-            for connection in server.connections:
-                await asyncio.wait_for(connection.disconnected.wait(), 2)
+                if fallback:
+                    await backup.aclose()
+                await server.wait_for_disconnects()
 
 
 async def collect_events(stream, events):

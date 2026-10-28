@@ -5,6 +5,7 @@ real WebSockets. Keep only faults that a TCP server cannot place precisely.
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 import aiohttp
@@ -107,3 +108,25 @@ async def test_remote_close_cannot_discard_queued_audio(provider):
         transport.sockets[0].server_close()
         with pytest.raises(APIError):
             await asyncio.wait_for(collector, 1)
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        fixture
+        for fixture in transport_fixtures()
+        if fixture.name in {"assemblyai", "fireworksai", "gradium"}
+    ],
+    indirect=True,
+    ids=lambda fixture: fixture.name,
+)
+async def test_healthy_idle_does_not_emit_warnings(provider, caplog):
+    _, _, transport = provider
+    async with open_stream(provider, continuous_audio=False, liveness_timeout=6) as (_, collector):
+        caplog.clear()
+        # Virtual time crosses two former 15-second warning intervals without a real wait.
+        await asyncio.sleep(31)
+        assert not collector.done()
+        assert len(transport.sockets) == 1
+        assert transport.sockets[0].pings >= 10
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]

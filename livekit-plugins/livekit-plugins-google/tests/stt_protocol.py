@@ -113,5 +113,6 @@ PROVIDERS += (
         "google",
         create_sdk_fixture,
         ("https://docs.cloud.google.com/speech-to-text/docs/v1/speech-to-text-requests",),
+        pools_connections=True,
     ),
 )

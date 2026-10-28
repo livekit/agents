@@ -21,6 +21,8 @@ def create_sdk_fixture(monkeypatch):
     class Recognizer:
         def __init__(self):
             server.recognizers.append(self)
+            server.connections.append(self)
+            self.closed = False
             for event in (
                 "recognizing",
                 "recognized",
@@ -37,6 +39,8 @@ def create_sdk_fixture(monkeypatch):
             server.connected.set()
 
         def stop_continuous_recognition(self):
+            self.closed = True
+            server.stream_closed = True
             server.closed = True
 
     server.recognizers = []

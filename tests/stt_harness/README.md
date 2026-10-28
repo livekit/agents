@@ -48,6 +48,14 @@ including the short final frame. Its reader can answer pings while final results
 are held. Receipt acknowledgements can precede those results. A server assertion
 fails the test even when the client retries or falls back.
 
+Shutdown checks run before the harness closes any client session or server socket.
+Non-pooled streams must release their connections at `stream.aclose()`. Providers
+marked `pools_connections` may retain them until `STT.aclose()`, which must release
+every connection, including idle prewarmed sockets. The SDK fixtures also track
+stream cancellation and transport closure before their own cleanup runs.
+Fallback recovery streams belong to the adapter and are checked after it closes,
+before closing the underlying providers.
+
 ## Coverage and limits
 
 The common scenarios cover active transcription, delayed final results, flush,

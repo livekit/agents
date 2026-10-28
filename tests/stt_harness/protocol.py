@@ -55,6 +55,9 @@ class ProviderConfig:
     live_options: dict[str, Any] = field(default_factory=dict)
     live_options_from_env: dict[str, str] = field(default_factory=dict)
     transport_fixture: TransportFixture | None = None
+    # Stream shutdown may return connections to a pool; STT.aclose must close that pool.
+    pools_connections: bool = False
+    supports_prewarm: bool = False
 
     def create_live_stt(self):
         module, constructor = self.live_constructor.split(":")

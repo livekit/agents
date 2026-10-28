@@ -74,6 +74,7 @@ PROVIDERS = (
         transport_fixture=TransportFixture(
             "assemblyai",
             plugin("assemblyai.stt"),
+            initial_messages=({"type": "Begin", "id": "test-session", "expires_at": 1e12},),
             completion_messages=(
                 {
                     "type": "Turn",

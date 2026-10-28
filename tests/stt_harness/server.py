@@ -281,6 +281,15 @@ class STTServer:
             await self.audio_received.wait()
         self.check()
 
+    async def wait_for_disconnects(self, timeout: float = 2) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(peer.disconnected.wait() for peer in self.connections)), timeout
+            )
+        except asyncio.TimeoutError as error:
+            raise AssertionError("STT connections remain open after shutdown") from error
+        assert all(peer.transport.is_closing() for peer in self.connections)
+
     def check(self) -> None:
         if self.errors:
             raise AssertionError(f"server protocol failed: {self.errors!r}") from self.errors[0]

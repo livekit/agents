@@ -38,10 +38,22 @@ async def connection(request, monkeypatch):
         await asyncio.wait_for(server.connected.wait(), 1)
         yield stream, server, collector, events
     finally:
-        await stream.aclose()
-        await utils.aio.gracefully_cancel(collector)
-        await provider.aclose()
-        await server.close()
+        try:
+            try:
+                await stream.aclose()
+                await utils.aio.gracefully_cancel(collector)
+                assert server.stream_closed, "the SDK streaming call was not closed"
+                assert server.connections, "the fixture did not track an SDK connection"
+                if not request.param.pools_connections:
+                    assert all(connection.closed for connection in server.connections)
+                if server.consumer is not None:
+                    await asyncio.wait((server.consumer,), timeout=1)
+                    assert server.consumer.done(), "the SDK request iterator is still running"
+            finally:
+                await provider.aclose()
+                assert all(connection.closed for connection in server.connections)
+        finally:
+            await server.close()
 
 
 async def test_deadline_does_not_apply_to_active_input(connection):
@@ -131,6 +143,7 @@ async def test_azure_option_change_drains_the_old_recognizer(monkeypatch, finish
         assert [e.alternatives[0].text for e in events if e.alternatives] == ["words", "words"]
     finally:
         await stream.aclose()
+        assert all(connection.closed for connection in server.connections)
         await utils.aio.gracefully_cancel(collector)
         await provider.aclose()
         await server.close()
