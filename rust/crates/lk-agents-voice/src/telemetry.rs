@@ -357,7 +357,9 @@ impl SessionTrace {
                 let open = self.start("on_user_turn_completed", parent, now, label(), out);
                 Hook { open, activity: None }
             }
-            HookKind::FillerSource | HookKind::FunctionToolsExecuted => return,
+            HookKind::OnUserTurnExceeded
+            | HookKind::FillerSource
+            | HookKind::FunctionToolsExecuted => return,
         };
         self.hooks.insert(id, hook);
     }

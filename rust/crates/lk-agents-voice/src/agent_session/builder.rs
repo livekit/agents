@@ -447,6 +447,7 @@ impl DriverBuilder {
             dtmf: Default::default(),
             end_call: None,
             pending_turn: None,
+            turn_limit: Default::default(),
             waiting_turns: Default::default(),
             last_turn: None,
             live_speech_at_final: false,

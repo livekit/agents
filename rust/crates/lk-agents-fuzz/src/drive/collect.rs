@@ -201,6 +201,13 @@ impl Run {
                 Step::Generation(GenerationStep::FillerStopped { filler, .. }) => {
                     self.close_by_id(at, Kind::Filler, Id::Filler(*filler));
                 }
+                // The developer's `on_user_turn_exceeded` runs on its own and is never answered by
+                // the case: it says nothing back the session waits on, and the callback still
+                // running is what makes a second crossing in the same activity a no-op.
+                Step::Handoff(HandoffStep::HookIssued {
+                    kind: lk_agents_voice::agent_session::HookKind::OnUserTurnExceeded,
+                    ..
+                }) => {}
                 Step::Handoff(HandoffStep::HookIssued { hook, kind, .. }) => {
                     self.open_once(at, Kind::Hook, Id::Hook(*hook), Detail::Hook { kind: *kind });
                 }

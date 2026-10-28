@@ -134,6 +134,8 @@ pub enum TurnStep {
         verdict: PreemptiveVerdict,
     },
     PreemptiveRefused(crate::agent_activity::scheduling::PreemptiveRefusal),
+    /// A user turn past its limit gets no `on_user_turn_exceeded`.
+    TurnLimitSkipped(crate::agent_activity::hooks::TurnLimitSkip),
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -835,7 +837,8 @@ impl Step {
                 | TurnStep::CommitSuperseded
                 | TurnStep::TranscriptSegment { .. }
                 | TurnStep::SttFlushed { .. }
-                | TurnStep::PreemptiveRefused(_) => None,
+                | TurnStep::PreemptiveRefused(_)
+                | TurnStep::TurnLimitSkipped(_) => None,
             },
             Step::Speech(step) => match step {
                 SpeechStep::ReplyCreated { speech }

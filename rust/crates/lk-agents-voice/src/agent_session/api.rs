@@ -893,6 +893,12 @@ pub trait SessionHooks: Send + Sync {
         new_transcript: &str,
         transcript_confidence: f64,
     ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>;
+    /// `agent.on_user_turn_exceeded(ev)`.
+    async fn on_user_turn_exceeded(
+        &self,
+        agent: &lk_agents_abi::HostRef,
+        ev: &lk_agents_abi::voice::events::UserTurnExceededEvent,
+    ) -> Result<(), HostError>;
     /// The `function_tools_executed` event emitted: each output's `reply_required` as its
     /// handlers left it.
     async fn function_tools_executed(
@@ -960,6 +966,12 @@ async fn answer_hook(
                     }
                     HookOutcome::Turn(edits)
                 }),
+            None => Ok(HookOutcome::Failed),
+        },
+        HookCall::OnUserTurnExceeded { agent, event, .. } => match agents.get(&agent) {
+            Some(agent) => {
+                hooks.on_user_turn_exceeded(&agent, &event).await.map(|()| HookOutcome::Returned)
+            }
             None => Ok(HookOutcome::Failed),
         },
         HookCall::FunctionToolsExecuted { event, .. } => {

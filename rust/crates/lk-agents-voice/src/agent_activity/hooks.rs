@@ -7,7 +7,8 @@ use crate::agent_session::effects::{Out, Signal, Timer};
 use crate::agent_session::{Driver, HookCall, HookId, HookKind, HookOutcome, HostEvent};
 use crate::audio_recognition::PendingTurn;
 use crate::run_result::Owned;
-use crate::trace::{CoreStep, HandoffStep, HookEnd};
+use crate::trace::{CoreStep, HandoffStep, HookEnd, TurnStep};
+use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::Ts;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -57,9 +58,9 @@ impl Driver {
         let id = call.id();
         let kind = call.kind();
         let (agent, speech, turn) = match &call {
-            HookCall::OnEnter { agent, .. } | HookCall::OnExit { agent, .. } => {
-                (Some(agent.clone()), None, None)
-            }
+            HookCall::OnEnter { agent, .. }
+            | HookCall::OnExit { agent, .. }
+            | HookCall::OnUserTurnExceeded { agent, .. } => (Some(agent.clone()), None, None),
             HookCall::OnUserTurnCompleted { turn, .. } => (None, None, Some(*turn)),
             HookCall::FillerSource { .. } => (None, None, None),
             HookCall::FunctionToolsExecuted { speech, .. } => (None, Some(*speech), None),
@@ -85,6 +86,7 @@ impl Driver {
             HookKind::OnEnter => self.run_own(Owned::Hook(id), out),
             HookKind::OnExit
             | HookKind::OnUserTurnCompleted
+            | HookKind::OnUserTurnExceeded
             | HookKind::FillerSource
             | HookKind::FunctionToolsExecuted => {}
         }
@@ -171,7 +173,10 @@ impl Driver {
         use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Returned, Turn};
         let fits = matches!(
             (kind, &outcome),
-            (HookKind::OnExit | HookKind::OnEnter, Returned | Failed)
+            (
+                HookKind::OnExit | HookKind::OnEnter | HookKind::OnUserTurnExceeded,
+                Returned | Failed
+            )
                 | (HookKind::OnUserTurnCompleted, Turn(_) | Returned | Failed)
                 | (HookKind::FillerSource, Filler { .. } | Returned | Failed)
                 | (
@@ -186,6 +191,11 @@ impl Driver {
         match kind {
             HookKind::OnExit => out.signal(Signal::OnExitEnded(id)),
             HookKind::OnEnter => {}
+            HookKind::OnUserTurnExceeded => {
+                if self.activity.turn_limit == TurnLimit::Running(id) {
+                    self.activity.turn_limit = TurnLimit::Idle;
+                }
+            }
             // "error occurred during on_user_turn_completed": return, no reply.
             HookKind::OnUserTurnCompleted => {
                 let edits = match outcome {
@@ -318,5 +328,98 @@ impl Leave<'_> {
             State::Exiting(hook) => Exit::Wait(hook),
             State::Abandoned(_) | State::Exited => Exit::Done,
         }
+    }
+}
+
+/// `on_user_turn_exceeded` (`_user_turn_exceeded_task`): waiting for the reply the end of turn may
+/// bring, or the developer's callback running.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) enum TurnLimit {
+    #[default]
+    Idle,
+    Waiting(lk_agents_abi::voice::events::UserTurnExceededEvent),
+    Running(HookId),
+}
+
+/// Why a user turn past its limit gets no `on_user_turn_exceeded`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum TurnLimitSkip {
+    /// Scheduling is paused, a handoff blocks new turns, or the session closes.
+    Paused,
+    /// The callback is still running.
+    Busy,
+    /// The agent started speaking: the end of turn replied.
+    AgentSpeaking,
+}
+
+impl Driver {
+    /// `on_user_turn_exceeded`: a new crossing replaces the wait still running.
+    pub(crate) fn on_user_turn_exceeded(
+        &mut self,
+        ev: &lk_agents_abi::voice::events::UserTurnExceededEvent,
+        out: &mut Out,
+    ) {
+        let skip = if self.turn_limit_blocked() {
+            Some(TurnLimitSkip::Paused)
+        } else if matches!(self.activity.turn_limit, TurnLimit::Running(_)) {
+            return out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Busy));
+        } else if self.session.states.agent_state() == AgentState::Speaking {
+            Some(TurnLimitSkip::AgentSpeaking)
+        } else {
+            None
+        };
+        self.activity.turn_limit = match skip {
+            Some(skip) => {
+                out.trace(TurnStep::TurnLimitSkipped(skip));
+                TurnLimit::Idle
+            }
+            None => TurnLimit::Waiting(ev.clone()),
+        };
+    }
+
+    /// The agent started speaking: the wait ends with no callback.
+    pub(crate) fn turn_limit_agent_speaking(&mut self, out: &mut Out) {
+        if matches!(self.activity.turn_limit, TurnLimit::Waiting(_)) {
+            self.activity.turn_limit = TurnLimit::Idle;
+            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::AgentSpeaking));
+        }
+    }
+
+    /// The wait ends once no reply is decided, queued or speaking: the callback runs, unless a
+    /// handoff or a pause began meanwhile.
+    pub(crate) fn settle_turn_limit(&mut self, now: Ts, out: &mut Out) {
+        if !matches!(self.activity.turn_limit, TurnLimit::Waiting(_)) {
+            return;
+        }
+        if self.turn_limit_blocked() {
+            self.activity.turn_limit = TurnLimit::Idle;
+            return out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Paused));
+        }
+        if !self.agent_idle() {
+            return;
+        }
+        let TurnLimit::Waiting(event) = std::mem::take(&mut self.activity.turn_limit) else {
+            return;
+        };
+        let id = self.activity.hooks.mint();
+        let agent = self.activity.agent.clone();
+        if self.issue_hook(now, HookCall::OnUserTurnExceeded { id, agent, event }, None, out) {
+            self.activity.turn_limit = TurnLimit::Running(id);
+        }
+    }
+
+    /// The activity ends (a swap, the close's edge): the wait raises `ActivityClosedError`, a
+    /// running callback is abandoned.
+    pub(crate) fn refuse_turn_limit(&mut self, out: &mut Out) {
+        if matches!(std::mem::take(&mut self.activity.turn_limit), TurnLimit::Waiting(_)) {
+            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Paused));
+        }
+    }
+
+    /// `_scheduling_paused or _new_turns_blocked`, or the activity closing.
+    fn turn_limit_blocked(&self) -> bool {
+        self.activity.speech_scheduler.is_paused()
+            || self.in_window()
+            || self.session.closing.is_some()
     }
 }

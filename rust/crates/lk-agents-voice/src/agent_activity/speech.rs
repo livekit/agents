@@ -1066,6 +1066,13 @@ impl Driver {
             | Phase::ManualCommitted { .. } => true,
             Phase::Committed { speaking, .. } => *speaking,
         };
+        self.agent_idle() && !deciding && self.session.states.user_turn_claims() == 0
+    }
+
+    /// `wait_for_idle(wait_for_agent=True, wait_for_user=False)`: no speech current, queued or
+    /// winding down, no end-of-turn countdown running and no turn parked on its hook.
+    pub(crate) fn agent_idle(&self) -> bool {
+        let activity = &self.activity;
         // Busy: every held handle is in flight, except one whose tools run (the current speech is
         // released for `foreground()` from inside a tool) and a live preemptive generation.
         let scheduling = &activity.speech_scheduler;
@@ -1078,9 +1085,8 @@ impl Driver {
         scheduling.no_current_speech()
             && scheduling.speech_q().is_empty()
             && !winding_down
-            && !deciding
+            && !activity.audio_recognition.phase().is_running()
             && activity.pending_turn.is_none()
-            && self.session.states.user_turn_claims() == 0
     }
 
     pub(crate) fn settle_waiters(&mut self, now: Ts, out: &mut Out) {
@@ -1089,6 +1095,7 @@ impl Driver {
         // A pending deferred tool reply takes the idle instant first.
         self.try_deliver_tool_reply(now, out);
         self.pump_fillers(now, out);
+        self.settle_turn_limit(now, out);
         if !self.session.idle.has_waiters() || !self.is_idle() {
             return;
         }

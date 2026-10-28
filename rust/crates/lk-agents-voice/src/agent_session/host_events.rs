@@ -11,6 +11,7 @@ pub enum HookKind {
     OnEnter,
     OnExit,
     OnUserTurnCompleted,
+    OnUserTurnExceeded,
     FillerSource,
     FunctionToolsExecuted,
 }
@@ -21,6 +22,7 @@ impl HookKind {
             HookKind::OnEnter => "on_enter",
             HookKind::OnExit => "on_exit",
             HookKind::OnUserTurnCompleted => "on_user_turn_completed",
+            HookKind::OnUserTurnExceeded => "on_user_turn_exceeded",
             HookKind::FillerSource => "filler_source",
             HookKind::FunctionToolsExecuted => "function_tools_executed",
         }
@@ -51,6 +53,13 @@ pub enum HookCall {
         new_transcript: String,
         transcript_confidence: f64,
     },
+    /// The user turn passed its limit with no reply on the way. Nothing waits on it; a turn that
+    /// passes the limit again while it runs is not handed over.
+    OnUserTurnExceeded {
+        id: HookId,
+        agent: String,
+        event: lk_agents_abi::voice::events::UserTurnExceededEvent,
+    },
     FillerSource {
         id: HookId,
         filler: FillerId,
@@ -73,6 +82,7 @@ impl HookCall {
             HookCall::OnEnter { id, .. }
             | HookCall::OnExit { id, .. }
             | HookCall::OnUserTurnCompleted { id, .. }
+            | HookCall::OnUserTurnExceeded { id, .. }
             | HookCall::FillerSource { id, .. }
             | HookCall::FunctionToolsExecuted { id, .. } => *id,
         }
@@ -83,6 +93,7 @@ impl HookCall {
             HookCall::OnEnter { .. } => HookKind::OnEnter,
             HookCall::OnExit { .. } => HookKind::OnExit,
             HookCall::OnUserTurnCompleted { .. } => HookKind::OnUserTurnCompleted,
+            HookCall::OnUserTurnExceeded { .. } => HookKind::OnUserTurnExceeded,
             HookCall::FillerSource { .. } => HookKind::FillerSource,
             HookCall::FunctionToolsExecuted { .. } => HookKind::FunctionToolsExecuted,
         }

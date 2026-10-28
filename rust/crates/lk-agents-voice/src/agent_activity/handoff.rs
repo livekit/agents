@@ -359,6 +359,8 @@ impl Driver {
             ..
         } = update;
         self.session.expressive.agent = expressive;
+        // The arriving agent's turn limit is its own; a callback still running is abandoned.
+        self.refuse_turn_limit(out);
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
         let tool_names: std::collections::BTreeSet<String> =

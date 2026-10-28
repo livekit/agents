@@ -73,6 +73,7 @@ from .events import (
     SpeechCreatedEvent,
     ToolExecutionUpdatedEvent,
     UserState,
+    UserTurnExceededEvent,
 )
 from .remote_session import ConsoleCall, SessionPort
 from .room_io import AudioInputOptions, RoomOptions, TextInputCallback, TextInputEvent
@@ -232,7 +233,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._agent: Agent | None = None
         self._chat_ctx = ChatContext.empty()
-        self._turn_exceeded_task: asyncio.Future[None] | None = None
         self._agent_state: AgentState = "initializing"
         self._user_state: UserState = "listening"
         self._input = io.AgentInput(self)
@@ -777,27 +777,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if (attr := MIRRORED_STATES.get(kind)) is not None:
                 setattr(self, attr, ev.new_state)
             self.emit(name, ev)
-            if name == "user_turn_exceeded":
-                self._on_user_turn_exceeded(ev)
             return
         handler = _HANDLERS.get(kind)
         if handler is not None:
             handler(self, wire)
-
-    def _on_user_turn_exceeded(self, ev: Any) -> None:
-        """The agent's ``on_user_turn_exceeded``, one at a time: a turn exceeded again while
-        it runs is not handed over twice."""
-        if self._turn_exceeded_task is not None and not self._turn_exceeded_task.done():
-            return
-        agent = self.current_agent
-
-        async def _run() -> None:
-            try:
-                await agent.on_user_turn_exceeded(ev)
-            except Exception:
-                logger.exception("error in on_user_turn_exceeded callback")
-
-        self._turn_exceeded_task = asyncio.ensure_future(_run())
 
     def _on_speech_created(self, wire: dict[str, Any]) -> None:
         handle = SpeechHandle._of(wire["speech_handle"])
@@ -1130,6 +1113,10 @@ class _AgentHooks:
     async def _core_on_exit(self, agent: Agent) -> None:
         with _in_hook("on_exit", self._session, agent):
             await agent.on_exit()
+
+    async def _core_on_user_turn_exceeded(self, agent: Agent, ev: dict[str, Any]) -> None:
+        with _in_hook("on_user_turn_exceeded", self._session, agent):
+            await agent.on_user_turn_exceeded(UserTurnExceededEvent.model_validate(ev))
 
     async def _core_close_toolsets(self, agent: Agent | None) -> None:
         tools = (agent or self._session).tools

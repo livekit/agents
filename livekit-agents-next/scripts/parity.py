@@ -1589,6 +1589,55 @@ async def sc_on_user_turn_completed(call: Call) -> None:
     await _close(call)
 
 
+async def sc_user_turn_limit(call: Call) -> None:
+    """Two turns get no reply, and the second passes the limit: once its end of turn settles, the
+    default on_user_turn_exceeded cuts in."""
+    from livekit.agents import Agent, StopResponse
+
+    class Quiet(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You listen.")
+
+        async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
+            raise StopResponse()
+
+    await _pipeline(
+        call,
+        agent=Quiet(),
+        vad=call.vad(),
+        turn_handling={"turn_detection": "vad", "user_turn_limit": {"max_words": 6}},
+    )
+    call.speak("my name is Theo")
+    await call.settle(3)
+    call.speak("and I live in Paris")
+    await call.settle(5)
+    await _close(call)
+
+
+async def sc_user_turn_limit_eou(call: Call) -> None:
+    """The final passes the limit while the end of turn counts down: its reply comes first and
+    on_user_turn_exceeded is skipped."""
+    from livekit.agents import Agent
+
+    class CutIn(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You listen.")
+
+        async def on_user_turn_exceeded(self, ev: Any) -> None:
+            call.log("on_user_turn_exceeded", ev.transcript)
+            self.session.say("Sorry to cut in.")
+
+    await _pipeline(
+        call,
+        agent=CutIn(),
+        vad=call.vad(),
+        turn_handling={"turn_detection": "vad", "user_turn_limit": {"max_words": 4}},
+    )
+    call.speak("my name is Theo and I live in Paris")
+    await call.settle(5)
+    await _close(call)
+
+
 async def sc_say_uninterruptible(call: Call) -> None:
     session = await _pipeline(call)
     call.handle("say", session.say(LONG, allow_interruptions=False))
@@ -1827,6 +1876,8 @@ SCENARIOS: dict[str, Callable[[Call], Any]] = {
     "user_away": sc_user_away,
     "preemptive": sc_preemptive,
     "on_user_turn_completed": sc_on_user_turn_completed,
+    "user_turn_limit": sc_user_turn_limit,
+    "user_turn_limit_eou": sc_user_turn_limit_eou,
     "say_uninterruptible": sc_say_uninterruptible,
     "interrupt_api": sc_interrupt_api,
     "amd_machine": sc_amd_machine,

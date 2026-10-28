@@ -669,6 +669,13 @@ impl SessionHooks for ScriptedHooks {
     ) -> Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError> {
         self.result((self.user_text.clone(), Some(Vec::new()), self.stop))
     }
+    async fn on_user_turn_exceeded(
+        &self,
+        _: &lk_agents_abi::HostRef,
+        _: &lk_agents_abi::voice::events::UserTurnExceededEvent,
+    ) -> Result<(), HostError> {
+        self.result(())
+    }
     async fn function_tools_executed(
         &self,
         _: Vec<lk_agents_abi::ChatItem>,

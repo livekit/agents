@@ -88,6 +88,8 @@ pub(crate) struct AgentActivity {
     pub(crate) dtmf: crate::workflows::dtmf::Dtmf,
     /// `EndCallTool`: the speech whose goodbye the session closes after.
     pub(crate) end_call: Option<crate::workflows::end_call::EndCall>,
+    /// `on_user_turn_exceeded`, waited for or running.
+    pub(crate) turn_limit: crate::agent_activity::hooks::TurnLimit,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// Decided turns waiting for `pending_turn`'s hook to return, in order.

@@ -536,9 +536,14 @@ impl Driver {
             }
             // The IVR navigator reads the two state edges off the feed, as `IVRActivity` does.
             SessionEvent::AgentStateChanged { .. } | SessionEvent::UserStateChanged { .. } => {
+                let speaking = lk_agents_abi::voice::events::AgentState::Speaking;
+                if matches!(ev, SessionEvent::AgentStateChanged { new, .. } if *new == speaking) {
+                    self.turn_limit_agent_speaking(out);
+                }
                 let closing = self.session.closing_past_edge();
                 out.machine().append(self.session.states.reconcile_away_timer(now, closing));
             }
+            SessionEvent::UserTurnExceeded(e) => self.on_user_turn_exceeded(e, out),
             SessionEvent::MetricsCollected { .. }
             | SessionEvent::SpanStarted(_)
             | SessionEvent::SpanEnded(_)
@@ -548,7 +553,6 @@ impl Driver {
             | SessionEvent::EotPrediction(_)
             | SessionEvent::AgentBackchannelOpportunity(_)
             | SessionEvent::PreemptiveGeneration(_)
-            | SessionEvent::UserTurnExceeded(_)
             | SessionEvent::UserTranscriptionTimeout(_)
             | SessionEvent::BackchannelConfirmed
             | SessionEvent::OverlapInterruption(_)
