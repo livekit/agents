@@ -1,6 +1,7 @@
 """Counterexamples for the Cargo-closure and tracked-file architecture contracts."""
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -171,14 +172,26 @@ class BaselineContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
+            # Inherited GIT_* variables (hooks, commit scripts) would aim these commands at the
+            # outer repository, so the scratch repository gets a clean environment.
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            env.update(
+                GIT_AUTHOR_NAME="Test",
+                GIT_AUTHOR_EMAIL="test@example.com",
+                GIT_COMMITTER_NAME="Test",
+                GIT_COMMITTER_EMAIL="test@example.com",
+            )
+
             def git(*args):
                 return subprocess.run(
-                    ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+                    ["git", "-C", str(root), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=env,
                 ).stdout
 
             git("init", "-q")
-            git("config", "user.name", "Test")
-            git("config", "user.email", "test@example.com")
             path = root / "baseline.json"
             path.write_text(json.dumps(["old"]))
             git("add", "baseline.json")
