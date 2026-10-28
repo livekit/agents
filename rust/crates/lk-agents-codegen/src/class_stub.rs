@@ -1,7 +1,7 @@
 //! The `.pyi` of the declared classes, one per ABI subject (`_generated/_core_<subject>.pyi`),
 //! star-imported by `_core.pyi`. Written from the same IR as the adapters.
 
-use crate::decl::{Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Ty};
+use crate::decl::{Class, Declarations, Form, HostForm, Literal, Method, MethodKind, RecordDecl, Ty};
 use crate::python::Out;
 
 pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
@@ -16,7 +16,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     let mut out = Vec::new();
     for family in families {
         let classes: Vec<&Class> = decls.classes.iter().filter(|c| c.family == family).collect();
-        let mut imports = Imports::default();
+        let mut imports = Imports(Vec::new(), decls.records.clone());
         let mut body = String::new();
         let mut own: Vec<String> = Vec::new();
         for c in &classes {
@@ -57,13 +57,25 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
 
 /// `from <module> import <name>` lines, sorted.
 #[derive(Default)]
-pub(crate) struct Imports(Vec<(String, String)>);
+pub(crate) struct Imports(Vec<(String, String)>, Vec<RecordDecl>);
 
 impl Imports {
     pub(crate) fn add(&mut self, module: &str, name: &str) {
         let entry = (module.to_owned(), name.to_owned());
         if !self.0.contains(&entry) {
             self.0.push(entry);
+        }
+    }
+
+    /// A handwritten scalar union can refer to the generated records beside its declaration.
+    fn annotation(&mut self, text: &str, rust: &str) {
+        let Some((module, _)) = rust.rsplit_once("::") else { return };
+        let records: Vec<_> = self.1.iter().filter(|record| {
+            record.rust.rsplit_once("::").is_some_and(|(scope, _)| scope == module)
+                && text.split(|c: char| !c.is_alphanumeric() && c != '_').any(|name| name == record.name)
+        }).map(|record| (record.module.clone(), record.name.clone())).collect();
+        for (module, name) in records {
+            self.add(&format!(".{module}"), &name);
         }
     }
 
@@ -225,7 +237,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                 name.clone()
             }
             HostForm::Dict => "dict[str, object]".into(),
-            HostForm::Annotation(text) => text.clone(),
+            HostForm::Annotation(text) => {
+                imports.annotation(text, &r.rust);
+                text.clone()
+            },
         },
         Ty::This => c.name.clone(),
         Ty::Proxy { host, generic, .. } => {

@@ -168,7 +168,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         })
     }
 
-    async fn run_tool(&self, invocation: &::lk_agents_abi::agent::Invocation, prepared: &::lk_agents_abi::HostRef) -> ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError> {
+    async fn run_tool(&self, invocation: &::lk_agents_abi::agent::Invocation, prepared: &::lk_agents_abi::HostRef) -> ::std::result::Result<(::lk_agents_abi::llm::tool_executor::ToolReport, ::serde_json::Map<::std::string::String, ::serde_json::Value>), ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
@@ -188,7 +188,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::llm::tool_executor::ToolReport>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AgentHost.run_tool"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::lk_agents_abi::llm::tool_executor::ToolReport>())?, (match ::lk_agents_abi::python::value_from_py(&item_1, "AgentHost.run_tool")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("AgentHost.run_tool", ": expected a dict"))) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

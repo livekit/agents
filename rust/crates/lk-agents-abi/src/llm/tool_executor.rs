@@ -110,7 +110,7 @@ pub const ASK_IN_OWN_WORDS: &str =
 
 /// What a tool's run came to, as the host classified the value it returned or raised. The host
 /// only classifies; the outcome table in `lk-agents-core` decides what it means.
-#[crate::host(record(module = "tool_report", extract))]
+#[crate::host(record(module = "tool_report", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolOutcome {
     /// A value the model reads: `text` is a string as written, anything else as its JSON.

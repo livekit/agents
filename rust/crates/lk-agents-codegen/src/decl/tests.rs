@@ -672,3 +672,50 @@ fn a_class_hands_out_an_async_iterable_instance_of_another_class() {
         "{err}"
     );
 }
+
+// Catches: the `str | Message` client annotation being emitted without the generated record's
+// import, or importing another subject's identically named record.
+#[test]
+fn handwritten_scalar_unions_import_the_records_in_their_declaring_module() {
+    let decls = read(
+        r#"
+        pub mod other {
+            #[crate::host(record(module = "other", extract, emit))]
+            pub struct Message { pub text: String }
+        }
+        #[crate::host(record(module = "client", extract, emit))]
+        pub struct Message { pub text: String }
+        #[crate::host(handwritten(extract, host = "str | Message"))]
+        pub enum Input { Text(String), Message(Message) }
+        #[crate::host(class(name = "Client"))]
+        pub trait Client: Sized {
+            #[host(call)] fn send(&self, message: Input);
+        }
+        "#,
+    ).expect("resolves");
+    let out = crate::class_stub::emit(&decls).expect("emits");
+    let stub = &out[0].text;
+    assert!(stub.contains("from .client import Message"), "{stub}");
+    assert!(stub.contains("message: str | Message"), "{stub}");
+    assert!(!stub.contains("from .other import Message"), "{stub}");
+}
+
+// Catches: a generated host return refusing a mixed tuple because its JSON map cannot use
+// pyo3's native extraction, or accepting a tuple without checking its exact arity.
+#[test]
+fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
+    let decls = read(&proxy(
+        r#"
+        #[host(await)] async fn report(&self) -> Result<(Chunk, super::chat::Extra), HostError>;
+        "#,
+    ))
+    .expect("resolves");
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(llm.contains("cast::<::pyo3::types::PyTuple>()?"), "{llm}");
+    assert!(llm.contains("tuple.len() != 2"), "{llm}");
+    assert!(llm.contains("tuple.get_item(0)?"), "{llm}");
+    assert!(llm.contains("tuple.get_item(1)?"), "{llm}");
+    assert!(llm.contains("extract::<::lk_agents_abi::llm::chat::Chunk>()"), "{llm}");
+    assert!(llm.contains("Value::Object(map) => Ok(map)"), "{llm}");
+}

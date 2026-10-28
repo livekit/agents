@@ -1,6 +1,4 @@
-"""Delegation (plan 7.2, 7.5): ``A2ADelegate`` against ``a2a_session`` in process over HTTP+SSE,
-and against a stock a2a-sdk server that speaks plain A2A and nothing else; the delegate as a
-toolset, its tool named from the card."""
+"""Public A2A client and remote tools against an owned local HTTP/SSE peer."""
 
 from __future__ import annotations
 
@@ -8,561 +6,540 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
-import httpx
 import pytest
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import EventQueue
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
-from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
-from a2a.types import a2a_pb2 as pb
-from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
-from starlette.applications import Starlette
-from starlette.routing import Mount
+import pytest_asyncio
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext, RunResult, llm
-from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.a2a.extension import KIND
-from livekit.agents.delegation import A2ADelegate, DelegationFailed
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
-from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS
-from livekit.agents.storage import Storage
-from livekit.agents.storage.protocol import payload_to_item
-from livekit.agents.storage.resolve import Thread
-
-from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_a2a_server import (
-    AGENT,
-    ENDPOINT,
-    history_items,
-    http_client,
-    make_server,
-    no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
-    rpc,
-    sse_results,
-    wire,
+from livekit.agents import APIConnectOptions, APITimeoutError
+from livekit.agents.a2a import (
+    AgentClient,
+    DataPart,
+    FilePart,
+    Message,
+    MessageMetadata,
+    RemoteAgent,
+    TextPart,
 )
 
+pytestmark = pytest.mark.unit
 
-async def lanes_of(storage: Storage, thread_id: str) -> set[str]:
-    core = await storage.open(thread_id)
-    try:
-        return {lane.lane for lane in await core.lanes()}
-    finally:
-        core.close()
+URI = "https://livekit.io/a2a/ext/agents/v1"
+OPTIONS = APIConnectOptions(max_retry=0, read_timeout=2.0)
 
 
-pytestmark = [pytest.mark.unit]
-
-
-# ---------------------------------------------------------------------------------------------
-# against a2a_session, in process
-# ---------------------------------------------------------------------------------------------
-
-
-async def expert(ctx: A2ASessionContext) -> str:
-    await ctx.update("checking the fare rules")
-    if ctx.message.text_content == "say goodbye":
-        return "Thanks for calling, goodbye."
-    caller = ctx.caller_history
-    seen = f" (caller history: {len(caller.items)})" if caller is not None else ""
-    return f"the fare is 240 USD{seen}"
-
-
-async def test_a2a_delegate_against_a_livekit_expert(thread_storage: Storage) -> None:
-    server, _ = make_server(thread_storage, expert)
-    storage = server.storage
-    assert storage is not None
-    caller_session = (await storage.threads.create_thread()).thread_id
-    progress: list[str] = []
-    async with http_client(server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        result = await delegate.run(
-            "what is the fare", progress=progress.append, context_id=caller_session
-        )
-        assert delegate.transport == "JSONRPC"
-        assert delegate.extension_active is True
-        goodbye = await delegate.run(
-            "say goodbye", progress=progress.append, context_id=caller_session
-        )
-        await delegate.aclose()
-
-    assert progress == ["checking the fare rules", "checking the fare rules"]
-    assert result.output == "the fare is 240 USD" and result.state == "completed"
-    # inside the project the expert writes its own lane of the caller's session (plan 4.4)
-    assert result.context_id == caller_session
-    assert AGENT in await lanes_of(storage, caller_session)
-    items = await history_items(storage, caller_session, AGENT)
-    assert [i.text_content for i in items] == [
-        "what is the fare",
-        "the fare is 240 USD",
-        "say goodbye",
-        "Thanks for calling, goodbye.",
-    ]
-    tasks = await Thread(storage, caller_session, agent_name=AGENT).tasks()
-    assert {t.task_id for t in tasks} == {result.task_id, goodbye.task_id}
-    # the message went as a delegation
-    assert all(t.data.history[0]["metadata"][KIND] == "delegation" for t in tasks)
-    assert goodbye.output == "Thanks for calling, goodbye."
-
-
-async def test_a2a_delegate_outside_the_session_sends_the_conversation(
-    thread_storage: Storage,
-) -> None:
-    server, _ = make_server(thread_storage, expert)
-    history = ChatContext(
-        [ChatMessage(role="user", content=["hi"]), ChatMessage(role="assistant", content=["hello"])]
-    )
-    async with http_client(server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        first = await delegate.run("what is the fare", message_history=history)
-        second = await delegate.run("what is the fare", message_history=history)
-        await delegate.aclose()
-    assert first.output == "the fare is 240 USD (caller history: 2)"
-    # outside a turn there is no session to name: a session of its own, kept across calls
-    assert first.context_id.startswith("AT_") and second.context_id == first.context_id
-
-
-# ---------------------------------------------------------------------------------------------
-# against a stock a2a-sdk server: plain A2A, nothing else
-# ---------------------------------------------------------------------------------------------
-
-
-class _Reasoner(AgentExecutor):
-    """A stock a2a-sdk server: a plain text agent, no extension, no LiveKit code."""
-
+class Peer:
     def __init__(self) -> None:
-        self.seen: list[pb.Message] = []
+        self.requests: list[tuple[str, dict[str, str], dict[str, Any] | None]] = []
+        self.scenario = "question"
+        self.capable = True
+        self.structured = False
+        self.url = ""
+        self.sockets: set[asyncio.StreamWriter] = set()
+        self.tasks: set[asyncio.Task[None]] = set()
+        self.release = asyncio.Event()
+        self.canceled = asyncio.Event()
 
-    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        assert context.message is not None
-        self.seen.append(context.message)
-        task_id = context.task_id or "task-1"
-        context_id = context.context_id or "ctx-1"
-        await event_queue.enqueue_event(
-            pb.Task(
-                id=task_id,
-                context_id=context_id,
-                status=pb.TaskStatus(state=pb.TaskState.TASK_STATE_SUBMITTED),
-            )
-        )
-        updater = TaskUpdater(event_queue, task_id, context_id)
-        progress = pb.Message(
-            message_id="p1",
-            role=pb.Role.ROLE_AGENT,
-            task_id=task_id,
-            context_id=context_id,
-            parts=[pb.Part(text="looking that up")],
-        )
-        await updater.update_status(pb.TaskState.TASK_STATE_WORKING, message=progress)
-        text = context.get_user_input()
-        if text == "fail":
-            await updater.update_status(
-                pb.TaskState.TASK_STATE_FAILED,
-                message=pb.Message(
-                    message_id="f1", role=pb.Role.ROLE_AGENT, parts=[pb.Part(text="no can do")]
-                ),
-            )
-            return
-        await updater.add_artifact(
-            [pb.Part(text="Your balance is ")], artifact_id="a1", append=False, last_chunk=False
-        )
-        await updater.add_artifact(
-            [pb.Part(text="forty dollars.")], artifact_id="a1", append=True, last_chunk=True
-        )
-        await updater.complete()
-
-    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        raise NotImplementedError
-
-
-@contextlib.asynccontextmanager
-async def stock_server(executor: _Reasoner) -> AsyncIterator[Starlette]:
-    """The stock server as an ASGI app, with the SDK's background tasks and sse-starlette's
-    shutdown watcher cleaned up after."""
-    card = pb.AgentCard(
-        name="reasoner",
-        description="A stock reasoner.",
-        version="0.1.0",
-        capabilities=pb.AgentCapabilities(streaming=True),
-        default_input_modes=["text/plain"],
-        default_output_modes=["text/plain"],
-        skills=[pb.AgentSkill(id="balance", name="balance", description="Balances.")],
-        supported_interfaces=[
-            pb.AgentInterface(
-                url="http://reasoner.test/a2a/v1",
-                protocol_binding=TransportProtocol.JSONRPC,
-                protocol_version=PROTOCOL_VERSION_1_0,
-            )
-        ],
-    )
-    handler = DefaultRequestHandler(
-        agent_executor=executor, task_store=InMemoryTaskStore(), agent_card=card
-    )
-    routes = [*create_agent_card_routes(card), *create_jsonrpc_routes(handler, "/v1")]
-    try:
-        yield Starlette(routes=[Mount("/a2a", routes=routes)])
-    finally:
-        with contextlib.suppress(Exception):
-            await handler.aclose()
-        from sse_starlette.sse import AppStatus
-
-        watchers = [
-            t
-            for t in asyncio.all_tasks()
-            if "_shutdown_watcher" in getattr(t.get_coro(), "__qualname__", "")
-        ]
-        AppStatus.should_exit = True
+    async def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        self.tasks.add(task)
+        self.sockets.add(writer)
         try:
-            if watchers:
-                await asyncio.wait(watchers, timeout=5)
+            await self.serve(reader, writer)
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
         finally:
-            AppStatus.should_exit = False
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+            self.sockets.discard(writer)
+            self.tasks.discard(task)
 
-
-def stock_http(app: Starlette) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://reasoner.test", timeout=30.0
-    )
-
-
-async def test_a2a_delegate_speaks_plain_a2a_to_a_stock_server() -> None:
-    """A stock server gets a stock request, and its stock answer is enough: the working
-    statuses are the progress, the artifact is the answer, failed is a failure. Nothing of the
-    extension is sent: no header, no LiveKit session header, no metadata, no chat_ctx part."""
-    plain = _Reasoner()
-    seen_headers: list[dict[str, str]] = []
-
-    async with stock_server(plain) as app:
-
-        async def recording(scope: Any, receive: Any, send: Any) -> None:
-            if scope["type"] == "http":
-                seen_headers.append({k.decode(): v.decode() for k, v in scope["headers"]})
-            await app(scope, receive, send)
-
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=recording),
-            base_url="http://reasoner.test",
-            timeout=30.0,
-        ) as http:
-            progress: list[str] = []
-            delegate = A2ADelegate("http://reasoner.test/a2a", httpx_client=http)
-            result = await delegate.run(
-                "balance please",
-                progress=progress.append,
-                context_id="AT_caller",
-                message_history=ChatContext([ChatMessage(role="user", content=["earlier"])]),
+    async def serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        method, _, _ = (await reader.readline()).decode().split()
+        headers: dict[str, str] = {}
+        while (line := await reader.readline()) != b"\r\n":
+            name, value = line.decode().split(":", 1)
+            headers[name.lower()] = value.strip()
+        body = bytearray()
+        if headers.get("transfer-encoding") == "chunked":
+            while size := int((await reader.readline()).split(b";", 1)[0], 16):
+                body.extend(await reader.readexactly(size))
+                assert await reader.readexactly(2) == b"\r\n"
+            assert await reader.readline() == b"\r\n"
+        elif length := int(headers.get("content-length", "0")):
+            body.extend(await reader.readexactly(length))
+        rpc = json.loads(body) if body else None
+        self.requests.append((method, headers, rpc))
+        if method == "GET":
+            if self.scenario == "stall-card":
+                await self.release.wait()
+                return
+            extensions = []
+            if self.capable:
+                extension: dict[str, Any] = {"uri": URI}
+                if self.structured:
+                    extension["params"] = {
+                        "toolName": "check_coverage",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"account": {"type": "integer"}},
+                            "required": ["account"],
+                            "additionalProperties": False,
+                        },
+                    }
+                extensions.append(extension)
+            card = {
+                "name": "coverage_expert",
+                "description": "Checks account coverage.",
+                "version": "1",
+                "supportedInterfaces": [
+                    {
+                        "url": self.url + "/rpc",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
+                "capabilities": {"streaming": True, "extensions": extensions},
+                "defaultInputModes": ["text/plain"],
+                "defaultOutputModes": ["text/plain"],
+                "skills": [],
+            }
+            await self.respond(writer, "application/json", json.dumps(card).encode())
+            return
+        assert rpc is not None
+        params = rpc["params"]
+        if rpc["method"] == "CancelTask":
+            self.canceled.set()
+            result = {
+                "id": params["id"],
+                "contextId": params["contextId"],
+                "status": {"state": "TASK_STATE_CANCELED"},
+            }
+            await self.respond(writer, "application/json", self.envelope(rpc, result))
+            return
+        message = params.get("message", {})
+        context = message.get("contextId", params.get("contextId", "remote-context"))
+        task_id = message.get("taskId", params.get("id", "remote-task"))
+        events = [
+            {
+                "task": {
+                    "id": task_id,
+                    "contextId": context,
+                    "status": {"state": "TASK_STATE_SUBMITTED"},
+                }
+            }
+        ]
+        events.append(self.status(task_id, context, "WORKING", "Checking café"))
+        if self.scenario in ("wait", "partial-stall"):
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
             )
-            with pytest.raises(DelegationFailed, match="no can do"):
-                await delegate.run("fail", context_id="AT_caller")
-            assert delegate.extension_active is False
-            await delegate.aclose()
-    assert progress == ["looking that up"]
-    assert result.output == "Your balance is forty dollars."
-    assert result.state == "completed"
-    assert result.profile == "a2a"
-    # a stock server never sees the caller's session id (the sdk mints a context of its own)
-    assert plain.seen[0].context_id != "AT_caller"
-    message = plain.seen[0]
-    assert [p.WhichOneof("content") for p in message.parts] == ["text"]
-    assert KIND not in dict(message.metadata) and not dict(message.metadata)
-    for headers in seen_headers:
-        assert "a2a-extensions" not in headers and "x-livekit-session-id" not in headers
+            for event in events:
+                data = b"data: " + self.envelope(rpc, event) + b"\n\n"
+                writer.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+            await writer.drain()
+            await self.release.wait()
+            return
+        if self.scenario == "flood":
+            events.extend(
+                self.status(task_id, context, "WORKING", f"progress {i}") for i in range(40)
+            )
+        if self.scenario == "failed":
+            events.append(self.status(task_id, context, "FAILED", "coverage unavailable"))
+        elif self.scenario == "canceled":
+            events.append(self.status(task_id, context, "CANCELED", "stopped"))
+        elif self.scenario == "question" and not message.get("taskId"):
+            events.append(self.status(task_id, context, "INPUT_REQUIRED", "Which account?"))
+        else:
+            events.append(
+                {
+                    "artifactUpdate": {
+                        "taskId": task_id,
+                        "contextId": context,
+                        "artifact": {
+                            "artifactId": "answer",
+                            "name": "answer",
+                            "parts": [{"text": "Confirmed "}, {"data": {"receipt": 42}}],
+                        },
+                    }
+                }
+            )
+            final = self.status(task_id, context, "COMPLETED", "")
+            final["statusUpdate"]["metadata"] = {URI + "/verbatim": "Confirmed "}
+            events.append(final)
+        wire = b"".join(b"data: " + self.envelope(rpc, event) + b"\n\n" for event in events)
+        await self.respond(writer, "text/event-stream", wire)
 
+    @staticmethod
+    def envelope(rpc: dict[str, Any], result: object) -> bytes:
+        return json.dumps(
+            {"jsonrpc": "2.0", "id": rpc["id"], "result": result}, ensure_ascii=False
+        ).encode()
 
-async def test_a_delegate_is_a_toolset_named_from_the_card(
-    thread_storage: Storage,
-) -> None:
-    expert_server = AgentServer(storage=thread_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(expert)
-    async with http_client(expert_server) as http:
-        back_office = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        assert back_office.tools == [], "nothing before the card is read"
-        await back_office.setup()
-        (tool,) = back_office.tools
-        assert tool.info.name == "ask"
-        assert tool.info.description.startswith("Payer eligibility checks.")
-        assert back_office.id == ENDPOINT
-        front = Agent(instructions="front desk", tools=[back_office])
-        assert [t.info.name for t in llm.ToolContext(front.tools).flatten()] == ["ask"]
-        await back_office.aclose()
+    @staticmethod
+    def status(task: str, context: str, state: str, text: str) -> dict[str, Any]:
+        return {
+            "statusUpdate": {
+                "taskId": task,
+                "contextId": context,
+                "status": {
+                    "state": "TASK_STATE_" + state,
+                    "message": {
+                        "messageId": "status-" + state,
+                        "role": "ROLE_AGENT",
+                        "parts": [{"text": text}],
+                    },
+                },
+            }
+        }
 
-
-# ---------------------------------------------------------------------------------------------
-# a tool's progress and the session, from inside agent.run()
-# ---------------------------------------------------------------------------------------------
-
-
-def _front_desk(expert: A2ADelegate) -> Agent:
-    front = Agent(
-        instructions="front desk",
-        llm=FakeLLM(
-            fake_responses=[
-                FakeLLMResponse(
-                    input="covered?",
-                    content="",
-                    ttft=0,
-                    duration=0,
-                    tool_calls=[FunctionToolCall(name="coverage", arguments="{}", call_id="c1")],
-                ),
-                FakeLLMResponse(
-                    input="the fare is 240 USD", content="Yes, 240 USD.", ttft=0, duration=0
-                ),
-            ]
-        ),
-    )
-
-    @front.tool
-    async def coverage(ctx: RunContext) -> str:
-        """Ask the eligibility expert."""
-        await ctx.update("asking the expert")
-        # no context_id: the delegate finds the turn's session through the run hooks
-        return (await expert.run("is it covered", progress=ctx.update)).output
-
-    return front
-
-
-async def test_a_tools_update_inside_agent_run_reaches_the_door_and_the_delegate_the_session(
-    thread_storages: tuple[Storage, Storage],
-) -> None:
-    # one project: the clinic and the expert share the threads service and the databases, and the
-    # expert is its own agent, so its lane is its own
-    clinic_storage, expert_storage = thread_storages
-    expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="x")(expert)
-    async with http_client(expert_server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        front = _front_desk(delegate)
-
-        async def handler(ctx: A2ASessionContext) -> str:
-            return (await front.run(ctx.message, message_history=ctx.message_history)).output
-
-        clinic, _ = make_server(clinic_storage, handler)
-        async with http_client(clinic) as clinic_http:
-            response = await rpc(clinic_http, "message/stream", {"message": wire("covered?", "m1")})
-            results = [r["result"] for r in sse_results(response)]
-        await delegate.aclose()
-    thread_id = results[0]["task"]["contextId"]
-    working = [
-        r["statusUpdate"]["status"]["message"]["parts"][0]["text"]
-        for r in results
-        if "statusUpdate" in r and r["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
-    ]
-    assert working == ["asking the expert", "checking the fare rules"]
-    assert results[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    # the expert wrote its own lane of the clinic's session, with no context_id passed
-    storage = expert_server.storage
-    assert storage is not None
-    assert await lanes_of(storage, thread_id) == {AGENT, "eligibility"}
-
-
-# ---------------------------------------------------------------------------------------------
-# the expert asks, the person answers: the answer goes to the expert as they gave it
-# ---------------------------------------------------------------------------------------------
-
-
-def _expert_that_asks(*, verbatim: bool = False) -> Agent:
-    expert = Agent(
-        instructions="eligibility",
-        llm=FakeLLM(
-            fake_responses=[
-                FakeLLMResponse(
-                    input="check coverage",
-                    content="",
-                    ttft=0,
-                    duration=0,
-                    tool_calls=[FunctionToolCall(name="which_payer", arguments="{}", call_id="e1")],
-                ),
-                FakeLLMResponse(
-                    input="Aetna, member 12-345",
-                    content="covered by Aetna 12-345",
-                    ttft=0,
-                    duration=0,
-                ),
-            ]
-        ),
-    )
-
-    @expert.tool
-    async def which_payer(ctx: RunContext) -> InputRequired:
-        """Ask for the payer."""
-        return InputRequired("Which payer, and the member id?", verbatim=verbatim)
-
-    return expert
-
-
-@pytest.mark.parametrize("verbatim", [False, True])
-async def test_the_experts_question_is_answered_through_the_delegates_tool(
-    thread_storages: tuple[Storage, Storage], verbatim: bool
-) -> None:
-    """The expert's question reaches the person in the front desk's words, or as the expert
-    wrote it when verbatim; the answer goes back to the expert either way."""
-    clinic_storage, expert_storage = thread_storages
-    expert = _expert_that_asks(verbatim=verbatim)
-    question = "Which payer, and the member id?"
-
-    async def expert_door(ctx: A2ASessionContext) -> RunResult[str]:
-        return await expert.run(ctx.message, message_history=ctx.message_history)
-
-    expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
-        expert_door
-    )
-    async with http_client(expert_server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        front = Agent(
-            instructions="front desk",
-            tools=[delegate],
-            llm=FakeLLM(
-                fake_responses=[
-                    FakeLLMResponse(
-                        input="am I covered?",
-                        content="",
-                        ttft=0,
-                        duration=0,
-                        tool_calls=[
-                            FunctionToolCall(
-                                name="ask",
-                                arguments='{"request": "check coverage"}',
-                                call_id="c1",
-                            )
-                        ],
-                    ),
-                    FakeLLMResponse(
-                        input=ASK_IN_OWN_WORDS.format(question=question),
-                        content="Who is your insurer, and your member number?",
-                        ttft=0,
-                        duration=0,
-                    ),
-                    # the answer never reaches this model: its next input is the expert's reply
-                    FakeLLMResponse(
-                        input="covered by Aetna 12-345",
-                        content="You are covered.",
-                        ttft=0,
-                        duration=0,
-                    ),
-                ]
-            ),
+    @staticmethod
+    async def respond(writer: asyncio.StreamWriter, kind: str, body: bytes) -> None:
+        writer.write(
+            f"HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
         )
+        for offset in range(0, len(body), 7):
+            writer.write(body[offset : offset + 7])
+            await writer.drain()
 
-        async def desk(ctx: A2ASessionContext) -> RunResult[str]:
-            return await front.run(ctx.message, message_history=ctx.message_history)
 
-        clinic, _ = make_server(clinic_storage, desk)
-        async with http_client(clinic) as clinic_http:
-            first = [
-                r["result"]
-                for r in sse_results(
-                    await rpc(
-                        clinic_http, "message/stream", {"message": wire("am I covered?", "m1")}
-                    )
-                )
-            ]
-            thread_id = first[0]["task"]["contextId"]
-            asked = first[-1]["statusUpdate"]["status"]
-            assert asked["state"] == "TASK_STATE_INPUT_REQUIRED"
-            assert asked["message"]["parts"][0]["text"] == (
-                question if verbatim else "Who is your insurer, and your member number?"
-            )
-
-            second = [
-                r["result"]
-                for r in sse_results(
-                    await rpc(
-                        clinic_http,
-                        "message/stream",
-                        {"message": wire("Aetna, member 12-345", "m2", context_id=thread_id)},
-                    )
-                )
-            ]
-        await delegate.aclose()
-    assert second[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    artifacts = [r["artifactUpdate"]["artifact"] for r in second if "artifactUpdate" in r]
-    # streamed in pieces as the model writes it, the last piece empty
-    assert "".join(p["text"] for a in artifacts for p in a.get("parts", [])) == "You are covered."
-
-    db = await clinic_storage.open(thread_id)
+@pytest_asyncio.fixture
+async def peer() -> AsyncIterator[Peer]:
+    peer = Peer()
+    server = await asyncio.start_server(peer.accept, "127.0.0.1", 0)
+    assert server.sockets
+    peer.url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/expert"
     try:
-        history = [payload_to_item(row.payload) for row in await db.history(AGENT)]
+        yield peer
     finally:
-        db.close()
-    calls = [i for i in history if i.type == "function_call" and i.name == "ask"]
-    assert [json.loads(c.arguments)["request"] for c in calls] == [
-        "check coverage",
-        "Aetna, member 12-345",  # the person's words, not the model's
-    ]
+        server.close()
+        await server.wait_closed()
+        peer.release.set()
+        for writer in tuple(peer.sockets):
+            writer.close()
+        await asyncio.gather(*tuple(peer.tasks))
 
 
-async def test_an_experts_verbatim_answer_reaches_the_person_as_written(
-    thread_storages: tuple[Storage, Storage],
+@pytest.mark.asyncio
+async def test_public_client_ack_continuation_and_full_artifacts(peer: Peer) -> None:
+    client = AgentClient(peer.url, token="peer-token", conn_options=OPTIONS)
+    try:
+        first = await client.send("Check my coverage")
+        assert (first.task_id, first.thread_id) == ("remote-task", "remote-context")
+        updates = [update async for update in first]
+        assert [update.state for update in updates] == ["submitted", "working", "input-required"]
+        assert updates[1].text == "Checking café"
+        reply = await client.send("account 42", task_id=first.task_id)
+        final = [update async for update in reply][-1]
+        assert final.state == "completed" and final.text == 'Confirmed {"receipt":42}'
+        assert final.metadata["livekit/verbatim"] == "Confirmed "
+        assert final.artifacts[0].parts[-1] == DataPart(data={"receipt": 42})
+        assert sum(method == "GET" for method, _, _ in peer.requests) == 1
+        sends = [rpc for _, _, rpc in peer.requests if rpc]
+        assert sends[1]["params"]["message"]["taskId"] == first.task_id
+        assert sends[1]["params"]["message"]["contextId"] == first.thread_id
+        assert all(headers["a2a-version"] == "1.0" for _, headers, _ in peer.requests)
+        assert all(
+            headers["authorization"] == "Bearer peer-token" for _, headers, _ in peer.requests
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_generated_message_parts_and_typed_metadata(peer: Peer) -> None:
+    peer.scenario = "complete"
+    client = AgentClient(peer.url, conn_options=OPTIONS)
+    try:
+        reply = await client.send(
+            Message(
+                parts=[
+                    TextPart(text="Check"),
+                    DataPart(data={"account": 42}),
+                    FilePart(url="https://example.test/coverage.pdf", media_type="application/pdf"),
+                ],
+                message_id="stable-id",
+                metadata=MessageMetadata(channel="portal", application={"trace": "abc"}),
+            )
+        )
+        assert [update async for update in reply][-1].state == "completed"
+        message = peer.requests[-1][2]["params"]["message"]
+        assert message["messageId"] == "stable-id"
+        assert message["metadata"] == {URI + "/channel": "portal", "trace": "abc"}
+        assert message["parts"] == [
+            {"text": "Check"},
+            {"data": {"account": 42}},
+            {"url": "https://example.test/coverage.pdf", "mediaType": "application/pdf"},
+        ]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancel_only_autoconnects_and_never_manufactures_completion(peer: Peer) -> None:
+    peer.capable = False
+    client = AgentClient(peer.url, conn_options=OPTIONS)
+    try:
+        canceled = await client.cancel(
+            "pending", thread_id="their-context", reason="caller-canceled"
+        )
+        assert canceled.state == "canceled"
+        rpc = peer.requests[-1][2]
+        assert rpc["params"]["contextId"] == "their-context"
+        assert rpc["params"]["metadata"] == {URI + "/reason": "caller-canceled"}
+        await client.cancel("pending", thread_id="their-context")
+        assert sum(method == "GET" for method, _, _ in peer.requests) == 1
+        assert all(headers["a2a-version"] == "1.0" for _, headers, _ in peer.requests)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_discovery_timeout_keeps_its_phase(peer: Peer) -> None:
+    peer.scenario = "stall-card"
+    client = AgentClient(peer.url, conn_options=replace(OPTIONS, read_timeout=0.02))
+    try:
+        with pytest.raises(APITimeoutError) as error:
+            await client.send("Check")
+        assert error.value.phase == "read"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_progress_keeps_phase_without_replaying(peer: Peer) -> None:
+    peer.scenario = "partial-stall"
+    client = AgentClient(peer.url, conn_options=replace(OPTIONS, read_timeout=0.02, max_retry=2))
+    try:
+        reply = await client.send("Check")
+        assert (await anext(reply)).state == "submitted"
+        assert (await anext(reply)).state == "working"
+        with pytest.raises(APITimeoutError) as error:
+            await anext(reply)
+        assert error.value.phase == "read"
+        assert (
+            sum(rpc is not None and rpc["method"].startswith("Send") for _, _, rpc in peer.requests)
+            == 1
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_remote_card_defines_non_ask_name_and_typed_input(peer: Peer) -> None:
+    peer.structured = True
+    toolset = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    await toolset.setup()
+    tool = toolset.tools[0]
+    assert tool.info.name == "check_coverage"
+    assert tool.info.raw_schema["description"] == "Checks account coverage."
+    assert tool.info.raw_schema["parameters"]["properties"] == {"account": {"type": "integer"}}
+    assert "request" not in tool.info.raw_schema["parameters"]["properties"]
+    with pytest.raises(TypeError):
+        RemoteAgent(peer.url).as_tool(needs_approval=True)
+
+
+@pytest.mark.asyncio
+async def test_remote_continuation_survives_reconstruction_and_isolates_conversations(
+    peer: Peer,
 ) -> None:
-    """A verbatim result leads the expert's answer, flagged ``livekit/verbatim``: the front desk
-    delivers it as written and phrases only the rest."""
-    from livekit.agents.llm.tool_context import DELIVERED
+    from livekit.agents import Agent
+    from livekit.agents.llm import FunctionToolCall
 
-    clinic_storage, expert_storage = thread_storages
-    disclaimer = "This is not medical advice."
-    expert = Agent(
-        instructions="eligibility",
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    def response(text: str, call_id: str) -> FakeLLMResponse:
+        return FakeLLMResponse(
+            input=text,
+            content="",
+            ttft=0,
+            duration=0,
+            tool_calls=[
+                FunctionToolCall(
+                    name="coverage_expert", arguments=json.dumps({"request": text}), call_id=call_id
+                )
+            ],
+        )
+
+    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    desk = Agent(
+        instructions="Call coverage_expert.",
+        tools=[tool],
         llm=FakeLLM(
             fake_responses=[
-                FakeLLMResponse(
-                    input="check coverage",
-                    content="",
-                    ttft=0,
-                    duration=0,
-                    tool_calls=[FunctionToolCall(name="disclose", arguments="{}", call_id="e1")],
-                ),
-                FakeLLMResponse(
-                    input=DELIVERED.format(text=disclaimer), content="covered", ttft=0, duration=0
-                ),
+                response("Check first", "first"),
+                response("Check second", "second"),
+                response("account 42", "answer"),
             ]
         ),
     )
-
-    @expert.tool
-    async def disclose(ctx: RunContext) -> llm.ToolResult:
-        """Disclose."""
-        return llm.ToolResult(disclaimer, verbatim=True)
-
-    async def expert_door(ctx: A2ASessionContext) -> RunResult[str]:
-        return await expert.run(ctx.message, message_history=ctx.message_history)
-
-    expert_server = AgentServer(storage=expert_storage, agent_name="eligibility")
-    expert_server.a2a_session(endpoint=ENDPOINT, description="Payer eligibility checks.")(
-        expert_door
+    first = await desk.run("Check first")
+    second = await desk.run("Check second")
+    assert first.status == second.status == "input_required"
+    first_call = next(item for item in first.all_messages() if item.type == "function_call")
+    second_call = next(item for item in second.all_messages() if item.type == "function_call")
+    assert (
+        first_call.extra["lk.delegation.state"]["id"]["delegation_id"]
+        != second_call.extra["lk.delegation.state"]["id"]["delegation_id"]
     )
-    async with http_client(expert_server) as http:
-        delegate = A2ADelegate(f"http://agents.test/{ENDPOINT}", httpx_client=http)
-        front = Agent(
-            instructions="front desk",
-            tools=[delegate],
-            llm=FakeLLM(
-                fake_responses=[
-                    FakeLLMResponse(
-                        input="am I covered?",
-                        content="",
-                        ttft=0,
-                        duration=0,
-                        tool_calls=[
-                            FunctionToolCall(
-                                name="ask", arguments='{"request": "check coverage"}', call_id="c1"
-                            )
-                        ],
-                    ),
-                    FakeLLMResponse(
-                        input=f"{DELIVERED.format(text=disclaimer)}\ncovered",
-                        content="Good news, you are covered.",
-                        ttft=0,
-                        duration=0,
-                    ),
-                ]
-            ),
+    await desk.run("account 42", message_history=first.all_messages())
+    messages = [
+        rpc["params"]["message"]
+        for _, _, rpc in peer.requests
+        if rpc and "message" in rpc["params"]
+    ]
+    assert "contextId" not in messages[0] and "contextId" not in messages[1]
+    assert messages[2]["contextId"] == "remote-context" and messages[2]["taskId"] == "remote-task"
+    assert all(message["metadata"][URI + "/kind"] == "delegation" for message in messages)
+    histories = [
+        part["data"]["items"]
+        for message in messages
+        for part in message["parts"]
+        if part.get("metadata", {}).get(URI + "/kind") == "chat_ctx"
+    ]
+    assert histories and all(
+        not any(
+            item.get("call_id") in {"first", "second", "answer"} and item["type"] == "function_call"
+            for item in history
         )
-        result = await front.run("am I covered?")
-        await delegate.aclose()
-    assert result.output == f"{disclaimer}\n\nGood news, you are covered."
-    assert result.verbatim == disclaimer
+        for history in histories[:2]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+async def test_remote_failure_and_cancellation_are_truthful_tool_outcomes(
+    peer: Peer, state: str
+) -> None:
+    from livekit.agents import Agent
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    peer.scenario = state
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="Check",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(
+                        name="coverage_expert", arguments='{"request":"Check"}', call_id="check"
+                    )
+                ],
+            )
+        ]
+    )
+    agent = Agent(
+        instructions="Check coverage.",
+        llm=model,
+        tools=[RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()],
+    )
+    if state == "canceled":
+        with pytest.raises(asyncio.CancelledError):
+            await agent.run("Check")
+    else:
+        result = await agent.run("Check")
+        output = next(item for item in result.all_messages() if item.type == "function_call_output")
+        assert output.is_error and output.output == "coverage unavailable"
+
+
+@pytest.mark.asyncio
+async def test_closing_a_pending_public_reply_cancels_exact_remote_task(peer: Peer) -> None:
+    peer.scenario = "wait"
+    client = AgentClient(peer.url, conn_options=replace(OPTIONS, read_timeout=None))
+    try:
+        reply = await client.send("Check")
+        await reply.aclose()
+        await asyncio.wait_for(peer.canceled.wait(), timeout=2)
+        cancel = next(rpc for _, _, rpc in peer.requests if rpc and rpc["method"] == "CancelTask")
+        assert cancel["params"]["id"] == reply.task_id
+        assert cancel["params"]["contextId"] == reply.thread_id
+        assert cancel["params"]["metadata"] == {URI + "/reason": "caller-canceled"}
+        assert [update async for update in reply] == []
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_malformed_message_is_refused_before_discovery(peer: Peer) -> None:
+    client = AgentClient(peer.url, conn_options=OPTIONS)
+    try:
+        with pytest.raises(ValueError, match="content parts"):
+            await client.send(Message(parts=[]))
+        with pytest.raises(ValueError, match="exactly one"):
+            await client.send(Message(parts=[FilePart()]))
+        assert peer.requests == []
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_total_deadline_cancels_remote_work_behind_an_unread_progress_queue(
+    peer: Peer,
+) -> None:
+    peer.scenario = "flood"
+    client = AgentClient(
+        peer.url, conn_options=replace(OPTIONS, total_timeout=0.1, read_timeout=None)
+    )
+    try:
+        reply = await client.send("Check")
+        await asyncio.wait_for(peer.canceled.wait(), timeout=1)
+        with pytest.raises(APITimeoutError) as error:
+            async for _ in reply:
+                pass
+        assert error.value.phase == "total"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_remote_tool_uses_only_its_configured_project_origin_for_default_credentials(
+    peer: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.agents.a2a import Credentials
+
+    monkeypatch.setenv("LIVEKIT_API_KEY", "delegation-test")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "delegation-test-secret-which-is-long-enough")
+    monkeypatch.setenv("LIVEKIT_URL", peer.url.replace("http://", "ws://").removesuffix("/expert"))
+    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    await tool.setup()
+    authorization = peer.requests[-1][1]["authorization"]
+    principal = Credentials(
+        "delegation-test", "delegation-test-secret-which-is-long-enough"
+    ).verify(authorization.removeprefix("Bearer "))
+    assert principal.identity == "delegate" and principal.kind == "project"
+
+    for project in ["wss://foreign.test", peer.url.replace("http://", "wss://")]:
+        monkeypatch.setenv("LIVEKIT_URL", project)
+        await RemoteAgent(peer.url, conn_options=OPTIONS).as_tool().setup()
+        assert "authorization" not in peer.requests[-1][1]
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_native_remote_result_crosses_the_voice_tool_output_adapter(failed: bool) -> None:
+    from livekit.agents._generated.tool_report import (
+        ToolOutcomeToolError,
+        ToolOutcomeValue,
+        ToolReport,
+    )
+    from livekit.agents.llm import FunctionCall
+    from livekit.agents.llm.utils import make_function_call_output
+
+    report = ToolReport(
+        outcome=ToolOutcomeToolError(message="unavailable")
+        if failed
+        else ToolOutcomeValue(text="covered")
+    )
+    result = make_function_call_output(
+        fnc_call=FunctionCall(call_id="call", name="coverage_expert", arguments="{}"),
+        output=report,
+        exception=None,
+    )
+    assert result.fnc_call_out.output == ("unavailable" if failed else "covered")
+    assert result.fnc_call_out.is_error == failed

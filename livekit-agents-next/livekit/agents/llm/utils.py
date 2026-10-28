@@ -504,6 +504,8 @@ def tool_report(output: Any, exception: BaseException | None = None) -> ToolRepo
         Working,
     )
 
+    if isinstance(output, ToolReport):
+        return output
     if isinstance(output, BaseException):
         exception, output = output, None
     if isinstance(exception, ToolError):

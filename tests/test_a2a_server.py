@@ -27,6 +27,7 @@ from livekit.agents.a2a import (
     AgentThreadGrant,
     Credentials,
     Extensions,
+    TextPart,
     Unauthorized,
 )
 from livekit.agents.a2a.codec import TaskUpdate, metadata_from_wire, updates_from_events
@@ -441,7 +442,7 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(thread_storages: Workers
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0]["text"] for m in ctx.messages])
+        batches.append([m.parts[0].text for m in ctx.messages])
         return "one reply"
 
     from datetime import timedelta
@@ -481,7 +482,7 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
-        batches.append([m.parts[0]["text"] for m in ctx.messages])
+        batches.append([m.parts[0].text for m in ctx.messages])
         await asyncio.sleep(0.5)
         return "one reply"
 
@@ -824,11 +825,11 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
     history = ChatContext([ChatMessage(role="user", content=["earlier"])])
     msg = {
         "messageId": "m1",
-        "role": "user",
-        "parts": [{"kind": "text", "text": "what is the fare"}, chat_ctx_part(history)],
+        "role": "ROLE_USER",
+        "parts": [{"text": "what is the fare"}, chat_ctx_part(history)],
         "metadata": {KIND: "delegation"},
     }
-    async with http_client(server) as http:
+    async with http_client(server, Authorization=f"Bearer {CREDENTIALS.project_token()}") as http:
         client = await stock_client(http, extensions=EXTENSION_URI)
         events = await send(client, message_to_pb(msg))
         await client.close()
@@ -837,7 +838,7 @@ async def test_a_delegation_part_and_kind_reach_the_handler(
     assert seen["caller_history"] is not None
     assert [i.text_content for i in seen["caller_history"].items] == ["earlier"]
     # the conversation part is not the turn's text
-    assert seen["parts"] == [{"kind": "text", "text": "what is the fare"}]
+    assert seen["parts"] == [TextPart(text="what is the fare")]
 
 
 async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(

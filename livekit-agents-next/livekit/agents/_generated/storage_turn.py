@@ -10,20 +10,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    from .a2a_client import Message
     from .storage_class import ItemRow, RunUsage, TaskRecord
     from .storage_context import ContextScope, ContextScopeWrite
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class Message:
-    message_id: str
-    parts: list[object]
-    metadata: dict[str, object]
-    channel: str
-    received_at: float
-    task_id: str | None
-    context_id: str | None
-    raw: object
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -41,6 +41,10 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type AgentClient = lk_agents_runtime::a2a_client::AgentClient;
+    type Reply = lk_agents_runtime::a2a_client::Reply;
+    type RemoteInteraction = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
+    type RemoteConfiguration = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;

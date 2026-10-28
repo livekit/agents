@@ -66,6 +66,195 @@ pub fn _core_auth_grant_allows(grant: ::lk_agents_abi::a2a::auth::AuthGrant, ope
     Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+type ReplyImpl = <crate::Selected as super::Implementations>::Reply;
+
+#[pyclass(frozen, name = "Reply", module = "livekit.agents._core")]
+pub struct Reply(::std::sync::Arc<ReplyImpl>);
+
+#[pymethods]
+impl Reply {
+    #[getter]
+    fn task_id(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::task_id(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn thread_id(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::thread_id(&self.0);
+        Ok(out)
+    }
+
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            match <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::next(&this).await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))? {
+                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py)),
+                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/client.rs.
+type AgentClientImpl = <crate::Selected as super::Implementations>::AgentClient;
+
+#[pyclass(frozen, name = "AgentClient", module = "livekit.agents._core")]
+pub struct AgentClient(::std::sync::Arc<AgentClientImpl>);
+
+#[pymethods]
+impl AgentClient {
+    #[new]
+    #[pyo3(signature = (endpoint_url, *, token = None, conn_options = None))]
+    fn new(endpoint_url: ::std::string::String, token: ::std::option::Option<::std::string::String>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<AgentClient> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(endpoint_url, token, conn_options).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(AgentClient(::std::sync::Arc::new(out)))
+    }
+
+    fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::connect(&this, )
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[getter]
+    fn offers_extension(&self) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::offers_extension(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn extensions(&self) -> PyResult<::std::vec::Vec<::std::string::String>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::extensions(&self.0);
+        Ok(out)
+    }
+
+    #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
+    fn send<'py>(&self, py: Python<'py>, message: ::lk_agents_abi::a2a::client::MessageInput, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: ::std::option::Option<::lk_agents_abi::a2a::client::MessageMetadata>, chat_ctx: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx)
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::Reply(::std::sync::Arc::new(out)), py))
+        })
+    }
+
+    #[pyo3(signature = (task_id, thread_id))]
+    fn _core_subscribe<'py>(&self, py: Python<'py>, task_id: ::std::string::String, thread_id: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id)
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::Reply(::std::sync::Arc::new(out)), py))
+        })
+    }
+
+    #[pyo3(signature = (task_id, *, thread_id = None, reason = None))]
+    fn cancel<'py>(&self, py: Python<'py>, task_id: ::std::string::String, thread_id: ::std::option::Option<::std::string::String>, reason: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::cancel(&this, task_id, thread_id, reason)
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
+type _core_RemoteInteractionImpl = <crate::Selected as super::Implementations>::RemoteInteraction;
+
+#[pyclass(frozen, name = "_core_RemoteInteraction", module = "livekit.agents._core")]
+pub struct _core_RemoteInteraction(::std::sync::Arc<_core_RemoteInteractionImpl>);
+
+#[pymethods]
+impl _core_RemoteInteraction {
+    #[new]
+    #[pyo3(signature = (endpoint, tool_id, function_call, history))]
+    fn new(endpoint: ::std::string::String, tool_id: ::std::string::String, function_call: ::lk_agents_abi::ChatItem, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<_core_RemoteInteraction> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(_core_RemoteInteraction(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (arguments, structured, offers_extension, history))]
+    fn message(&self, arguments: Bound<'_, PyAny>, structured: bool, offers_extension: bool, history: ::std::vec::Vec<::lk_agents_abi::ChatItem>) -> PyResult<::lk_agents_abi::a2a::client::Message> {
+        ::lk_agents_abi::python::check_pid()?;
+        let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    #[pyo3(signature = (update))]
+    fn update(&self, update: ::lk_agents_abi::a2a::client::TaskUpdate) -> PyResult<::lk_agents_abi::a2a::remote::RemoteEvent> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::update(&self.0, update).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
+    }
+
+    fn cancelled(&self) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancelled(&self.0).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[getter]
+    fn extra<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_RemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::extra(&self.0).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
+type RemoteConfigurationImpl = <crate::Selected as super::Implementations>::RemoteConfiguration;
+
+/// Resolve an endpoint credential from explicit input or the configured project's origin.
+#[pyfunction]
+#[pyo3(signature = (endpoint, token = None))]
+pub fn _core_remote_token(endpoint: ::std::string::String, token: ::std::option::Option<::std::string::String>) -> PyResult<::std::option::Option<::std::string::String>> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, token).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
 type EndpointCardImpl = <crate::Selected as super::Implementations>::EndpointCard;
 

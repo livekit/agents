@@ -146,6 +146,74 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Too
     }
 }
 
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::llm::tool_executor::ToolOutcome {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Value { text, reply_required, verbatim, more } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                kwargs.set_item("reply_required", ::pyo3::IntoPyObjectExt::into_bound_py_any(reply_required, py)?)?;
+                kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                kwargs.set_item("more", match more { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                TOOL_OUTCOME_VALUE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeValue")?.call((), Some(&kwargs))
+            },
+            Self::Nothing => TOOL_OUTCOME_NOTHING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeNothing")?.call0(),
+            Self::ToolError(message) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                TOOL_OUTCOME_TOOL_ERROR.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeToolError")?.call((), Some(&kwargs))
+            },
+            Self::ModelRetry(message) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                TOOL_OUTCOME_MODEL_RETRY.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeModelRetry")?.call((), Some(&kwargs))
+            },
+            Self::StopResponse => TOOL_OUTCOME_STOP_RESPONSE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeStopResponse")?.call0(),
+            Self::Internal => TOOL_OUTCOME_INTERNAL.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInternal")?.call0(),
+            Self::Invalid => TOOL_OUTCOME_INVALID.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInvalid")?.call0(),
+            Self::Cancelled => TOOL_OUTCOME_CANCELLED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCancelled")?.call0(),
+            Self::Update { message, raw } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+                kwargs.set_item("raw", ::pyo3::IntoPyObjectExt::into_bound_py_any(raw, py)?)?;
+                TOOL_OUTCOME_UPDATE.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeUpdate")?.call((), Some(&kwargs))
+            },
+            Self::Completed { text, verbatim } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                TOOL_OUTCOME_COMPLETED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeCompleted")?.call((), Some(&kwargs))
+            },
+            Self::Failed(error) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("error", ::pyo3::IntoPyObjectExt::into_bound_py_any(error, py)?)?;
+                TOOL_OUTCOME_FAILED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeFailed")?.call((), Some(&kwargs))
+            },
+            Self::Rejected(reason) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("reason", ::pyo3::IntoPyObjectExt::into_bound_py_any(reason, py)?)?;
+                TOOL_OUTCOME_REJECTED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeRejected")?.call((), Some(&kwargs))
+            },
+            Self::InputRequired { question, verbatim, tool } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+                kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+                kwargs.set_item("tool", match tool { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                TOOL_OUTCOME_INPUT_REQUIRED.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeInputRequired")?.call((), Some(&kwargs))
+            },
+            Self::Working(message) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("message", match message { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+                TOOL_OUTCOME_WORKING.import(py, "livekit.agents._generated.tool_report", "ToolOutcomeWorking")?.call((), Some(&kwargs))
+            },
+        }
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/tool_executor.rs.
 
 impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Approval {

@@ -142,7 +142,9 @@ class AgentHost:
                 )
             return ReadBackAnswerQuestion(question=str(question))
 
-    async def run_tool(self, invocation: Invocation, prepared: _Prepared) -> ToolReport:
+    async def run_tool(
+        self, invocation: Invocation, prepared: _Prepared
+    ) -> tuple[ToolReport, dict[str, Any]]:
         """Runs the body, sync or async, and classifies what it returned or raised."""
         with self._operation(invocation):
             prepared.ctx._function_call = _function_call(invocation)
@@ -153,7 +155,7 @@ class AgentHost:
                 if inspect.isawaitable(output):
                     output = await output
             except asyncio.CancelledError:
-                return ToolReport(outcome=ToolOutcomeCancelled())
+                return ToolReport(outcome=ToolOutcomeCancelled()), prepared.ctx.function_call.extra
             except Exception as e:
                 report = tool_report(None, e)
                 if isinstance(report.outcome, ToolOutcomeInternal):
@@ -161,14 +163,14 @@ class AgentHost:
                         "exception occurred while executing a tool",
                         extra={"function": prepared.ctx.function_call.name},
                     )
-                return report
+                return report, prepared.ctx.function_call.extra
             report = tool_report(output)
             if isinstance(report.outcome, ToolOutcomeInvalid):
                 logger.error(
                     f"tool `{prepared.ctx.function_call.name}` returned an invalid output",
                     extra={"lk.pii.output": output},
                 )
-            return report
+            return report, prepared.ctx.function_call.extra
 
     async def validate_output(
         self, invocation: Invocation, candidate: OutputCandidate

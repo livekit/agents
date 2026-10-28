@@ -120,6 +120,10 @@ pub enum Event {
         call: CallId,
         message: String,
     },
+    ToolCallUpdated {
+        call: CallId,
+        extra: Map<String, Value>,
+    },
     ToolSettled {
         call: CallId,
         outcome: ToolOutcome,
@@ -382,11 +386,20 @@ impl AgentRun {
                     a.calls.progress(call, message, &mut fx);
                 }
             }
-            Event::ToolSettled { call, outcome } => {
+            Event::ToolCallUpdated { call, extra } => {
                 if let Phase::Acting(a) = &mut self.phase {
-                    a.calls.body_settled(call, outcome, &mut fx);
+                    a.calls.update_extra(call, extra);
                 }
-                self.step_settled(now, &mut fx);
+            }
+            Event::ToolSettled { call, outcome } => {
+                let cancelled = if let Phase::Acting(a) = &mut self.phase {
+                    a.calls.body_settled(call, outcome, &mut fx)
+                } else { false };
+                if cancelled {
+                    self.abort(RunError::Cancelled, now, &mut fx);
+                } else {
+                    self.step_settled(now, &mut fx);
+                }
             }
             Event::ToolLaunchFailed { call, .. } => {
                 if let Phase::Acting(a) = &mut self.phase {

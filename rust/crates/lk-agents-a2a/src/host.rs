@@ -8,20 +8,15 @@ use crate::{HandlerOutput, HostEvent, Message, PendingCall, TurnContext, TurnRes
 
 impl From<Message> for host::Message {
     fn from(message: Message) -> Self {
-        Self {
-            message_id: message.message_id,
-            parts: message
-                .parts
-                .into_iter()
-                .map(|p| serde_json::to_value(p).expect("A2A part"))
-                .collect(),
-            metadata: message.metadata,
-            channel: message.channel,
-            received_at: message.received_at,
-            task_id: message.task_id,
-            context_id: message.context_id,
-            raw: serde_json::to_value(message.raw).expect("A2A message"),
-        }
+        let mut out = crate::client::message_from_wire(message.raw.clone());
+        out.message_id = Some(message.message_id);
+        out.parts = message.parts.into_iter().map(crate::client::part_from_wire).collect();
+        out.channel = Some(message.channel);
+        out.received_at = Some(message.received_at);
+        out.task_id = message.task_id;
+        out.context_id = message.context_id;
+        out.raw = Some(serde_json::to_value(message.raw).expect("A2A message"));
+        out
     }
 }
 

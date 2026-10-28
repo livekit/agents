@@ -153,7 +153,7 @@ pub trait AgentHost: Send + Sync {
         &self,
         #[host(context)] invocation: &Invocation,
         prepared: &HostRef,
-    ) -> Result<ToolReport, HostError>;
+    ) -> Result<(ToolReport, Map<String, Value>), HostError>;
 
     /// The output type, validators and output function on a candidate.
     #[host(await)]

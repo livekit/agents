@@ -26,6 +26,15 @@ if "livekit.agents._generated.agent_run" not in sys.modules:
 models = sys.modules["livekit.agents._generated.agent_run"]
 ToolArgumentError = sys.modules["livekit.agents.voice.agent_host"].ToolArgumentError
 
+if "livekit.agents._generated.tool_report" not in sys.modules:
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents._generated.tool_report", MODELS.rsplit("/", 1)[0] + "/tool_report.py"
+    )
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = loaded
+    spec.loader.exec_module(loaded)
+reports = sys.modules["livekit.agents._generated.tool_report"]
+
 var = contextvars.ContextVar("var", default="unset")
 loop = asyncio.new_event_loop()
 ready = threading.Event()
@@ -55,6 +64,14 @@ class Host:
         return models.PreparedArguments(
             prepared=arguments, identity=models.ArgumentIdentityJson(value=arguments)
         )
+
+    async def run_tool(self, invocation, prepared):
+        report = reports.ToolReport(outcome=reports.ToolOutcomeValue(text="answered"))
+        if prepared.get("bad_arity"):
+            return (report,)
+        if prepared.get("bad_metadata"):
+            return report, ["not a map"]
+        return report, {"lk.delegation.task_id": "original-task"}
 
     async def validate_output(self, invocation, candidate):
         self.seen["candidate"] = candidate
@@ -114,6 +131,19 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
             prepared.identity,
             lk_agents_abi::agent::ArgumentIdentity::Json(serde_json::json!({"city": true}))
         );
+        let (report, extra) = proxy.run_tool(&inv, &prepared.prepared).await.unwrap();
+        assert!(matches!(
+            report.outcome,
+            lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, .. } if text == "answered"
+        ));
+        assert_eq!(extra["lk.delegation.task_id"], "original-task");
+        for key in ["bad_arity", "bad_metadata"] {
+            let prepared = proxy.prepare_tool(&inv, args(key)).await.unwrap().unwrap();
+            let error = proxy.run_tool(&inv, &prepared.prepared).await.unwrap_err();
+            assert_eq!(error.kind, "TypeError");
+            let expected = if key == "bad_arity" { "tuple of 2 items" } else { "expected a dict" };
+            assert!(error.message.contains(expected), "{error}");
+        }
         let refused = proxy.prepare_tool(&inv, args("bad")).await.unwrap().unwrap_err();
         assert_eq!(refused.message, "city is required");
         let failed = proxy.prepare_tool(&inv, args("crash")).await.unwrap_err();

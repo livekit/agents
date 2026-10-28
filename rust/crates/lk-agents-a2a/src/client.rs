@@ -2,6 +2,11 @@
 //! response to its own [`ReplyState`]; neither a connection nor an outstanding task lives on a
 //! reusable remote-tool definition.
 
+mod messages;
+pub use messages::{message_to_wire, message_from_wire, part_from_wire, metadata_to_wire};
+mod tool;
+pub use tool::tool_definition;
+
 use a2a::{
     AgentCard, Artifact, CancelTaskRequest, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Message,
     Part, PartContent, SendMessageRequest, StreamResponse, SubscribeToTaskRequest,
@@ -14,6 +19,8 @@ use crate::rpc::{TaskRef, task_state};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ClientError {
+    #[error(transparent)]
+    Transport(#[from] lk_agents_abi::errors::ApiError),
     #[error("the A2A client is closed")]
     Closed,
     #[error("connect the A2A client before sending a request")]
@@ -78,6 +85,10 @@ impl Client {
             last_context: None,
             closed: false,
         })
+    }
+
+    pub fn last_context(&self) -> Option<&str> {
+        self.last_context.as_deref()
     }
 
     pub fn card(&self) -> Option<&AgentCard> {

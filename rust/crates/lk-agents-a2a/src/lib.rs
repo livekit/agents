@@ -284,6 +284,8 @@ pub struct TurnResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
+    use std::time::Duration;
     use lk_agents_storage::run::{MERGED_INTO_KEY, REASON_KEY, TaskState};
     use serde_json::json;
 

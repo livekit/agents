@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use a2a::{JsonRpcRequest, JsonRpcResponse, Message, Part, PartContent, Role};
 use lk_agents_a2a::client::{ClientError, TaskUpdate};
 use lk_agents_a2a::rpc::TaskRef;
-use lk_agents_abi::{Clock, Closed, RealClock};
+use lk_agents_abi::errors::{ApiErrorKind, ProviderError, TimeoutPhase};
+use lk_agents_abi::{ApiConnectOptions, Clock, Closed, RealClock};
 use lk_agents_runtime::a2a_client::{AgentClient, CleanupObservation, Reply};
 use lk_agents_runtime::source::{PullError, Pulled};
 use lk_agents_storage::run::{REASON_KEY, TaskState};
@@ -30,6 +32,11 @@ enum Scenario {
     ResetBeforeAck,
     FastQuestion,
     DelayedCancel,
+    StalledCardHeaders,
+    StalledCardBody,
+    StalledRpcHeaders,
+    StalledCancelBody,
+    RetryOnce,
 }
 
 #[derive(Default)]
@@ -37,6 +44,7 @@ struct AckGate {
     waiting: Notify,
     release: Notify,
     finished: Notify,
+    retries: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -188,6 +196,16 @@ async fn serve(
     let rpc = request.rpc.clone();
     let is_get = request.method == "GET";
     requests.send(request).await.map_err(io::Error::other)?;
+    if (is_get && matches!(scenario, Scenario::StalledCardHeaders | Scenario::StalledCardBody))
+        || (!is_get && matches!(scenario, Scenario::StalledRpcHeaders))
+    {
+        if matches!(scenario, Scenario::StalledCardBody) {
+            socket.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n{").await?;
+        }
+        let mut discarded = Vec::new();
+        socket.read_to_end(&mut discarded).await?;
+        return Ok(());
+    }
     if is_get {
         let body = serde_json::to_vec(&json!({"name": "expert", "version": "1",
             "supportedInterfaces": [{"url": interface, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
@@ -198,7 +216,19 @@ async fn serve(
     }
     let rpc = rpc.ok_or_else(|| io::Error::other("POST without JSON-RPC"))?;
     let params = rpc.params.clone().ok_or_else(|| io::Error::other("RPC without params"))?;
+    if matches!(scenario, Scenario::RetryOnce)
+        && rpc.method != "CancelTask"
+        && ack_gate.retries.fetch_add(1, Ordering::SeqCst) == 0
+    {
+        return socket.get_mut().shutdown().await;
+    }
     if rpc.method == "CancelTask" {
+        if matches!(scenario, Scenario::StalledCancelBody) {
+            socket.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n{").await?;
+            let mut discarded = Vec::new();
+            socket.read_to_end(&mut discarded).await?;
+            return Ok(());
+        }
         if matches!(scenario, Scenario::DelayedCancel) {
             ack_gate.waiting.notify_one();
             ack_gate.release.notified().await;
@@ -237,9 +267,9 @@ async fn serve(
     events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
         "status": {"state": "TASK_STATE_WORKING", "message": {"messageId": "progress", "role": "ROLE_AGENT", "parts": [{"text": "Checking café"}]}}}}));
     match scenario {
-        Scenario::Question | Scenario::FastQuestion if !answer => events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
+        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce if !answer => events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
             "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"messageId": "question", "role": "ROLE_AGENT", "parts": [{"text": "Which account?"}]}}}})),
-        Scenario::Question | Scenario::FastQuestion => {
+        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce => {
             events.push(json!({"artifactUpdate": {"taskId": task, "contextId": context,
                 "artifact": {"artifactId": "answer", "name": "answer", "parts": [{"text": "Confirmed "}]}}}));
             events.push(json!({"artifactUpdate": {"taskId": task, "contextId": context,
@@ -247,11 +277,11 @@ async fn serve(
             events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
                 "status": {"state": "TASK_STATE_COMPLETED"}, "metadata": {"https://livekit.io/a2a/ext/agents/v1/verbatim": "Confirmed "}}}));
         }
-        Scenario::Waiting | Scenario::Truncated | Scenario::DelayedAck => {
+        Scenario::Waiting | Scenario::Truncated | Scenario::DelayedAck | Scenario::StalledCancelBody => {
             events.push(json!({"artifactUpdate": {"taskId": task, "contextId": context,
                 "artifact": {"artifactId": "partial", "parts": [{"text": "unaccepted partial"}]}}}));
         }
-        Scenario::ResetBeforeAck | Scenario::DelayedCancel => unreachable!("unary response already served"),
+        Scenario::ResetBeforeAck | Scenario::DelayedCancel | Scenario::StalledCardHeaders | Scenario::StalledCardBody | Scenario::StalledRpcHeaders => unreachable!("unary response already served"),
     }
     let mut body = Vec::new();
     for (index, event) in events.into_iter().enumerate() {
@@ -549,7 +579,14 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
 async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent() {
     let peer = Peer::start(Scenario::ResetBeforeAck).await;
     let clock = Arc::new(RealClock::new());
-    let client = client(&peer, &clock);
+    let client = AgentClient::new_with_options(
+        peer.url.clone(),
+        Some("test-token".into()),
+        tokio::runtime::Handle::current(),
+        clock.clone(),
+        ApiConnectOptions { max_retry: 0, ..Default::default() },
+    )
+    .unwrap();
     let result = tokio::time::timeout(
         LIMIT,
         client.send(message("accepted-with-lost-ack", "Work once"), None, None),
@@ -702,4 +739,167 @@ async fn a_cleanup_deadline_reports_incomplete_but_retains_the_original_cancel_f
     let methods: Vec<_> =
         requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
     assert_eq!(methods, ["CancelTask"], "the original control request is retained, never replaced");
+}
+
+#[tokio::test]
+async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
+    for (scenario, total, cancel) in [
+        (Scenario::StalledCardHeaders, false, false),
+        (Scenario::StalledCardBody, false, false),
+        (Scenario::StalledRpcHeaders, false, false),
+        (Scenario::StalledCancelBody, false, true),
+        (Scenario::StalledCardBody, true, false),
+    ] {
+        let peer = Peer::start(scenario).await;
+        let clock = Arc::new(RealClock::new());
+        let options = ApiConnectOptions {
+            max_retry: 0,
+            read_timeout: Some(if total { 10.0 } else { 0.05 }),
+            total_timeout: total.then_some(0.05),
+            ..Default::default()
+        };
+        let client = AgentClient::new_with_options(
+            peer.url.clone(),
+            Some("test-token".into()),
+            tokio::runtime::Handle::current(),
+            clock,
+            options,
+        )
+        .unwrap();
+        let result = tokio::time::timeout(LIMIT, async {
+            if cancel {
+                client
+                    .cancel(
+                        TaskRef { id: "stalled-task".into(), context_id: "stalled-context".into() },
+                        None,
+                    )
+                    .await
+                    .map(|_| ())
+            } else {
+                client.send_text("Work".into(), None, None).await.map(|_| ())
+            }
+        })
+        .await
+        .expect("phase deadline must settle before the peer test deadline");
+        let ClientError::Transport(error) = result.unwrap_err() else {
+            panic!("transport error lost its API error type");
+        };
+        assert_eq!(error.kind, ApiErrorKind::Timeout);
+        assert_eq!(error.phase, Some(if total { TimeoutPhase::Total } else { TimeoutPhase::Read }));
+        client.aclose().await;
+        let requests = peer.finish().await;
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.headers.get("a2a-version").map(String::as_str) == Some("1.0"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_source() {
+    let peer = Peer::start(Scenario::Waiting).await;
+    let clock = Arc::new(RealClock::new());
+    let client = AgentClient::new_with_options(
+        peer.url.clone(),
+        Some("test-token".into()),
+        tokio::runtime::Handle::current(),
+        clock,
+        ApiConnectOptions { max_retry: 3, read_timeout: Some(0.05), ..Default::default() },
+    )
+    .unwrap();
+    let reply = client.send_text("Work".into(), None, None).await.unwrap();
+    loop {
+        match reply.pull().await {
+            Ok(Pulled::Item(update)) => assert!(!update.state.is_terminal()),
+            Err(PullError::Failed(ProviderError::Local(error))) => {
+                assert_eq!(error.kind, ApiErrorKind::Timeout);
+                assert_eq!(error.phase, Some(TimeoutPhase::Read));
+                break;
+            }
+            other => panic!("stalled stream lost the typed timeout: {other:?}"),
+        }
+    }
+    client.aclose().await;
+    let requests = peer.finish().await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter_map(|r| r.rpc.as_ref())
+            .filter(|r| r.method == "SendStreamingMessage")
+            .count(),
+        1,
+        "progress already delivered cannot be replayed"
+    );
+}
+
+#[tokio::test]
+async fn retry_before_ack_preserves_the_business_message_and_rpc_identity() {
+    let peer = Peer::start(Scenario::RetryOnce).await;
+    let clock = Arc::new(RealClock::new());
+    let client = client(&peer, &clock);
+    let reply = client.send(message("stable-across-retry", "Work once"), None, None).await.unwrap();
+    assert_eq!(updates(&reply).await.last().unwrap().state, TaskState::InputRequired);
+    client.aclose().await;
+    let requests = peer.finish().await;
+    let sends: Vec<_> = requests
+        .iter()
+        .filter_map(|r| r.rpc.as_ref())
+        .filter(|r| r.method == "SendStreamingMessage")
+        .collect();
+    assert_eq!(sends.len(), 2);
+    assert_eq!(sends[0], sends[1], "retry preserves the prepared request, including messageId");
+}
+
+#[tokio::test]
+async fn remote_redirect_cannot_leave_the_configured_origin() {
+    let untrusted = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination = format!("http://{}/stolen", untrusted.local_addr().unwrap());
+    let contacted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = contacted.clone();
+    let (stop, mut stopping) = oneshot::channel();
+    let target = tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            accepted = untrusted.accept() => {
+                let _ = accepted.unwrap();
+                observed.store(true, Ordering::SeqCst);
+            }
+            _ = &mut stopping => {},
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/expert", listener.local_addr().unwrap());
+    let interface = format!("{endpoint}/v1");
+    let redirector = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let (mut socket, request) = read_request(socket).await.unwrap();
+        assert_eq!(request.method, "GET");
+        let card = serde_json::to_vec(&json!({"name": "expert", "version": "1",
+            "supportedInterfaces": [{"url": interface, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+            "capabilities": {"streaming": false}})).unwrap();
+        respond(socket.get_mut(), "application/json", &card).await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let (mut socket, request) = read_request(socket).await.unwrap();
+        assert_eq!(request.method, "POST");
+        socket.get_mut().write_all(format!("HTTP/1.1 303 See Other\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        socket.get_mut().shutdown().await.unwrap();
+    });
+    let client = AgentClient::new_with_options(
+        endpoint,
+        Some("private-token".into()),
+        tokio::runtime::Handle::current(),
+        Arc::new(RealClock::new()),
+        ApiConnectOptions { max_retry: 0, ..Default::default() },
+    )
+    .unwrap();
+    let error = client.send_text("Private caller history".into(), None, None).await.err().unwrap();
+    assert!(
+        matches!(error, ClientError::Transport(ref error) if error.kind == ApiErrorKind::Connection)
+    );
+    client.aclose().await;
+    redirector.await.unwrap();
+    let _ = stop.send(());
+    target.await.unwrap();
+    assert!(!contacted.load(Ordering::SeqCst), "redirect crossed the authority boundary");
 }

@@ -2,6 +2,8 @@
 //! settlement belong to the conversation coordinator, which explicitly retains `InteractionState`.
 //! Credentials are verified in runtime before this owner receives `VerifiedAuthority`.
 
+pub mod retained;
+
 use a2a::{Message, Part, Role};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_storage::run::{KIND_KEY, TaskState};

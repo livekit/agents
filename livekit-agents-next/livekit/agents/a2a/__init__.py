@@ -5,13 +5,23 @@ Every byte that crosses a process boundary is A2A JSON, and the extension at
 ``@server.a2a_session`` serves an endpoint; ``AgentClient`` talks to one.
 """
 
+from .._generated.a2a_client import (
+    Artifact,
+    DataPart,
+    FilePart,
+    Message,
+    MessageMetadata,
+    TaskUpdate,
+    TextPart,
+)
 from ..storage.context import A2ASessionContext
 from .auth import AgentThreadGrant, Credentials, Forbidden, Principal, Unauthorized
 from .client import AgentClient, Reply
-from .codec import TaskUpdate, updates_from_events
+from .codec import updates_from_events
 from .endpoint import AGENT_CARD_PATH, RPC_PATH, A2AEndpoint, a2a_session
 from .extension import EXTENSION_URI, EXTENSIONS_HEADER, Extensions, agent_card
-from .methods import A2AService, CallContext, TurnOutcome
+from .methods import A2AService
+from .remote import RemoteAgent
 
 __all__ = [
     "a2a_session",
@@ -23,15 +33,20 @@ __all__ = [
     "A2AService",
     "A2ASessionContext",
     "AgentClient",
+    "Artifact",
+    "DataPart",
+    "FilePart",
+    "Message",
+    "MessageMetadata",
+    "RemoteAgent",
+    "TextPart",
     "AgentThreadGrant",
-    "CallContext",
     "Credentials",
     "Extensions",
     "Forbidden",
     "Principal",
     "Reply",
     "TaskUpdate",
-    "TurnOutcome",
     "Unauthorized",
     "agent_card",
     "updates_from_events",

@@ -104,7 +104,10 @@ fn none_return_continues() {
     d.run_tools(|_| ToolOutcome::Nothing);
     assert_eq!(d.requests(), 2);
     d.reply("Logged.", &[]);
-    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Logged.".into()) });
+    assert_eq!(
+        d.result().outcome,
+        RunOutcome::Completed { output: Output::Text("Logged.".into()) }
+    );
 }
 
 // Catches: `StopResponse` continuing the loop, or a verbatim result losing its delivered text or
@@ -375,4 +378,49 @@ fn dynamic_instructions_are_rendered_before_every_request() {
     }
     d.reply("hello", &[]);
     assert!(d.result().all_messages.iter().all(|i| !i.is_instruction()));
+}
+
+// A host tool's retained remote-task identity must survive into the history the next run loads.
+#[test]
+fn tool_metadata_is_recorded_with_its_original_call() {
+    let mut driver =
+        Driver::new(text_agent(vec![string_tool("expert", "request")]), "Help", vec![]);
+    driver.reply("", &[("expert", json!({"request": "Check coverage"}))]);
+    let (call, arguments) = driver.prepares()[0].clone();
+    driver.prepared(call, Value::Object(arguments));
+    driver.send(Event::ToolCallUpdated {
+        call,
+        extra: [("lk.delegation.task_id".into(), json!("remote-task"))].into_iter().collect(),
+    });
+    driver.send(Event::ToolSettled {
+        call,
+        outcome: ToolOutcome::InputRequired {
+            question: "Which payer?".into(),
+            verbatim: false,
+            tool: None,
+        },
+    });
+    driver.reply("Which payer?", &[]);
+    let call = driver
+        .result()
+        .new_messages
+        .iter()
+        .find_map(|item| match item {
+            ChatItem::FunctionCall(call) => Some(call),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(call.extra["lk.delegation.task_id"], "remote-task");
+}
+
+// A remote cancellation is a cancellation of the caller, while replaced calls are settled
+// separately by the duplicate-policy regression.
+#[test]
+fn an_unsolicited_tool_cancellation_cancels_the_run() {
+    let mut driver =
+        Driver::new(text_agent(vec![string_tool("expert", "request")]), "Help", vec![]);
+    driver.reply("", &[("expert", json!({"request": "Check coverage"}))]);
+    driver.run_tools(|_| ToolOutcome::Cancelled);
+    assert_eq!(driver.finished(), Some(&Err(RunError::Cancelled)));
+    assert_eq!(driver.requests(), 1);
 }

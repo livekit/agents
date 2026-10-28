@@ -2,27 +2,33 @@
 //! HTTP/SSE and owned cancellation run here through the shared HTTP pool and task/source owners.
 
 pub mod authority;
+pub mod host;
+pub mod remote;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use a2a::{AgentCard, JsonRpcId, Message};
-use futures_util::StreamExt;
-use lk_agents_a2a::client::{Client, ClientError, ReplyState, Request, TaskUpdate};
+use lk_agents_a2a::client::{Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate};
 use lk_agents_a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
+use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
 use lk_agents_inference::transport::HttpRequest;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
-use crate::http::{GatewayHttp, Reporter, read_body};
+use crate::http::GatewayHttp;
+use crate::http::exchange::{Exchange, HttpEvent};
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
 use crate::task::{OwnedTask, TaskOutcome};
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
+
+// B-12 host-resource teardown (the reference INTERRUPTION_TIMEOUT): the caller waits at most
+// this long for close/cancel. Expiry reports incomplete cleanup; it does not abandon ownership.
+const CLIENT_TEARDOWN_TIMEOUT: std::time::Duration = HOST_TEARDOWN_TIMEOUT;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupObservation {
@@ -60,6 +66,7 @@ struct Inner {
     operations: Mutex<BTreeMap<u64, Operation>>,
     observations: Mutex<Vec<CleanupObservation>>,
     endpoint: url::Url,
+    options: ApiConnectOptions,
 }
 
 /// A connection owns its outstanding exchanges; it holds no remote-tool conversation state.
@@ -74,6 +81,17 @@ impl AgentClient {
         runtime: tokio::runtime::Handle,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, ClientError> {
+        Self::new_with_options(endpoint, token, runtime, clock, ApiConnectOptions::default())
+    }
+
+    pub fn new_with_options(
+        endpoint: String,
+        token: Option<String>,
+        runtime: tokio::runtime::Handle,
+        clock: Arc<dyn Clock>,
+        options: ApiConnectOptions,
+    ) -> Result<Self, ClientError> {
+        options.validate().map_err(|error| ClientError::InvalidInput(error.to_string()))?;
         let endpoint_url = checked_url(&endpoint)?;
         let core = Client::new(endpoint, token)?;
         Ok(Self {
@@ -83,6 +101,7 @@ impl AgentClient {
                 runtime,
                 clock,
                 endpoint: endpoint_url,
+                options,
                 connect: AsyncMutex::new(()),
                 closed: AtomicBool::new(false),
                 closing: Notify::new(),
@@ -103,15 +122,7 @@ impl AgentClient {
         let request = self.inner.core.lock().map_err(poisoned)?.card_request()?;
         let closing = self.inner.closing.notified();
         self.inner.ensure_open()?;
-        let discovery = async {
-            let response = self
-                .inner
-                .http
-                .get(request.url, request.headers)
-                .await
-                .map_err(|e| transport_error(format!("{e:?}")))?;
-            read_body(response, RESPONSE_LIMIT).await.map_err(|e| transport_error(format!("{e:?}")))
-        };
+        let discovery = self.inner.read_response(&request);
         let body = tokio::select! {
             biased;
             _ = closing => return Err(ClientError::Closed),
@@ -284,7 +295,7 @@ impl AgentClient {
                             }
                         };
                         tokio::pin!(cleanup);
-                        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
+                        if tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
                             work_inner.observe(CleanupObservation::Incomplete { requests: vec![id] });
                             cleanup.await;
                         }
@@ -397,6 +408,9 @@ impl AgentClient {
         match reply.pull().await {
             Ok(Pulled::Item(update)) => Ok(update),
             Ok(_) => Err(ClientError::Incomplete),
+            Err(PullError::Failed(ProviderError::Local(error))) => {
+                Err(ClientError::Transport(error))
+            }
             Err(error) => Err(transport_error(error.to_string())),
         }
     }
@@ -415,7 +429,7 @@ impl AgentClient {
                 }
             }
         };
-        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, wait).await.is_err() {
+        if tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, wait).await.is_err() {
             let requests = self
                 .inner
                 .operations
@@ -477,21 +491,34 @@ impl Inner {
             .unwrap_or_default()
     }
 
-    async fn post(&self, request: &Request) -> Result<reqwest::Response, ClientError> {
-        let (tx, _rx) = mpsc::channel(2);
-        let reporter = Reporter { tx, clock: self.clock.clone() };
-        self.http
-            .send(
-                HttpRequest {
-                    url: request.url.clone(),
-                    headers: request.headers.clone(),
-                    body: request.body.clone(),
-                },
-                &reporter,
-                |_| (),
-            )
-            .await
-            .map_err(|e| transport_error(format!("{e:?}")))
+    fn exchange(&self, request: &Request) -> Exchange {
+        Exchange::new(
+            self.http.clone(),
+            match request.method {
+                HttpMethod::Get => reqwest::Method::GET,
+                HttpMethod::Post => reqwest::Method::POST,
+            },
+            HttpRequest {
+                url: request.url.clone(),
+                headers: request.headers.clone(),
+                body: request.body.clone(),
+            },
+            &self.options,
+            self.clock.clone(),
+        )
+    }
+
+    async fn read_response(&self, request: &Request) -> Result<Vec<u8>, ClientError> {
+        let mut exchange = self.exchange(request);
+        let mut body = Vec::new();
+        loop {
+            match exchange.next().await.map_err(ClientError::Transport)? {
+                HttpEvent::Started => body.clear(),
+                HttpEvent::Headers(_) => {}
+                HttpEvent::Bytes(bytes) => append_body(&mut body, &bytes)?,
+                HttpEvent::End => return Ok(body),
+            }
+        }
     }
 
     async fn cancel_remote(
@@ -501,17 +528,14 @@ impl Inner {
     ) -> Result<TaskUpdate, ClientError> {
         let id = JsonRpcId::Number(self.next_id() as i64);
         let request = self.core.lock().map_err(poisoned)?.cancel(task, reason, id.clone())?;
-        let response = self.post(&request).await?;
-        let body = read_body(response, RESPONSE_LIMIT)
-            .await
-            .map_err(|e| transport_error(format!("{e:?}")))?;
+        let body = self.read_response(&request).await?;
         ReplyState::new(Some(task.clone())).decode_task(&body, &id)
     }
 
     async fn cancel_owned(&self, task: &TaskRef) {
         let cancellation = self.cancel_remote(task, Some("caller-canceled"));
         tokio::pin!(cancellation);
-        let result = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cancellation).await {
+        let result = match tokio::time::timeout(CLIENT_TEARDOWN_TIMEOUT, &mut cancellation).await {
             Ok(result) => result,
             Err(_) => {
                 self.observe(CleanupObservation::CancellationIncomplete { task: task.clone() });
@@ -576,10 +600,10 @@ struct ReplyUpdates {
 #[async_trait::async_trait]
 impl StreamSource<TaskUpdate> for ReplyUpdates {
     async fn next(&mut self) -> Result<Option<TaskUpdate>, ProviderError> {
-        let update =
-            self.rx.recv().await.transpose().map_err(|e| {
-                ProviderError::from(ApiError::new(e.to_string()).with_retryable(false))
-            })?;
+        let update = self.rx.recv().await.transpose().map_err(|e| match e {
+            ClientError::Transport(error) => ProviderError::Local(error),
+            error => ProviderError::from(ApiError::new(error.to_string()).with_retryable(false)),
+        })?;
         if update.as_ref().is_some_and(TaskUpdate::is_settled) {
             self.delivered.send_replace(true);
         }
@@ -613,44 +637,71 @@ async fn exchange(
 ) -> Result<(), ClientError> {
     let id =
         request.id.clone().ok_or_else(|| ClientError::InvalidInput("an RPC needs an id".into()))?;
-    let response = inner.post(&request).await?;
-    let sse = response
-        .headers()
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|v| v.split(';').next().is_some_and(|v| v.trim() == "text/event-stream"));
+    let mut exchange = inner.exchange(&request);
     let mut state = ReplyState::for_request(&request);
-    if !sse {
-        let body = read_body(response, RESPONSE_LIMIT)
-            .await
-            .map_err(|e| transport_error(format!("{e:?}")))?;
-        let update = if request.task_response {
-            Some(state.decode_task(&body, &id)?)
-        } else {
-            state.decode(&body, &id)?
-        };
-        if let Some(update) = update {
-            deliver(inner, update, ack, tx, remote, terminal, known).await?;
-        }
-        return state.finish();
-    }
     let mut decoder = SseDecoder::new();
-    let mut chunks = response.bytes_stream();
+    let mut body = Vec::new();
+    let mut sse = false;
     let mut events = Vec::new();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(|e| transport_error(e.to_string()))?;
-        decoder.feed(&chunk, &mut events).map_err(|e| transport_error(e.to_string()))?;
-        for event in events.drain(..) {
-            if let Some(update) = state.decode(event.data.as_bytes(), &id)? {
-                deliver(inner, update, ack, tx, remote, terminal, known).await?;
+    loop {
+        match exchange.next().await.map_err(ClientError::Transport)? {
+            HttpEvent::Started => {
+                state = ReplyState::for_request(&request);
+                decoder = SseDecoder::new();
+                body.clear();
+                events.clear();
             }
-            if state.settled() {
+            HttpEvent::Headers(headers) => {
+                sse = headers.get("content-type").and_then(|h| h.to_str().ok()).is_some_and(|v| {
+                    v.split(';').next().is_some_and(|v| v.trim() == "text/event-stream")
+                });
+            }
+            HttpEvent::Bytes(bytes) if sse => {
+                decoder
+                    .feed(&bytes, &mut events)
+                    .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+                for event in events.drain(..) {
+                    if let Some(update) = state.decode(event.data.as_bytes(), &id)? {
+                        exchange.delivered();
+                        exchange.wait_for_consumer(deliver(inner, update, ack, tx, remote, terminal, known))
+                            .await.map_err(ClientError::Transport)??;
+                    }
+                    if state.settled() {
+                        return state.finish();
+                    }
+                }
+            }
+            HttpEvent::Bytes(bytes) => append_body(&mut body, &bytes)?,
+            HttpEvent::End => {
+                if sse {
+                    decoder
+                        .finish()
+                        .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+                } else {
+                    let update = if request.task_response {
+                        Some(state.decode_task(&body, &id)?)
+                    } else {
+                        state.decode(&body, &id)?
+                    };
+                    if let Some(update) = update {
+                        exchange.wait_for_consumer(deliver(inner, update, ack, tx, remote, terminal, known))
+                            .await.map_err(ClientError::Transport)??;
+                    }
+                }
                 return state.finish();
             }
         }
     }
-    decoder.finish().map_err(|e| transport_error(e.to_string()))?;
-    state.finish()
+}
+
+fn append_body(body: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ClientError> {
+    if body.len() + bytes.len() > RESPONSE_LIMIT {
+        return Err(ClientError::InvalidResponse(format!(
+            "the answer exceeds {RESPONSE_LIMIT} bytes"
+        )));
+    }
+    body.extend_from_slice(bytes);
+    Ok(())
 }
 
 async fn deliver(
@@ -691,7 +742,7 @@ fn checked_url(url: &str) -> Result<url::Url, ClientError> {
 }
 
 fn transport_error(error: String) -> ClientError {
-    ClientError::InvalidResponse(error)
+    ClientError::Transport(ApiError::connection(Some(error)))
 }
 fn poisoned<T>(_: std::sync::PoisonError<T>) -> ClientError {
     ClientError::InvalidResponse("the A2A client state is poisoned".into())

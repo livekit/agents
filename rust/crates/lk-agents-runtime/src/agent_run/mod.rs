@@ -295,7 +295,10 @@ impl Driver {
                     approval,
                     move |inv, events| async move {
                         let event = match host.run_tool(&inv, &args).await {
-                            Ok(report) => Event::ToolSettled { call, outcome: report.outcome },
+                            Ok((report, extra)) => {
+                                let _ = events.send(Report::Core(Event::ToolCallUpdated { call, extra })).await;
+                                Event::ToolSettled { call, outcome: report.outcome }
+                            },
                             Err(e) => Event::ToolLaunchFailed { call, error: e.to_string() },
                         };
                         let _ = events.send(Report::Core(event)).await;

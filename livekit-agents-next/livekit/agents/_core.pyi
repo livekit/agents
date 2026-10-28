@@ -16,6 +16,10 @@ from enum import Enum
 from typing import Any, Protocol
 
 from ._generated._core_a2a import (
+    AgentClient as AgentClient,
+    Reply as Reply,
+    _core_RemoteInteraction as _core_RemoteInteraction,
+    _core_remote_token as _core_remote_token,
     _core_a2a_agent_card as _core_a2a_agent_card,
     _core_Credentials as _core_Credentials,
     _core_auth_grant_allows as _core_auth_grant_allows,

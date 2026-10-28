@@ -15,12 +15,12 @@ from typing import cast
 
 from pydantic import JsonValue
 
+from .._generated.a2a_client import Message
 from .._generated.storage_class import RunUsage, TaskRecord
 from .._generated.storage_turn import (
     Checkpoint,
     HandlerOutput,
     HostEvent,
-    Message,
     Output,
     PendingCall,
     TurnContext,

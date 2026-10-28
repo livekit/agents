@@ -371,6 +371,20 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             "{v}.try_iter()?.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()",
             from_object("item", inner, path, at)?
         ),
+        Ty::Tuple(items) => {
+            let mut reads = String::new();
+            let mut fields = Vec::new();
+            for (index, item) in items.iter().enumerate() {
+                let name = format!("item_{index}");
+                reads.push_str(&format!(" let {name} = tuple.get_item({index})?;"));
+                fields.push(format!("({})?", from_object(&name, item, path, at)?));
+            }
+            format!(
+                "(|| -> ::pyo3::PyResult<_> {{ let tuple = {v}.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != {len} {{ return Err(::pyo3::exceptions::PyTypeError::new_err(format!(\"{{}}: expected a tuple of {len} items\", {path}))); }}{reads} Ok(({},)) }})()",
+                fields.join(", "),
+                len = items.len(),
+            )
+        }
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })

@@ -11,14 +11,14 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::{Map, Value};
 
-use super::result::CallId;
-use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use super::Effect;
+use super::result::CallId;
 use crate::agent::{self, FINAL_RESULT_TOOL, WRAPPED_RESULT_KEY};
-use lk_agents_abi::agent::{AgentDefinition, OutputSpec, ReadBack};
 use crate::approval;
-use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
 use crate::tool_outcome;
+use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec, ReadBack};
+use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
 
 /// The parameter the model sets to re-assert a call of an `on_duplicate="confirm"` tool.
 use lk_agents_abi::llm::provider_format::tools::CONFIRM_DUPLICATE_PARAM;
@@ -50,6 +50,7 @@ struct Call {
     id: CallId,
     item: FunctionCall,
     phase: Phase,
+    cancellation_requested: bool,
 }
 
 #[derive(Debug)]
@@ -119,7 +120,7 @@ impl ToolCalls {
             } else {
                 start(id, &item, agent, fx)
             };
-            this.calls.push(Call { id, item, phase });
+            this.calls.push(Call { id, item, phase, cancellation_requested: false });
         }
         (this, finals)
     }
@@ -193,16 +194,32 @@ impl ToolCalls {
         }
     }
 
-    /// The body's outcome. An update is progress: the tool runs on.
-    pub(super) fn body_settled(&mut self, id: CallId, outcome: ToolOutcome, fx: &mut Vec<Effect>) {
-        if let ToolOutcome::Update { raw, .. } = outcome {
-            return self.progress(id, raw, fx);
-        }
+    pub(super) fn update_extra(&mut self, id: CallId, extra: Map<String, Value>) {
         let Some(call) = self.call_mut(id) else { return };
         if matches!(call.phase, Phase::Running { .. }) {
-            let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
-            settle(call, outcome, retry, fx);
+            call.item.extra.extend(extra);
         }
+    }
+
+    /// The body's outcome. An update is progress: the tool runs on.
+    pub(super) fn body_settled(
+        &mut self,
+        id: CallId,
+        outcome: ToolOutcome,
+        fx: &mut Vec<Effect>,
+    ) -> bool {
+        if let ToolOutcome::Update { raw, .. } = outcome {
+            self.progress(id, raw, fx);
+            return false;
+        }
+        let Some(call) = self.call_mut(id) else { return false };
+        if !matches!(call.phase, Phase::Running { .. }) {
+            return false;
+        }
+        let cancelled = matches!(outcome, ToolOutcome::Cancelled) && !call.cancellation_requested;
+        let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
+        settle(call, outcome, retry, fx);
+        cancelled
     }
 
     /// The parent's verdict on a `final_result` candidate: `None` accepted.
@@ -265,10 +282,7 @@ impl ToolCalls {
     ) -> Option<Vec<ChatItem>> {
         // A sibling with a terminal outcome still belongs to AgentRun's terminal arbitration.
         // The session must not discard it in order to start a child.
-        if delegated
-            .iter()
-            .any(|id| !self.calls.iter().any(|c| c.id == *id))
-        {
+        if delegated.iter().any(|id| !self.calls.iter().any(|c| c.id == *id)) {
             return None;
         }
         let mut items = Vec::new();
@@ -335,7 +349,13 @@ impl ToolCalls {
         }
     }
 
-    fn decide(&mut self, index: usize, agent: &AgentDefinition, history: &[ChatItem], fx: &mut Vec<Effect>) {
+    fn decide(
+        &mut self,
+        index: usize,
+        agent: &AgentDefinition,
+        history: &[ChatItem],
+        fx: &mut Vec<Effect>,
+    ) {
         let Some(tool) = agent::tool(agent, &self.calls[index].item.name) else { return };
         let Phase::Admitting { prepared, ref identity, confirmed } = self.calls[index].phase else {
             return;
@@ -385,6 +405,7 @@ impl ToolCalls {
             DuplicateMode::Confirm => None,
             DuplicateMode::Replace => {
                 for &i in &running {
+                    self.calls[i].cancellation_requested = true;
                     fx.push(Effect::ToolCancel { call: self.calls[i].id });
                 }
                 None

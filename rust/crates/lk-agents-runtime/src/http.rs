@@ -2,6 +2,8 @@
 //! observed (connection, request handed over, response bytes, decoded answer, end or failure) and
 //! decides nothing. The request's core owns every deadline and retry.
 
+pub(crate) mod exchange;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
@@ -72,7 +74,20 @@ impl GatewayHttp {
         let client = reqwest::Client::builder()
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() > 10 {
+                    attempt.error("too many HTTP redirects")
+                } else if attempt
+                    .previous()
+                    .first()
+                    .is_some_and(|first| first.origin() != attempt.url().origin())
+                {
+                    // A 307/308 could forward private caller history to a card-selected peer.
+                    attempt.error("HTTP redirects must preserve the request origin")
+                } else {
+                    attempt.follow()
+                }
+            }))
             .build()
             .map_err(|e| error_chain(&e))?;
         Ok(GatewayHttp { client })
@@ -89,26 +104,6 @@ impl GatewayHttp {
         }
     }
 
-    /// Fetches a protocol discovery document through the same connection pool as exchanges.
-    pub(crate) async fn get(
-        &self,
-        url: String,
-        headers: Vec<(String, String)>,
-    ) -> Result<reqwest::Response, AttemptFailure> {
-        let mut request = self.client.get(url);
-        for (name, value) in headers {
-            request = request.header(name, value);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| AttemptFailure::Connection(error_chain(&error)))?;
-        if !response.status().is_success() {
-            return Err(rejected(response).await);
-        }
-        Ok(response)
-    }
-
     /// Sends `request`, reporting through `sent` how far it got; the response once its status is
     /// a success.
     pub(crate) async fn send<E>(
@@ -117,9 +112,27 @@ impl GatewayHttp {
         reporter: &Reporter<E>,
         sent: impl Fn(Sent) -> E,
     ) -> Result<reqwest::Response, AttemptFailure> {
+        self.send_method(reqwest::Method::POST, request, reporter, sent).await
+    }
+
+    /// GET discovery and POST RPC share connection/write observations and the request clock.
+    pub(crate) async fn send_method<E>(
+        &self,
+        method: reqwest::Method,
+        request: HttpRequest,
+        reporter: &Reporter<E>,
+        sent: impl Fn(Sent) -> E,
+    ) -> Result<reqwest::Response, AttemptFailure> {
+        // Hyper otherwise suppresses an unknown-length GET body without polling it. Explicit
+        // empty chunked framing preserves its real connection/write observations without a payload.
+        let empty_get = method == reqwest::Method::GET && request.body.is_empty();
         let progress = Arc::new(BodyProgress::default());
         let body = ReportingBody { bytes: Some(request.body.into()), progress: progress.clone() };
-        let mut builder = self.client.post(request.url).body(reqwest::Body::wrap_stream(body));
+        let mut builder =
+            self.client.request(method, request.url).body(reqwest::Body::wrap_stream(body));
+        if empty_get {
+            builder = builder.header(reqwest::header::TRANSFER_ENCODING, "chunked");
+        }
         for (name, value) in request.headers {
             builder = builder.header(name, value);
         }
@@ -261,7 +274,7 @@ fn error_message(body: &str) -> Option<String> {
     message.and_then(|m| m.as_str()).map(str::to_owned).or_else(text)
 }
 
-fn error_chain(err: &dyn std::error::Error) -> String {
+pub(crate) fn error_chain(err: &dyn std::error::Error) -> String {
     let mut message = err.to_string();
     let mut source = err.source();
     while let Some(cause) = source {

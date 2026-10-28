@@ -8,18 +8,7 @@ use crate::storage::context::{ContextScope, ContextScopeWrite};
 use crate::storage::{ItemRow, RunUsage, TaskRecord};
 use crate::{StreamSink, StreamSource};
 
-#[crate::host(record(module = "storage_turn", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct Message {
-    pub message_id: String,
-    pub parts: Vec<Value>,
-    pub metadata: Map<String, Value>,
-    pub channel: String,
-    pub received_at: f64,
-    pub task_id: Option<String>,
-    pub context_id: Option<String>,
-    pub raw: Value,
-}
+pub use crate::a2a::client::Message;
 
 #[crate::host(record(module = "storage_turn", emit))]
 #[derive(Debug, Clone, PartialEq)]
