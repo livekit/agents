@@ -14,10 +14,15 @@ from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
 
 from . import concurrency
+from .a2a_driver import door, expert  # noqa: F401  (re-exported so pytest discovers the fixtures)
 from .agentdb_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
     agentdb_storage,
     agentdb_worker,
     agentdb_workers,
+)
+from .rule_coverage import (
+    add_options as _add_rule_coverage_options,
+    register as _register_rule_coverage,
 )
 from .toxic_proxy import Toxiproxy
 from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
@@ -64,6 +69,7 @@ _CATEGORY_HINT = (
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     _add_realtime_option(parser)
+    _add_rule_coverage_options(parser)
     group = parser.getgroup("categories", "test category selection")
     for category in CATEGORIES:
         group.addoption(
@@ -153,6 +159,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """Handle `--list-categories` before any collection/import happens."""
     _module_facts.cache_clear()
     _register_virtual_time_marker(config)
+    _register_rule_coverage(config)
     _clamp_open_file_limit()
 
     if not config.getoption("--list-categories"):

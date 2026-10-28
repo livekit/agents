@@ -18,6 +18,8 @@ from livekit.agents._generated.storage_run import Item
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext, TurnOptions
 from livekit.agents.storage import AgentDBStorage
 
+from .agentdb_fixture import past_the_fresh_acquire
+
 pytestmark = pytest.mark.unit
 
 LANE = "front-desk"
@@ -154,6 +156,7 @@ async def test_a_second_message_under_interrupt_yields_the_first(
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("the waiter was never set")
+    await past_the_fresh_acquire()
     gate.set()
 
     r1 = await asyncio.wait_for(first, 30)

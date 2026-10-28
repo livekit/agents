@@ -11,8 +11,7 @@ from livekit.agents import AgentHandler, AgentServer
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import AgentDBStorage
 
-from .test_a2a_delegation import lanes_of
-from .test_a2a_server import (
+from .a2a_driver import (
     AGENT,
     API_KEY,
     API_SECRET,
@@ -21,6 +20,7 @@ from .test_a2a_server import (
     sse_results,
     wire,
 )
+from .test_a2a_delegation import lanes_of
 
 pytestmark = [pytest.mark.unit]
 

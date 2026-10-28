@@ -6,23 +6,17 @@ at the endpoint."""
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-import httpx
 import pytest
-from a2a.client import ClientConfig, ClientFactory
-from a2a.client.card_resolver import A2ACardResolver
 from a2a.types import a2a_pb2 as pb
-from a2a.utils.constants import TransportProtocol
 
-from livekit.agents import Agent, AgentServer, RunContext
+from livekit.agents import Agent, RunContext
 from livekit.agents._generated.storage_threads import ThreadInfo
 from livekit.agents.a2a import (
     AGENT_CARD_PATH,
     EXTENSION_URI,
-    A2AEndpoint,
     A2ASessionContext,
     AgentThreadGrant,
     Credentials,
@@ -42,145 +36,34 @@ from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.storage import AgentDBStorage, StorageUnavailable
 from livekit.agents.storage.resolve import Thread
 
+from .a2a_driver import (
+    AGENT,
+    API_SECRET,
+    CREDENTIALS,
+    ENDPOINT,
+    Door,
+    Reply,
+    ScriptedLLM,
+    call,
+    http_client,
+    make_server,
+    no_project_env,  # noqa: F401  (autouse: the demo environment must not shape the cards)
+    output_of,
+    payloads,
+    rpc,
+    send,
+    sse_results,
+    state_of,
+    stock_client,
+    user_message,
+    wire,
+)
+from .agentdb_fixture import past_the_fresh_acquire
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit]
 
-PROJECT_ENV = (
-    "LIVEKIT_URL",
-    "LIVEKIT_AGENT_NAME",
-    "LIVEKIT_AGENT_NAME_OVERRIDE",
-    "LIVEKIT_AGENT_DEPLOYMENT",
-    "LIVEKIT_AGENT_VERSION",
-)
-
-
-@pytest.fixture(autouse=True)
-def no_project_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests build their servers in memory and address them as ``agents.test``; a
-    developer's exported demo environment (``LIVEKIT_URL`` shapes the card's URLs, the agent
-    variables its name and version) must not reach them."""
-    for name in PROJECT_ENV:
-        monkeypatch.delenv(name, raising=False)
-
-
-AGENT = "front-desk"
-API_KEY = "APItest"
-API_SECRET = "secret-secret-secret-secret-secret"
-CREDENTIALS = Credentials(API_KEY, API_SECRET)
-ENDPOINT = "desk"
-
-
-# ---------------------------------------------------------------------------------------------
-# the harness
-# ---------------------------------------------------------------------------------------------
-
-
-async def echo(ctx: A2ASessionContext[Any]) -> str:
-    await ctx.update("looking")
-    return "reply to: " + ctx.message.text_content
-
-
 Workers = tuple[AgentDBStorage, AgentDBStorage]
-
-
-def make_server(
-    storage: AgentDBStorage,
-    handler: Callable[[A2ASessionContext[Any]], Awaitable[Any]] = echo,
-    **kw: Any,
-) -> tuple[AgentServer, A2AEndpoint[Any]]:
-    server = AgentServer(storage=storage, agent_name=AGENT, api_key=API_KEY, api_secret=API_SECRET)
-    kw.setdefault("description", "Answers front desk questions.")
-    endpoint = server.a2a_session(endpoint=ENDPOINT, **kw)(handler)
-    return server, endpoint
-
-
-def http_client(server: AgentServer, **headers: str) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server.http.app),
-        base_url="http://agents.test",
-        headers=headers,
-        timeout=30.0,
-    )
-
-
-async def stock_client(http: httpx.AsyncClient, *, extensions: str | None = None) -> Any:
-    """A vanilla a2a-sdk client over JSON-RPC; ``extensions`` is the header it sends."""
-    card = await A2ACardResolver(http, f"http://agents.test/{ENDPOINT}").get_agent_card()
-    client = ClientFactory(
-        ClientConfig(
-            httpx_client=http,
-            streaming=True,
-            supported_protocol_bindings=[TransportProtocol.JSONRPC],
-            accepted_output_modes=["text/plain"],
-        )
-    ).create(card)
-    if extensions:
-        from a2a.client import ClientCallContext
-
-        client._lk_context = ClientCallContext(service_parameters={"A2A-Extensions": extensions})
-    else:
-        client._lk_context = None
-    return client
-
-
-def user_message(
-    text: str, message_id: str, *, context_id: str | None = None, **metadata: Any
-) -> pb.Message:
-    msg = pb.Message(message_id=message_id, role=pb.Role.ROLE_USER, parts=[pb.Part(text=text)])
-    if context_id:
-        msg.context_id = context_id
-    if metadata:
-        from livekit.agents.a2a.extension import struct, widen
-
-        msg.metadata.CopyFrom(struct({widen(k): v for k, v in metadata.items()}))
-    return msg
-
-
-async def send(client: Any, message: pb.Message) -> list[Any]:
-    request = pb.SendMessageRequest(message=message)
-    return [e async for e in client.send_message(request, context=client._lk_context)]
-
-
-def payloads(events: list[Any]) -> list[Any]:
-    return [getattr(e, e.WhichOneof("payload")) for e in events]
-
-
-async def rpc(
-    http: httpx.AsyncClient, method: str, params: Mapping[str, Any], **headers: str
-) -> httpx.Response:
-    return await http.post(
-        f"/{ENDPOINT}/v1",
-        json={"jsonrpc": "2.0", "id": method, "method": method, "params": dict(params)},
-        headers=headers,
-    )
-
-
-def sse_results(response: httpx.Response) -> list[dict[str, Any]]:
-    out = []
-    for block in response.text.split("\n\n"):
-        for line in block.splitlines():
-            if line.startswith("data: "):
-                out.append(json.loads(line[len("data: ") :]))
-    return out
-
-
-def wire(
-    text: str, message_id: str, *, context_id: str | None = None, **metadata: Any
-) -> dict[str, Any]:
-    from livekit.agents.a2a.extension import widen
-
-    msg: dict[str, Any] = {"messageId": message_id, "role": "ROLE_USER", "parts": [{"text": text}]}
-    if context_id:
-        msg["contextId"] = context_id
-    if metadata:
-        msg["metadata"] = {widen(k): v for k, v in metadata.items()}
-    return msg
-
-
-def state_of(result: dict[str, Any]) -> str | None:
-    update = result.get("statusUpdate")
-    return update["status"]["state"] if update else None
 
 
 async def history_items(storage: AgentDBStorage, thread_id: str, lane: str) -> list[ChatItem]:
@@ -413,6 +296,7 @@ async def test_interrupt_two_streams_within_a_second_on_two_workers(
             await asyncio.sleep(0.01)
         else:
             pytest.fail("the waiter was never set")
+        await past_the_fresh_acquire()
         release.set()
         r1, r2 = await asyncio.gather(first, second)
 
@@ -474,11 +358,9 @@ async def test_inbox_sms_burst_is_one_reply_and_a_merge(agentdb_workers: Workers
     assert task_2["artifacts"][0]["parts"][0]["text"] == "one reply"
 
 
-async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
-    agentdb_storage: AgentDBStorage,
-) -> None:
+@pytest.mark.rule("R10")
+async def test_an_inbox_burst_on_one_worker_is_one_turn_too(door: Callable[..., Door]) -> None:
     """Two requests of one worker on one lane hold two leases, not one re-taken lease."""
-    storage = agentdb_storage
     batches: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext[Any]) -> str:
@@ -488,55 +370,35 @@ async def test_an_inbox_burst_on_one_worker_is_one_turn_too(
 
     from datetime import timedelta
 
-    server, _ = make_server(storage, handler, debounce=timedelta(seconds=0.3))
-    ctx_id = (await storage.threads.create_thread()).thread_id
-    async with http_client(server) as http:
-        first = asyncio.create_task(
-            rpc(
-                http,
-                "message/send",
-                {"message": wire("where", "m1", context_id=ctx_id, **{"livekit/channel": "sms"})},
-            )
-        )
-        await asyncio.sleep(0.05)
-        second = asyncio.create_task(
-            rpc(
-                http,
-                "message/send",
-                {"message": wire("are you", "m2", context_id=ctx_id, **{"livekit/channel": "sms"})},
-            )
-        )
-        r1, r2 = await asyncio.gather(first, second)
-    task_1, task_2 = r1.json()["result"]["task"], r2.json()["result"]["task"]
+    desk = door(handler, debounce=timedelta(seconds=0.3))
+    ctx_id = await desk.thread()
+    sms = {"livekit/channel": "sms"}
+    first = asyncio.create_task(desk.send("where", context_id=ctx_id, **sms))
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(desk.send("are you", context_id=ctx_id, **sms))
+    r1, r2 = await asyncio.gather(first, second)
     assert batches == [["where", "are you"]]
-    assert task_1["status"]["state"] == "TASK_STATE_COMPLETED" and "artifacts" not in task_1
-    assert metadata_from_wire(task_1["metadata"])[MERGED_INTO] == task_2["id"]
-    assert task_2["artifacts"][0]["parts"][0]["text"] == "one reply"
+    assert r1.state == "completed" and r1.answer is None
+    assert r1.metadata[MERGED_INTO] == r2.task["id"]
+    assert r2.answer == "one reply"
 
 
-async def test_a_resent_message_id_returns_the_existing_task(
-    agentdb_storage: AgentDBStorage,
-) -> None:
-    server, _ = make_server(agentdb_storage)
-    async with http_client(server) as http:
-        first = (await rpc(http, "message/send", {"message": wire("hi", "m1")})).json()["result"][
-            "task"
-        ]
-        again = (
-            await rpc(
-                http, "message/send", {"message": wire("hi", "m1", context_id=first["contextId"])}
-            )
-        ).json()["result"]["task"]
-        listed = (await rpc(http, "tasks/list", {"contextId": first["contextId"]})).json()[
-            "result"
-        ]["tasks"]
-    assert again["id"] == first["id"]
-    assert again["artifacts"][0]["parts"][0]["text"] == "reply to: hi"
-    assert [t["id"] for t in listed] == [first["id"]]
-    storage = server.storage
-    assert storage is not None
-    items = await history_items(storage, first["contextId"], AGENT)
-    assert [i.text_content for i in items] == ["hi", "reply to: hi"]
+@pytest.mark.rule("R3")
+async def test_a_resent_message_id_returns_the_existing_task(door: Callable[..., Door]) -> None:
+    runs: list[str] = []
+
+    async def handler(ctx: A2ASessionContext[Any]) -> str:
+        runs.append(ctx.message.text_content or "")
+        return "reply to: " + (ctx.message.text_content or "")
+
+    desk = door(handler)
+    first = await desk.send("hi", message_id="m1")
+    ctx_id = first.task["contextId"]
+    again = await desk.send("hi", message_id="m1", context_id=ctx_id)
+    assert again.task["id"] == first.task["id"]
+    assert again.answer == "reply to: hi"
+    assert [t["id"] for t in await desk.list_tasks(ctx_id)] == [first.task["id"]]
+    assert runs == ["hi"], "nothing runs twice"
 
 
 async def test_resubscribe_replays_after_the_first_stream_is_dropped(
@@ -634,43 +496,41 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
     del stream
 
 
-async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(
-    agentdb_storage: AgentDBStorage,
-) -> None:
+@pytest.mark.rule("R12")
+async def test_tasks_cancel_ends_a_running_turn_at_its_boundary(door: Callable[..., Door]) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
-    front = _blocking_agent(entered, release)
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("lookup", "c1")]), Reply("never sent", when=output_of("c1"))
+    )
+    front = Agent(instructions="front desk", llm=model)
+
+    @front.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look the caller up."""
+        entered.set()
+        await release.wait()
+        return "found"
 
     async def handler(ctx: A2ASessionContext[Any]) -> str | None:
         return (await front.run(ctx.message, message_history=ctx.message_history)).output
 
-    server, _ = make_server(agentdb_storage, handler)
-    ctx_id = (await agentdb_storage.threads.create_thread()).thread_id
-    async with http_client(server) as http:
-        running = asyncio.create_task(
-            rpc(http, "message/stream", {"message": wire("first", "m1", context_id=ctx_id)})
-        )
-        await asyncio.wait_for(entered.wait(), 5)
-        listed = (await rpc(http, "tasks/list", {"contextId": ctx_id})).json()["result"]["tasks"]
-        (task,) = listed
-        assert task["status"]["state"] == "TASK_STATE_WORKING"
-        canceled = await rpc(
-            http,
-            "tasks/cancel",
-            {
-                "id": task["id"],
-                "contextId": ctx_id,
-                "metadata": {f"{EXTENSION_URI}/reason": "user_interrupted"},
-            },
-        )
-        assert canceled.json()["result"]["status"]["state"] == "TASK_STATE_CANCELED"
-        release.set()
-        response = await running
-    results = [r["result"] for r in sse_results(response)]
-    final = results[-1]["statusUpdate"]
-    assert final["status"]["state"] == "TASK_STATE_CANCELED"
+    desk = door(handler)
+    ctx_id = await desk.thread()
+    running = asyncio.create_task(desk.send("first", context_id=ctx_id))
+    await asyncio.wait_for(entered.wait(), 5)
+    (task,) = await desk.list_tasks(ctx_id)
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    canceled = await desk.cancel(task["id"], ctx_id, **{"livekit/reason": "user_interrupted"})
+    assert canceled["result"]["status"]["state"] == "TASK_STATE_CANCELED"
+    await past_the_fresh_acquire()
+    release.set()
+    sent = await running
+    final = sent.frames[-1]["statusUpdate"]
+    assert final["status"]["state"] == "TASK_STATE_CANCELED" and sent.state == "canceled"
     # a client's cancel, not the server's interrupt
     assert INTERRUPTED not in metadata_from_wire(final.get("metadata", {}))
     assert metadata_from_wire(final["metadata"])["livekit/reason"] == "user_interrupted"
+    assert len(model.requests) == 1, "the tool's output never reached the model"
 
 
 # ---------------------------------------------------------------------------------------------
