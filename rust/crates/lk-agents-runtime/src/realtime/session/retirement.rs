@@ -78,12 +78,30 @@ pub(super) async fn run(
                 };
                 shared.retirement_unavailable(generation, &label, error);
                 shared.retirement_closing.store(true, Ordering::Release);
-                shared.closing.notify_one();
                 for event in step.events {
                     if let Err(error) = events.send(event) {
                         events.fail(clock.now(), &label, error);
                     }
                 }
+                let error = lk_agents_abi::errors::ApiError::new(format!(
+                    "realtime context cleanup service is unavailable: {error}"
+                ))
+                .with_retryable(false);
+                let event = lk_agents_abi::llm::realtime::Event::Error(
+                    lk_agents_abi::llm::realtime::RealtimeModelError {
+                        timestamp: clock.now(),
+                        label: label.clone(),
+                        message: error.message.clone(),
+                        recoverable: false,
+                        req_id: None,
+                        code: None,
+                        provider_error: Some(error),
+                    },
+                );
+                if let Err(error) = events.send(event) {
+                    events.fail(clock.now(), &label, error);
+                }
+                shared.closing.notify_one();
                 // Failed process startup cannot admit a replacement worker. Refuse this session
                 // and reclaim once outside its state lock instead of retaining and retrying.
                 drop(retired);

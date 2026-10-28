@@ -164,6 +164,13 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
         Some(Event::GenerateReplyFailed(failed)) if failed.req_id == "closing"),
         "worker startup failure must refuse the session's pending caller"
     );
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), receiver.next())
+            .await
+            .expect("terminal worker startup failure did not explain the session close"),
+        Some(Event::Error(error))
+            if !error.recoverable && error.message.contains("cleanup service is unavailable")
+    ));
     drop(pump);
     drop(shared);
     if tokio::time::timeout(Duration::from_millis(250), done.wait_for(|settled| *settled))

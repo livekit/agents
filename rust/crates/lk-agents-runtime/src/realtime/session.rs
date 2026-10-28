@@ -648,7 +648,6 @@ impl Pump {
         > = None;
         let mut context_due = false;
         loop {
-            tokio::task::yield_now().await;
             {
                 let mut machine = self.shared.machine.lock().await;
                 while let Ok(sent) = receipts.try_recv() {
@@ -672,6 +671,9 @@ impl Pump {
             context_wake.as_mut().enable();
             let continuation_ready = self.shared.machine.lock().await.context_continuation_ready();
             let can_continue = continuation_ready && outgoing.capacity() > 0;
+            if can_continue {
+                tokio::task::yield_now().await;
+            }
 
             let mut step = tokio::select! {
                 biased;

@@ -888,13 +888,17 @@ impl RealtimeMachine {
             && let Some(ContextWork::ServerItems(server)) = &mut update.work
         {
             let source = std::mem::take(&mut self.remote);
-            if let Some(retired) = server.reconnect(self.connection_generation - 1, source) {
+            if let Some(retired) = server.reconnect(self.connection_generation - 1, source)
+                && retired.revision() != 0
+            {
                 self.retired.push_back(Retired::Remote(retired));
             }
             return;
         }
         let acknowledged = std::mem::take(&mut self.remote);
-        self.retired.push_back(Retired::Remote(acknowledged));
+        if acknowledged.revision() != 0 {
+            self.retired.push_back(Retired::Remote(acknowledged));
+        }
         self.start_context_replay();
     }
 

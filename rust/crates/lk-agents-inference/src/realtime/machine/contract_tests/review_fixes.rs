@@ -217,3 +217,40 @@ fn deferred_audio_and_truncation_share_the_remaining_page_allowance() {
     assert!(edited);
     assert!(!m.context_pages_pending());
 }
+
+#[test]
+fn repeated_reconnects_preserve_replay_with_initial_cleanup_withheld() {
+    let mut m = machine();
+    m.open(at(0));
+    let mut initial =
+        m.command(at(0), Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: long_context(10_000) }));
+    for _ in 0..1_000 {
+        if !m.context_pages_pending() {
+            break;
+        }
+        assert!(m.context_continuation_ready(), "initial submission unexpectedly parked");
+        let page = m.continue_context(at(0));
+        assert!(page.fatal.is_none());
+        initial.merge(page);
+    }
+    assert!(!m.context_pages_pending());
+    assert_eq!(creates(&initial).len(), 10_000);
+    acknowledge_page(&mut m, initial);
+    assert!(m.has_context_retirement());
+    assert!(m.retired.len() <= 3);
+
+    let first = m.reconnect(at(1));
+    assert!(first.fatal.is_none(), "the first reconnect exhausted cleanup slots");
+    assert!(first.frames.iter().all(|frame| !matches!(frame, Outgoing::ItemCreate { .. })));
+    let queued = m.retired.len();
+    let second = m.reconnect(at(2));
+    assert!(second.fatal.is_none(), "an empty old connection consumed a fifth cleanup slot");
+    assert!(!m.closing);
+    assert_eq!(m.retired.len(), queued, "empty connection state must not add a cleanup batch");
+    assert!(!m.context_continuation_ready(), "replay must await withheld disposal admission");
+
+    retire_context(&mut m);
+    let replay = finish_context(&mut m, at(2), second);
+    assert!(replay.fatal.is_none() && !m.closing);
+    assert_eq!(creates(&replay), (0..10_000).map(|id| id.to_string()).collect::<Vec<_>>());
+}

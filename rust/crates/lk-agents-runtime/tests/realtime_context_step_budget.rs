@@ -2,6 +2,9 @@
 //! LK_REALTIME_STEP_QUALIFICATION=1 enforces K-31 CPU gates with optimized core packages.
 #![cfg(unix)]
 
+mod realtime_support;
+use realtime_support::{RetirementStats, thread_cpu};
+
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use lk_agents_abi::llm::realtime::UpdateChatCtx;
@@ -19,20 +22,13 @@ fn context(count: usize) -> ChatContext {
     )
 }
 
-fn thread_cpu() -> Duration {
-    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: the OS writes one initialized timespec through a valid exclusive pointer.
-    let status = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) };
-    assert_eq!(status, 0, "thread CPU clock unavailable");
-    Duration::new(time.tv_sec.try_into().unwrap(), time.tv_nsec.try_into().unwrap())
-}
-
 #[derive(Default)]
 struct Samples {
     cpu: Vec<Duration>,
     wall: Vec<Duration>,
     phase: &'static str,
     maximum: Option<Maximum>,
+    cleanup: RetirementStats,
 }
 
 #[derive(Debug)]
@@ -82,10 +78,11 @@ fn observe(step: Step, ids: &mut Vec<String>) {
     }
 }
 
-fn execute_retirements(machine: &mut RealtimeMachine) {
-    while let Some(retirement) = machine.take_context_retirement() {
-        drop(retirement);
-    }
+fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples) {
+    let stats = realtime_support::execute_retirements(machine, |_| {});
+    samples.cleanup.jobs += stats.jobs;
+    samples.cleanup.cpu += stats.cpu;
+    samples.cleanup.maximum = samples.cleanup.maximum.max(stats.maximum);
 }
 
 fn drain(
@@ -98,7 +95,7 @@ fn drain(
         observe(step, observed);
     }
     for machine in &mut *machines {
-        execute_retirements(machine);
+        execute_retirements(machine, samples);
     }
     while machines.iter().any(RealtimeMachine::context_work_pending) {
         for (machine, observed) in machines.iter_mut().zip(&mut ids) {
@@ -107,7 +104,7 @@ fn drain(
                     samples.step("continue_context", || machine.continue_context(Ts::ZERO)),
                     observed,
                 );
-                execute_retirements(machine);
+                execute_retirements(machine, samples);
             }
             assert!(samples.step("tick", || machine.tick(Ts::ZERO)).frames.is_empty());
         }
@@ -194,6 +191,12 @@ fn realtime_context_step_budget() {
                 samples.wall.last().unwrap()
             );
             println!("largest step: {:?}", samples.maximum);
+            println!(
+                "retirement effects: jobs={} worker_cpu_total_ns={} worker_cpu_max_job_ns={}",
+                samples.cleanup.jobs,
+                samples.cleanup.cpu.as_nanos(),
+                samples.cleanup.maximum.as_nanos()
+            );
             if std::env::var_os("LK_REALTIME_STEP_QUALIFICATION").is_some()
                 && (cpu_p999 > Duration::from_millis(1) || cpu_max > Duration::from_millis(2))
             {

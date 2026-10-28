@@ -1,6 +1,9 @@
 //! Core context preparation, acknowledgements and retirement under long histories.
 #![cfg(unix)]
 
+mod realtime_support;
+use realtime_support::thread_cpu as cpu_time;
+
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -18,13 +21,6 @@ fn context(count: usize) -> ChatContext {
             })
             .collect(),
     )
-}
-
-fn cpu_time() -> Duration {
-    let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: the OS writes one initialized timespec through a valid exclusive pointer.
-    assert_eq!(unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) }, 0);
-    Duration::new(time.tv_sec.try_into().unwrap(), time.tv_nsec.try_into().unwrap())
 }
 
 #[derive(Default)]
@@ -81,8 +77,7 @@ impl Samples {
 }
 
 fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples, controls: bool) {
-    while let Some(retirement) = machine.take_context_retirement() {
-        // The admitted job owns this batch while the core remains available for controls.
+    let stats = realtime_support::execute_retirements(machine, |machine| {
         if controls {
             assert!(
                 samples.step("tick_during_cleanup", || machine.tick(Ts::ZERO)).frames.is_empty()
@@ -94,13 +89,10 @@ fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples, con
                     .is_empty()
             );
         }
-        let start = cpu_time();
-        drop(retirement);
-        let job_cpu = cpu_time().saturating_sub(start);
-        samples.cleanup_cpu += job_cpu;
-        samples.cleanup_max = samples.cleanup_max.max(job_cpu);
-        samples.cleanup_jobs += 1;
-    }
+    });
+    samples.cleanup_cpu += stats.cpu;
+    samples.cleanup_max = samples.cleanup_max.max(stats.maximum);
+    samples.cleanup_jobs += stats.jobs;
 }
 
 fn acknowledge(machine: &mut RealtimeMachine, samples: &mut Samples, step: Step) {

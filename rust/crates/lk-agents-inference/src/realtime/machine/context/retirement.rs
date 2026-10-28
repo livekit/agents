@@ -14,6 +14,8 @@ pub struct ContextRetirement {
 
 #[derive(Debug, Default)]
 pub(in crate::realtime::machine) struct RetirementQueue {
+    // The count charges only coalesced small owners. A large owner has its own slot
+    // and may retain at most CONTEXT_PAGE additional small-owner units.
     batches: VecDeque<(usize, ContextRetirement)>,
 }
 
@@ -28,14 +30,15 @@ impl RetirementQueue {
     pub(in crate::realtime::machine) fn push_back(&mut self, state: Retired) {
         let units = state.retained_units().max(1);
         if units <= super::CONTEXT_PAGE
-            && let Some((size, batch)) = self.batches.back_mut()
-            && size.saturating_add(units) <= super::CONTEXT_PAGE
+            && let Some((small_units, batch)) = self.batches.back_mut()
+            && small_units.saturating_add(units) <= super::CONTEXT_PAGE
         {
-            *size += units;
+            *small_units += units;
             batch.states.push(state);
             return;
         }
-        self.batches.push_back((units, ContextRetirement { states: vec![state] }));
+        let small_units = if units <= super::CONTEXT_PAGE { units } else { 0 };
+        self.batches.push_back((small_units, ContextRetirement { states: vec![state] }));
     }
 
     fn pop_front(&mut self) -> Option<ContextRetirement> {
@@ -124,5 +127,25 @@ impl ContextWork {
                     })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_owners_have_a_separate_bounded_allowance_beside_large_owners() {
+        let mut queue = RetirementQueue::default();
+        for _ in 0..4 {
+            queue.push_back(Retired::Context(ChatContext::new(Vec::with_capacity(10_000))));
+        }
+        assert_eq!(queue.len(), 4, "large owners must retain separate slots");
+        for _ in 0..super::super::CONTEXT_PAGE {
+            queue.push_back(Retired::Context(ChatContext::new(Vec::with_capacity(1))));
+        }
+        assert_eq!(queue.len(), 4, "a large owner must allow a bounded small-owner tail");
+        queue.push_back(Retired::Context(ChatContext::new(Vec::with_capacity(1))));
+        assert_eq!(queue.len(), 5, "small-owner coalescing must remain charged and bounded");
     }
 }
