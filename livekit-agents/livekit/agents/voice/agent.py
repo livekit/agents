@@ -934,12 +934,11 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__fut.exception()  # silence exc not retrieved warnings
 
-        from .agent_activity import _SpeechHandleContextVar
+        from .agent_activity import _AgentActivityContextVar
 
-        speech_handle = _SpeechHandleContextVar.get(None)
-
-        if speech_handle:
-            speech_handle._maybe_run_final_output = result
+        activity = self._activity or _AgentActivityContextVar.get(None)
+        if activity and (run_state := activity.session._global_run_state) and not run_state.done():
+            run_state._set_final_output(result)
 
         # if not self.__inline_mode:
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)

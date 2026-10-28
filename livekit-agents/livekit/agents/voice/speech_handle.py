@@ -81,7 +81,6 @@ class SpeechHandle:
                     logger.warning(f"error in done_callback: {cb}", exc_info=e)
 
         self._done_fut.add_done_callback(_on_done)
-        self._maybe_run_final_output: Any = None  # kept private
         self._error: BaseException | None = None
 
     @staticmethod
@@ -305,6 +304,10 @@ class SpeechHandle:
 
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
+
+    def _remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+        """Stop notifying the callback when this speech records a chat item."""
+        self._item_added_callbacks.discard(callback)
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
         for item in items:

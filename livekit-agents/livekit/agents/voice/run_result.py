@@ -110,6 +110,7 @@ class _RunSuspension:
     active: bool = False
 
     def suspends(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Return whether a pending task releases this handle from holding the run open."""
         return self.active and not self.until.done() and handle in self.handles
 
 
@@ -141,6 +142,7 @@ class RunResult(Generic[Run_T]):
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
+        self.__last_final_output: Any = None
 
         # an awaiter suspended before this run started resumes into it
         if session is not None:
@@ -250,6 +252,18 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Detach this run's callbacks and return whether the handle was tracked."""
+        if handle not in self._handles:
+            return False
+
+        self._handles.discard(handle)
+        handle.remove_done_callback(self._mark_done_if_needed)
+
+        if isinstance(handle, SpeechHandle):
+            handle._remove_item_added_callback(self._item_added)
+        return True
+
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
@@ -260,6 +274,10 @@ class RunResult(Generic[Run_T]):
             for handle in self._handles
         ):
             self._mark_done()
+
+    def _set_final_output(self, output: Any) -> None:
+        """Keep the latest completed task result across subsequent speech."""
+        self.__last_final_output = output
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -272,7 +290,7 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_exception(self.__last_speech_handle._error)
                 return
 
-            final_output = self.__last_speech_handle._maybe_run_final_output
+            final_output = self.__last_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
                     # only the no-output case is retryable: a completed task is
