@@ -64,10 +64,10 @@ reply; in text a first `update` does so under the `live` inbox
 ([text-endpoints.md](text-endpoints.md)). On a call later ones are delivered
 at idle in call order, consecutive updates as one reply, and a `say` cut off
 before it played is said again. In text a later one is a `working` frame at
-once, and the model reads it with the next turn. On a call the reply to an update calls no
-tools and the reply to a tool's end may, as after any tool; in text an update gets no reply,
-the receiver words it. `ctx.update(text, silent=True)` is for the model alone: no reply on a
-call, no `working` frame in text. A model that cannot say text
+once, and the model reads it with the next turn. The reply to an update calls no tools and
+the reply to a tool's end may, as after any tool; in text a turn another agent delegated
+gets no reply to an update, its caller words it. `ctx.update(text, silent=True)` is for the
+model alone: no reply, and no `working` frame in text. A model that cannot say text
 as written is asked to, with a warning.
 
 The calls of one step run together. A verbatim result the model goes on

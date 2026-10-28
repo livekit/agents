@@ -759,7 +759,10 @@ class AgentRun(Generic[Run_T]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN
         for _ in range(self._max_steps):
             if hooks is not None and hooks.boundary is not None and await hooks.boundary():
-                # a newer message waits for the lane: stop here, what ran is kept, no reply
+                # a newer message waits for the lane: stop here, what ran is kept, no reply; tool
+                # outputs left unanswered are marked as a reply cut off before it showed anything
+                if new_items and isinstance(new_items[-1], FunctionCallOutput):
+                    record(ChatMessage(role="assistant", content=[""], interrupted=True))
                 return finish(None, interrupted=True)
             agent = self._agent
             run_ctx = RunContext[Any, Any](function_call=None, run=self)
@@ -955,9 +958,14 @@ class AgentRun(Generic[Run_T]):
                 out.reply_tool_choice for out in outs.values() if not isinstance(out, AgentTask)
             )
             tool_choice = reports if reports is not None else NOT_GIVEN
-            if tool_choice == "none" and not wants_tool_output and not isinstance(agent, AgentTask):
-                # every call went to the background: its progress went out as it is and the
-                # receiver words it, so the turn ends on the reply beside the calls, if any
+            if (
+                tool_choice == "none"
+                and not wants_tool_output
+                and not isinstance(agent, AgentTask)
+                and (text or not facing_person or not replies)
+            ):
+                # every call went to the background: the reply beside the calls is the turn's,
+                # and a delegated turn's progress went out as it is for its caller to word
                 return finish(text or None)
             await release_held()
 
@@ -1180,6 +1188,9 @@ class AgentRun(Generic[Run_T]):
             # a conversation tool never ends a task; the value is its output
             output = ToolResult(output.value, verbatim=True) if output.verbatim else output.value
         out = make_tool_output(fnc_call=fnc_call, output=output, exception=None)
+        if run_ctx._suppress_reply:
+            # a silent update() keeps the output for the model and asks for no reply
+            out.fnc_call_out.reply_required = False
         out.reply_tool_choice = run_ctx._reply_tool_choice
         return out
 

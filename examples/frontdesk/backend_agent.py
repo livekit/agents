@@ -6,7 +6,7 @@ import datetime
 from calendar_api import TIMEZONE, Calendar, Slot, SlotUnavailable, calendar
 from pydantic import BaseModel
 
-from livekit.agents import Agent, AgentHandler, InputRequired, RunContext, ToolError
+from livekit.agents import Agent, AgentHandler, InputRequired, RunContext, RunResult, ToolError
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ToolFlag
 
@@ -164,8 +164,8 @@ back_office = AgentHandler(lane="backend")
     inbox="live",
     state=Patient,
 )
-async def text(ctx: A2ASessionContext[Patient]) -> str:
-    result = await backend.run(
+async def text(ctx: A2ASessionContext[Patient]) -> RunResult[str]:
+    # the run as it is: its question while it waits, else its answer, none while work runs on
+    return await backend.run(
         ctx.message, message_history=ctx.message_history, state=ctx.state, deps=cal
     )
-    return result.input_required or str(result.output)
