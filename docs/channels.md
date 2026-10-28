@@ -14,8 +14,9 @@ WhatsApp, and email into endpoint requests and delivers their replies.
 Every A2A message may carry `livekit/channel` with the channel's name, and
 the handler reads the resolved value as `ctx.messages[i].channel`.
 `livekit/kind: delegation` selects `delegation` even with an explicit channel;
-otherwise it uses `livekit/channel`, or `a2a` when absent. The channel picks the endpoint's policy and
-debounce for a message that arrives while a turn runs; see
+otherwise it uses `livekit/channel`, or `a2a` when absent. The channel picks
+the endpoint's policy and debounce for a message that arrives while a turn
+runs; see
 [server.md](server.md). Delegations default to `queue`, web
 chat and API clients to `interrupt`.
 

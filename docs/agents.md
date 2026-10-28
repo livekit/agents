@@ -112,8 +112,9 @@ result.usage                             # requests, input/output/total_tokens, 
 It is a discriminated union: `status == "completed"` exposes `output: Output`,
 and `status == "input_required"` exposes `question: str`. The branches are
 `RunCompleted[Output]` and `RunInputRequired`, exported with `RunResult` from
-`livekit.agents`. Both branches expose history and usage. A tool's `InputRequired(...)` sets the framework outcome;
-`output_type` contains only the application's final-result contract. See the
+`livekit.agents`. Both branches expose history and usage. A tool's
+`InputRequired(...)` sets the framework outcome; `output_type` contains only
+the application's final-result contract. See the
 [result and A2A mapping](#running-a-turn).
 
 `RunResult` describes one agent invocation:

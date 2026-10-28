@@ -114,9 +114,9 @@ accepted `result.output` delivered as an artifact. The application's
 A turn whose tool returned `InputRequired(question)` ends `input-required`.
 The question is the turn's reply, as the status message. A model-driven agent
 facing the person may phrase it once under the
-[wording contract](../tools.md#wording-and-verbatim); the endpoint sends that final text without another model call. A handler
-without a model sends the question as written. The pending call stays in the
-history with a placeholder output,
+[wording contract](../tools.md#wording-and-verbatim); the endpoint sends that
+final text without another model call. A handler without a model sends the
+question as written. The pending call stays in the history with a placeholder output,
 `waiting for the person's answer to: <question>`.
 
 The next message in the thread answers it: its text replaces the

@@ -110,13 +110,10 @@ language adapters handle invocation, backpressure, errors and cleanup. An
 `AudioOutput` reports playback progress and completion separately from frame
 acceptance.
 
-Native VAD streams run their recurrent model on an admitted worker. A process
-admits up to 32 VAD streams within its shared native-worker ceiling. Each stream
-accepts at most 256 pending input frames and 2 MiB of queued PCM, with a
-192,000-byte limit per frame (one second of 48 kHz stereo). A synchronous push
-raises an API error when either input limit is full or a frame is oversized;
-it retains no refused audio. Output buffers hold 64 events and backpressure
-the worker. Close remains available at capacity and observes native settlement.
+VAD streams bound pending audio and output. Pushing audio beyond capacity or
+an oversized frame raises an API error and retains no refused audio. Close
+remains available at capacity and waits for bounded cleanup. See
+[runtime limits](internals/rust-core.md#runtime-limits-and-backpressure).
 
 The session owns input/output routing, transcript synchronization and recording.
 Replacing its playback destination changes that destination only. Recording
