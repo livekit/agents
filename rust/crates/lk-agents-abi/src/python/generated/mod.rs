@@ -12,6 +12,7 @@ mod recorder;
 mod storage;
 mod stt;
 mod telemetry;
+mod text_session;
 mod tts;
 mod vad;
 mod worker;

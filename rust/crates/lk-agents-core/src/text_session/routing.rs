@@ -8,20 +8,7 @@ use lk_agents_abi::resources::LlmRef;
 
 use super::{ChildCallStatus, TextSessionState};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatHistory {
-    Fresh,
-    Fork,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalAgentTool {
-    pub agent_name: String,
-    pub chat_history: ChatHistory,
-    pub merge_chat_history: bool,
-    /// None shares the parent's scope. A supplied reference is application-owned.
-    pub context_scope: Option<String>,
-}
+pub use lk_agents_abi::text_session::{ChatHistory, LocalAgentTool, RoutingError};
 
 #[derive(Debug, Clone)]
 pub struct SessionAgent {
@@ -45,7 +32,7 @@ impl TextSessionConfig {
         Self { root_agent, agents, max_depth: 8 }
     }
 
-    pub(super) fn validate(&self) -> Result<(), RoutingError> {
+    pub fn validate(&self) -> Result<(), RoutingError> {
         if self.max_depth == 0 {
             return Err(RoutingError::MaxDepth { max_depth: 0 });
         }
@@ -186,36 +173,3 @@ impl TextSessionConfig {
         Ok(())
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoutingError {
-    MaxDepth { max_depth: usize },
-    UnknownAgent(String),
-    UnknownScope(String),
-    UnknownTool(String),
-    MissingOutputType(String),
-    InvalidState(String),
-    MissingAcceptedOutput,
-}
-
-impl std::fmt::Display for RoutingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MaxDepth { max_depth } => {
-                write!(f, "agent-tool call exceeds max_depth={max_depth}")
-            }
-            Self::UnknownAgent(name) => write!(f, "unknown session agent: {name}"),
-            Self::UnknownScope(scope) => write!(f, "unknown context scope: {scope}"),
-            Self::UnknownTool(tool) => write!(f, "unknown local agent tool: {tool}"),
-            Self::MissingOutputType(name) => {
-                write!(f, "agent tool {name} requires explicit output_type")
-            }
-            Self::InvalidState(reason) => write!(f, "invalid text session state: {reason}"),
-            Self::MissingAcceptedOutput => {
-                f.write_str("child completed without a serialized accepted output")
-            }
-        }
-    }
-}
-
-impl std::error::Error for RoutingError {}

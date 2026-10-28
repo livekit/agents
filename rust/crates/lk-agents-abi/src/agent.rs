@@ -25,6 +25,11 @@ pub struct Invocation {
     /// The agent invocation this callback belongs to.
     pub invocation_id: String,
     pub agent_name: String,
+    pub execution_id: Option<String>,
+    pub frame_id: Option<crate::text_session::FrameId>,
+    pub context_scope: Option<String>,
+    pub application_context: Option<HostRef>,
+    pub history: Vec<crate::ChatItem>,
     /// The tool call, for a tool's preparation, read-back and body.
     pub function_call: Option<FunctionCall>,
     /// The call's approval scope: the body runs on a granted read-back.
@@ -100,12 +105,25 @@ pub enum OutputCandidate {
     Value(Value),
 }
 
+/// An available JSON representation, including JSON null. Absence means the host value
+/// has no persistent representation.
+#[crate::host(record(module = "agent_run", extract))]
+#[derive(Debug, Clone)]
+pub struct SerializedOutput {
+    pub value: Value,
+}
+
 /// The host's verdict on an output candidate.
 #[crate::host(record(module = "agent_run", extract))]
 #[derive(Debug, Clone)]
 pub enum ValidatedOutput {
     /// Accepted: a `str` output's final text, or the validated value the host keeps.
-    Accepted { text: Option<String>, value: Option<HostRef> },
+    Accepted {
+        text: Option<String>,
+        value: Option<HostRef>,
+        #[host(default = None)]
+        serialized: Option<SerializedOutput>,
+    },
     /// `ModelRetry` or a validation error: the model corrects its output.
     #[host(field = "reason")]
     Retry(String),

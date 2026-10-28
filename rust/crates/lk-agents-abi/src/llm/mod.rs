@@ -9,6 +9,8 @@ pub mod inference;
 pub mod json_repair;
 pub mod llm;
 pub mod mcp;
+#[cfg(feature = "serde")]
+mod persistence;
 pub mod provider_format;
 pub mod realtime;
 pub mod schema;

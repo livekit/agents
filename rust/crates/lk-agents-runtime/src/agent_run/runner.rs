@@ -75,6 +75,12 @@ impl AgentRunner for Runner {
                 operation: 0,
                 invocation_id: request.invocation_id,
                 agent_name: self.definition.name.clone(),
+                execution_id: None,
+                frame_id: None,
+                context_scope: None,
+                application_context: None,
+                history: input.history.iter().cloned()
+                    .chain([ChatItem::Message(input.message.clone())]).collect(),
                 function_call: None,
                 approval: None,
                 host_context: Some(request.host_context),

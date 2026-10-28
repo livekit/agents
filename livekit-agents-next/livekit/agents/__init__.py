@@ -78,6 +78,7 @@ from .simulation import (
     SimulationVerdict,
 )
 from .storage.context_store import load_context, persisted, save_context
+from .text_session import TextSession, TextSessionRoutingError, TextSessionState, TextSessionTurn
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -186,6 +187,10 @@ def __getattr__(name: str) -> typing.Any:
 
 
 __all__ = [
+    "TextSession",
+    "TextSessionState",
+    "TextSessionTurn",
+    "TextSessionRoutingError",
     "persisted",
     "load_context",
     "save_context",

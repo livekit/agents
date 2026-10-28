@@ -21,14 +21,11 @@ from pydantic import TypeAdapter
 from . import _core, llm
 from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
 from .llm.tool_context import (
-    FunctionTool,
     ProviderTool,
-    RawFunctionTool,
     Tool,
     ToolFlag,
     Toolset,
 )
-from .llm.utils import function_arguments_to_pydantic_model
 from .types import NOT_GIVEN
 from .voice import io
 
@@ -394,14 +391,9 @@ def tool_specs(tools: Sequence[Tool | Toolset]) -> list[dict[str, Any]]:
     """The core's ``ToolSpec`` of each function tool; provider tools stay in the host pool."""
     specs = []
     for tool in llm.ToolContext(tools).function_tools.values():
-        if isinstance(tool, RawFunctionTool):
-            schema = tool.info.raw_schema
-            name, description = schema["name"], schema.get("description", "")
-            parameters = schema.get("parameters", {})
-        else:
-            assert isinstance(tool, FunctionTool)
-            name, description = tool.info.name, tool.info.description or ""
-            parameters = function_arguments_to_pydantic_model(tool).model_json_schema()
+        from .llm.utils import tool_schema
+
+        name, description, parameters = tool_schema(tool)
         specs.append(
             {
                 "name": name,

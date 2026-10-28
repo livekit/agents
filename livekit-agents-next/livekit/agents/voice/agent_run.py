@@ -36,6 +36,7 @@ from .._generated.agent_run import (
     RunRequest,
     RunSettled,
 )
+from .._generated.text_session import FrameId
 from ..llm import ChatContext, ChatItem, ChatMessage, FunctionTool, RawFunctionTool, ToolContext
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import Toolset
@@ -128,8 +129,11 @@ class _TextRun(Generic[Context_T]):
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
-        self.runner: _core.AgentRunner | None = None
+        self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
         self._history = history
+        self.execution_id: str | None = None
+        self.frame_id: FrameId | None = None
+        self.context_scope: str | None = None
         self._toolsets: list[Toolset] = []
 
     @property
@@ -148,7 +152,11 @@ class _TextRun(Generic[Context_T]):
     def store(self) -> ContextStore:
         if self.hooks is None or self.hooks.store is None:
             raise RuntimeError("this run has no managed context store")
-        return self.hooks.store
+        return (
+            self.hooks.store._for_scope(self.context_scope)
+            if self.context_scope is not None
+            else self.hooks.store
+        )
 
     async def acquire_toolsets(self) -> None:
         """Sets up the agent's toolsets for this run (tools.md "Toolsets"); a failure releases
@@ -218,7 +226,9 @@ async def start_run(
     return run, updates
 
 
-def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
+def settled_result(
+    run: _TextRun[Any], settled: RunSettled, *, accumulate: bool = True
+) -> RunResult[Any]:
     """The settled invocation as the caller's ``RunResult``; this run's usage is added to the
     caller's accumulator."""
     from .._core_view import from_core_item
@@ -232,7 +242,8 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
         output_tokens=result.usage.output_tokens,
         tool_calls=result.usage.tool_calls,
     )
-    run.usage._add(usage)
+    if accumulate:
+        run.usage._add(usage)
     common: dict[str, Any] = {
         "new_messages": [from_core_item(i) for i in result.new_messages],
         "all_messages": [from_core_item(i) for i in result.all_messages],

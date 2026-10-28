@@ -12,6 +12,8 @@ one ``_BindingContextVar`` holds there. The records crossing are the generated m
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import copy
 import inspect
 import uuid
 from collections.abc import Awaitable, Callable
@@ -35,6 +37,7 @@ from .._generated.agent_run import (
     ReadBackAnswer,
     ReadBackAnswerInputRequired,
     ReadBackAnswerQuestion,
+    SerializedOutput,
     ValidatedOutput,
     ValidatedOutputAccepted,
     ValidatedOutputFailed,
@@ -82,7 +85,7 @@ class ToolArgumentError(Exception):
 class _Prepared:
     """A call's validated arguments, held by the runtime between preparation and the body."""
 
-    tool: FunctionTool | RawFunctionTool
+    tool: FunctionTool[..., Awaitable[Any]] | RawFunctionTool[..., Awaitable[Any]]
     ctx: RunContext[Any]
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
@@ -124,11 +127,21 @@ class AgentHost:
             if tool is None:
                 raise ToolArgumentError(f"unknown tool `{call.name}`")
             ctx = RunContext[Any](function_call=call, run=run)
+            from .agent_tool import _LocalAgentTool
+
             try:
-                fields = validated_arguments(tool, arguments)
+                fields = (
+                    tool.validate(arguments)
+                    if isinstance(tool, _LocalAgentTool)
+                    else validated_arguments(tool, arguments)
+                )
             except (ValidationError, ValueError, TypeError) as e:
                 raise ToolArgumentError(f"Error parsing arguments for `{call.name}`: {e}") from e
-            args, kwargs = bind_function_arguments(tool, fields, ctx)
+            args, kwargs = (
+                ((), fields)
+                if isinstance(tool, _LocalAgentTool)
+                else bind_function_arguments(tool, fields, ctx)
+            )
             identified = {k: v for k, v in fields.items() if k != CONFIRM_DUPLICATE_PARAM}
             identity: ArgumentIdentity
             try:
@@ -191,7 +204,9 @@ class AgentHost:
             try:
                 if isinstance(candidate, OutputCandidateText):
                     text = await self._agent._validate_output(ctx, candidate.text)
-                    return ValidatedOutputAccepted(text=str(text), value=None)
+                    return ValidatedOutputAccepted(
+                        text=str(text), value=None, serialized=SerializedOutput(value=str(text))
+                    )
                 value = await self._output.accept(ctx, candidate.value)
                 value = await self._agent._validate_output(ctx, value)
             except ValidationError as e:
@@ -201,7 +216,11 @@ class AgentHost:
             except Exception as e:
                 logger.exception("the output validation failed")
                 return ValidatedOutputFailed(error=f"{type(e).__name__}: {e}")
-            return ValidatedOutputAccepted(text=None, value=value)
+            try:
+                serialized: SerializedOutput | None = SerializedOutput(value=to_jsonable_python(value))
+            except PydanticSerializationError:
+                serialized = None
+            return ValidatedOutputAccepted(text=None, value=value, serialized=serialized)
 
     def cancel(self, invocation: Invocation) -> None:
         """Cancels the callback in flight for ``invocation``; it still settles."""
@@ -210,23 +229,38 @@ class AgentHost:
             task.cancel()
 
     def _operation(self, invocation: Invocation) -> _Operation:
-        return _Operation(self._running, _operation_key(invocation))
+        return _Operation(self._running, invocation)
 
 
 class _Operation:
     """Registers the current task as the callback of one operation while it runs."""
 
-    def __init__(self, running: dict[tuple[str, int], asyncio.Task[Any]], key: tuple[str, int]):
+    def __init__(self, running: dict[tuple[str, int], asyncio.Task[Any]], invocation: Invocation):
         self._running = running
-        self._key = key
+        self._key = _operation_key(invocation)
+        self._invocation = invocation
+        self._token: contextvars.Token[Any] | None = None
 
     def __enter__(self) -> None:
+        run = copy.copy(_current_run())
+        run.id = self._invocation.invocation_id
+        from .._core_view import from_core_item
+
+        run._history = [from_core_item(item) for item in self._invocation.history]
+        run.execution_id = self._invocation.execution_id
+        run.frame_id = self._invocation.frame_id
+        run.context_scope = self._invocation.context_scope
+        if run.context_scope is not None:
+            run.context = self._invocation.application_context
+        self._token = _BindingContextVar.set(run)
         task = asyncio.current_task()
         if task is not None:
             self._running[self._key] = task
 
     def __exit__(self, *exc: object) -> None:
         self._running.pop(self._key, None)
+        if self._token is not None:
+            _BindingContextVar.reset(self._token)
 
 
 class OutputContract:
@@ -308,6 +342,8 @@ def _function_call(invocation: Invocation) -> FunctionCall:
     from .._core_view import from_core_item
 
     call = invocation.function_call
+    if call is None:
+        raise RuntimeError("a tool callback has no function call")
     if isinstance(call, FunctionCall):
         return call
     if isinstance(call, dict) and "type" not in call:

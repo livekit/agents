@@ -50,8 +50,8 @@ impl TextSession {
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
             let history = history::initial(&parent.history, tool.chat_history);
             let merge_chat_history = tool.merge_chat_history;
-            let frame_id = self.state.mint("frame");
-            let task_id = self.state.mint("task");
+            let frame_id = super::FrameId { value: self.mint("frame") };
+            let task_id = self.mint("task");
             let mut starting_history_ids = history
                 .iter()
                 .map(|i| i.id().to_owned())

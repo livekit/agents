@@ -17,11 +17,16 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::agent::Invocation {
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let Self { operation, invocation_id, agent_name, function_call, approval, host_context: _ } = self;
+        let Self { operation, invocation_id, agent_name, execution_id, frame_id, context_scope, application_context, history, function_call, approval, host_context: _ } = self;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("operation", ::pyo3::IntoPyObjectExt::into_bound_py_any(operation, py)?)?;
         kwargs.set_item("invocation_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?)?;
         kwargs.set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
+        kwargs.set_item("execution_id", match execution_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+        kwargs.set_item("frame_id", match frame_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+        kwargs.set_item("context_scope", match context_scope { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+        kwargs.set_item("application_context", match application_context { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+        kwargs.set_item("history", ::pyo3::types::PyList::new(py, history.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
         kwargs.set_item("function_call", match function_call { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
         kwargs.set_item("approval", match approval { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
         INVOCATION.import(py, "livekit.agents._generated.agent_run", "Invocation")?.call((), Some(&kwargs))
@@ -120,6 +125,25 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::agent::OutputCandidate {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+static SERIALIZED_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::SerializedOutput {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(SERIALIZED_OUTPUT.import(py, "livekit.agents._generated.agent_run", "SerializedOutput")?)? {
+            return Err(super::not_a(obj, "SerializedOutput"));
+        }
+        Ok(Self {
+            value: ::lk_agents_abi::python::attr_with(obj, "SerializedOutput", "value", |v| ::lk_agents_abi::python::value_from_py(v, "SerializedOutput.value"))?,
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/agent.rs.
 static VALIDATED_OUTPUT_ACCEPTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
     ::pyo3::sync::PyOnceLock::new();
 static VALIDATED_OUTPUT_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -134,7 +158,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::agent::ValidatedOutput 
         let obj = &*obj;
         let py = obj.py();
         if obj.is_instance(VALIDATED_OUTPUT_ACCEPTED.import(py, "livekit.agents._generated.agent_run", "ValidatedOutputAccepted")?)? {
-            return Ok(Self::Accepted { text: ::lk_agents_abi::python::attr_with(obj, "ValidatedOutputAccepted", "text", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, value: ::lk_agents_abi::python::attr_with(obj, "ValidatedOutputAccepted", "value", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })? });
+            return Ok(Self::Accepted { text: ::lk_agents_abi::python::attr_with(obj, "ValidatedOutputAccepted", "text", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?, value: ::lk_agents_abi::python::attr_with(obj, "ValidatedOutputAccepted", "value", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?, serialized: ::lk_agents_abi::python::attr_with(obj, "ValidatedOutputAccepted", "serialized", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::agent::SerializedOutput>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })? });
         }
         if obj.is_instance(VALIDATED_OUTPUT_RETRY.import(py, "livekit.agents._generated.agent_run", "ValidatedOutputRetry")?)? {
             return Ok(Self::Retry(::lk_agents_abi::python::attr_with(obj, "ValidatedOutputRetry", "reason", |v| v.extract::<::std::string::String>())?));

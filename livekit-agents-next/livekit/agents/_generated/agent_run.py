@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from livekit.agents.types import APIConnectOptions
 
     from .._core import ChatItem
+    from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_report import Approval
 
@@ -30,6 +31,11 @@ class Invocation:
     invocation_id: str
     """The agent invocation this callback belongs to."""
     agent_name: str
+    execution_id: str | None
+    frame_id: FrameId | None
+    context_scope: str | None
+    application_context: object | None
+    history: list[ChatItem]
     function_call: dict[str, object] | None
     """The tool call, for a tool's preparation, read-back and body."""
     approval: Approval | None
@@ -94,11 +100,21 @@ OutputCandidate: TypeAlias = OutputCandidateText | OutputCandidateValue
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class SerializedOutput:
+    """An available JSON representation, including JSON null. Absence means the host value
+    has no persistent representation.
+    """
+
+    value: object
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ValidatedOutputAccepted:
     """Accepted: a `str` output's final text, or the validated value the host keeps."""
 
     text: str | None
     value: object | None
+    serialized: SerializedOutput | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

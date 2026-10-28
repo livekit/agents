@@ -13,7 +13,7 @@ license.workspace = true
 doctest = false
 
 [dependencies]
-lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # `preserve_order`: a tool schema's property order decides which parameter takes an answer
 # (`InputRequired(tool=)`), and history JSON round-trips the host's key order.
 serde_json = { workspace = true, features = ["preserve_order"] }

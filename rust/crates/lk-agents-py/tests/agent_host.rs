@@ -92,6 +92,11 @@ fn invocation(context: lk_agents_abi::HostRef) -> Invocation {
         operation: 7,
         invocation_id: "AI_1".into(),
         agent_name: "front".into(),
+        execution_id: None,
+        frame_id: None,
+        context_scope: None,
+        application_context: None,
+        history: Vec::new(),
         function_call: None,
         approval: None,
         host_context: Some(context),
@@ -205,7 +210,7 @@ fn records_cross_as_their_models_with_declared_presence() {
         let accepted = eval("models.ValidatedOutputAccepted(text=None, value=None)");
         assert!(matches!(
             accepted.extract::<ValidatedOutput>().unwrap(),
-            ValidatedOutput::Accepted { text: None, value: None }
+            ValidatedOutput::Accepted { text: None, value: None, serialized: None }
         ));
         let dict =
             eval("{'kind': 'retry', 'reason': 'no'}").extract::<ValidatedOutput>().unwrap_err();

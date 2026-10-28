@@ -15,6 +15,7 @@ pub mod recorder;
 pub mod storage;
 pub mod stt;
 pub mod telemetry;
+pub mod text_session;
 pub mod tts;
 pub mod vad;
 pub mod worker;
@@ -46,6 +47,7 @@ pub trait Implementations: 'static {
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
     type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
+    type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
     type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
 }
@@ -84,8 +86,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::_core_SessionReportUpload>()?;
     m.add_class::<telemetry::_core_PreparedTranscript>()?;
     m.add_class::<telemetry::_core_TelemetryWorker>()?;
+    m.add_class::<text_session::TextSessionRunner>()?;
+    m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
     m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
     m.add_class::<worker::ExitSignals>()?;
+    m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
+    m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     Ok(())
 }

@@ -35,6 +35,7 @@ pub mod storage;
 pub mod stt;
 pub mod telemetry;
 pub mod tokenize;
+pub mod text_session;
 pub mod tts;
 pub mod turn;
 pub mod types;

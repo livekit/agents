@@ -45,6 +45,11 @@ from ._generated._core_telemetry import (
     _core_TelemetryPolicy as _core_TelemetryPolicy,
     _core_TelemetryWorker as _core_TelemetryWorker,
 )
+from ._generated._core_text_session import *  # noqa: F401, F403
+from ._generated._core_text_session import (
+    _core_persist_text_session_state as _core_persist_text_session_state,
+    _core_restore_text_session_state as _core_restore_text_session_state,
+)
 from ._generated._core_worker import *  # noqa: F401, F403
 from ._generated.storage_class import (
     EventRow,

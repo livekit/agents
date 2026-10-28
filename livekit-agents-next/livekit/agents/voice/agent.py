@@ -203,6 +203,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._frozen = False
 
         # a type, or an output function whose return value is the output
+        self._output_type_explicit = output_type is not None
         self._output_spec: Any = output_type if output_type is not None else str
         self._output_type: type[Any] = _output_type_of(self._output_spec)
         self._host_instance: AgentHost | None = None
@@ -292,6 +293,29 @@ class Agent(Generic[Context_T, Output_T]):
     def output_type(self) -> type[Output_T]:
         """What ``run()`` returns as ``result.output``: ``str`` unless declared."""
         return self._output_type
+
+    def as_tool(
+        self,
+        *,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+        parameters: type[object] | None = None,
+        needs_approval: bool | llm.tool_context.ReadBack = False,
+        chat_history: Literal["fresh", "fork"] = "fresh",
+        merge_chat_history: bool = False,
+    ) -> llm.FunctionTool[..., Awaitable[Output_T]]:
+        """A typed child conversation managed by TextSession (text-session.md)."""
+        from .agent_tool import _LocalAgentTool
+
+        return _LocalAgentTool(
+            self,
+            tool_name=tool_name,
+            tool_description=tool_description,
+            parameters=parameters,
+            needs_approval=needs_approval,
+            chat_history=chat_history,
+            merge_chat_history=merge_chat_history,
+        )  # type: ignore[return-value]
 
     async def run(
         self,

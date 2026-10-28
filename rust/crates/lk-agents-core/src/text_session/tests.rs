@@ -102,7 +102,8 @@ impl Driver {
         self.effects.extend(effects.iter().cloned());
         if self.auto_release {
             for invocation_id in effects.iter().filter_map(|e| match e {
-                Effect::InvocationSettled { invocation_id, .. } => Some(invocation_id.clone()),
+                Effect::InvocationSettled { invocation_id, .. }
+                | Effect::InvocationParked { invocation_id, .. } => Some(invocation_id.clone()),
                 _ => None,
             }) {
                 self.send(Event::InvocationReleased { invocation_id });

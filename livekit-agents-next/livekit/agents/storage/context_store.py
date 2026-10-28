@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
-from typing import Any, TypeVar, cast, get_type_hints, overload
+from typing import (
+    Any,
+    Protocol,
+    Self,
+    TypeVar,
+    get_args,
+    get_type_hints,
+    overload,
+    runtime_checkable,
+)
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -150,12 +159,12 @@ def _identity(context: object) -> str:
     return f"{type(context).__module__}.{type(context).__qualname__}"
 
 
-def _field_adapters(context: object) -> dict[str, TypeAdapter[object]]:
+def _field_adapters(context: object) -> dict[str, TypeAdapter[object] | _RecordAdapter]:
     if not is_dataclass(context) or isinstance(context, type):
         raise TypeError("context persistence requires a dataclass instance")
     hints = get_type_hints(type(context), include_extras=True)
     return {
-        item.name: cast(TypeAdapter[object], TypeAdapter(hints[item.name]))
+        item.name: _field_adapter(hints[item.name])
         for item in fields(context)
         if item.metadata.get(_FIELD_MARKER, False)
     }
@@ -170,3 +179,48 @@ async def save_context(context: object, *, store: ContextStore) -> None:
     """Save marked fields using an explicitly supplied store."""
     await store.save_context(context)
 
+
+@runtime_checkable
+class _PersistedRecord(Protocol):
+    def to_json(self) -> str: ...
+
+    @classmethod
+    def from_json(cls, data: str) -> Self: ...
+
+
+@dataclass(frozen=True)
+class _RecordAdapter:
+    record: type[_PersistedRecord]
+    optional: bool
+
+    def json_schema(self) -> dict[str, JsonValue]:
+        schema: dict[str, JsonValue] = {
+            "type": "string",
+            "format": f"livekit.record:{self.record.__module__}.{self.record.__qualname__}",
+        }
+        return {"anyOf": [schema, {"type": "null"}]} if self.optional else schema
+
+    def validate_python(self, value: object) -> _PersistedRecord | None:
+        if value is None and self.optional:
+            return None
+        if isinstance(value, self.record):
+            return value
+        if isinstance(value, str):
+            return self.record.from_json(value)
+        raise TypeError(f"expected {self.record.__qualname__} or its saved JSON")
+
+    def dump_python(self, value: object, *, mode: str) -> JsonValue:
+        record = self.validate_python(value)
+        return None if record is None else record.to_json()
+
+
+def _field_adapter(annotation: object) -> TypeAdapter[object] | _RecordAdapter:
+    candidates = get_args(annotation) or (annotation,)
+    records = [
+        item for item in candidates if isinstance(item, type) and issubclass(item, _PersistedRecord)
+    ]
+    if records:
+        if len(records) != 1 or any(item not in (records[0], type(None)) for item in candidates):
+            raise TypeError("a persisted record field must name one record, optionally None")
+        return _RecordAdapter(records[0], type(None) in candidates)
+    return TypeAdapter(annotation)

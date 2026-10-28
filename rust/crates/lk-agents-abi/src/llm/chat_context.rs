@@ -12,6 +12,7 @@ use lk_agents_host_derive::Host;
 /// `ChatRole` (`chat_context.py:222`). Declaration order matches the reference's; the wire strings
 /// are the exact `Literal`s, the `to_core`/`from_core` contract.
 #[crate::host(wire_enum)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Developer,
@@ -71,6 +72,7 @@ impl ItemKind {
 /// `ImageContent.inference_detail` (`chat_context.py:203`). OpenAI-only today. An unknown value is
 /// refused, never defaulted: it reaches OpenAI's request body verbatim.
 #[crate::host(wire_enum)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InferenceDetail {
     #[default]
@@ -80,7 +82,9 @@ pub enum InferenceDetail {
 }
 
 /// A URL passes through as-is; a frame is encoded first, and the resize fields apply only to it.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ImageSource {
     Url(String),
     Frame(MediaRef),
@@ -130,6 +134,7 @@ impl<'py> pyo3::IntoPyObject<'py> for ImageSource {
 /// # With an external URL
 /// chat_image = ImageContent(image="https://example.com/image.jpg")
 /// ```
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
     pydantic,
@@ -165,13 +170,9 @@ pub struct ImageContent {
 
 // `chat_context.py:216`. No `tag_after`: `type` comes first, and pydantic field order is
 // `model_dump()` key order.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
-#[python(
-    pydantic,
-    name = "AudioContent",
-    tag = "type",
-    tag_value = "audio_content"
-)]
+#[python(pydantic, name = "AudioContent", tag = "type", tag_value = "audio_content")]
 #[binding(emit, model_dump)]
 pub struct AudioContent {
     // One side-table entry for the whole `list[rtc.AudioFrame]`; the reference field is `frame`.
@@ -182,7 +183,9 @@ pub struct AudioContent {
     pub transcript: Option<String>,
 }
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ChatContent {
     Text(String),
     Image(ImageContent),
@@ -217,7 +220,14 @@ impl ChatContent {
         mime_type: Option<String>,
     ) -> Self {
         let image = ImageSource::Url(url);
-        ChatContent::Image(ImageContent { id, image, inference_width, inference_height, inference_detail, mime_type })
+        ChatContent::Image(ImageContent {
+            id,
+            image,
+            inference_width,
+            inference_height,
+            inference_detail,
+            mime_type,
+        })
     }
 
     /// `ImageContent` whose `image` is an `rtc.VideoFrame`; only its side-table key crosses.
@@ -231,7 +241,14 @@ impl ChatContent {
         mime_type: Option<String>,
     ) -> Self {
         let image = ImageSource::Frame(frame);
-        ChatContent::Image(ImageContent { id, image, inference_width, inference_height, inference_detail, mime_type })
+        ChatContent::Image(ImageContent {
+            id,
+            image,
+            inference_width,
+            inference_height,
+            inference_detail,
+            mime_type,
+        })
     }
 
     /// `AudioContent`: one side-table entry for the whole `list[rtc.AudioFrame]`.
@@ -252,12 +269,9 @@ impl ChatContent {
 }
 
 // `MetricsMetadata` (`chat_context.py:226`). A field with no value contributes no key.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    name = "MetricsMetadata"
-)]
+#[python(typed_dict, total = "False", name = "MetricsMetadata")]
 #[binding(emit, extract, from_items, model_dump)]
 pub struct MetricsMetadata {
     #[binding(skip_if_none)]
@@ -270,12 +284,9 @@ pub struct MetricsMetadata {
 
 // `chat_context.py:231`, `total=False`: absent is distinct from null (and an absent list from an
 // empty one), so every field is `skip_if_none`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(
-    typed_dict,
-    total = "False",
-    name = "MetricsReport"
-)]
+#[python(typed_dict, total = "False", name = "MetricsReport")]
 #[binding(emit, extract, from_items, skip_if_none, model_dump)]
 pub struct MetricsReport {
     #[python(ty = "float")]
@@ -353,6 +364,7 @@ pub struct MetricsReport {
 }
 
 // `chat_context.py:310`. The text properties keep their bodies in `_bindings` (`text_content` imports `strip_expr_markup` lazily: a cycle).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(
     pydantic,
@@ -373,7 +385,7 @@ pub struct MetricsReport {
         doc = "Returns a string of all text content in the message, exactly as generated\n(assistant messages may contain expressive ``<expr/>`` tags).\n\nMultiple text content items will be joined by a newline."
     )
 )]
-#[binding(emit, model_dump)]
+#[binding(emit, extract, from_items, model_dump)]
 pub struct ChatMessage {
     #[python(default_factory = "lambda: utils.shortuuid(\"item_\")", import = "..:utils")]
     pub id: String,
@@ -416,7 +428,11 @@ impl ChatMessage {
     /// Display text strips expressive markup only from assistant messages.
     pub fn text_content(&self) -> Option<String> {
         self.raw_text_content().map(|text| {
-            if self.role == Role::Assistant { crate::tts::markup::strip_expr_markup(&text) } else { text }
+            if self.role == Role::Assistant {
+                crate::tts::markup::strip_expr_markup(&text)
+            } else {
+                text
+            }
         })
     }
 }
@@ -473,6 +489,7 @@ impl ChatMessage {
 }
 
 // `chat_context.py:361`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
     pydantic,
@@ -517,6 +534,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for FunctionCall {
 }
 
 // `chat_context.py:374`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
     pydantic,
@@ -564,6 +582,7 @@ impl FunctionCallOutput {
 }
 
 // `chat_context.py:389`; `...Item` to stay apart from `AgentHandoffEvent`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 // `tag_after = "id"`: `chat_context.py` writes `id` then `type`, and field order is user-visible
 // (`model_dump()` and `repr`).
@@ -587,6 +606,7 @@ pub struct AgentHandoffItem {
 }
 
 // `chat_context.py:397`.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Host)]
 #[python(
     pydantic,
@@ -615,12 +635,15 @@ pub struct AgentConfigUpdate {
         default_factory = "list"
     )]
     #[python(required)]
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub tools: Option<HostRef>,
 }
 
 /// Not boxed: boxing `ChatMessage` would cost an allocation per message on the warm `to_core` path.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ChatItem {
     Message(ChatMessage),
     FunctionCall(FunctionCall),
@@ -674,7 +697,15 @@ impl ChatItem {
         group_id: Option<String>,
     ) -> Self {
         let extra = extra.unwrap_or_default();
-        ChatItem::FunctionCall(FunctionCall { id, call_id, arguments, name, created_at, extra, group_id })
+        ChatItem::FunctionCall(FunctionCall {
+            id,
+            call_id,
+            arguments,
+            name,
+            created_at,
+            extra,
+            group_id,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -689,11 +720,24 @@ impl ChatItem {
         reply_required: bool,
     ) -> Self {
         let name = name.unwrap_or_default();
-        ChatItem::FunctionCallOutput(FunctionCallOutput { id, name, call_id, output, is_error, created_at, reply_required })
+        ChatItem::FunctionCallOutput(FunctionCallOutput {
+            id,
+            name,
+            call_id,
+            output,
+            is_error,
+            created_at,
+            reply_required,
+        })
     }
 
     #[host(method(kw_only))]
-    pub fn agent_handoff(id: String, new_agent_id: String, created_at: SystemTime, old_agent_id: Option<String>) -> Self {
+    pub fn agent_handoff(
+        id: String,
+        new_agent_id: String,
+        created_at: SystemTime,
+        old_agent_id: Option<String>,
+    ) -> Self {
         ChatItem::AgentHandoff(AgentHandoffItem { id, old_agent_id, new_agent_id, created_at })
     }
 
@@ -708,7 +752,14 @@ impl ChatItem {
         tools_removed: Option<Vec<String>>,
         tools: Option<HostRef>,
     ) -> Self {
-        ChatItem::AgentConfigUpdate(AgentConfigUpdate { id, instructions, tools_added, tools_removed, created_at, tools })
+        ChatItem::AgentConfigUpdate(AgentConfigUpdate {
+            id,
+            instructions,
+            tools_added,
+            tools_removed,
+            created_at,
+            tools,
+        })
     }
 
     /// The pydantic `type` literal, so `from_core` can index a `{type: model}` table.
@@ -808,8 +859,8 @@ chat_item_from!(
     AgentConfigUpdate => AgentConfigUpdate,
 );
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashSet;
+mod history;
+pub use history::{ItemFacts, copy_excludes_facts, copy_plan, merge_plan, truncate_plan};
 
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "chat_items", path = "livekit.agents.llm.chat_context"))]
@@ -920,155 +971,6 @@ impl From<Vec<ChatItem>> for ChatContext {
     }
 }
 
-/// What a host that owns its items reports; the rules over them stay here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ItemFacts<'a> {
-    pub kind: ItemKind,
-    pub role: Option<Role>,
-    /// `len(item.content)`: the reference tests the list, so one empty string survives.
-    pub content_len: usize,
-    pub tool_name: Option<&'a str>,
-    /// A function call's or output's `call_id`: an output with no name pairs with its call by it.
-    pub call_id: Option<&'a str>,
-    pub id: &'a str,
-    pub created_at: SystemTime,
-}
-
-impl<'a> ItemFacts<'a> {
-    pub fn of(item: &'a ChatItem) -> Self {
-        ItemFacts {
-            kind: item.kind(),
-            role: item.as_message().map(|m| m.role),
-            content_len: item.as_message().map_or(0, |m| m.content.len()),
-            tool_name: item.tool_name(),
-            call_id: match item {
-                ChatItem::FunctionCall(f) => Some(&f.call_id),
-                ChatItem::FunctionCallOutput(f) => Some(&f.call_id),
-                _ => None,
-            },
-            id: item.id(),
-            created_at: item.created_at(),
-        }
-    }
-
-    fn is_instruction(&self) -> bool {
-        self.kind == ItemKind::Message && matches!(self.role, Some(Role::System | Role::Developer))
-    }
-
-    fn is_function_call_pair(&self) -> bool {
-        self.kind.is_function_call_pair()
-    }
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `valid_call_ids`: the calls `opts.tools` keeps, which an output with no name is paired by.
-pub fn copy_excludes_facts(f: &ItemFacts<'_>, opts: &CopyOptions, valid_call_ids: &HashSet<&str>) -> bool {
-    let is_message = f.kind == ItemKind::Message;
-
-    if opts.exclude_function_call && f.is_function_call_pair() {
-        return true;
-    }
-    // `role in ("system", "developer")`, and a *message* only -- the other kinds have no role.
-    if opts.exclude_instructions && f.is_instruction() {
-        return true;
-    }
-    // `not item.content` -- an empty content *list*. A message holding one empty string survives.
-    if opts.exclude_empty_message && is_message && f.content_len == 0 {
-        return true;
-    }
-    if opts.exclude_handoff && f.kind == ItemKind::AgentHandoff {
-        return true;
-    }
-    if opts.exclude_config_update && f.kind == ItemKind::AgentConfigUpdate {
-        return true;
-    }
-    if let Some(valid) = &opts.tools {
-        let named = |name: &str| valid.iter().any(|t| t == name);
-        match f.kind {
-            ItemKind::FunctionCall => return !f.tool_name.is_some_and(named),
-            // `FunctionCallOutput.name` is optional: one with none goes with its call
-            ItemKind::FunctionCallOutput => {
-                return match f.tool_name.filter(|n| !n.is_empty()) {
-                    Some(name) => !named(name),
-                    None => !f.call_id.is_some_and(|c| valid_call_ids.contains(c)),
-                };
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-fn merge_excludes_facts(f: &ItemFacts<'_>, opts: &MergeOptions) -> bool {
-    (opts.exclude_function_call && f.is_function_call_pair())
-        || (opts.exclude_instructions && f.is_instruction())
-        || (opts.exclude_config_update && f.kind == ItemKind::AgentConfigUpdate)
-}
-
-// The operations as index plans over the facts, applied by whoever owns the items. Positions, not
-// ids, so duplicate ids pick the right object.
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-pub fn copy_plan(facts: &[ItemFacts<'_>], opts: &CopyOptions) -> Vec<usize> {
-    let valid_call_ids: HashSet<&str> = match &opts.tools {
-        Some(valid) => facts
-            .iter()
-            .filter(|f| f.kind == ItemKind::FunctionCall && f.tool_name.is_some_and(|n| valid.iter().any(|t| t == n)))
-            .filter_map(|f| f.call_id)
-            .collect(),
-        None => HashSet::new(),
-    };
-    (0..facts.len()).filter(|&i| !copy_excludes_facts(&facts[i], opts, &valid_call_ids)).collect()
-}
-
-/// `None` when under the limit. Leading function calls are dropped; the first instruction message
-/// comes back unless the window holds its id (#4845). Sliced like `self._items[-max_items:]`, but a
-/// zero budget keeps no conversational item (only that instruction); a negative `n` drops the
-/// first `|n|` (the host refuses one).
-pub fn truncate_plan(facts: &[ItemFacts<'_>], max_items: i64) -> Option<Vec<usize>> {
-    let n = facts.len();
-    if (n as i64) <= max_items {
-        return None;
-    }
-    let instructions = facts.iter().position(ItemFacts::is_instruction);
-    let start = match max_items {
-        0 => n,
-        m if m > 0 => n - m as usize,
-        m => m.unsigned_abs().min(n as u64) as usize,
-    };
-    let mut kept: Vec<usize> = (start..n).collect();
-    let lead = kept.iter().take_while(|&&i| facts[i].is_function_call_pair()).count();
-    kept.drain(..lead);
-    if let Some(ins) = instructions
-        && !kept.iter().any(|&i| facts[i].id == facts[ins].id)
-    {
-        kept.insert(0, ins);
-    }
-    Some(kept)
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `merge`: `(index, j)` pairs -- insert `theirs[j]` at `index` of the growing list, in order.
-/// De-duplicated by id; ties go after.
-pub fn merge_plan(
-    mine: &[ItemFacts<'_>],
-    theirs: &[ItemFacts<'_>],
-    opts: &MergeOptions,
-) -> Vec<(usize, usize)> {
-    let mut existing: HashSet<&str> = mine.iter().map(|f| f.id).collect();
-    let mut stamps: Vec<SystemTime> = mine.iter().map(|f| f.created_at).collect();
-    let mut plan = Vec::new();
-    for (j, f) in theirs.iter().enumerate() {
-        if merge_excludes_facts(f, opts) || !existing.insert(f.id) {
-            continue;
-        }
-        let idx = stamps.iter().rposition(|&at| at <= f.created_at).map_or(0, |i| i + 1);
-        stamps.insert(idx, f.created_at);
-        plan.push((idx, j));
-    }
-    plan
-}
-
 /// `(type, id, role, len(content), name, created_at, call_id)`.
 pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64, Option<String>);
 
@@ -1092,7 +994,18 @@ fn host_facts(facts: &[HostFacts]) -> Result<Vec<ItemFacts<'_>>, String> {
 
 /// `ChatContext.copy` as an index plan over the host's own items.
 #[allow(clippy::too_many_arguments)]
-#[crate::host(export(pid = false, name = "chat_ctx_copy_plan", kw_only = "exclude_function_call", defaults(exclude_function_call = false, exclude_instructions = false, exclude_empty_message = false, exclude_handoff = false, exclude_config_update = false)))]
+#[crate::host(export(
+    pid = false,
+    name = "chat_ctx_copy_plan",
+    kw_only = "exclude_function_call",
+    defaults(
+        exclude_function_call = false,
+        exclude_instructions = false,
+        exclude_empty_message = false,
+        exclude_handoff = false,
+        exclude_config_update = false
+    )
+))]
 pub fn copy_plan_of(
     facts: Vec<HostFacts>,
     exclude_function_call: bool,
@@ -1102,18 +1015,37 @@ pub fn copy_plan_of(
     exclude_config_update: bool,
     tools: Option<Vec<String>>,
 ) -> Result<Vec<usize>, String> {
-    let opts = CopyOptions { exclude_function_call, exclude_instructions, exclude_empty_message, exclude_handoff, exclude_config_update, tools };
+    let opts = CopyOptions {
+        exclude_function_call,
+        exclude_instructions,
+        exclude_empty_message,
+        exclude_handoff,
+        exclude_config_update,
+        tools,
+    };
     Ok(copy_plan(&host_facts(&facts)?, &opts))
 }
 
 /// `ChatContext.truncate` as an index plan; `None` when under the limit.
 #[crate::host(export(pid = false, name = "chat_ctx_truncate_plan"))]
-pub fn truncate_plan_of(facts: Vec<HostFacts>, max_items: i64) -> Result<Option<Vec<usize>>, String> {
+pub fn truncate_plan_of(
+    facts: Vec<HostFacts>,
+    max_items: i64,
+) -> Result<Option<Vec<usize>>, String> {
     Ok(truncate_plan(&host_facts(&facts)?, max_items))
 }
 
 /// `ChatContext.merge` as `(index, j)` insertions.
-#[crate::host(export(pid = false, name = "chat_ctx_merge_plan", kw_only = "exclude_function_call", defaults(exclude_function_call = false, exclude_instructions = false, exclude_config_update = false)))]
+#[crate::host(export(
+    pid = false,
+    name = "chat_ctx_merge_plan",
+    kw_only = "exclude_function_call",
+    defaults(
+        exclude_function_call = false,
+        exclude_instructions = false,
+        exclude_config_update = false
+    )
+))]
 pub fn merge_plan_of(
     mine: Vec<HostFacts>,
     theirs: Vec<HostFacts>,
@@ -1147,7 +1079,10 @@ impl PyChatContent {
 impl PyChatItem {
     /// Every field of this variant keyed by its pydantic name (without `type`), so `from_core` is
     /// `Model(**item.fields())` once `content` is mapped.
-    fn fields<'py>(&self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    fn fields<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+    ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
         use pyo3::IntoPyObject as _;
         match &self.inner {
             ChatItem::Message(m) => m.into_pyobject(py),
@@ -1160,6 +1095,6 @@ impl PyChatItem {
 }
 
 #[cfg(test)]
-mod item_tests;
-#[cfg(test)]
 mod context_tests;
+#[cfg(test)]
+mod item_tests;

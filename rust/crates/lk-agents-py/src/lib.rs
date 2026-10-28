@@ -61,6 +61,7 @@ impl generated::Implementations for Selected {
     type SessionReportUpload = lk_agents_runtime::telemetry::upload::SessionReportUploader;
     type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;
     type LoopMonitorThresholds = lk_agents_runtime::telemetry::loop_monitor::LoopMonitorOptions;
+    type TextSessionRunner = lk_agents_runtime::text_session::Runner;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
     type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;

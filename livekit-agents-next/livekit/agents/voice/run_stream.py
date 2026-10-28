@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import JsonValue
 
-from .._generated import agent_run as records
+from .._generated import agent_run as records, text_session as session_records
 from ..log import logger
 
 if TYPE_CHECKING:
@@ -108,6 +108,7 @@ class RunStream(Generic[ResultT]):
         self._settled: ResultT | None = None
         self._error: BaseException | None = None
         self._closing: asyncio.Task[None] | None = None
+        self._presented: dict[str, str] = {}
 
     async def __aenter__(self) -> RunStream[ResultT]:
         if self._entered:
@@ -169,15 +170,22 @@ class RunStream(Generic[ResultT]):
 
     async def _text(self, delta: bool) -> AsyncIterator[str]:
         message_id, text = None, ""
-        async for event in self._events():
-            if event.type != "text_delta":
-                continue
-            if event.message_id != message_id:
-                message_id, text = event.message_id, ""
-            text += event.delta
-            yield event.delta if delta else text
+        events = self._events()
+        try:
+            async for event in events:
+                if event.type != "text_delta":
+                    continue
+                if event.message_id != message_id:
+                    message_id, text = event.message_id, ""
+                text += event.delta
+                self._presented[event.message_id] = (
+                    self._presented.get(event.message_id, "") + event.delta
+                )
+                yield event.delta if delta else text
+        finally:
+            await events.aclose()
 
-    async def _events(self) -> AsyncIterator[StreamEvent]:
+    async def _events(self) -> AsyncGenerator[StreamEvent, None]:
         try:
             while not self._done():
                 event = await self._next()
@@ -196,7 +204,6 @@ class RunStream(Generic[ResultT]):
             try:
                 update = await started.updates.recv()
             except Exception as e:
-                # the run failed on its model: the provider's own error
                 await started.cleanup()
                 self._error = e
                 return None
@@ -210,18 +217,57 @@ class RunStream(Generic[ResultT]):
                 case records.RunUpdateStream(event=event):
                     self._sequence += 1
                     return _event(event, self._sequence, self._agent_name, started.id)
-                case records.RunUpdateFinished(settled=settled):
+                case session_records.TextSessionUpdateStream():
+                    return _event(
+                        update.event,
+                        update.sequence,
+                        update.agent_name,
+                        update.invocation_id,
+                        update.frame_id.value,
+                    )
+                case session_records.TextSessionUpdateInvocationSettled(
+                    invocation_id=invocation_id, usage=usage
+                ):
+                    if started.on_usage is not None:
+                        started.on_usage(usage)
+                    self._release(invocation_id)
+                case session_records.TextSessionUpdateParked(
+                    invocation_id=invocation_id, usage=usage
+                ):
+                    if started.on_usage is not None:
+                        started.on_usage(usage)
+                    self._release(invocation_id)
+                case (
+                    records.RunUpdateFinished(settled=settled)
+                    | session_records.TextSessionUpdateFinished(settled=settled)
+                ):
                     await started.cleanup()
                     self._settled = started.settle(settled)
                     return None
-                case records.RunUpdateFailed(error=error):
+                case (
+                    records.RunUpdateFailed(error=error)
+                    | session_records.TextSessionUpdateFailed(error=error)
+                ):
                     await started.cleanup()
                     self._error = started.fail(error)
                     return None
-                case records.RunUpdateIncompleteCleanup(pending=pending):
+                case (
+                    records.RunUpdateIncompleteCleanup(pending=pending)
+                    | session_records.TextSessionUpdateIncompleteCleanup(pending=pending)
+                ):
                     logger.error(
                         "the run's cleanup missed its deadline", extra={"pending": pending}
                     )
+
+    def _release(self, invocation_id: str) -> None:
+        started = self._started
+        assert started is not None and started.release is not None
+        started.release(
+            session_records.TextSessionDelivery(
+                invocation_id=invocation_id, messages=self._presented
+            )
+        )
+        self._presented = {}
 
     async def _close(self) -> None:
         if self._closing is None:
@@ -256,19 +302,26 @@ class _Started(Generic[ResultT]):
     what it holds for its lifetime (its toolsets), awaited once it settled; idempotent."""
 
     id: str
-    updates: _core.AgentRunUpdates | None
-    settle: Callable[[records.RunSettled | None], ResultT]
-    fail: Callable[[records.RunError], BaseException]
+    updates: _core.AgentRunUpdates | _core.TextSessionUpdates | None
+    settle: Callable[[Any], ResultT]
+    fail: Callable[[Any], BaseException]
     cleanup: Callable[[], Awaitable[None]] = _nothing
+    release: Callable[[session_records.TextSessionDelivery], None] | None = None
+    on_usage: Callable[[records.RunUsage], None] | None = None
 
 
 def _event(
-    event: records.StreamEvent, sequence: int, agent_name: str, invocation_id: str
+    event: records.StreamEvent,
+    sequence: int,
+    agent_name: str,
+    invocation_id: str,
+    frame_id: str | None = None,
 ) -> StreamEvent:
     common: dict[str, Any] = {
         "sequence": sequence,
         "agent_name": agent_name,
         "invocation_id": invocation_id,
+        "frame_id": frame_id,
     }
     match event:
         case records.StreamEventTextDelta():

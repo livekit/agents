@@ -232,7 +232,11 @@ impl AgentHost for FakeHost {
         let OutputCandidate::Value(_) = candidate else {
             return Ok(ValidatedOutput::Retry("not text".into()));
         };
-        Ok(ValidatedOutput::Accepted { text: None, value: Some(self.host_ref()) })
+        Ok(ValidatedOutput::Accepted {
+            text: None,
+            value: Some(self.host_ref()),
+            serialized: Some(lk_agents_abi::agent::SerializedOutput { value: serde_json::json!({"accepted": true}) }),
+        })
     }
 
     fn cancel(&self, invocation: &Invocation) {
@@ -295,6 +299,11 @@ fn setup(
         operation: 0,
         invocation_id: "run_1".into(),
         agent_name: "scheduler".into(),
+        execution_id: None,
+        frame_id: None,
+        context_scope: None,
+        application_context: None,
+        history: Vec::new(),
         function_call: None,
         approval: None,
         host_context: Some(HostRef::new(0, &registry)),
