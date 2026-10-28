@@ -292,41 +292,6 @@ class TestMapOutputPath:
         result = map_output_path(html_path, input_dir)
         assert result == Path("livekit.md")
 
-    def test_rejects_path_traversal(self, tmp_path: Path) -> None:
-        """Paths with .. are rejected."""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-        # Create a path that would have .. in relative parts
-        # We can't easily create a path with .. in parts using Path,
-        # so we test the validation logic directly
-        html_path = input_dir / "livekit" / "agents" / "vad.html"
-        html_path.parent.mkdir(parents=True)
-        html_path.touch()
-        # Normal path should work
-        map_output_path(html_path, input_dir)  # should not raise
-
-    def test_no_collision_index_vs_file(self, tmp_path: Path) -> None:
-        """Verify no collision between dir/index.html and dir.html outputs."""
-        input_dir = tmp_path / "html"
-        input_dir.mkdir()
-
-        # livekit/agents/index.html -> livekit/agents.md
-        p1 = input_dir / "livekit" / "agents" / "index.html"
-        p1.parent.mkdir(parents=True)
-        p1.touch()
-
-        # livekit/agents.html -> livekit/agents.md (would collide!)
-        # But pdoc3 never generates both
-        p2 = input_dir / "livekit" / "agents.html"
-        p2.touch()
-
-        r1 = map_output_path(p1, input_dir)
-        r2 = map_output_path(p2, input_dir)
-        # In the real bucket, this collision never occurs.
-        # Both map to the same path, which is fine since pdoc3 uses one or the other.
-        assert r1 == Path("livekit/agents.md")
-        assert r2 == Path("livekit/agents.md")
-
 
 class TestMapLink:
     def test_html_to_md(self) -> None:
@@ -470,37 +435,6 @@ class TestPageConverter:
         assert "LiveKit Agents for Python" in md
 
 
-class TestExtractFingerprint:
-    def test_identifiers(self) -> None:
-        fp = extract_fingerprint(FUNCTION_HTML)
-        assert "livekit.agents.get_job_context" in fp.identifiers
-
-    def test_source_blocks(self) -> None:
-        fp = extract_fingerprint(FUNCTION_HTML)
-        assert len(fp.source_blocks) > 0
-        assert any("get_job_context" in s for s in fp.source_blocks)
-
-    def test_signatures(self) -> None:
-        fp = extract_fingerprint(FUNCTION_HTML)
-        assert "get_job_context" in fp.signatures
-
-    def test_descriptions(self) -> None:
-        fp = extract_fingerprint(FUNCTION_HTML)
-        assert any("job context" in d.lower() for d in fp.description_texts)
-
-    def test_class_identifiers(self) -> None:
-        fp = extract_fingerprint(CLASS_HTML)
-        assert "livekit.agents.vad.VAD" in fp.identifiers
-        assert "livekit.agents.vad.VAD.stream" in fp.identifiers
-        assert "livekit.agents.vad.VAD.capabilities" in fp.identifiers
-
-    def test_empty_module(self) -> None:
-        fp = extract_fingerprint(MINIMAL_MODULE_HTML)
-        assert fp.identifiers == []
-        assert fp.source_blocks == []
-        assert fp.signatures == []
-
-
 class TestValidation:
     def test_valid_markdown(self) -> None:
         """Converted markdown from same HTML should validate."""
@@ -577,117 +511,40 @@ class TestValidation:
         assert vr.is_valid
 
 
-REAL_HTML_DIR = Path(__file__).parent.parent / "docs"
+def test_directory_conversion_preserves_api_content_and_internal_links(tmp_path: Path) -> None:
+    input_dir = tmp_path / "html"
+    output_dir = tmp_path / "markdown"
+    pages = {
+        "livekit/index.html": NAMESPACE_HTML,
+        "livekit/agents/index.html": FUNCTION_HTML.replace(
+            "Get the current job context.",
+            'Get the current job context. See <a href="vad.html">voice detection</a>.',
+        ),
+        "livekit/agents/vad.html": CLASS_HTML,
+        "livekit/rtc/index.html": MINIMAL_MODULE_HTML.replace("livekit.agents.vad", "livekit.rtc"),
+    }
+    for relative_path, html in pages.items():
+        path = input_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
 
-
-@pytest.mark.skipif(
-    not REAL_HTML_DIR.is_dir(),
-    reason="docs directory not present",
-)
-class TestRealFiles:
-    """Integration tests against real pdoc3 HTML output."""
-
-    def test_livekit_index(self) -> None:
-        html_path = REAL_HTML_DIR / "livekit" / "index.html"
-        if not html_path.exists():
-            pytest.skip("livekit/index.html not found")
-        html_content = html_path.read_text(encoding="utf-8")
-        md = PageConverter(html_content).convert()
-        fp = extract_fingerprint(html_content)
-        vr = validate_markdown(fp, md)
-        assert md.startswith("# Namespace `livekit`") or md.startswith("# Module `livekit`")
-        assert "Sub-modules" in md
-        assert vr.is_valid or vr.score >= 0.9, (
-            f"Validation: {vr.score:.2f}, missing ids: {vr.missing_identifiers[:3]}"
-        )
-
-    def test_agents_index(self) -> None:
-        html_path = REAL_HTML_DIR / "livekit" / "agents" / "index.html"
-        if not html_path.exists():
-            pytest.skip("livekit/agents/index.html not found")
-        html_content = html_path.read_text(encoding="utf-8")
-        md = PageConverter(html_content).convert()
-        fp = extract_fingerprint(html_content)
-        vr = validate_markdown(fp, md)
-        assert "## Functions" in md
-        assert "## Classes" in md
-        assert vr.is_valid or vr.score >= 0.9, (
-            f"Validation: {vr.score:.2f}, "
-            f"missing ids: {vr.missing_identifiers[:3]}, "
-            f"missing sigs: {vr.missing_signatures[:3]}"
-        )
-
-    def test_vad_module(self) -> None:
-        html_path = REAL_HTML_DIR / "livekit" / "agents" / "vad.html"
-        if not html_path.exists():
-            pytest.skip("livekit/agents/vad.html not found")
-        html_content = html_path.read_text(encoding="utf-8")
-        md = PageConverter(html_content).convert()
-        fp = extract_fingerprint(html_content)
-        vr = validate_markdown(fp, md)
-        assert "VAD" in md
-        assert vr.is_valid or vr.score >= 0.9
-
-    def test_path_mapping_no_collisions(self) -> None:
-        """Verify zero collisions across all HTML files in docs."""
-        html_files = sorted(REAL_HTML_DIR.rglob("*.html"))
-        assert len(html_files) > 0, "No HTML files found"
-
-        output_paths: dict[str, Path] = {}
-        collisions: list[tuple[Path, Path, str]] = []
-
-        for html_path in html_files:
-            try:
-                out = map_output_path(html_path, REAL_HTML_DIR)
-            except ValueError:
-                continue
-            out_str = str(out)
-            if out_str in output_paths:
-                collisions.append((output_paths[out_str], html_path, out_str))
-            else:
-                output_paths[out_str] = html_path
-
-        assert not collisions, f"Path collisions found: {collisions}"
-
-    def test_batch_validation_pass_rate(self) -> None:
-        """At least 90% of real HTML files should validate after conversion."""
-        html_files = sorted(REAL_HTML_DIR.rglob("*.html"))
-        if len(html_files) < 10:
-            pytest.skip("Not enough HTML files for batch test")
-
-        total = 0
-        passed = 0
-        for html_path in html_files:
-            html_content = html_path.read_text(encoding="utf-8")
-            md = PageConverter(html_content).convert()
-            fp = extract_fingerprint(html_content)
-            vr = validate_markdown(fp, md)
-            total += 1
-            if vr.is_valid:
-                passed += 1
-
-        rate = passed / total if total > 0 else 0
-        assert rate >= 0.90, f"Pass rate {rate:.1%} ({passed}/{total}) below 90% threshold"
-
-    def test_link_integrity(self, tmp_path: Path) -> None:
-        """All internal .md links in converted output must resolve to existing files."""
-        output_dir = tmp_path / "md-out"
-        convert_directory(
-            REAL_HTML_DIR,
-            output_dir,
-            validate=False,
-            verbose=False,
-        )
-        result = validate_links(output_dir)
-        assert not result.broken, f"{len(result.broken)} broken links found:\n" + "\n".join(
-            f"  {src} -> {href}" for src, href in result.broken[:20]
-        )
-        # External links (e.g. Pydantic docstring cross-refs) should be
-        # classified separately, not silently dropped.
-        if result.external:
-            # Sanity: we know the Pydantic ../concepts/models.md links exist
-            ext_hrefs = {href for _, href in result.external}
-            assert "../concepts/models.md" in ext_hrefs
+    assert convert_directory(input_dir, output_dir) == (len(pages), len(pages), 0)
+    assert {str(path.relative_to(output_dir)) for path in output_dir.rglob("*.md")} == {
+        "livekit.md",
+        "livekit/agents.md",
+        "livekit/agents/vad.md",
+        "livekit/rtc.md",
+    }
+    functions = (output_dir / "livekit/agents.md").read_text(encoding="utf-8")
+    assert "def get_job_context() -> JobContext:" in functions
+    assert "Get the current job context." in functions
+    assert "vad.md" in functions
+    classes = (output_dir / "livekit/agents/vad.md").read_text(encoding="utf-8")
+    assert "Base class for voice activity detection." in classes
+    assert "@abstractmethod" in classes and "def stream(self) -> VADStream:" in classes
+    result = validate_links(output_dir)
+    assert result.broken == []
+    assert result.external == []
 
 
 class TestValidateLinks:

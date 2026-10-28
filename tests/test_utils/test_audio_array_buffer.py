@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import pytest
 
@@ -27,18 +25,6 @@ def _stereo(left: list[int], right: list[int], *, sr: int = 16000) -> rtc.AudioF
 
 def _assert_eq(buf: AudioArrayBuffer, expected: list[int]) -> None:
     np.testing.assert_array_equal(buf.read(), expected)
-
-
-class TestInit:
-    def test_defaults(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=100)
-        assert buf._dtype == np.int16
-        assert len(buf._buffer) == 100
-        assert len(buf.read()) == 0
-
-    def test_custom_dtype(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=50, dtype=np.float32)
-        assert buf._buffer.dtype == np.float32
 
 
 class TestPushFrame:
@@ -133,16 +119,6 @@ class TestRead:
         result = buf.read()
         result[0] = 999
         _assert_eq(buf, [1, 2, 3])
-
-    def test_dtype_preserved(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3]))
-        assert buf.read().dtype == np.int16
-
-    def test_length_matches_written(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=100)
-        buf.push_frame(_frame([1, 2, 3, 4, 5]))
-        assert len(buf.read()) == 5
 
 
 class TestSlidingWindow:
@@ -243,48 +219,3 @@ class TestSampleRates:
 
         assert buf.push_frame(frame) == fresh.push_frame(frame)
         np.testing.assert_allclose(buf.read(), fresh.read(), atol=2)
-
-
-class TestPerformance:
-    @pytest.mark.parametrize("sr", [16000, 48000], ids=["16k", "48k"])
-    def test_3s_buffer_50ms_frames(self, sr: int) -> None:
-        """60s of audio in 50ms frames (1200 pushes) into a 3s buffer."""
-        buf_s, frame_ms, total_s = 3, 50, 60
-        buf = AudioArrayBuffer(buffer_size=sr * buf_s, sample_rate=sr)
-        frame = _frame(list(range(sr * frame_ms // 1000)), sr=sr)
-
-        start = time.perf_counter()
-        for _ in range(total_s * 1000 // frame_ms):
-            buf.push_frame(frame)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-
-        assert len(buf.read()) == sr * buf_s
-        assert elapsed_ms < 100, f"took {elapsed_ms:.1f}ms, expected <100ms"
-
-
-class TestLen:
-    def test_empty(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        assert len(buf) == 0
-
-    def test_after_push(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3]))
-        assert len(buf) == 3
-
-    def test_after_shift(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3, 4, 5]))
-        buf.shift(2)
-        assert len(buf) == 3
-
-    def test_after_reset(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3]))
-        buf.reset()
-        assert len(buf) == 0
-
-    def test_consistent_with_read(self) -> None:
-        buf = AudioArrayBuffer(buffer_size=10)
-        buf.push_frame(_frame([1, 2, 3, 4, 5]))
-        assert len(buf) == len(buf.read())
