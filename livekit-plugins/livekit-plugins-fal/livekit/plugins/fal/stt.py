@@ -71,8 +71,7 @@ class WizperSTT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         try:
-            if is_given(language):
-                self._opts.language = LanguageCode(language)
+            request_language = LanguageCode(language) if is_given(language) else self._opts.language
             data_uri = fal_client.encode(
                 rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
@@ -81,7 +80,7 @@ class WizperSTT(stt.STT):
                 json={
                     "audio_url": data_uri,
                     "task": self._opts.task,
-                    "language": self._opts.language.language,
+                    "language": request_language.language,
                     "chunk_level": self._opts.chunk_level,
                     "version": self._opts.version,
                 },
@@ -94,7 +93,7 @@ class WizperSTT(stt.STT):
             )
             response.raise_for_status()
             text = response.json().get("text", "")
-            return self._transcription_to_speech_event(text=text)
+            return self._transcription_to_speech_event(text=text, language=request_language)
         except httpx.TimeoutException as e:
             raise APITimeoutError() from e
         except httpx.HTTPStatusError as e:
@@ -107,10 +106,10 @@ class WizperSTT(stt.STT):
         except httpx.RequestError as e:
             raise APIConnectionError() from e
 
-    def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
+    def _transcription_to_speech_event(self, text: str, language: LanguageCode) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,
-            alternatives=[stt.SpeechData(text=text, language=self._opts.language)],
+            alternatives=[stt.SpeechData(text=text, language=language)],
         )
 
     async def aclose(self) -> None:
