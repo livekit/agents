@@ -350,7 +350,7 @@ class TTS(tts.TTS):
 
         return self._session
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
         url = self._opts.base_url
         if url.startswith("http"):
             url = url.replace("http", "ws", 1)
@@ -389,6 +389,17 @@ class TTS(tts.TTS):
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "minimax streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -430,7 +441,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(start_msg))
 
             try:
-                await asyncio.wait_for(task_started, self._conn_options.timeout)
+                await asyncio.wait_for(task_started, self._conn_options.read_timeout)
             except asyncio.TimeoutError as e:
                 raise APITimeoutError("task_start timed out") from e
 
@@ -524,7 +535,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
-            ws = await self._tts._connect_ws(self._conn_options.timeout)
+            ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
@@ -539,11 +550,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await utils.aio.gracefully_cancel(*tasks)
 
         except asyncio.TimeoutError:
-            logger.error(
-                f"MiniMax WebSocket request timeout after {self._conn_options.timeout}s, trace_id={trace_id}"
-            )
             raise APITimeoutError(
-                f"WebSocket TTS synthesis timed out after {self._conn_options.timeout}s (trace_id: {trace_id})"
+                f"WebSocket TTS synthesis timed out (trace_id: {trace_id})"
             ) from None
         except aiohttp.ClientResponseError as e:
             logger.error(
@@ -577,6 +585,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         if not self._input_text.strip():
             return
 
@@ -598,7 +607,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Authorization": f"Bearer {self._opts.api_key}",
                 },
                 json=msg,
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
+                timeout=http_timeout,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
@@ -664,10 +673,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
-            logger.error(f"Minimax HTTP stream request timeout after {self._conn_options.timeout}s")
-            raise APITimeoutError(
-                f"TTS synthesis timed out after {self._conn_options.timeout}s"
-            ) from None
+            raise APITimeoutError("TTS synthesis timed out") from None
         except aiohttp.ClientResponseError as e:
             logger.error(f"HTTP error: status={e.status}, message={e.message}", exc_info=True)
             raise APIStatusError(
