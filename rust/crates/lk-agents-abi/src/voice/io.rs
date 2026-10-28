@@ -5,10 +5,11 @@
 use crate::voice::rtc::TrackSid;
 use crate::{AudioFrame, TimedString, Ts, WallAnchor};
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Poll, Waker};
 use std::time::Duration;
-use tokio::sync::Notify as IoChainNotify;
 
 pub use crate::voice::rtc::AudioOutputCapabilities;
 
@@ -80,6 +81,8 @@ struct TrackerState {
     progressed: Duration,
     /// Audio captured into the open segment that no clear has dropped yet.
     uncleared: Duration,
+    next_waiter: u64,
+    waiters: BTreeMap<u64, Waker>,
 }
 
 impl TrackerState {
@@ -93,7 +96,6 @@ impl TrackerState {
 pub struct PlaybackTracker {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<TrackerState>,
-    wake: IoChainNotify,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     observers: Mutex<Vec<Arc<dyn PlaybackObserver>>>,
     /// The session's clock as wall seconds, for a host sink's `time.time()` stamps. Set once.
@@ -128,8 +130,9 @@ impl PlaybackTracker {
                 epoch: 0,
                 progressed: Duration::ZERO,
                 uncleared: Duration::ZERO,
+                next_waiter: 0,
+                waiters: BTreeMap::new(),
             }),
-            wake: IoChainNotify::new(),
             observers: Mutex::new(Vec::new()),
             anchor: OnceLock::new(),
         }
@@ -259,8 +262,11 @@ impl PlaybackTracker {
         s.capturing = false;
         s.epoch += 1;
         s.progressed = Duration::ZERO;
+        let waiters = std::mem::take(&mut s.waiters);
         drop(s);
-        self.wake.notify_waiters();
+        for waiter in waiters.into_values() {
+            waiter.wake();
+        }
         self.on_playback_reset();
     }
 
@@ -289,7 +295,7 @@ impl PlaybackTracker {
     /// A segment finished playing. With no outstanding segment it returns `false` and emits
     /// nothing: a spurious `finished` would release the next segment's wait.
     pub fn playback_finished(&self, ev: PlaybackFinished) -> bool {
-        let segment = {
+        let (segment, waiters) = {
             let mut s = self.state.lock().unwrap();
             if s.finished >= s.segments {
                 return false;
@@ -297,9 +303,11 @@ impl PlaybackTracker {
             s.finished += 1;
             s.last = ev.clone();
             s.progressed = Duration::ZERO;
-            s.finished
+            (s.finished, std::mem::take(&mut s.waiters))
         };
-        self.wake.notify_waiters();
+        for waiter in waiters.into_values() {
+            waiter.wake();
+        }
         self.emit(|o| o.on_segment_finished(segment, &ev));
         true
     }
@@ -319,22 +327,33 @@ impl PlaybackTracker {
             let s = self.state.lock().unwrap();
             (s.segments, s.epoch)
         };
-        loop {
-            // Registered before the check, or a `finished` between the two is missed.
-            let parked = self.wake.notified();
-            tokio::pin!(parked);
-            parked.as_mut().enable();
-            {
-                let s = self.state.lock().unwrap();
-                if s.epoch != epoch {
-                    // Reset while parked: `last` is the release the reset wrote.
-                    return s.last.clone();
-                }
-                if s.finished >= target {
-                    return s.last.clone();
-                }
+        let mut waiting = PlaybackWait { tracker: self, id: None };
+        std::future::poll_fn(|cx| {
+            let mut s = self.state.lock().unwrap();
+            if s.epoch != epoch || s.finished >= target {
+                return Poll::Ready(s.last.clone());
             }
-            parked.await;
+            let id = *waiting.id.get_or_insert_with(|| {
+                s.next_waiter += 1;
+                s.next_waiter
+            });
+            s.waiters.insert(id, cx.waker().clone());
+            Poll::Pending
+        })
+        .await
+    }
+}
+
+// Cancellation releases the captured task even if playback never completes.
+struct PlaybackWait<'a> {
+    tracker: &'a PlaybackTracker,
+    id: Option<u64>,
+}
+
+impl Drop for PlaybackWait<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id {
+            self.tracker.state.lock().unwrap().waiters.remove(&id);
         }
     }
 }
@@ -388,7 +407,10 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
 
 /// What a host wrapper over a core leg hears of its playback (`_ParticipantAudioOutput`, re-emitting
 /// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, through its `_core_*` surface.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", view = "livekit.agents._core_view._AudioOutput"))]
+#[crate::host(proxy(
+    host = "livekit.agents.voice.io.AudioOutput",
+    view = "livekit.agents._core_view._AudioOutput"
+))]
 pub trait PlaybackListener: Send + Sync {
     #[host(notify, name = "_core_on_playback_started")]
     fn on_playback_started(&self, created_at: f64);
@@ -431,7 +453,10 @@ impl PlaybackObserver for ListenerObserver {
 
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput", view = "livekit.agents._core_view._AudioInput"))]
+#[crate::host(proxy(
+    host = "livekit.agents.voice.io.AudioInput",
+    view = "livekit.agents._core_view._AudioInput"
+))]
 #[async_trait]
 pub trait AudioInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -449,7 +474,10 @@ pub trait AudioInput: Send + Sync {
 }
 
 /// `io.VideoInput`: the source end of the video-in chain; one reader. Frames are side-table keys.
-#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput", view = "livekit.agents._core_view._VideoInput"))]
+#[crate::host(proxy(
+    host = "livekit.agents.voice.io.VideoInput",
+    view = "livekit.agents._core_view._VideoInput"
+))]
 #[async_trait]
 pub trait VideoInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -468,7 +496,10 @@ pub trait VideoInput: Send + Sync {
 
 /// `io.AudioOutput`: one link in the audio-out chain. Implement [`capture`](Self::capture) and
 /// [`flush_segment`](Self::flush_segment); call [`AudioOutputExt::capture_frame`] and [`AudioOutputExt::flush`].
-#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput", view = "livekit.agents._core_view._AudioOutput"))]
+#[crate::host(proxy(
+    host = "livekit.agents.voice.io.AudioOutput",
+    view = "livekit.agents._core_view._AudioOutput"
+))]
 #[async_trait]
 pub trait AudioOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -566,7 +597,10 @@ pub trait AudioOutputExt: AudioOutput {
 impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 
 /// `io.TextOutput`: one link in the transcript chain; `flush` is the whole protocol.
-#[crate::host(proxy(host = "livekit.agents.voice.io.TextOutput", view = "livekit.agents._core_view._TextOutput"))]
+#[crate::host(proxy(
+    host = "livekit.agents.voice.io.TextOutput",
+    view = "livekit.agents._core_view._TextOutput"
+))]
 #[async_trait]
 pub trait TextOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -643,5 +677,67 @@ impl crate::python::FromHostErr for IoError {
 impl From<crate::ResampleError> for IoError {
     fn from(e: crate::ResampleError) -> Self {
         IoError::Resample(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod playback_wait_tests {
+    use super::*;
+    use std::future::Future;
+    use std::task::{Context, Wake, Waker};
+
+    struct Observer(Arc<OnceLock<()>>);
+
+    impl Wake for Observer {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.set(());
+        }
+    }
+
+    #[test]
+    fn cancellation_releases_a_playback_waiter_and_finish_releases_every_remaining_waiter() {
+        let tracker = PlaybackTracker::new();
+        tracker.note_capture();
+        let task = Arc::new(OnceLock::new());
+        let waker = Waker::from(Arc::new(Observer(task.clone())));
+        let mut cx = Context::from_waker(&waker);
+        let mut cancelled = Box::pin(tracker.wait_for_playout());
+        assert!(cancelled.as_mut().poll(&mut cx).is_pending());
+        drop(cancelled);
+        drop(waker);
+        assert_eq!(Arc::strong_count(&task), 1, "a cancelled wait must release its task");
+
+        let mut first = Box::pin(tracker.wait_for_playout());
+        let mut second = Box::pin(tracker.wait_for_playout());
+        let first_woken = Arc::new(OnceLock::new());
+        let second_woken = Arc::new(OnceLock::new());
+        let first_waker = Waker::from(Arc::new(Observer(first_woken.clone())));
+        let second_waker = Waker::from(Arc::new(Observer(second_woken.clone())));
+        assert!(first.as_mut().poll(&mut Context::from_waker(&first_waker)).is_pending());
+        assert!(second.as_mut().poll(&mut Context::from_waker(&second_waker)).is_pending());
+        let finished =
+            PlaybackFinished { playback_position: Duration::from_millis(20), ..Default::default() };
+        assert!(tracker.playback_finished(finished.clone()));
+        assert!(first_woken.get().is_some());
+        assert!(second_woken.get().is_some());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(first.as_mut().poll(&mut cx), Poll::Ready(finished.clone()));
+        assert_eq!(second.as_mut().poll(&mut cx), Poll::Ready(finished));
+    }
+
+    #[test]
+    fn reset_releases_a_waiter_with_the_open_segments_played_position() {
+        let tracker = PlaybackTracker::new();
+        tracker.note_capture();
+        tracker.playback_progressed(Ts::ZERO, Duration::ZERO, Duration::from_millis(20));
+        let mut waiting = Box::pin(tracker.wait_for_playout());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        tracker.reset();
+        let Poll::Ready(finished) = waiting.as_mut().poll(&mut cx) else {
+            panic!("reset must release a parked waiter");
+        };
+        assert!(finished.interrupted);
+        assert_eq!(finished.playback_position, Duration::from_millis(20));
     }
 }

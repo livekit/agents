@@ -5,7 +5,9 @@ use std::sync::Mutex;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::sync::Notify;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
 
 /// One second at 20 ms.
 pub const AUDIO_QUEUE_FRAMES: usize = 50;
@@ -22,8 +24,6 @@ pub enum Pushed {
 struct Shared<T> {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     q: Mutex<Queue<T>>,
-    /// `Notify` stores one permit, so an early push is not lost.
-    ready: Notify,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     dropped: AtomicU64,
 }
@@ -32,17 +32,18 @@ struct Queue<T> {
     items: VecDeque<T>,
     cap: usize,
     closed: bool,
+    receiver: Option<Waker>,
 }
 
 impl<T> Shared<T> {
     fn push(&self, v: T) -> Pushed {
-        let outcome = {
+        let (outcome, receiver) = {
             // A std `Mutex`, never held across an await: the host push is a synchronous method.
             let mut q = self.q.lock().unwrap();
             if q.closed {
                 return Pushed::Closed;
             }
-            if q.items.len() >= q.cap {
+            let outcome = if q.items.len() >= q.cap {
                 q.items.pop_front();
                 self.dropped.fetch_add(1, Ordering::Relaxed);
                 q.items.push_back(v);
@@ -50,15 +51,24 @@ impl<T> Shared<T> {
             } else {
                 q.items.push_back(v);
                 Pushed::Ok
-            }
+            };
+            (outcome, q.receiver.take())
         };
-        self.ready.notify_one();
+        if let Some(receiver) = receiver {
+            receiver.wake();
+        }
         outcome
     }
 
     fn close(&self) {
-        self.q.lock().unwrap().closed = true;
-        self.ready.notify_one();
+        let receiver = {
+            let mut q = self.q.lock().unwrap();
+            q.closed = true;
+            q.receiver.take()
+        };
+        if let Some(receiver) = receiver {
+            receiver.wake();
+        }
     }
 }
 
@@ -85,8 +95,8 @@ impl<T> BoundedLossy<T> {
                     items: VecDeque::with_capacity(capacity),
                     cap: capacity,
                     closed: false,
+                    receiver: None,
                 }),
-                ready: Notify::new(),
                 dropped: AtomicU64::new(0),
             }),
         }
@@ -110,19 +120,7 @@ impl<T> BoundedLossy<T> {
 
     /// `None` once closed and drained. Cancel-safe: a dropped future loses no item.
     pub async fn recv(&mut self) -> Option<T> {
-        loop {
-            {
-                let mut q = self.shared.q.lock().unwrap();
-                if let Some(v) = q.items.pop_front() {
-                    return Some(v);
-                }
-                if q.closed {
-                    return None;
-                }
-            }
-            // Check, then park: `notify_one`'s single permit covers a push in between.
-            self.shared.ready.notified().await;
-        }
+        Receive { shared: &self.shared }.await
     }
 
     /// Monotone; the driver rate-limits the warning it drives.
@@ -141,6 +139,33 @@ impl<T> BoundedLossy<T> {
     /// Queued items still drain.
     pub fn close(&self) {
         self.shared.close();
+    }
+}
+
+// The queue check and registration share the producer's lock, so no wake can be lost.
+struct Receive<'a, T> {
+    shared: &'a Shared<T>,
+}
+
+impl<T> Future for Receive<'_, T> {
+    type Output = Option<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut q = self.shared.q.lock().unwrap();
+        if let Some(item) = q.items.pop_front() {
+            Poll::Ready(Some(item))
+        } else if q.closed {
+            Poll::Ready(None)
+        } else {
+            q.receiver = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+impl<T> Drop for Receive<'_, T> {
+    fn drop(&mut self) {
+        self.shared.q.lock().unwrap().receiver = None;
     }
 }
 
