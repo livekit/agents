@@ -238,17 +238,6 @@ impl ChatContextDiff {
             + self.row.as_ref().map_or(0, |row| row.storage.capacity())
             + self.spare_rows.as_ref().map_or(0, RowsStorage::capacity)
     }
-
-    /// Release owned identity keys below the same continuation budget as preparation.
-    pub fn retire_step(&mut self) -> bool {
-        self.operations.to_remove.pop().is_some()
-            || self.operations.to_create.pop().is_some()
-            || self.operations.to_update.pop().is_some()
-            || self.previous_id.take().is_some()
-            || self.old_by_id.pop_first().is_some()
-            || self.positions.pop_first().is_some()
-            || self.kept.pop_first().is_some()
-    }
 }
 
 #[derive(Debug)]
@@ -399,6 +388,5 @@ mod tests {
         creates.extend((1..128).map(|_| (Some("a".to_owned()), "b".to_owned())));
         assert_eq!(operations.to_create, creates);
         assert!(operations.to_update.is_empty());
-        while diff.retire_step() {}
     }
 }

@@ -553,7 +553,7 @@ impl RealtimeMachine {
                 && let Some((is_delete, item_id, sequence)) = update.by_event_id.remove(event_id)
             {
                 if err.code.as_deref() != Some("item_create_duplicate_item_id") {
-                    self.reject_ctx_item(is_delete, &item_id, sequence);
+                    step.merge(self.reject_ctx_item(now, is_delete, &item_id, sequence));
                 }
                 let confirmed = if !is_delete
                     && err.code.as_deref() == Some("item_create_duplicate_item_id")

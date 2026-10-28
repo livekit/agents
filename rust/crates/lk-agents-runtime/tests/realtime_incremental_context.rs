@@ -36,7 +36,6 @@ struct Samples {
     cleanup_cpu: Duration,
     cleanup_max: Duration,
     cleanup_jobs: usize,
-    cleanup_chunks: usize,
 }
 
 impl Samples {
@@ -70,9 +69,8 @@ impl Samples {
             self.maximum
         );
         println!(
-            "retirement effects: jobs={} chunks={} worker_cpu_total_ns={} worker_cpu_max_job_ns={}",
+            "retirement effects: jobs={} worker_cpu_total_ns={} worker_cpu_max_job_ns={}",
             self.cleanup_jobs,
-            self.cleanup_chunks,
             self.cleanup_cpu.as_nanos(),
             self.cleanup_max.as_nanos()
         );
@@ -83,34 +81,22 @@ impl Samples {
 }
 
 fn execute_retirements(machine: &mut RealtimeMachine, samples: &mut Samples, controls: bool) {
-    while let Some(mut retirement) = machine.take_context_retirement() {
-        let mut job_cpu = Duration::ZERO;
-        loop {
-            let start = cpu_time();
-            let done = retirement.advance(64);
-            job_cpu += cpu_time().saturating_sub(start);
-            samples.cleanup_chunks += 1;
-            if controls {
-                assert!(
-                    samples
-                        .step("tick_during_cleanup", || machine.tick(Ts::ZERO))
-                        .frames
-                        .is_empty()
-                );
-                assert!(
-                    samples
-                        .step("continue_during_cleanup", || machine.continue_context(Ts::ZERO))
-                        .frames
-                        .is_empty()
-                );
-            }
-            if done {
-                break;
-            }
+    while let Some(retirement) = machine.take_context_retirement() {
+        // The admitted job owns this batch while the core remains available for controls.
+        if controls {
+            assert!(
+                samples.step("tick_during_cleanup", || machine.tick(Ts::ZERO)).frames.is_empty()
+            );
+            assert!(
+                samples
+                    .step("continue_during_cleanup", || machine.continue_context(Ts::ZERO))
+                    .frames
+                    .is_empty()
+            );
         }
         let start = cpu_time();
         drop(retirement);
-        job_cpu += cpu_time().saturating_sub(start);
+        let job_cpu = cpu_time().saturating_sub(start);
         samples.cleanup_cpu += job_cpu;
         samples.cleanup_max = samples.cleanup_max.max(job_cpu);
         samples.cleanup_jobs += 1;
@@ -218,7 +204,7 @@ fn realtime_acknowledgements_and_context_edits_stay_within_one_page() {
 }
 
 #[test]
-fn realtime_context_churn_fails_explicitly_and_close_retires_in_pages() {
+fn realtime_context_churn_fails_explicitly_and_close_retires_off_step() {
     let mut failures = Vec::new();
     for sessions in [1, 8, 32, 64] {
         let mut machines: Vec<_> = (0..sessions)
@@ -231,7 +217,7 @@ fn realtime_context_churn_fails_explicitly_and_close_retires_in_pages() {
                 machine
             })
             .collect();
-        let mut setup = Samples::default();
+        let mut samples = Samples::default();
         let first = machines
             .iter_mut()
             .map(|machine| {
@@ -241,8 +227,7 @@ fn realtime_context_churn_fails_explicitly_and_close_retires_in_pages() {
                 )
             })
             .collect();
-        finish(&mut machines, &mut setup, first);
-        let mut samples = Samples::default();
+        finish(&mut machines, &mut samples, first);
         let mut failed = vec![false; sessions];
         for revision in 0..8 {
             for (machine, failed) in machines.iter_mut().zip(&mut failed) {
@@ -271,7 +256,7 @@ fn realtime_context_churn_fails_explicitly_and_close_retires_in_pages() {
             execute_retirements(machine, &mut samples, true);
         }
         assert!(machines.iter().all(|machine| !machine.context_work_pending()));
-        if let Some(failure) = samples.report(sessions, 10_000, "churn_close") {
+        if let Some(failure) = samples.report(sessions, 10_000, "churn_close_lifecycle") {
             failures.push(failure);
         }
     }

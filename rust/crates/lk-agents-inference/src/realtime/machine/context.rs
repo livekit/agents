@@ -23,7 +23,7 @@ impl RealtimeMachine {
     }
 
     pub(super) fn enforce_retirement_capacity(&mut self, now: Ts, step: &mut Step) -> bool {
-        if !self.closing && self.retired.len() >= RETIRED_CONTEXTS {
+        if !self.closing && self.retired.len() > RETIRED_CONTEXTS {
             step.merge(self.close(now));
             step.fatal =
                 Some(self.error(now, "realtime context retirement capacity exceeded", false));
@@ -34,10 +34,21 @@ impl RealtimeMachine {
 
     /// A function output must name a call already submitted in the intended conversation.
     pub(super) fn holds_call(&self, call_id: &str) -> bool {
-        !self.deleted_calls.iter().any(|id| id == call_id) && (self.desired.contains_call(call_id) || self.ctx_update.as_ref().and_then(|update| update.work.as_ref()).is_some_and(|work| matches!(work, ContextWork::ServerItems(server) if server.contains_call(call_id, &self.remote))))
+        !self.deleted_calls.iter().any(|id| id == call_id)
+            && (self.desired.contains_call(call_id)
+                || self.ctx_update.as_ref().and_then(|update| update.work.as_ref()).is_some_and(
+                    |work| {
+                        matches!(work, ContextWork::ServerItems(server)
+                        if server.contains_call(call_id, &self.remote))
+                    },
+                ))
     }
 
     pub(super) fn update_ctx(&mut self, now: Ts, chat_ctx: ChatContext) -> Step {
+        self.update_ctx_budget(now, chat_ctx, CONTEXT_PAGE)
+    }
+
+    fn update_ctx_budget(&mut self, now: Ts, chat_ctx: ChatContext, budget: usize) -> Step {
         self.deferred_commands.retain(|command| !matches!(command, DeferredCommand::Item(_)));
         if self.ctx_update.as_ref().is_some_and(|update| {
             matches!(update.work, Some(ContextWork::Overlay(_) | ContextWork::ServerItems(_)))
@@ -45,7 +56,7 @@ impl RealtimeMachine {
             if let Some(previous) = self.pending_context.replace(chat_ctx) {
                 self.retired.push_back(Retired::Context(previous));
             }
-            return self.continue_context(now);
+            return self.continue_context_budget(now, budget);
         }
         let mut update = self.ctx_update.take().unwrap_or_default();
         if let Some(work) = update.work.take() {
@@ -62,18 +73,19 @@ impl RealtimeMachine {
             update.work = Some(ContextWork::Prepare(Box::new(PrepareWork::new(self, chat_ctx))));
         }
         self.ctx_update = Some(update);
-        self.continue_context(now)
+        self.continue_context_budget(now, budget)
     }
 
     pub(super) fn truncate_ctx(
         &mut self,
         now: Ts,
         edit: lk_agents_abi::llm::realtime::Truncate,
+        budget: usize,
     ) -> Step {
         let mut update = self.ctx_update.take().unwrap_or_default();
         update.work = Some(ContextWork::Prepare(Box::new(PrepareWork::truncate(self, edit))));
         self.ctx_update = Some(update);
-        self.continue_context(now)
+        self.continue_context_budget(now, budget)
     }
 
     pub(super) fn delete_ctx_item(
@@ -128,10 +140,15 @@ impl RealtimeMachine {
         })
     }
 
-    pub(super) fn reject_ctx_item(&mut self, is_delete: bool, id: &str, sequence: u64) {
-        let newer = !self.ctx_event_is_latest(id, sequence);
-        if newer {
-            return;
+    pub(super) fn reject_ctx_item(
+        &mut self,
+        now: Ts,
+        is_delete: bool,
+        id: &str,
+        sequence: u64,
+    ) -> Step {
+        if !self.ctx_event_is_latest(id, sequence) {
+            return Step::default();
         }
         if !is_delete && let Ok(item) = self.desired.delete(id) {
             self.discard_context_item(item);
@@ -140,16 +157,11 @@ impl RealtimeMachine {
             self.ctx_update.as_ref().is_some_and(|update| update.awaiting_delete.contains(id));
         if self.desired.get(id).is_none()
             && (is_delete || !delete_pending)
-            && let Some(item) = self.remote.get(id)
+            && self.remote.get(id).is_some()
         {
-            let item = item.clone();
-            let previous = self
-                .remote
-                .previous_id(id)
-                .filter(|id| self.desired.get(id).is_some())
-                .map(str::to_owned);
-            let _ = self.desired.insert(previous.as_deref(), item);
+            return self.place_server_item(now, id);
         }
+        Step::default()
     }
 
     pub(super) fn settle_ctx_item(&mut self, is_delete: bool, item_id: &str) -> Step {
@@ -223,7 +235,7 @@ impl CtxUpdate {
 }
 
 /// Context preparation and submission share a bounded continuation budget.
-const CONTEXT_PAGE: usize = 64;
+pub(super) const CONTEXT_PAGE: usize = 64;
 const RETIRED_CONTEXTS: usize = 4;
 const QUEUED_CONTEXT_ITEMS: usize = 32;
 
@@ -256,15 +268,6 @@ impl RetiredContextEvents {
             inverse: std::mem::take(&mut update.events_by_item),
         }
     }
-
-    fn step(&mut self) -> bool {
-        self.creates.pop_first().is_some()
-            || self.deletes.pop_first().is_some()
-            || self.events.pop_first().is_some()
-            || self.touched.pop_first().is_some()
-            || self.tails.pop_first().is_some()
-            || retirement::pop_inverse(&mut self.inverse)
-    }
 }
 
 #[derive(Debug)]
@@ -272,25 +275,17 @@ pub(super) struct ReplayWork {
     phase: ReplayPhase,
     cursor: usize,
     emitted: usize,
-    write: usize,
-    selected: Vec<bool>,
     calls: BTreeSet<String>,
     seen: BTreeSet<String>,
     preserve_empty: bool,
     empty_allowed: BTreeSet<String>,
-    retired_update: Option<RetiredContextEvents>,
-    all_selected: bool,
     previous: Option<String>,
-    retired_items: Vec<ChatItem>,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum ReplayPhase {
     Calls,
     Emit,
-    Compact,
-    Retire,
-    Cleanup,
 }
 
 impl ReplayWork {
@@ -299,16 +294,11 @@ impl ReplayWork {
             phase: ReplayPhase::Calls,
             cursor: 0,
             emitted: 0,
-            write: 0,
-            selected: Vec::new(),
             calls: BTreeSet::new(),
             seen: BTreeSet::new(),
             preserve_empty,
             empty_allowed: BTreeSet::new(),
-            retired_update: None,
-            all_selected: true,
             previous: None,
-            retired_items: Vec::new(),
         }
     }
 }
@@ -363,13 +353,6 @@ impl ProjectionItems {
         match self {
             Self::Context { capacity, .. } => *capacity,
             Self::Mirror { remote, .. } => remote.retained_units(),
-        }
-    }
-
-    fn retire_step(&mut self) -> bool {
-        match self {
-            Self::Context { items, .. } => items.next().is_some(),
-            Self::Mirror { remote, .. } => remote.pop_front().is_some(),
         }
     }
 }
@@ -593,14 +576,30 @@ impl RealtimeMachine {
             || self.pending_context.is_some()
     }
 
+    /// Semantic work can pause while admitted cleanup makes ownership capacity available.
+    pub fn context_continuation_ready(&self) -> bool {
+        self.context_pages_pending()
+            && (self.retired.len() <= RETIRED_CONTEXTS - 3
+                || (self.pending_context.is_none()
+                    && self.ctx_update.as_ref().is_none_or(|update| update.work.is_none())))
+    }
+
+    pub(super) fn take_desired(&mut self) -> crate::realtime::RemoteChatContext {
+        self.desired_epoch = self.desired_epoch.checked_add(1).expect("context epoch exhausted");
+        std::mem::take(&mut self.desired)
+    }
+
     pub fn context_work_pending(&self) -> bool {
         self.context_pages_pending() || self.has_context_retirement()
     }
 
     /// Continue at most one context page; transport admission precedes the next continuation.
-    pub fn continue_context(&mut self, _now: Ts) -> Step {
+    pub fn continue_context(&mut self, now: Ts) -> Step {
+        self.continue_context_budget(now, CONTEXT_PAGE)
+    }
+
+    fn continue_context_budget(&mut self, _now: Ts, mut budget: usize) -> Step {
         let mut step = Step::default();
-        let mut budget = CONTEXT_PAGE;
         let mut replay_after_server_items = false;
         let mut server_items_failed = false;
         if self.closing {
@@ -608,6 +607,11 @@ impl RealtimeMachine {
         }
         if let Some(mut update) = self.ctx_update.take() {
             while budget > 0 {
+                // A unit may finish work, its target and the now-settled update. Reserve all
+                // three ownership slots before advancing. Incoming growth has one terminal slot.
+                if self.retired.len() > RETIRED_CONTEXTS - 3 {
+                    break;
+                }
                 let Some(work) = update.work.take() else { break };
                 match work {
                     ContextWork::ServerItems(mut server) => {
@@ -638,7 +642,7 @@ impl RealtimeMachine {
                             }
                         }
                         if prepare.replay_ready() {
-                            let source = std::mem::take(&mut self.desired);
+                            let source = self.take_desired();
                             self.retired
                                 .push_back(Retired::Context(std::mem::take(&mut update.target)));
                             let retired = RetiredContextEvents::take(&mut update);
@@ -675,7 +679,6 @@ impl RealtimeMachine {
                     ContextWork::Replay(mut replay) => match replay.phase {
                         ReplayPhase::Calls => {
                             if let Some(item) = update.target.items.get(replay.cursor) {
-                                replay.selected.push(false);
                                 if let ChatItem::FunctionCall(call) = item {
                                     replay.calls.insert(call.call_id.clone());
                                 }
@@ -694,8 +697,6 @@ impl RealtimeMachine {
                                     || replay.empty_allowed.contains(item.id()))
                                     && !matches!(item, ChatItem::FunctionCallOutput(output) if !replay.calls.contains(&output.call_id));
                                 let selected = valid && replay.seen.insert(item.id().to_owned());
-                                replay.selected[replay.cursor] = selected;
-                                replay.all_selected &= selected;
                                 if selected {
                                     let previous = replay
                                         .previous
@@ -723,48 +724,24 @@ impl RealtimeMachine {
                                 budget -= 1;
                                 update.work = Some(ContextWork::Replay(replay));
                             } else {
-                                if replay.all_selected {
-                                    replay.phase = ReplayPhase::Cleanup;
-                                } else {
-                                    replay.phase = ReplayPhase::Compact;
-                                    replay.cursor = 0;
-                                }
-                                update.work = Some(ContextWork::Replay(replay));
+                                self.retired.push_back(Retired::Work(ContextWork::Replay(replay)));
                             }
-                        }
-                        ReplayPhase::Compact => {
-                            if replay.cursor < update.target.len() {
-                                if replay.selected[replay.cursor] {
-                                    update.target.items.swap(replay.write, replay.cursor);
-                                    replay.write += 1;
-                                }
-                                replay.cursor += 1;
-                                budget -= 1;
-                            } else {
-                                replay.phase = ReplayPhase::Retire;
-                            }
-                            update.work = Some(ContextWork::Replay(replay));
-                        }
-                        ReplayPhase::Retire => {
-                            if update.target.len() > replay.write {
-                                replay.retired_items.push(update.target.items.pop().unwrap());
-                                budget -= 1;
-                                update.work = Some(ContextWork::Replay(replay));
-                            } else {
-                                replay.phase = ReplayPhase::Cleanup;
-                                update.work = Some(ContextWork::Replay(replay));
-                            }
-                        }
-                        ReplayPhase::Cleanup => {
-                            self.retired.push_back(Retired::Work(ContextWork::Replay(replay)));
                         }
                     },
                 }
             }
-            if update.work.is_none() && !update.target.is_empty() {
-                self.retired.push_back(Retired::Context(std::mem::take(&mut update.target)));
+            if matches!(&update.work, Some(ContextWork::Replay(replay))
+                if matches!(replay.phase, ReplayPhase::Emit)
+                    && replay.cursor == update.target.len())
+                || matches!(&update.work, Some(ContextWork::Prepare(prepare))
+                    if prepare.completed())
+            {
+                self.retired.push_back(Retired::Work(update.work.take().unwrap()));
             }
             if update.pending() {
+                if update.work.is_none() && !update.target.is_empty() {
+                    self.retired.push_back(Retired::Context(std::mem::take(&mut update.target)));
+                }
                 self.ctx_update = Some(update);
             } else {
                 self.retired.push_back(Retired::Update(update));
@@ -784,19 +761,24 @@ impl RealtimeMachine {
             return step;
         }
         if self.pending_context.is_some()
-            && !self
-                .ctx_update
-                .as_ref()
-                .is_some_and(|update| matches!(update.work, Some(ContextWork::Overlay(_))))
+            && budget > 0
+            && self.retired.len() <= RETIRED_CONTEXTS - 3
+            && !self.ctx_update.as_ref().is_some_and(|update| {
+                matches!(update.work, Some(ContextWork::Overlay(_) | ContextWork::ServerItems(_)))
+            })
         {
             let target = self.pending_context.take().unwrap();
-            step.merge(self.update_ctx(_now, target));
+            step.merge(self.update_ctx_budget(_now, target, budget));
+            // The nested preparation owns the remaining allowance, including deferred commands.
+            return step;
         }
         if !self.ctx_update.as_ref().is_some_and(|update| update.work.is_some()) {
-            let mut commands = 0;
-            while step.frames.len() < CONTEXT_PAGE && commands < CONTEXT_PAGE {
+            while step.frames.len() < CONTEXT_PAGE && budget > 0 {
+                if self.ctx_update.as_ref().is_some_and(|update| update.work.is_some()) {
+                    break;
+                }
                 let Some(command) = self.deferred_commands.pop_front() else { break };
-                commands += 1;
+                budget -= 1;
                 match command {
                     DeferredCommand::Response(req_id) => {
                         self.deferred_replies.remove(&req_id);
@@ -812,7 +794,12 @@ impl RealtimeMachine {
                     DeferredCommand::Media(command) => {
                         self.deferred_media_count -= 1;
                         self.deferred_media_bytes -= media_bytes(&command);
-                        step.merge(self.apply_command(_now, command));
+                        let nested = matches!(&command, super::Command::Truncate(_));
+                        step.merge(self.apply_command(_now, command, budget));
+                        if nested {
+                            // Truncation may have spent the remaining allowance preparing edits.
+                            return step;
+                        }
                     }
                     DeferredCommand::Item(item) => step.merge(self.submit_context_item(*item)),
                 }
@@ -918,7 +905,7 @@ impl RealtimeMachine {
             prepare.replay = true;
             return;
         }
-        let desired = std::mem::take(&mut self.desired);
+        let desired = self.take_desired();
         let mut update = self.ctx_update.take().unwrap_or_default();
         let old_work = update.work.take();
         if let Some(ContextWork::Overlay(mut overlay)) = old_work {
@@ -960,7 +947,10 @@ impl RealtimeMachine {
                 empty_allowed,
             ))));
         }
-        if matches!(update.work, Some(ContextWork::Overlay(_))) {
+        // Repeated reconnects resume the same overlay. It already owns the original event
+        // maps; no context operation emits during this phase, so no new maps need replacing.
+        if matches!(&update.work, Some(ContextWork::Overlay(overlay)) if overlay.retired.is_none())
+        {
             let retired = RetiredContextEvents::take(&mut update);
             if let Some(ContextWork::Overlay(overlay)) = &mut update.work {
                 overlay.retired = Some(retired);
@@ -985,5 +975,37 @@ fn media_bytes(command: &super::Command) -> usize {
     match command {
         super::Command::PushAudio(audio) => audio.frame.data.len(),
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::realtime::dialect::OPENAI;
+    use crate::realtime::testfix::{machine, msg};
+
+    #[test]
+    fn repeated_reconnect_retains_the_unsettled_event_owner() {
+        let mut machine = machine(OPENAI);
+        let now = Ts::from_nanos(0);
+        machine.open(now);
+        for index in 0..300 {
+            machine.submit_context_item(msg(&index.to_string(), "pending"));
+        }
+        machine.reconnect(now);
+        let Some(ContextWork::Overlay(overlay)) =
+            machine.ctx_update.as_ref().and_then(|update| update.work.as_ref())
+        else {
+            panic!("large projection must still be paged");
+        };
+        assert_eq!(overlay.retired.as_ref().unwrap().events.len(), 300);
+        machine.reconnect(now);
+        let Some(ContextWork::Overlay(overlay)) =
+            machine.ctx_update.as_ref().and_then(|update| update.work.as_ref())
+        else {
+            panic!("second reconnect must resume the same projection");
+        };
+        assert_eq!(overlay.retired.as_ref().unwrap().events.len(), 300);
+        assert!(machine.ctx_update.as_ref().unwrap().by_event_id.is_empty());
     }
 }

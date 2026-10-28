@@ -4,11 +4,7 @@ use super::{Pump, Shared};
 use lk_agents_abi::{Clock, SpawnerExt};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 use tokio::sync::{Notify, watch};
-
-// A failed process-service startup retains ownership and retries without blocking controls.
-const SERVICE_RETRY: Duration = Duration::from_millis(2);
 
 impl Pump {
     pub(super) fn wake_retirement(&self) {
@@ -27,7 +23,10 @@ impl Pump {
             let wake = self.shared.retirement_wake.clone();
             let clock = self.clock.clone();
             let label = self.label.clone();
-            let _owner = self.spawner.spawn_unboxed(run(shared, wake, clock, label, settled, None));
+            let events = self.events.clone();
+            let _owner = self.spawner.spawn_unboxed(async move {
+                run(shared, wake, clock, label, events, settled, crate::process::workers()).await;
+            });
         }
         self.shared.retirement_wake.notify_one();
     }
@@ -38,8 +37,9 @@ pub(super) async fn run(
     wake: Arc<Notify>,
     clock: Arc<dyn Clock>,
     label: String,
+    events: super::super::queue::Delivery,
     settled: watch::Sender<bool>,
-    mut workers: Option<crate::media_workers::MediaWorkers>,
+    workers: Result<crate::media_workers::MediaWorkers, crate::process::ProcessError>,
 ) {
     let mut retained = None;
     loop {
@@ -63,19 +63,35 @@ pub(super) async fn run(
             }
             continue;
         }
-        if workers.is_none() {
-            match crate::process::workers() {
-                Ok(service) => workers = Some(service),
-                Err(_) => {
-                    let generation = shared.machine.lock().await.connection_generation();
-                    shared.incomplete_cleanup(generation, &label);
-                    clock.wait_until(clock.now().saturating_add(SERVICE_RETRY)).await;
-                    retained = Some(shared);
-                    continue;
+        let workers = match &workers {
+            Ok(service) => service,
+            Err(error) => {
+                let (generation, step, retired) = {
+                    let mut machine = shared.machine.lock().await;
+                    let generation = machine.connection_generation();
+                    let step = machine.close(clock.now());
+                    let mut retired = Vec::new();
+                    while let Some(owner) = machine.take_context_retirement() {
+                        retired.push(owner);
+                    }
+                    (generation, step, retired)
+                };
+                shared.retirement_unavailable(generation, &label, error);
+                shared.retirement_closing.store(true, Ordering::Release);
+                shared.closing.notify_one();
+                for event in step.events {
+                    if let Err(error) = events.send(event) {
+                        events.fail(clock.now(), &label, error);
+                    }
                 }
+                // Failed process startup cannot admit a replacement worker. Refuse this session
+                // and reclaim once outside its state lock instead of retaining and retrying.
+                drop(retired);
+                shared.context_ready.notify_one();
+                settled.send_replace(true);
+                return;
             }
-        }
-        let workers = workers.as_ref().expect("worker service initialized");
+        };
         let permit = match workers.try_admit(crate::media_workers::MediaWorkerClass::Formatting) {
             Ok(permit) => permit,
             Err(_) => {
@@ -86,11 +102,12 @@ pub(super) async fn run(
             }
         };
         let retirement = shared.machine.lock().await.take_context_retirement();
-        let Some(mut retirement) = retirement else {
+        let Some(retirement) = retirement else {
             retained = Some(shared);
             continue;
         };
-        if workers.spawn_admitted(permit, move || while !retirement.advance(64) {}).await.is_err() {
+        shared.context_ready.notify_one();
+        if workers.spawn_admitted(permit, move || drop(retirement)).await.is_err() {
             let generation = shared.machine.lock().await.connection_generation();
             shared.incomplete_cleanup(generation, &label);
         }

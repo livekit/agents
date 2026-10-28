@@ -1,27 +1,15 @@
-//! Runtime-owned incremental disposal of retired context state.
+//! Runtime-owned disposal of retired context state.
 
-use super::{ContextWork, CtxUpdate, DeferredCommand, OverlayWork, ReplayWork};
+use super::{ContextWork, CtxUpdate, DeferredCommand};
 use crate::realtime::RemoteChatContext;
 use lk_agents_abi::ChatContext;
 use std::collections::VecDeque;
 
 /// An owned cleanup effect. Admission precedes taking it from the machine.
-/// The runtime advances and finally drops it on an admitted worker, even if its receipt is canceled.
+/// The runtime drops it on an admitted worker, even if its receipt is canceled.
 #[derive(Debug)]
 pub struct ContextRetirement {
     states: Vec<Retired>,
-}
-
-impl ContextRetirement {
-    pub fn advance(&mut self, budget: usize) -> bool {
-        for _ in 0..budget {
-            let Some(state) = self.states.last_mut() else { return true };
-            if !state.step() {
-                self.states.pop();
-            }
-        }
-        false
-    }
 }
 
 #[derive(Debug, Default)]
@@ -104,42 +92,6 @@ impl Retired {
             Self::Work(work) => work.retained_units(),
         }
     }
-
-    pub(super) fn step(&mut self) -> bool {
-        match self {
-            Self::Deferred(commands) => commands.pop_front().is_some(),
-            Self::Context(context) => context.items.pop().is_some(),
-            Self::Update(update) => update.retire_step(),
-            Self::Work(work) => work.retire_step(),
-            Self::Remote(remote) => remote.pop_front().is_some(),
-        }
-    }
-}
-
-impl CtxUpdate {
-    fn retire_step(&mut self) -> bool {
-        self.target.items.pop().is_some()
-            || self.awaiting_create.pop_first().is_some()
-            || self.awaiting_delete.pop_first().is_some()
-            || self.by_event_id.pop_first().is_some()
-            || pop_inverse(&mut self.events_by_item)
-            || self.touched.pop_first().is_some()
-            || self.tail_creates.pop_first().is_some()
-            || self.work.as_mut().is_some_and(ContextWork::retire_step)
-    }
-}
-
-pub(super) fn pop_inverse(
-    inverse: &mut std::collections::BTreeMap<
-        (bool, String),
-        std::collections::BTreeMap<u64, String>,
-    >,
-) -> bool {
-    let Some(mut entry) = inverse.first_entry() else { return false };
-    if entry.get_mut().pop_first().is_none() {
-        entry.remove();
-    }
-    true
 }
 
 impl ContextWork {
@@ -147,21 +99,7 @@ impl ContextWork {
         match self {
             Self::ServerItems(work) => work.retained_units(),
             Self::Prepare(work) => work.retained_units(),
-            Self::Replay(work) => {
-                work.selected.capacity()
-                    + work.calls.len()
-                    + work.seen.len()
-                    + work.empty_allowed.len()
-                    + work.retired_items.capacity()
-                    + work.retired_update.as_ref().map_or(0, |events| {
-                        events.creates.len()
-                            + events.deletes.len()
-                            + events.events.len()
-                            + events.touched.len()
-                            + events.tails.len()
-                            + events.inverse.len()
-                    })
-            }
+            Self::Replay(work) => work.calls.len() + work.seen.len() + work.empty_allowed.len(),
             Self::Overlay(work) => {
                 work.remote.retained_units()
                     + work.target_storage
@@ -186,58 +124,5 @@ impl ContextWork {
                     })
             }
         }
-    }
-
-    pub(super) fn retire_step(&mut self) -> bool {
-        match self {
-            Self::ServerItems(work) => work.retire_step(),
-            Self::Replay(replay) => replay.retire_step(),
-            Self::Overlay(overlay) => overlay.retire_step(),
-            Self::Prepare(prepare) => prepare.retire_step(),
-        }
-    }
-}
-
-impl ReplayWork {
-    fn retire_step(&mut self) -> bool {
-        self.calls.pop_first().is_some()
-            || self.seen.pop_first().is_some()
-            || self.empty_allowed.pop_first().is_some()
-            || self.retired_update.as_mut().is_some_and(super::RetiredContextEvents::step)
-            || self.selected.pop().is_some()
-            || self.retired_items.pop().is_some()
-    }
-}
-
-impl OverlayWork {
-    pub(super) fn retire_step(&mut self) -> bool {
-        if self.remote.retire_step()
-            || self.target.items.pop().is_some()
-            || self.target_items.as_mut().is_some_and(|items| items.next().is_some())
-            || self.touched.pop_first().is_some()
-            || self.target_ids.pop_first().is_some()
-            || self.tail_creates.pop_first().is_some()
-            || self.nodes.pop().is_some()
-            || self.positions.pop_first().is_some()
-            || self.collected.pop().is_some()
-            || self.retired_items.pop().is_some()
-            || self.empty_allowed.pop_first().is_some()
-            || self.retired.as_mut().is_some_and(super::RetiredContextEvents::step)
-        {
-            return true;
-        }
-        if let Some(source) = self.retired_sources.last_mut() {
-            if !source.retire_step() {
-                self.retired_sources.pop();
-            }
-            return true;
-        }
-        if let Some(items) = self.extra.front_mut() {
-            if !items.retire_step() {
-                self.extra.pop_front();
-            }
-            return true;
-        }
-        false
     }
 }

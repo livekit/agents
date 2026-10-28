@@ -33,7 +33,7 @@ pub(in crate::realtime::machine) struct PrepareWork {
     input_storage: usize,
     filtered: ChatContext,
     mirror: ChatContext,
-    revision: u64,
+    revision: (u64, u64),
     cursor: usize,
     mirror_cursor: Option<String>,
     old: ChatContext,
@@ -67,7 +67,7 @@ impl PrepareWork {
             input_storage,
             filtered: ChatContext::empty(),
             mirror: ChatContext::empty(),
-            revision: machine.desired.revision(),
+            revision: (machine.desired_epoch, machine.desired.revision()),
             cursor: 0,
             mirror_cursor: machine.desired.first_id().map(str::to_owned),
             old: ChatContext::empty(),
@@ -108,17 +108,25 @@ impl PrepareWork {
         match self.phase {
             Phase::Mirror => {
                 let remote = &machine.desired;
-                if remote.revision() != self.revision {
+                if (machine.desired_epoch, remote.revision()) != self.revision {
                     if !self.mirror.is_empty() {
                         machine
                             .retired
                             .push_back(Retired::Context(std::mem::take(&mut self.mirror)));
                     }
-                    self.revision = remote.revision();
+                    self.revision = (machine.desired_epoch, remote.revision());
                     self.mirror_cursor = remote.first_id().map(str::to_owned);
                 }
                 if let Some(id) = self.mirror_cursor.take() {
-                    let item = remote.get(&id).expect("snapshot restarts after structural changes");
+                    let Some(item) = remote.get(&id) else {
+                        if !self.mirror.is_empty() {
+                            machine
+                                .retired
+                                .push_back(Retired::Context(std::mem::take(&mut self.mirror)));
+                        }
+                        self.mirror_cursor = remote.first_id().map(str::to_owned);
+                        return false;
+                    };
                     self.mirror.items.push(item.clone());
                     self.mirror_cursor = remote.next_id(&id).map(str::to_owned);
                 } else {
@@ -250,7 +258,12 @@ impl PrepareWork {
             }
             Phase::UpdateDelete => {
                 if let Some((previous, id)) = self.updates.next() {
-                    if self.old_by_id.get(&id).is_some_and(|&at| matches!(&self.old.items[at], ChatItem::Message(message) if message.content.is_empty())) { return false; }
+                    if self.old_by_id.get(&id).is_some_and(|&at| {
+                        matches!(&self.old.items[at], ChatItem::Message(message)
+                            if message.content.is_empty())
+                    }) {
+                        return false;
+                    }
                     self.delete(machine, update, step, id.clone());
                     self.update_item = Some((previous, id));
                     self.phase = Phase::UpdateCreate;
@@ -327,22 +340,8 @@ impl PrepareWork {
             + self.diff.retained_units()
     }
 
-    pub(super) fn retire_step(&mut self) -> bool {
-        self.retired_frames.pop().is_some()
-            || self.filtered_out.pop().is_some()
-            || self.input.items.pop().is_some()
-            || self.input_items.as_mut().is_some_and(|items| items.next().is_some())
-            || self.filtered.items.pop().is_some()
-            || self.mirror.items.pop().is_some()
-            || self.old.items.pop().is_some()
-            || self.old_by_id.pop_first().is_some()
-            || self.input_by_id.pop_first().is_some()
-            || self.new_by_id.pop_first().is_some()
-            || self.calls.pop_first().is_some()
-            || self.removes.next().is_some()
-            || self.creates.next().is_some()
-            || self.updates.next().is_some()
-            || self.diff.retire_step()
+    pub(super) fn completed(&self) -> bool {
+        !self.replay && matches!(self.phase, Phase::Cleanup)
     }
 
     pub(super) fn replay_ready(&self) -> bool {

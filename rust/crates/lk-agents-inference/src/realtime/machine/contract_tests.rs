@@ -3,6 +3,7 @@
 use super::*;
 
 mod server_items;
+mod review_fixes;
 use crate::realtime::dialect::OPENAI;
 use crate::realtime::protocol::Incoming;
 use lk_agents_abi::llm::realtime::{GenerateReply, PushItem, UpdateChatCtx};
@@ -235,8 +236,8 @@ fn long_context(count: usize) -> ChatContext {
 }
 
 fn retire_context(m: &mut RealtimeMachine) {
-    while let Some(mut retirement) = m.take_context_retirement() {
-        while !retirement.advance(64) {}
+    while let Some(retirement) = m.take_context_retirement() {
+        drop(retirement);
     }
 }
 

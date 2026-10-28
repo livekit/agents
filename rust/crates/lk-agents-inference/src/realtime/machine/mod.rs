@@ -59,6 +59,7 @@ pub struct RealtimeMachine {
 
     remote: RemoteChatContext,
     desired: RemoteChatContext,
+    desired_epoch: u64,
     tools: Arc<Vec<ToolSpec>>,
 
     generation: Generation,
@@ -143,6 +144,7 @@ impl RealtimeMachine {
             first_token_at: None,
             remote: RemoteChatContext::new(),
             desired: RemoteChatContext::new(),
+            desired_epoch: 0,
             tools: Arc::new(Vec::new()),
             generation: Generation::None,
             closed_messages: BTreeSet::new(),
@@ -455,7 +457,7 @@ impl RealtimeMachine {
         for req_id in pending.into_iter().rev() {
             match self.reply_frames.get(&req_id) {
                 Some(frame) => {
-                    if self.context_work_pending() {
+                    if self.context_pages_pending() {
                         self.defer_reply(req_id, true);
                     } else {
                         step.frames.push(frame.clone());
@@ -496,7 +498,8 @@ impl RealtimeMachine {
             self.retired.push_back(Retired::Context(target));
         }
         if self.desired.revision() != 0 {
-            self.retired.push_back(Retired::Remote(std::mem::take(&mut self.desired)));
+            let desired = self.take_desired();
+            self.retired.push_back(Retired::Remote(desired));
         }
         if self.remote.revision() != 0 {
             self.retired.push_back(Retired::Remote(std::mem::take(&mut self.remote)));
@@ -599,7 +602,7 @@ impl RealtimeMachine {
 
     pub fn command(&mut self, now: Ts, cmd: Command) -> Step {
         if !self.closing
-            && self.context_work_pending()
+            && self.context_pages_pending()
             && matches!(
                 &cmd,
                 Command::PushAudio(_)
@@ -610,12 +613,12 @@ impl RealtimeMachine {
         {
             return self.queue_context_media(now, cmd);
         }
-        let mut step = self.apply_command(now, cmd);
+        let mut step = self.apply_command(now, cmd, context::CONTEXT_PAGE);
         self.enforce_retirement_capacity(now, &mut step);
         step
     }
 
-    fn apply_command(&mut self, now: Ts, cmd: Command) -> Step {
+    fn apply_command(&mut self, now: Ts, cmd: Command, context_budget: usize) -> Step {
         if self.closing {
             return match cmd {
                 Command::GenerateReply(lk_agents_abi::llm::realtime::GenerateReply {
@@ -678,7 +681,7 @@ impl RealtimeMachine {
                 Step::default()
             }
             Command::PushItem(lk_agents_abi::llm::realtime::PushItem { item, .. }) => {
-                if self.context_work_pending() {
+                if self.context_pages_pending() {
                     self.queue_context_item(now, *item)
                 } else {
                     self.submit_context_item(*item)
@@ -724,7 +727,7 @@ impl RealtimeMachine {
                 };
                 self.reply_frames.retain(|id, _| self.pending_replies.contains(id));
                 self.reply_frames.insert(req_id.clone(), frame.clone());
-                if self.context_work_pending() {
+                if self.context_pages_pending() {
                     self.defer_reply(req_id, false);
                     Step::default()
                 } else {
@@ -768,7 +771,7 @@ impl RealtimeMachine {
                 self.pending_replies.insert(req_id.clone());
                 let frame = Outgoing::ForceMessage { req_id: req_id.clone(), text };
                 self.say_frames.insert(req_id.clone(), frame.clone());
-                if self.context_work_pending() {
+                if self.context_pages_pending() {
                     self.defer_reply(req_id, false);
                     Step::default()
                 } else {
@@ -821,6 +824,7 @@ impl RealtimeMachine {
                         audio_end_ms,
                         audio_transcript,
                     },
+                    context_budget,
                 )
             }
         }

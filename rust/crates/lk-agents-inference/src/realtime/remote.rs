@@ -115,7 +115,6 @@ impl RemoteChatContext {
 
     pub fn get_mut(&mut self, item_id: &str) -> Option<&mut ChatItem> {
         let node = self.nodes.get_mut(item_id)?;
-        self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Some(&mut node.item)
     }
 
@@ -199,12 +198,6 @@ impl RemoteChatContext {
         }
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(node.item)
-    }
-
-    /// A retired conversation is consumed one item at a time, without flattening its index.
-    pub(crate) fn pop_front(&mut self) -> Option<ChatItem> {
-        let id = self.head.clone()?;
-        self.delete(&id).ok()
     }
 }
 

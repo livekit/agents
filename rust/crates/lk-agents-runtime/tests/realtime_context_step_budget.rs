@@ -83,8 +83,8 @@ fn observe(step: Step, ids: &mut Vec<String>) {
 }
 
 fn execute_retirements(machine: &mut RealtimeMachine) {
-    while let Some(mut retirement) = machine.take_context_retirement() {
-        while !retirement.advance(64) {}
+    while let Some(retirement) = machine.take_context_retirement() {
+        drop(retirement);
     }
 }
 

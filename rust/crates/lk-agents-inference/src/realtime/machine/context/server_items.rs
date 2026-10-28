@@ -90,12 +90,6 @@ impl ServerItemsWork {
             + self.source.as_ref().map_or(0, |(_, source)| source.retained_units())
             + self.prior.as_ref().map_or(0, |prior| prior.retained_units())
     }
-
-    pub(super) fn retire_step(&mut self) -> bool {
-        self.items.pop_front().is_some()
-            || self.source.as_mut().is_some_and(|(_, source)| source.pop_front().is_some())
-            || self.prior.as_mut().is_some_and(|prior| prior.retire_step())
-    }
 }
 
 impl RealtimeMachine {

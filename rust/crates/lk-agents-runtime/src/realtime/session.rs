@@ -300,6 +300,7 @@ impl NativeRealtime {
             cleanup: std::sync::Mutex::new(None),
             retirement: std::sync::Mutex::new(None),
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
+            context_ready: tokio::sync::Notify::new(),
             retirement_closing: std::sync::atomic::AtomicBool::new(false),
         });
         let commands = Arc::new(super::queue::Ingress {
@@ -349,21 +350,39 @@ pub(super) struct Shared {
     machine: Mutex<RealtimeMachine>,
     retirement: std::sync::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     retirement_wake: Arc<tokio::sync::Notify>,
+    context_ready: tokio::sync::Notify,
     retirement_closing: std::sync::atomic::AtomicBool,
     /// The machine's, mirrored where a synchronous read reaches it; `update_options` moves it.
     caps: std::sync::Mutex<RealtimeCapabilities>,
 }
 
 impl Shared {
-    fn incomplete_cleanup(&self, generation: u64, label: &str) {
+    fn record_incomplete_cleanup(&self, generation: u64) -> bool {
         let mut cleanup = self.cleanup.lock().unwrap_or_else(|error| error.into_inner());
         if cleanup.is_some() {
-            return;
+            return false;
         }
         *cleanup =
             Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation });
-        drop(cleanup);
+        true
+    }
+
+    fn incomplete_cleanup(&self, generation: u64, label: &str) {
+        if !self.record_incomplete_cleanup(generation) {
+            return;
+        }
         log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime cleanup did not settle within its deadline");
+    }
+
+    fn retirement_unavailable(
+        &self,
+        generation: u64,
+        label: &str,
+        error: &crate::process::ProcessError,
+    ) {
+        if self.record_incomplete_cleanup(generation) {
+            log::error!(target: "livekit.agents", connection_generation = generation, model = label, cause = error.to_string().as_str(); "realtime context cleanup service is unavailable");
+        }
     }
 }
 
@@ -627,7 +646,9 @@ impl Pump {
                 Box<dyn std::future::Future<Output = Result<wire::Incoming, ApiError>> + Send>,
             >,
         > = None;
+        let mut context_due = false;
         loop {
+            tokio::task::yield_now().await;
             {
                 let mut machine = self.shared.machine.lock().await;
                 while let Ok(sent) = receipts.try_recv() {
@@ -646,7 +667,11 @@ impl Pump {
                 .chain(connection.next_deadline())
                 .min();
             let sleep = deadline.map(|at| self.clock.wait_until(at));
-            let context_work_pending = self.shared.machine.lock().await.context_pages_pending();
+            let context_wake = self.shared.context_ready.notified();
+            tokio::pin!(context_wake);
+            context_wake.as_mut().enable();
+            let continuation_ready = self.shared.machine.lock().await.context_continuation_ready();
+            let can_continue = continuation_ready && outgoing.capacity() > 0;
 
             let mut step = tokio::select! {
                 biased;
@@ -661,6 +686,7 @@ impl Pump {
                 },
                 result = &mut writer => return result.map(|()| Outcome::Closed),
                 () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); },
+                () = &mut context_wake => continue,
                 Some(sent) = receipts.recv() => {
                     self.shared.machine.lock().await.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
                     continue;
@@ -697,7 +723,9 @@ impl Pump {
                     Err(TransportError::Timeout) => continue,
                     Err(_) => return Err(self.lost()),
                 },
-                cmd = commands.recv() => match cmd {
+                cmd = commands.recv(), if !context_due || !can_continue => {
+                    context_due = true;
+                    match cmd {
                     Some(Cmd::Core(cmd)) => {
                         let mut m = self.shared.machine.lock().await;
                         m.command(self.clock.now(), cmd)
@@ -712,10 +740,14 @@ impl Pump {
                         self.close().await;
                         return Ok(Outcome::Closed);
                     }
+                    }
                 },
-
-
-                () = tokio::task::yield_now(), if context_work_pending && outgoing.capacity() > 0 => {
+                capacity = outgoing.reserve(), if continuation_ready && !can_continue => {
+                    drop(capacity.map_err(|_| ApiError::new("realtime writer closed during context replay").with_retryable(false))?);
+                    continue;
+                },
+                () = std::future::ready(()), if can_continue => {
+                    context_due = false;
                     self.shared.machine.lock().await.continue_context(self.clock.now())
                 }
 
