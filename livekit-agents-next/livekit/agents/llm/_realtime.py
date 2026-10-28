@@ -11,6 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
+from .._exceptions import APIError
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from . import realtime as llm_realtime
 from .tool_context import ToolChoice
@@ -41,6 +42,20 @@ DEFAULT_VOICE = "marin"
 
 # the metrics label direct OpenAI sessions had before the client moved into the core
 _PLUGIN_LABEL = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+
+
+def _native_connect_timeout(options: APIConnectOptions) -> float:
+    """Project the connect-only interface of the native websocket adapter."""
+    for field, value in (
+        ("write_timeout", options.write_timeout),
+        ("read_timeout", options.read_timeout),
+        ("total_timeout", options.total_timeout),
+    ):
+        if value is not None:
+            raise APIError(f"Native websocket cannot enforce conn_options.{field}", retryable=False)
+    if options.connect_timeout is None:
+        raise APIError("Native websocket cannot disable connect_timeout", retryable=False)
+    return options.connect_timeout
 
 
 # sessions run in the core; the name stays for the plugins that subclass it
@@ -127,7 +142,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             azure_defaults=_azure_defaults,
-            timeout=conn_options.timeout,
+            timeout=_native_connect_timeout(conn_options),
             max_retry=conn_options.max_retry,
             retry_interval=conn_options.retry_interval,
             label=label,

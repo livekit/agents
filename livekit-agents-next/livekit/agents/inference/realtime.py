@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
 from ..llm import realtime as llm_realtime
-from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
+from ..llm._realtime import (
+    RealtimeModel as _RealtimeModel,
+    RealtimeSession,
+    _native_connect_timeout,
+)
 from ..llm.tool_context import ToolChoice
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ._utils import (
@@ -63,7 +67,7 @@ class RealtimeModel(_RealtimeModel):
             modalities=modalities or None,
             inference_provider=provider,
             inference_class=inference_class,
-            timeout=conn_options.timeout,
+            timeout=_native_connect_timeout(conn_options),
             max_retry=conn_options.max_retry,
             retry_interval=conn_options.retry_interval,
             label=f"{type(self).__module__}.{type(self).__name__}",
