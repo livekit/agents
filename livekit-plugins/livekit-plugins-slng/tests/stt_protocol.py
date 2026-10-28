@@ -56,6 +56,7 @@ PROVIDERS = (
         create_stt,
         ("https://docs.slng.ai/api-reference/speech-to-text/overview",),
         progress_requires_final=True,
+        reconnect_on_idle_close=True,
         completion_unknown_reason="Unmute Bridge EOF ordering needs a verified specification or trace",
         transport_fixture=TransportFixture(
             "slng",

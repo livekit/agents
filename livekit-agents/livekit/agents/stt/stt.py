@@ -532,7 +532,7 @@ class RecognizeStream(ABC):
                         raise APITimeoutError("STT connection operation timed out") from e
                     except (aiohttp.ClientError, ConnectionError, OSError) as e:
                         raise APIConnectionError("STT connection operation failed") from e
-                if reconnect_task in done:
+                if reconnect is not None and reconnect.is_set():
                     return True
                 if receiver in done and not sender.done():
                     if drain_started is None or not drain_started.is_set():

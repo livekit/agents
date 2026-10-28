@@ -553,6 +553,9 @@ class SpeechStream(stt.SpeechStream):
         """Run the streaming transcription session"""
         drain_started = asyncio.Event()
         pending_commits = 0
+        commits_completed = asyncio.Event()
+        commits_completed.set()
+        manual_commits = self._server_vad is None
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -598,9 +601,12 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif isinstance(data, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
-                        if (missing := min_commit_samples - uncommitted_samples) > 0:
+                        if (
+                            uncommitted_samples
+                            and (missing := min_commit_samples - uncommitted_samples) > 0
+                        ):
                             frames.append(rtc.AudioFrame.create(self._opts.sample_rate, 1, missing))
-                        has_ended = True
+                        has_ended = uncommitted_samples > 0
 
                     for frame in frames:
                         self._audio_duration_collector.push(frame.duration)
@@ -619,6 +625,7 @@ class SpeechStream(stt.SpeechStream):
                     if has_ended:
                         self._audio_duration_collector.flush()
                         pending_commits += 1
+                        commits_completed.clear()
                         if self._input_ch.closed and self._input_ch.empty():
                             drain_started.set()
                         await ws.send_str(
@@ -635,6 +642,8 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = False
 
                 drain_started.set()
+                if manual_commits:
+                    await commits_completed.wait()
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
@@ -664,10 +673,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
-                    if parsed.get("message_type") == self._final_message_type:
+                    if manual_commits and parsed.get("message_type") == self._final_message_type:
                         pending_commits = max(0, pending_commits - 1)
-                        if drain_started.is_set() and pending_commits == 0:
-                            return
+                        if pending_commits == 0:
+                            commits_completed.set()
                     if parsed.get("message_type") in (
                         "partial_transcript",
                         "committed_transcript",
@@ -683,9 +692,11 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                manual_commits = self._server_vad is None
                 ws = await self._connect_ws()
                 drain_started.clear()
                 pending_commits = 0
+                commits_completed.set()
                 self._last_partial_text = ""
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
@@ -706,6 +717,9 @@ class SpeechStream(stt.SpeechStream):
                     reconnect=self._reconnect_event,
                     background=[asyncio.create_task(keepalive_task(ws))],
                     drain_started=drain_started,
+                    # VAD finals have no ID that ties them to a manual commit.
+                    require_completion=manual_commits,
+                    sender_waits_for_completion=manual_commits,
                 )
                 if not reconnect:
                     break

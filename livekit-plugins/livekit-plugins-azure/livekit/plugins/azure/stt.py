@@ -18,8 +18,10 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -28,6 +30,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -295,7 +298,8 @@ class SpeechStream(stt.SpeechStream):
                 )
 
         while True:
-            self._session_stopped_event.clear()
+            self._session_started_event = asyncio.Event()
+            self._session_stopped_event = asyncio.Event()
             self._cancellation_error = None
 
             self._stream = speechsdk.audio.PushAudioInputStream(
@@ -306,13 +310,16 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
             self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
-            self._recognizer.recognizing.connect(self._on_recognizing)
-            self._recognizer.recognized.connect(self._on_recognized)
-            self._recognizer.speech_start_detected.connect(self._on_speech_start)
-            self._recognizer.speech_end_detected.connect(self._on_speech_end)
-            self._recognizer.session_started.connect(self._on_session_started)
-            self._recognizer.session_stopped.connect(self._on_session_stopped)
-            self._recognizer.canceled.connect(self._on_canceled)
+            for signal, callback in (
+                (self._recognizer.recognizing, self._on_recognizing),
+                (self._recognizer.recognized, self._on_recognized),
+                (self._recognizer.speech_start_detected, self._on_speech_start),
+                (self._recognizer.speech_end_detected, self._on_speech_end),
+                (self._recognizer.session_started, self._on_session_started),
+                (self._recognizer.session_stopped, self._on_session_stopped),
+                (self._recognizer.canceled, self._on_canceled),
+            ):
+                signal.connect(partial(self._dispatch_event, self._recognizer, callback))
             self._recognizer.start_continuous_recognition()
 
             try:
@@ -331,6 +338,10 @@ class SpeechStream(stt.SpeechStream):
                 if reconnect:
                     self._reconnect_event.clear()
                     self._stream.close()
+                    try:
+                        await asyncio.wait_for(receive(), self._conn_options.final_response_timeout)
+                    except asyncio.TimeoutError as e:
+                        raise APITimeoutError("Azure STT final response timed out") from e
 
                 if not reconnect:
                     break
@@ -341,6 +352,16 @@ class SpeechStream(stt.SpeechStream):
                     del self._recognizer
 
                 await asyncio.to_thread(_cleanup)
+
+    def _dispatch_event(
+        self, recognizer: speechsdk.SpeechRecognizer, callback: Callable[[Any], None], evt: Any
+    ) -> None:
+        def dispatch() -> None:
+            if getattr(self, "_recognizer", None) is recognizer:
+                callback(evt)
+
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(dispatch)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         with contextlib.suppress(RuntimeError):

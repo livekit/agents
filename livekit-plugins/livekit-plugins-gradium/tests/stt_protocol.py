@@ -44,11 +44,22 @@ class Gradium(Protocol):
             )
         self.emitted_words = len(words)
 
+    async def finish_turn(self):
+        await super().finish_turn()
+        self.connection.send(
+            {"type": "end_text", "stop_s": len(self.connection.audio) / 48000}, final=True
+        )
+        # Six tokens of decoder lookahead follow the first inactivity step.
+        for _ in range(7):
+            self.connection.send(
+                {"type": "step", "vad": [{"inactivity_prob": 1.0}] * 3}, final=True
+            )
+
 
 def create_stt(server, monkeypatch):
     from livekit.plugins.gradium import STT
 
-    return STT(api_key="test-key", model_endpoint=server.ws_url)
+    return STT(api_key="test-key", model_endpoint=server.ws_url, vad_flush=False)
 
 
 PROVIDERS = (

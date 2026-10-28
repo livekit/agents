@@ -660,7 +660,7 @@ def _audio_ms_before_each_commit(sent: list[dict], sample_rate: int = 16000) -> 
     return audio_ms
 
 
-async def test_flush_pads_a_short_turn_with_silence() -> None:
+async def test_flush_pads_a_short_turn_and_skips_an_empty_commit() -> None:
     # Scribe answers a commit with less than 300ms of audio since the previous one with
     # commit_throttled and closes the session, dropping the uncommitted audio. The commit still
     # has to go out on the flush: the caller waits on its final transcript, and no more audio
@@ -679,10 +679,10 @@ async def test_flush_pads_a_short_turn_with_silence() -> None:
         await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 1)
 
         stream.flush()
-        await _wait_until(lambda: sum(msg["commit"] for msg in ws.sent) == 2)
+        await asyncio.sleep(0.01)
 
-        assert _audio_ms_before_each_commit(ws.sent) == [300, 300]
-        silence_ms = (_MIN_COMMIT_MS - 100) + _MIN_COMMIT_MS
+        assert _audio_ms_before_each_commit(ws.sent) == [300]
+        silence_ms = _MIN_COMMIT_MS - 100
         audio = b"".join(base64.b64decode(msg["audio_base_64"]) for msg in ws.sent)
         assert audio == speech + bytes(16000 * 2 * silence_ms // 1000)
     finally:
@@ -976,8 +976,52 @@ async def test_final_commit_failure_is_reported(failure: str) -> None:
         ws.receive = close_message
         ws.close_code = 1000
     try:
+        stream.push_frame(_frame(300))
         stream.end_input()
         with pytest.raises((APIConnectionError, APIStatusError)):
             await asyncio.wait_for(stream._task, 1)
     finally:
         await stream.aclose()
+
+
+@pytest.mark.usefixtures("job_process")
+async def test_server_vad_final_cannot_confirm_the_last_manual_commit(monkeypatch):
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+    from .stt_harness.protocol import Transcript
+    from .stt_harness.server import STTServer, json_message
+
+    provider = provider_by_name("elevenlabs_server_vad")
+
+    class DelayedCommits(provider.protocol):
+        async def receive(self, message):
+            if json_message(message).get("commit"):
+                self.connection.server.final_requested.set()
+            else:
+                await super().receive(message)
+
+    provider = dataclasses.replace(provider, protocol=DelayedCommits)
+    server = STTServer(provider, segments=make_audio_segments(provider))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        for segment in make_audio_segments(provider):
+            push_audio(stream, provider, segment)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        peer = server.connections[0]
+        await peer.protocol.send_transcript(Transcript("first", True, 0, 0.4, 0))
+        await peer.replies.join()
+        await asyncio.sleep(0.01)
+        assert not collector.done(), "an earlier VAD final consumed the manual commit"
+        await peer.protocol.send_transcript(Transcript("tail", True, 0.4, 0.8, 1))
+        await asyncio.wait_for(collector, 1)
+        assert [
+            e.alternatives[0].text for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ] == ["first", "tail"]
+        assert not errors

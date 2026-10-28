@@ -1482,7 +1482,7 @@ async def test_a_close_with_a_turn_open_is_an_error(
     await stream.aclose()
 
 
-async def test_unacknowledged_trailing_audio_reports_a_timeout(
+async def test_trailing_silence_drains_without_another_turn_end(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server()
@@ -1503,10 +1503,9 @@ async def test_unacknowledged_trailing_audio_reports_a_timeout(
 
     events: list[stt.SpeechEvent] = []
     started = time.time()
-    with pytest.raises(APITimeoutError):
-        async with asyncio.timeout(2):
-            async for event in stream:
-                events.append(event)
+    async with asyncio.timeout(2):
+        async for event in stream:
+            events.append(event)
 
     elapsed = time.time() - started
     await stream.aclose()
@@ -1516,7 +1515,7 @@ async def test_unacknowledged_trailing_audio_reports_a_timeout(
     assert elapsed < 1
 
 
-async def test_an_unanswered_flush_is_a_timeout(
+async def test_an_unanswered_flush_has_a_bounded_quiet_drain(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
     base_url = await finalizing_server(answer_flush=False)
@@ -1527,10 +1526,9 @@ async def test_an_unanswered_flush_is_a_timeout(
     stream.push_frame(_frame())
     stream.end_input()
 
-    with pytest.raises(APITimeoutError):
-        async with asyncio.timeout(2):
-            async for _ in stream:
-                pass
+    async with asyncio.timeout(2):
+        async for _ in stream:
+            pass
 
     await stream.aclose()
 

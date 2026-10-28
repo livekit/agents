@@ -42,6 +42,9 @@ class Protocol:
     async def send_transcript(self, result: Transcript) -> None:
         raise NotImplementedError
 
+    async def finish_turn(self) -> None:
+        await self.connection.finalize()
+
 
 @dataclass(frozen=True, kw_only=True)
 class ProviderConfig:
@@ -71,6 +74,8 @@ class Provider(ProviderConfig):
     sample_rate: int = 16000
     # Only a missing protocol guarantee can exclude a completion test.
     completion_unknown_reason: str = ""
+    # Some protocols have turn finals but no acknowledgement for an idle stop.
+    require_completion: bool = True
     completion_on_close: bool = True
     # SDKs may manage heartbeat themselves rather than use APIConnectOptions.
     uses_websocket_monitor: bool = True
@@ -80,6 +85,7 @@ class Provider(ProviderConfig):
     expected_attempts_after_audio: int = 3
     # A replay buffer can require a final before its separate replay debt clears.
     progress_requires_final: bool = False
+    reconnect_on_idle_close: bool = False
 
 
 @dataclass(frozen=True)

@@ -285,6 +285,7 @@ class RecognizeStream(stt.RecognizeStream):
                     asyncio.create_task(send()),
                     asyncio.create_task(receive()),
                     drain_started=drain_started,
+                    require_completion=False,
                 )
 
         # Provider errors can quote the audio payload or transcript, so the text is logged

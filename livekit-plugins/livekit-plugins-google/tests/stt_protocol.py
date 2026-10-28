@@ -56,7 +56,12 @@ PROVIDERS = (
         ("https://ai.google.dev/gemini-api/docs/live-api/live-transcribe",),
         uses_websocket_monitor=False,
         tls=True,
+        require_completion=False,
         completion_on_close=False,
+        live_constructor="livekit.plugins.google.beta.gemini_stt:STT",
+        required_env=("GOOGLE_API_KEY",),
+        live_options={"vertexai": False},
+        live_options_from_env={"api_key": "GOOGLE_API_KEY"},
     ),
 )
 

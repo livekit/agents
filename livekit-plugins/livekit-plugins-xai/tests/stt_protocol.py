@@ -21,6 +21,7 @@ class XAI(Protocol):
             if event["type"] == "audio.done":
                 peer.end_input()
                 await peer.finalize()
+                peer.send({"type": "transcript.done", "text": ""}, final=True)
                 peer.close()
             else:
                 assert event["type"] in ("finalize", "Finalize")
@@ -29,7 +30,7 @@ class XAI(Protocol):
     async def send_transcript(self, result):
         self.connection.send(
             {
-                "type": "transcript.done" if result.final else "transcript.partial",
+                "type": "transcript.partial",
                 "text": result.text,
                 "is_final": result.final,
                 "speech_final": result.final,
@@ -58,6 +59,7 @@ PROVIDERS = (
             plugin("xai.stt"),
             initial_messages=({"type": "transcript.created"},),
             completion_messages=({"type": "transcript.done", "text": "words"},),
+            stop_message={"type": "audio.done"},
         ),
         live_constructor="livekit.plugins.xai.stt:STT",
         required_env=("XAI_API_KEY",),

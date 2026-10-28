@@ -58,5 +58,8 @@ PROVIDERS = (
         uses_websocket_monitor=False,
         final_response_timeout=0.8,
         completion_on_close=False,
+        require_completion=False,
+        live_constructor="livekit.plugins.reson8:STT",
+        required_env=("RESON8_API_KEY",),
     ),
 )

@@ -20,6 +20,7 @@ def create_sdk_fixture(monkeypatch):
 
     class Recognizer:
         def __init__(self):
+            server.recognizers.append(self)
             for event in (
                 "recognizing",
                 "recognized",
@@ -38,8 +39,8 @@ def create_sdk_fixture(monkeypatch):
         def stop_continuous_recognition(self):
             server.closed = True
 
-    recognizer = Recognizer()
-    monkeypatch.setattr(module, "_create_speech_recognizer", lambda **kw: recognizer)
+    server.recognizers = []
+    monkeypatch.setattr(module, "_create_speech_recognizer", lambda **kw: Recognizer())
     monkeypatch.setattr(
         module.speechsdk.audio,
         "PushAudioInputStream",
@@ -51,11 +52,12 @@ def create_sdk_fixture(monkeypatch):
     provider = module.STT(speech_key="test", speech_region="test")
 
     def finish():
+        recognizer = server.recognizers[-1]
         recognizer.recognized.emit(NS(result=NS(text="words", offset=0, duration=1000000)))
         recognizer.session_stopped.emit()
 
     server.finish = finish
-    server.drop = recognizer.session_stopped.emit
+    server.drop = lambda: server.recognizers[-1].session_stopped.emit()
     return provider, server
 
 
@@ -66,5 +68,7 @@ PROVIDERS = (
         (
             "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-use-audio-input-streams",
         ),
+        live_constructor="livekit.plugins.azure:STT",
+        required_env=("AZURE_SPEECH_KEY", "AZURE_SPEECH_REGION"),
     ),
 )

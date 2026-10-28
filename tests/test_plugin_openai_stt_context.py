@@ -21,6 +21,40 @@ from .stt_harness.discovery import provider_by_name
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.usefixtures("job_process")
+async def test_failed_transcription_reports_provider_error_without_waiting_for_drain(monkeypatch):
+    from livekit.agents import APIError
+
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+
+    provider = provider_by_name("openai")
+
+    class FailedItem(provider.protocol):
+        async def send_transcript(self, result):
+            if not result.final:
+                return await super().send_transcript(result)
+            peer = self.connection
+            await peer.acknowledge({"type": "input_audio_buffer.committed", "item_id": "failed"})
+            peer.send(
+                {
+                    "type": "conversation.item.input_audio_transcription.failed",
+                    "item_id": "failed",
+                    "content_index": 0,
+                    "error": {"code": "server_error", "message": "test transcription failed"},
+                }
+            )
+
+    provider = dataclasses.replace(provider, protocol=FailedItem, final_response_timeout=5)
+    async with open_stream(provider, monkeypatch) as (stream, collector, _, _, errors):
+        for segment in make_audio_segments(provider):
+            push_audio(stream, provider, segment)
+        stream.end_input()
+        with pytest.raises(APIError, match="transcription failed") as error:
+            await asyncio.wait_for(collector, 1)
+        assert error.value.body["code"] == "server_error"
+        assert errors and not errors[-1].recoverable
+
+
 class _FakeMessage:
     type = aiohttp.WSMsgType.TEXT
 

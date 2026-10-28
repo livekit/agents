@@ -31,8 +31,10 @@ class AgentSTT(Protocol):
             peer.send({"message": "EndOfTranscript"}, final=True)
         elif kind == "ForceEndOfUtterance":
             await peer.finalize()
+        elif kind == "GetSpeakers":
+            peer.send({"message": "SpeakersResult", "speakers": [{"speaker_id": "S1"}]})
         else:
-            assert kind in ("SetRecognitionConfig", "GetSpeakers")
+            assert kind == "SetRecognitionConfig"
 
     async def send_transcript(self, result):
         self.connection.send(

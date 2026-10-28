@@ -31,6 +31,13 @@ completion ordering. Cite the provider specification in `sources`. Do not import
 production serializers, parsers, or stop-message constants. A test must detect
 when production code sends the wrong message.
 
+`finish_turn()` emits an ordinary turn final while input stays open. Override it
+when a turn final must follow a client flush. Keep terminal replies separate.
+Set `require_completion=False` if an idle stop has no acknowledgement; the final
+response budget then bounds a successful quiet drain. Transport failures still
+raise errors. `reconnect_on_idle_close` identifies providers that can safely retire
+a connection after a final and open a new one for the next utterance.
+
 The client factory constructs the real STT client and redirects its endpoints to
 `STTServer`. It can supply test keys and local input fixtures. Do not replace
 `send`, `receive`, or SDK event iterators with mocks in this factory.

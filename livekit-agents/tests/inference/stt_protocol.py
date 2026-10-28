@@ -62,7 +62,8 @@ PROVIDERS = (
         Inference,
         create_stt,
         (__doc__.splitlines()[2],),
-        final_response_timeout=4,
+        final_response_timeout=0.25,
+        require_completion=False,
         transport_fixture=TransportFixture(
             "inference",
             "livekit.agents.inference.stt",

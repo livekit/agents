@@ -29,7 +29,7 @@ class Nabrah(Protocol):
         self.connection.send(
             {
                 "type": "transcript",
-                "text": result.text,
+                "text": result.text + (" <eot>" if result.final else ""),
                 "is_final": result.final,
                 "audio_processed": result.end,
             },

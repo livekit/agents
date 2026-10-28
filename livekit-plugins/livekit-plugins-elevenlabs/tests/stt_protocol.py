@@ -1,6 +1,7 @@
-"""Scribe v2: JSON audio chunks; a commit yields correlated stable transcript copies."""
+"""Scribe v2: JSON audio chunks; manual and VAD commits yield stable transcript copies."""
 
 import base64
+from dataclasses import replace
 
 from tests.stt_harness.faults import TransportFixture, plugin
 from tests.stt_harness.protocol import Protocol, Provider
@@ -42,11 +43,15 @@ class Scribe(Protocol):
             )
 
 
-def create_stt(server, monkeypatch):
+def create_stt(server, monkeypatch, **kwargs):
     from livekit.plugins.elevenlabs import STT
 
     return STT(
-        api_key="test-key", base_url=server.url + "/v1", use_realtime=True, sample_rate=16000
+        api_key="test-key",
+        base_url=server.url + "/v1",
+        use_realtime=True,
+        sample_rate=16000,
+        **kwargs,
     )
 
 
@@ -74,5 +79,21 @@ PROVIDERS = (
         live_options={"use_realtime": True},
         live_options_from_env={},
         completion_on_close=False,
+    ),
+)
+
+
+def create_server_vad_stt(server, monkeypatch):
+    return create_stt(server, monkeypatch, server_vad={})
+
+
+PROVIDERS += (
+    replace(
+        PROVIDERS[0],
+        name="elevenlabs_server_vad",
+        create_stt=create_server_vad_stt,
+        transport_fixture=None,
+        require_completion=False,
+        live_options={"use_realtime": True, "server_vad": {}},
     ),
 )

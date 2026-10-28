@@ -106,6 +106,28 @@ async def test_reconnect_cancels_connection_tasks(stream, draining):
     assert sender.done()
 
 
+async def test_receiver_can_request_reconnect_before_waiter_runs(stream):
+    sender, _, _ = futures()
+
+    class DelayedWaiter(asyncio.Event):
+        async def wait(self):
+            await asyncio.sleep(0.1)
+            return await super().wait()
+
+    reconnect = DelayedWaiter()
+
+    async def receive():
+        reconnect.set()
+
+    assert (
+        await stream._run_connection_tasks(
+            sender, asyncio.create_task(receive()), reconnect=reconnect
+        )
+        is True
+    )
+    assert sender.cancelled()
+
+
 @pytest.mark.parametrize("draining", [False, True])
 async def test_cancellation_awaits_all_connection_tasks(stream, draining):
     sender, receiver, background = futures()

@@ -173,6 +173,7 @@ class STTServer:
         self.allow_partial_input = False
         self.fault_after_audio: str | None = None
         self.processing_stalled = False
+        self.ignore_client_messages = False
         self.app = web.Application()
         self.app.router.add_route("*", "/{path:.*}", self.handle)
         self.http = TestServer(self.app)
@@ -230,7 +231,8 @@ class STTServer:
                     connection.pongs += 1
                     connection.pong_received.set()
                 elif message.type in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
-                    await connection.protocol.receive(message)
+                    if not self.ignore_client_messages:
+                        await connection.protocol.receive(message)
                 elif message.type == aiohttp.WSMsgType.ERROR:
                     raise ws.exception() or ConnectionError("server WebSocket receive failed")
             return ws

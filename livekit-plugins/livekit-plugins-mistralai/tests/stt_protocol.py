@@ -1,5 +1,6 @@
 """Voxtral Realtime: created, update, append, text deltas, end, transcription.done."""
 
+import asyncio
 import base64
 from dataclasses import replace
 
@@ -16,6 +17,7 @@ class Voxtral(Protocol):
         }
         self.emitted = ""
         self.turn_open = False
+        self.flushed = asyncio.Event()
         self.connection.send({"type": "session.created", "session": self.session})
 
     async def receive(self, message):
@@ -46,6 +48,11 @@ class Voxtral(Protocol):
         else:
             assert kind == "input_audio.flush"
             await peer.finalize()
+            self.flushed.set()
+
+    async def finish_turn(self):
+        await asyncio.wait_for(self.flushed.wait(), 1)
+        self.flushed.clear()
 
     def done_message(self, text, result=None):
         return {

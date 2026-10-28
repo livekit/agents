@@ -354,8 +354,8 @@ class SpeechStream(stt.RecognizeStream):
                     await ws.send_bytes(frame.data.tobytes())
 
             self._audio_duration_collector.flush()
-            await ws.send_str(json.dumps({"type": "audio.done"}))
             drain_started.set()
+            await ws.send_str(json.dumps({"type": "audio.done"}))
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:

@@ -82,3 +82,14 @@ async def collect_events(stream, events):
     """Observe terminal errors through the public iterator, including after the last event."""
     async for event in stream:
         events.append(event)
+
+
+async def wait_for_final(collector, events, text):
+    while not any(
+        event.type == stt.SpeechEventType.FINAL_TRANSCRIPT and event.alternatives[0].text == text
+        for event in events
+    ):
+        if collector.done():
+            await collector
+            raise AssertionError("the public stream ended before the final transcript")
+        await asyncio.sleep(0.01)

@@ -1,5 +1,6 @@
 """Whisper and Qwen3-ASR deployments have different audio and stop messages."""
 
+import asyncio
 import base64
 from dataclasses import replace
 
@@ -56,6 +57,11 @@ class LegacyWhisper(Whisper):
 
 
 class Qwen(Whisper):
+    def __init__(self, connection):
+        super().__init__(connection)
+        self.committing = False
+        self.flushed = asyncio.Event()
+
     async def receive(self, message):
         event = json_message(message)
         if not self.configured:
@@ -65,14 +71,23 @@ class Qwen(Whisper):
             await self.connection.accept_audio(base64.b64decode(event["audio"], validate=True))
         else:
             assert event["type"] == "input_audio_buffer.commit"
-            await self.connection.finalize()
+            self.committing = True
+            # Every commit has a response, including an empty turn.
+            await self.send_transcript(self.connection.result(final=True))
+            self.connection.server.final_requested.set()
+            self.committing = False
+            self.flushed.set()
+
+    async def finish_turn(self):
+        await asyncio.wait_for(self.flushed.wait(), 1)
+        self.flushed.clear()
 
     async def send_transcript(self, result):
         self.connection.send(
             {
                 "type": "transcription",
                 "is_final": result.final,
-                "is_end_of_audio_flush": result.final,
+                "is_end_of_audio_flush": result.final and self.committing,
                 "language": "English",
                 "segments": [{"text": result.text, "start": result.start, "end": result.end}],
             },

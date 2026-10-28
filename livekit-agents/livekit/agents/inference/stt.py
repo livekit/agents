@@ -1329,6 +1329,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(receive_until_complete()),
                     background=background,
                     drain_started=drain_started,
+                    require_completion=False,
                 )
             finally:
                 transcript_timeout.cancel()

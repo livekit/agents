@@ -974,6 +974,7 @@ class SpeechStream(stt.SpeechStream):
                     if input_finished or protocol_close_sent:
                         return True
                     if not buffered_audio:
+                        idle_reconnect.set()
                         return False
                     raise APIStatusError("SLNG connection closed unexpectedly")
 
@@ -1178,6 +1179,7 @@ class SpeechStream(stt.SpeechStream):
                     pending_switch_succeeded = None
 
                 connection_had_transcript = False
+                idle_reconnect = asyncio.Event()
                 send = asyncio.create_task(
                     send_task(
                         ws,
@@ -1195,6 +1197,7 @@ class SpeechStream(stt.SpeechStream):
                     self._run_connection_tasks(
                         send,
                         recv,
+                        reconnect=idle_reconnect,
                         require_completion=False,
                     )
                 )

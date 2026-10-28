@@ -8,7 +8,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, stt, utils
 
-from .stt_harness.discovery import sdk_providers
+from .stt_harness.discovery import provider_by_name, sdk_providers
 from .stt_harness.drivers import collect_events
 
 pytestmark = pytest.mark.unit
@@ -93,3 +93,44 @@ async def test_remote_completion_before_input_end_is_an_error(connection):
     server.drop()
     with pytest.raises(APIError):
         await asyncio.wait_for(collector, 1)
+
+
+@pytest.mark.parametrize("finish_old_session", [True, False])
+async def test_azure_option_change_drains_the_old_recognizer(monkeypatch, finish_old_session):
+    provider, server = provider_by_name("azure").create_fixture(monkeypatch)
+    stream = provider.stream(
+        conn_options=APIConnectOptions(max_retry=0, final_response_timeout=0.2)
+    )
+    events = []
+    collector = asyncio.create_task(collect_events(stream, events))
+    try:
+        await asyncio.wait_for(server.connected.wait(), 1)
+        old = server.recognizers[0]
+        stream.push_frame(rtc.AudioFrame.create(16000, 1, 3200))
+        stream.update_options(language="fr-FR")
+        await asyncio.wait_for(server.stopped.wait(), 1)
+        assert len(server.recognizers) == 1
+        if not finish_old_session:
+            with pytest.raises(APIError):
+                await asyncio.wait_for(collector, 1)
+            assert len(server.recognizers) == 1
+            return
+        server.connected.clear()
+        server.finish()
+        await asyncio.wait_for(server.connected.wait(), 1)
+        assert len(server.recognizers) == 2
+        assert [e.alternatives[0].text for e in events if e.alternatives] == ["words"]
+        old.session_stopped.emit()
+        await asyncio.sleep(0.01)
+        assert not collector.done(), "an old recognizer stopped the new connection"
+        server.stopped.clear()
+        stream.end_input()
+        await asyncio.wait_for(server.stopped.wait(), 1)
+        server.finish()
+        await asyncio.wait_for(collector, 1)
+        assert [e.alternatives[0].text for e in events if e.alternatives] == ["words", "words"]
+    finally:
+        await stream.aclose()
+        await utils.aio.gracefully_cancel(collector)
+        await provider.aclose()
+        await server.close()

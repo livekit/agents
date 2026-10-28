@@ -958,6 +958,12 @@ class SpeechStream(stt.SpeechStream):
                             self._pool.remove(ws)
                             self._reconnect_event.set()
                             return
+                    elif msg_type == "conversation.item.input_audio_transcription.failed":
+                        error_body = data.get("error", {})
+                        raise APIError(
+                            "OpenAI Realtime STT transcription failed",
+                            body=error_body,
+                        )
                     elif msg_type == "error":
                         error_body = data.get("error", {})
                         # Server VAD may already have committed the last audio.

@@ -578,6 +578,23 @@ class SpeechStream(stt.RecognizeStream):
         return info.session_id if info is not None else None
 
     async def _run(self) -> None:
+        try:
+            await self._run_connection()
+        finally:
+            if self._vad_stream is not None:
+                await self._vad_stream.aclose()
+                self._vad_stream = None
+            if self._client is not None:
+                await self._client.close()
+                self._client = None
+
+    async def _main_task(self) -> None:
+        try:
+            await super()._main_task()
+        finally:
+            self._stt._streams.remove(self)
+
+    async def _run_connection(self) -> None:
         """Run the STT stream."""
         logger.debug("Connecting to Speechmatics STT service")
 
@@ -678,24 +695,16 @@ class SpeechStream(stt.RecognizeStream):
             if not transcript_ended.is_set() and client.session_error is None:
                 raise APIConnectionError("Speechmatics connection closed before EndOfTranscript")
 
-        try:
-            await self._run_connection_tasks(
-                asyncio.create_task(send()),
-                asyncio.create_task(self._process_messages()),
-                background=[
-                    asyncio.create_task(watch_transport()),
-                    *([vad_task] if vad_task is not None else []),
-                ],
-                sender_waits_for_completion=True,
-                drain_started=drain_started,
-            )
-        finally:
-            if self._vad_stream is not None:
-                await self._vad_stream.aclose()
-                self._vad_stream = None
-            await self._client.close()
-            if self in self._stt._streams:
-                self._stt._streams.remove(self)
+        await self._run_connection_tasks(
+            asyncio.create_task(send()),
+            asyncio.create_task(self._process_messages()),
+            background=[
+                asyncio.create_task(watch_transport()),
+                *([vad_task] if vad_task is not None else []),
+            ],
+            sender_waits_for_completion=True,
+            drain_started=drain_started,
+        )
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""
@@ -881,6 +890,8 @@ class SpeechStream(stt.RecognizeStream):
 
     async def aclose(self) -> None:
         await super().aclose()
+        if self in self._stt._streams:
+            self._stt._streams.remove(self)
         if self._client is not None:
             await self._client.close()
             self._client = None
