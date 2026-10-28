@@ -267,6 +267,9 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         constants.extend(parse::constants(src, &text)?);
     }
     parse::link(&mut decls)?;
+    let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
+    let mut declared = decl::resolve::declarations(&abi)?;
+    records::link_legacy(&mut decls, &mut declared)?;
     resolve(&decls)?;
     // Aliases first, from every file: a signature may name `Object` or `Extra` from another file.
     let mut texts = Vec::new();
@@ -294,8 +297,6 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     }
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
-    let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
-    let declared = decl::resolve::declarations(&abi)?;
     records::check_in_place(root, &declared)?;
     let conversions = records::conversions(&declared)?;
     o.add(Path::new(adapter::DIR).join(&conversions.path), &conversions.text);
@@ -331,12 +332,13 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         // modules: the records name them (`.language`), the reference's included.
         let python = if *package == REFERENCE_PACKAGE { &records } else { &with_bases };
         // The declared classes are the successor's: the reference keeps its own `_core`. A module
-        // holding both legacy and declared models is one file.
+        // holding both legacy and declared models is one file, in both packages: a legacy model
+        // there may name a declared one.
         let successor = *package != REFERENCE_PACKAGE;
         let legacy: Vec<&python::Out> =
             python.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward).collect();
         for out in &legacy {
-            let text = match models.iter().find(|m| successor && m.path == out.path) {
+            let text = match models.iter().find(|m| m.path == out.path) {
                 Some(m) => records::merge(&out.text, &m.text)
                     .map_err(|e| format!("_generated/{}: {e}", out.path))?,
                 None => out.text.clone(),

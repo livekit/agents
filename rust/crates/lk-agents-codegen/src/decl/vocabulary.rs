@@ -32,10 +32,12 @@
 //! | `#[derive(Host)]` record | `handwritten(extract)` | read through its own `FromPyObject` beside the derive's emit; with `host = ".."`, crosses both ways by its own conversions |
 //! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions are free functions written into `lk-agents-py/src/generated/records.rs` (`records::IN_PLACE`: the few an in-place export still converts by trait stay trait impls in ABI) |
 //! | record struct | `record(.., constant(type = "x"))` | a model field at that fixed value (a discriminator its readers compare), never Rust state: read past, emitted by its default |
-//! | record enum | `record(.., transparent)` | every variant is one value crossing as itself (`str \| Message`), told apart by its class (a model class, else its Python type): the model is a union alias, no class per variant |
+//! | record enum | `record(.., transparent)` | every variant is one value crossing as itself (`str \| Message`, `Policy \| dict[str, Policy] \| None`), told apart by its class (a model class, a literal record's `str`, else its Python type; a `float` takes an `int`); one unit variant may cross as `None` (a field of the record then takes `default = None`): the model is a union alias, no class per variant |
+//! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains `to_json()`/`from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
 //! | record field, tuple variant | `skip` | does not cross (emit-only records) |
+//! | record struct field | `omitted = path` | an extracted scalar the host may leave out: `path(&record)` computes it from the record read (the model's `__post_init__` asks `_core` for it), an explicit value stays |
 //! | tuple variant | `field = "x"` | the name its one value crosses under |
 //! | variant | `name = "X"` | its model class, when not `<Enum><Variant>` |
 //! | unit variant of a literal record | `rename = "x"` | its string, when not the snake-cased identifier |

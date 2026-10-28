@@ -23,7 +23,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         .iter()
         .map(|c| c.family.as_str())
         .chain(decls.proxies.iter().map(|p| p.family.as_str()))
-        .chain(decls.records.iter().filter(|r| r.persisted).map(|r| r.family.as_str()))
+        .chain(decls.records.iter().filter(|r| has_functions(r)).map(|r| r.family.as_str()))
         .collect();
     sorted.sort();
     sorted.dedup();
@@ -68,9 +68,8 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             root.push_str(&format!("    m.add_class::<{}::{class}>()?;\n", c.family));
         }
     }
-    for r in decls.records.iter().filter(|r| r.persisted) {
-        let (persist, restore) = r.persistence();
-        for f in [persist, restore] {
+    for r in &decls.records {
+        for f in functions(r) {
             root.push_str(&format!(
                 "    m.add_function(wrap_pyfunction!({}::{f}, m)?)?;\n",
                 r.family
@@ -99,6 +98,19 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         for r in decls.records.iter().filter(|r| r.persisted && r.family == *family) {
             text.push('\n');
             text.push_str(&persistence(r));
+        }
+        for r in decls.records.iter().filter(|r| r.family == *family) {
+            for (f, function) in r.omitted() {
+                text.push('\n');
+                text.push_str(&format!(
+                    "// Declared in {source}.\n\n/// `{name}.{field}` when the host leaves it out.\n#[pyfunction]\npub fn {function}<'py>(py: Python<'py>, record: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {{\n    let record = {conv}_from_py(&record)?;\n    Ok({value})\n}}\n",
+                    source = r.source,
+                    name = r.name,
+                    field = f.host_name(),
+                    conv = crate::records::conversion(&r.module, &r.name),
+                    value = crate::records::emit(&f.ty, &format!("record.{}", f.rust_name))?,
+                ));
+            }
         }
         out.push(Out { path: format!("{family}.rs"), text });
     }
@@ -258,6 +270,21 @@ fn doc(lines: &[String], indent: &str) -> String {
 }
 
 /// The stream classes a class's methods hand out, once each.
+/// A record's `_core` functions: its persistence codec, its omitted fields' computations.
+pub(crate) fn functions(r: &RecordDecl) -> Vec<String> {
+    let mut out = Vec::new();
+    if r.persisted {
+        let (persist, restore) = r.persistence();
+        out.extend([persist, restore]);
+    }
+    out.extend(r.omitted().into_iter().map(|(_, f)| f));
+    out
+}
+
+pub(crate) fn has_functions(r: &RecordDecl) -> bool {
+    r.persisted || !r.omitted().is_empty()
+}
+
 /// A persisted record's codec: its serde form in Rust, crossing as its generated model.
 fn persistence(r: &RecordDecl) -> String {
     let (persist, restore) = r.persistence();

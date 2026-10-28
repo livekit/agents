@@ -982,3 +982,187 @@ fn a_record_constant_is_a_model_field_at_its_fixed_value() {
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(!shell.contains("\"type\""), "{shell}");
 }
+
+// Catches: a legacy union naming a record migrated to a declaration failing generation, the
+// union referencing its model before the module defines it, or the record not marked for the
+// legacy conversions (by-reference emit, union tag) its members owe.
+#[test]
+fn a_legacy_union_names_a_declared_record_member() {
+    let mut decls = read(
+        r#"#[crate::host(record(module = "events", extract, emit, constant(type = "updated")))]
+        #[derive(Clone)]
+        pub struct Updated { pub id: String }"#,
+    )
+    .expect("resolves");
+    let mut legacy = crate::parse::file(
+        "events.rs",
+        r#"
+        #[derive(Host)]
+        #[python(pydantic, module = "events", name = "Started", tag = "type", tag_value = "started")]
+        #[binding(emit)]
+        pub struct Started { pub id: String }
+        #[derive(Host)]
+        #[python(union, module = "events", name = "Update")]
+        #[binding(emit)]
+        pub enum Update { Started(Started), Updated(Updated) }
+        "#,
+    )
+    .expect("parses");
+    crate::records::link_legacy(&mut legacy, &mut decls).expect("links");
+    let union = legacy.iter().find(|d| d.rust_name == "Update").expect("Update");
+    let crate::ir::Body::Union(members) = &union.body else { panic!("a union") };
+    assert!(
+        matches!(&members[1].ty, crate::ir::Ty::Foreign(f) if f.python == "Updated" && f.python_from.is_empty())
+    );
+    assert!(decls.records[0].legacy);
+    let mut in_place = decls.clone();
+    in_place.records[0].in_place = true;
+    let abi: String =
+        crate::records::rust(&in_place).expect("emits").into_iter().map(|o| o.text).collect();
+    assert!(
+        abi.contains("IntoPyObject<'py> for &::lk_agents_abi::llm::class::Updated")
+            && abi.contains("const TAG: &'static str = \"updated\";"),
+        "{abi}"
+    );
+    let legacy_py = "# GENERATED FILE -- DO NOT EDIT.\n\nfrom __future__ import annotations\n\nfrom pydantic import BaseModel\n\n\nclass Started(BaseModel):\n    id: str\n\n\nUpdate = Started | Updated\n";
+    let models = crate::records::python(&decls).expect("models");
+    let merged = crate::records::merge(legacy_py, &models[0].text).expect("merges");
+    let (defined, used) =
+        (merged.find("class Updated:").unwrap(), merged.find("= Started | Updated").unwrap());
+    assert!(defined < used && merged.find("from pydantic").unwrap() < defined, "{merged}");
+}
+
+// Catches: a scalar-or-map option (`Policy | dict[str, Policy] | None`) needing wrapper classes,
+// `None` not crossing as the unit variant, a policy string read as a model instance, an `int`
+// refused where seconds are a `float`, or `int` and `float` variants left ambiguous.
+#[test]
+fn a_transparent_record_crosses_scalars_maps_and_none() {
+    let decls = read(
+        r#"#[crate::host(record(module = "options", extract, emit))]
+        pub enum Policy { Batch, Queue }
+        #[crate::host(record(module = "options", extract, emit, transparent))]
+        pub enum PolicySpec { Default, All(Policy), ByChannel(std::collections::BTreeMap<String, Policy>) }
+        #[crate::host(record(module = "options", extract, emit, transparent))]
+        pub enum DebounceSpec { Default, All(std::time::Duration) }
+        #[crate::host(record(module = "options", extract, emit))]
+        pub struct TurnOptions {
+            #[host(default = None)]
+            pub policy: PolicySpec,
+            #[host(default = None)]
+            pub debounce: DebounceSpec,
+        }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let options = &models.iter().find(|o| o.path == "options.py").expect("options.py").text;
+    assert!(
+        options.contains("PolicySpec: TypeAlias = Policy | dict[str, Policy] | None")
+            && options.contains("    policy: PolicySpec = None\n"),
+        "{options}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("return Ok(::lk_agents_abi::llm::class::PolicySpec::Default);")
+            && shell.contains("::lk_agents_abi::llm::class::PolicySpec::Default => py.None().into_bound(py),")
+            && shell.contains("PolicySpec::All(crate::generated::records::options::policy_from_py(obj)?)")
+            && shell.contains("obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>()"),
+        "{shell}"
+    );
+    let not_none = read(
+        r#"#[crate::host(record(module = "options", extract, transparent))]
+        pub enum Spec { All(String) }
+        #[crate::host(record(module = "options", extract))]
+        pub struct Holder { #[host(default = None)] pub spec: Spec }"#,
+    );
+    assert!(not_none.err().is_some_and(|e| e.contains("default None")));
+    let ambiguous = read(
+        r#"#[crate::host(record(module = "options", extract, transparent))]
+        pub enum Number { Count(i64), Seconds(f64) }"#,
+    )
+    .expect("resolves");
+    assert!(
+        crate::records::conversions(&ambiguous).err().is_some_and(|e| e.contains("share a class"))
+    );
+}
+
+// Catches: a nested model (`RealtimeModelMetrics.InputTokenDetails`) emitted at module level,
+// named without its owner where it is used, read off the module rather than its owner, or nested
+// in what is no record struct.
+#[test]
+fn a_nested_record_is_a_class_of_its_owners_model() {
+    let decls = read(
+        r#"#[crate::host(record(module = "metrics", extract, emit, nested_in = "RealtimeModelMetrics"))]
+        pub struct CachedTokenDetails { pub audio_tokens: u32 }
+        #[crate::host(record(module = "metrics", extract, emit, nested_in = "RealtimeModelMetrics"))]
+        pub struct InputTokenDetails { pub cached_tokens_details: Option<CachedTokenDetails> }
+        /// One response.
+        #[crate::host(record(module = "metrics", extract, emit))]
+        pub struct RealtimeModelMetrics { pub input_token_details: InputTokenDetails }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let metrics = &models.iter().find(|o| o.path == "metrics.py").expect("metrics.py").text;
+    assert!(
+        metrics.contains("class RealtimeModelMetrics:\n    \"\"\"One response.\"\"\"\n\n    @dataclass(frozen=True, kw_only=True, slots=True)\n    class CachedTokenDetails:\n        audio_tokens: int\n")
+            && metrics.contains("        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None\n")
+            && metrics.contains("\n    input_token_details: RealtimeModelMetrics.InputTokenDetails\n")
+            && !metrics.contains("\nclass InputTokenDetails"),
+        "{metrics}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains(".getattr(\"RealtimeModelMetrics\")?.getattr(\"InputTokenDetails\")?")
+            && shell.contains("pub fn realtime_model_metrics_input_token_details_from_py("),
+        "{shell}"
+    );
+    let orphan = read(
+        r#"#[crate::host(record(module = "metrics", extract, nested_in = "Missing"))]
+        pub struct Details { pub n: u32 }"#,
+    )
+    .expect("resolves");
+    assert!(
+        crate::records::python(&orphan).err().is_some_and(|e| e.contains("nested in `Missing`"))
+    );
+}
+
+// Catches: a computed default (`STTMetrics.total_tokens`, input plus output when left out) lost,
+// overriding an explicit value (even 0), computed in Python rather than by the Rust function, or
+// accepted where the host never reads it.
+#[test]
+fn an_omitted_field_is_computed_from_the_record_read() {
+    let decls = read(
+        r#"#[crate::host(record(module = "metrics", extract, emit))]
+        pub struct SttMetrics {
+            pub input_tokens: u32,
+            #[host(omitted = Self::sum)]
+            pub total_tokens: u32,
+        }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let metrics = &models.iter().find(|o| o.path == "metrics.py").expect("metrics.py").text;
+    assert!(
+        metrics.contains("    total_tokens: int = None  # type: ignore[assignment]\n")
+            && metrics.contains("        if self.total_tokens is None:\n            object.__setattr__(self, \"total_tokens\", _core._core_omitted_stt_metrics_total_tokens(self))\n"),
+        "{metrics}"
+    );
+    let shell = crate::records::conversions(&decls).expect("emits").text;
+    assert!(
+        shell.contains("total_tokens: ::std::default::Default::default(),")
+            && shell.contains("record.total_tokens = match total_tokens { Some(v) => v, None => ::lk_agents_abi::llm::class::SttMetrics::sum(&record) };"),
+        "{shell}"
+    );
+    let adapters: String =
+        crate::adapter::emit(&decls).expect("emits").into_iter().map(|o| o.text).collect();
+    assert!(
+        adapters.contains("pub fn _core_omitted_stt_metrics_total_tokens<'py>(")
+            && adapters
+                .contains("wrap_pyfunction!(llm::_core_omitted_stt_metrics_total_tokens, m)"),
+        "{adapters}"
+    );
+    let emitted_only = read(
+        r#"#[crate::host(record(module = "metrics", emit))]
+        pub struct Out { #[host(omitted = Self::sum)] pub total: u32 }"#,
+    );
+    assert!(emitted_only.err().is_some_and(|e| e.contains("`omitted`")));
+}

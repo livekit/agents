@@ -12,7 +12,13 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
         .classes
         .iter()
         .map(|c| c.family.as_str())
-        .chain(decls.records.iter().filter(|r| r.persisted).map(|r| r.family.as_str()))
+        .chain(
+            decls
+                .records
+                .iter()
+                .filter(|r| crate::adapter::has_functions(r))
+                .map(|r| r.family.as_str()),
+        )
         .collect();
     families.sort();
     families.dedup();
@@ -47,6 +53,19 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
             ));
             names.extend([persist, restore]);
         }
+        for r in decls.records.iter().filter(|r| r.family == family) {
+            for (f, function) in r.omitted() {
+                imports.add(&format!(".{}", r.module), &r.name);
+                let ty = match f.ty {
+                    Ty::Bool => "bool",
+                    Ty::Int(_) => "int",
+                    Ty::Float | Ty::Duration => "float",
+                    _ => "str",
+                };
+                body.push_str(&format!("\ndef {function}(record: {}) -> {ty}: ...\n", r.name));
+                names.push(function);
+            }
+        }
         names.extend(own.iter().cloned());
         let own: Vec<&str> = own.iter().map(String::as_str).collect();
         let mut text = String::from(
@@ -68,7 +87,9 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
 pub(crate) struct Imports(Vec<(String, String)>, Vec<RecordDecl>);
 
 impl Imports {
+    /// `name` may be a nested model (`Owner.Name`): its owner is imported.
     pub(crate) fn add(&mut self, module: &str, name: &str) {
+        let name = name.split('.').next().unwrap_or(name);
         let entry = (module.to_owned(), name.to_owned());
         if !self.0.contains(&entry) {
             self.0.push(entry);

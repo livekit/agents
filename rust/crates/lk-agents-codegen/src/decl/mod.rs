@@ -30,7 +30,8 @@ pub struct Declarations {
 pub struct RecordDecl {
     /// `::lk_agents_abi::agent::ValidatedOutput`.
     pub rust: String,
-    /// The host name: the model class, the union alias or the literal alias.
+    /// The host name: the model class, the union alias or the literal alias; `Owner.Name` for a
+    /// model nested in its owner's (`record(.., nested_in = "Owner")`).
     pub name: String,
     /// The generated Python module (`agent_run`: `_generated/agent_run.py`).
     pub module: String,
@@ -43,6 +44,11 @@ pub struct RecordDecl {
     /// Its conversions are pyo3 trait impls in ABI, which the in-place exports call
     /// (`crate::records::IN_PLACE`).
     pub in_place: bool,
+    /// It derives `Clone`: an in-place record a legacy record holds is emitted by reference too.
+    pub clone: bool,
+    /// A legacy (`#[derive(Host)]`) model names it (`records::link_legacy`): in place, it keeps
+    /// what the legacy conversions ask of a member (by-reference emit, its union tag).
+    pub legacy: bool,
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
     pub transparent: bool,
@@ -94,6 +100,9 @@ pub struct Field {
     pub ty: Ty,
     pub default: Option<Literal>,
     pub skip: bool,
+    /// `omitted = path`: when the host leaves it out, `path(&record)` computes it from the rest
+    /// (`STTMetrics.total_tokens`: input plus output). The function's Rust path.
+    pub omitted: Option<String>,
     pub doc: Vec<String>,
 }
 
@@ -127,6 +136,19 @@ pub struct Proxy {
 }
 
 impl RecordDecl {
+    /// The fields an omitted keyword computes, each with its `_core` function.
+    pub fn omitted(&self) -> Vec<(&Field, String)> {
+        let RecordBody::Struct(fields) = &self.body else { return Vec::new() };
+        fields
+            .iter()
+            .filter(|f| f.omitted.is_some())
+            .map(|f| {
+                let record = resolve::snake(&self.name.replace('.', ""));
+                (f, format!("_core_omitted_{record}_{}", f.host_name()))
+            })
+            .collect()
+    }
+
     /// The `_core` functions saving and restoring a persisted record.
     pub fn persistence(&self) -> (String, String) {
         let name = resolve::snake(&self.name);

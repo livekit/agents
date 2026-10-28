@@ -41,6 +41,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
             }
         }
     }
+    crate::records::check_none_defaults(&out)?;
     crate::records::mark_in_place(&mut out);
     Ok(out)
 }
@@ -714,15 +715,22 @@ impl Resolver<'_> {
         if !constants.is_empty() && !matches!(item, syn::Item::Struct(_)) {
             return Err(format!("{at}: constants belong to a record struct's model"));
         }
-        let tuples = |en: &syn::ItemEnum| {
-            en.variants
-                .iter()
-                .all(|v| matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1))
+        // One-value tuple variants, and at most one unit variant (the host's `None`).
+        let values = |en: &syn::ItemEnum| {
+            en.variants.iter().all(|v| match &v.fields {
+                syn::Fields::Unnamed(f) => f.unnamed.len() == 1,
+                syn::Fields::Unit => true,
+                syn::Fields::Named(_) => false,
+            }) && en.variants.iter().filter(|v| matches!(v.fields, syn::Fields::Unit)).count() <= 1
+                && en.variants.iter().any(|v| !matches!(v.fields, syn::Fields::Unit))
         };
-        if transparent && !matches!(item, syn::Item::Enum(en) if tuples(en)) {
+        if transparent && !matches!(item, syn::Item::Enum(en) if values(en)) {
             return Err(format!(
-                "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value"
+                "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value, and at most one unit variant crossing as None"
             ));
+        }
+        if name.contains('.') && (persisted || !matches!(item, syn::Item::Struct(_))) {
+            return Err(format!("{at}: a nested model is a record struct, not persisted"));
         }
         if persisted && !(extract && emit && matches!(item, syn::Item::Struct(_))) {
             return Err(format!(
@@ -794,6 +802,8 @@ impl Resolver<'_> {
             extract,
             emit,
             in_place: false,
+            clone: derives(item_attrs(item), "Clone"),
+            legacy: false,
             transparent,
             constants,
             persisted,
@@ -818,7 +828,11 @@ impl Resolver<'_> {
             }
             syn::Fields::Named(named) => {
                 voc::only(&at, &entries, &["name"])?;
-                VariantShape::Named(self.fields(named.named.iter(), owner, dirs)?)
+                let fields = self.fields(named.named.iter(), owner, dirs)?;
+                if fields.iter().any(|f| f.omitted.is_some()) {
+                    return Err(format!("{at}: `omitted` belongs to a record struct's field"));
+                }
+                VariantShape::Named(fields)
             }
             syn::Fields::Unnamed(unnamed) => {
                 voc::only(&at, &entries, &["name", "field", "skip", "default"])?;
@@ -854,6 +868,7 @@ impl Resolver<'_> {
                         ty,
                         default,
                         skip: false,
+                        omitted: None,
                         doc: Vec::new(),
                     }))
                 }
@@ -880,8 +895,15 @@ impl Resolver<'_> {
             let ident = f.ident.as_ref().expect("named").to_string();
             let at = format!("{}({owner}.{ident})", self.at);
             let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-            voc::only(&at, &entries, &["default", "skip"])?;
+            voc::only(&at, &entries, &["default", "skip", "omitted"])?;
             let skip = voc::find(&entries, "skip").is_some();
+            let omitted = voc::rust(&at, &entries, "omitted")?.map(|path| {
+                let path = quote::quote!(#path).to_string().replace(' ', "");
+                match path.strip_prefix("crate::") {
+                    Some(rest) => format!("::lk_agents_abi::{rest}"),
+                    None => path,
+                }
+            });
             if skip && dirs.0 {
                 return Err(format!("{at}: an extracted record reads every field: no `skip`"));
             }
@@ -891,7 +913,16 @@ impl Resolver<'_> {
             if !skip {
                 check_record_field(&at, &ty, dirs)?;
             }
-            out.push(Field { rust_name: ident, ty, default, skip, doc: doc(&f.attrs) });
+            if omitted.is_some() {
+                let scalar =
+                    matches!(ty, Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Duration | Ty::Str);
+                if !dirs.0 || default.is_some() || !scalar {
+                    return Err(format!(
+                        "{at}: `omitted` computes a read scalar field the host leaves out: an extracted record's bool, number or string, with no `default`"
+                    ));
+                }
+            }
+            out.push(Field { rust_name: ident, ty, default, skip, omitted, doc: doc(&f.attrs) });
         }
         Ok(out)
     }
@@ -906,11 +937,16 @@ fn record_target(
     voc::only(
         at,
         &record.nested,
-        &["module", "name", "extract", "emit", "persisted", "transparent", "constant"],
+        &["module", "name", "extract", "emit", "persisted", "transparent", "constant", "nested_in"],
     )?;
     let module = voc::text(at, &record.nested, "module")?
         .ok_or_else(|| format!("{at}: record(module = \"..\") is its generated Python module"))?;
     let name = voc::text(at, &record.nested, "name")?.unwrap_or_else(|| ident.to_owned());
+    // A nested model is named through its owner, `Owner.Name`, wherever it is named.
+    let name = match voc::text(at, &record.nested, "nested_in")? {
+        Some(owner) => format!("{owner}.{name}"),
+        None => name,
+    };
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
     if !extract && !emit {
@@ -1047,11 +1083,9 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             check_input(at, v)
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This
-        | Ty::Source { .. }
-        | Ty::Handle { .. }
-        | Ty::Instance { .. }
-        | Ty::Unit => Err(format!("{at}: `{}` is not an input", ty.rust())),
+        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Instance { .. } | Ty::Unit => {
+            Err(format!("{at}: `{}` is not an input", ty.rust()))
+        }
         Ty::HostSource(item) => check_input(at, item),
         Ty::HostDuplex { input, output } => {
             check_output(at, input)?;
@@ -1086,6 +1120,8 @@ fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Result<(), Str
     let Some(d) = default else { return Ok(()) };
     let fits = match (ty, d) {
         (Ty::Optional(_), Literal::None) => true,
+        // A transparent record crossing `None` (`records::check_none_defaults`).
+        (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
         (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
         (Ty::Bool, Literal::Bool(_))
         | (Ty::Float, Literal::Float(_) | Literal::Int(_))
@@ -1112,13 +1148,15 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
 }
 
 pub(crate) fn derives_host(attrs: &[syn::Attribute]) -> bool {
+    derives(attrs, "Host")
+}
+
+fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
     attrs.iter().filter(|a| a.path().is_ident("derive")).any(|a| {
         a.parse_args_with(
             syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
         )
-        .is_ok_and(|paths| {
-            paths.iter().any(|p| p.segments.last().is_some_and(|s| s.ident == "Host"))
-        })
+        .is_ok_and(|paths| paths.iter().any(|p| p.segments.last().is_some_and(|s| s.ident == name)))
     })
 }
 
