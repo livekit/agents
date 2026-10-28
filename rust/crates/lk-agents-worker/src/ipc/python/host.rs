@@ -482,6 +482,7 @@ pub(super) fn closed(_: Closed) -> PyErr {
     pyo3::exceptions::PyConnectionError::new_err("the IPC socket is closed")
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 pub(super) fn run_process_owner<'py>(
     slf: Bound<'py, super::PyProcSupervisor>,
     joined: Py<PyAny>,

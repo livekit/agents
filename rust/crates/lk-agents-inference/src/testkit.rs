@@ -23,6 +23,7 @@ impl lk_agents_abi::llm::provider_format::ImageResolver for NoImages {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// A scripted WebSocket: records sends, replays canned incoming messages unsynchronised with them.
 type Incoming = Arc<Mutex<std::collections::VecDeque<Result<WsMessage, TransportError>>>>;
 

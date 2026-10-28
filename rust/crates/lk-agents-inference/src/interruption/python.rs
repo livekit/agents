@@ -479,6 +479,7 @@ impl WsTransport for HostWs {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// One `await ws.receive()` at a time, as aiohttp requires: `recv` reads the channel, so racing
 /// it never starts a second receive.
 async fn pump_receive(

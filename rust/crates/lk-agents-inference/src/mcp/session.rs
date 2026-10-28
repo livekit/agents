@@ -145,6 +145,7 @@ impl McpSession {
         self.invalidate_cache();
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `MCPServerHTTP.initialize()`: `httpx`'s client as `_create_http_client` builds it -- the
     /// headers on every request, redirects followed, `timeout` to connect and `sse_read_timeout`
@@ -179,6 +180,7 @@ impl McpSession {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `MCPServerStdio.initialize()`. The child's environment is the SDK's: the few variables

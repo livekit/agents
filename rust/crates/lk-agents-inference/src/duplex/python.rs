@@ -307,6 +307,7 @@ impl PyDuplexSession {
         let _ = tx.send(Some(DuplexEvent::OutputEnded { error }));
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// The configuration and its updates, each applied once the previous one has. A session that
     /// cannot carry its startup configuration is unusable: it reports the error and closes.
     async fn run_lane(

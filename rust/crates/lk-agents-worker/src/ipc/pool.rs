@@ -910,6 +910,7 @@ mod tests {
         assert_eq!(count(&host, PoolEvent::Closed), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     #[tokio::test(start_paused = true)]
     async fn failed_join_cannot_report_cleaned_or_release_the_resource_owner() {
         let receipt = watch::channel(false).0;
@@ -936,6 +937,7 @@ mod tests {
         assert_eq!(count(&host, PoolEvent::Closed), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     #[tokio::test(start_paused = true)]
     async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
         let reaped = watch::channel(false).0;

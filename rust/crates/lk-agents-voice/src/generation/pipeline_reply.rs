@@ -23,6 +23,7 @@ use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// A realtime speech's end of the socket's events (`RealtimeWake` routes them by speech).
 type RealtimePlayer =
     tokio::sync::Mutex<mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>>;
