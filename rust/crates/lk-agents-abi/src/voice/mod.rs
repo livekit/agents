@@ -15,3 +15,5 @@ pub mod run_result;
 pub mod session_effects;
 pub mod session_options;
 pub mod workflows;
+
+pub mod console;

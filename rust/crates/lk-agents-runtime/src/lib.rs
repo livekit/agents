@@ -64,3 +64,6 @@ pub mod vad;
 
 pub mod llm_algorithms;
 pub use lk_agents_media::filters;
+
+/// The voice session queue owner and its I/O effect execution.
+pub mod voice;

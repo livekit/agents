@@ -176,6 +176,7 @@
     "_core_restore_text_session_state",
     "_core_session_chat_record",
     "_core_trace_parent",
+    "_core_voice_session_start",
     "amd_auto_select_models",
     "amd_category_is_human",
     "amd_category_is_machine",

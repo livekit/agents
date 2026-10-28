@@ -1,11 +1,9 @@
-pub mod console;
 pub use lk_agents_abi::llm::chat_context::protocol::{
     encode_chat_item, encode_epoch_secs, encode_metrics, encode_role, encode_timestamp,
 };
 pub mod driver;
 pub mod room;
 
-use async_trait::async_trait;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
@@ -548,35 +546,7 @@ pub fn stamp_event(
 #[error("created_at must be a finite epoch-seconds value")]
 pub struct NonFiniteStamp;
 
-/// `SessionTransport` (`remote_session.py:78`), as `voice/remote_session.py`'s `_CoreTransport`
-/// sees it. A host failure keeps the original exception.
-#[async_trait]
-pub trait SessionTransport: Send + Sync {
-    /// `start()`; idempotent.
-    async fn start(&self) -> Result<(), HostError>;
-
-    /// `send_message`. Failures are raised: only the caller knows whether anyone waits on it.
-    async fn send_message(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError>;
-
-    /// `send_message_threadsafe`: enqueue and forget, dropped when closed. Not ordered against
-    /// `send_message`.
-    fn send_message_nowait(&self, msg: &proto::AgentSessionMessage);
-
-    /// The next message (`__anext__`); `Ok(None)` is `StopAsyncIteration`, `Err` ends the loop.
-    /// Only the receive loop reads.
-    async fn recv(&self) -> Result<Option<proto::AgentSessionMessage>, HostError>;
-
-    /// `close()`; idempotent, never fails.
-    async fn close(&self);
-}
-
-/// The console's local legs (`TcpAudioInput.push_frame`, `TcpAudioOutput.notify_playout_finished`),
-/// on `SessionHost`.
-pub trait ConsoleSink: Send + Sync {
-    fn push_input_frame(&self, frame: &proto::agent_session_message::console_io::AudioFrame);
-
-    fn playout_finished(&self);
-}
+pub use lk_agents_abi::voice::console::{ConsoleSink, SessionTransport};
 
 /// Where a client's arriving events go: `RemoteSession.emit(name, event)`.
 pub trait ClientSink: Send + Sync {

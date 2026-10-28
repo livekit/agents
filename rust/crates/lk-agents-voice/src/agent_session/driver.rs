@@ -316,8 +316,8 @@ pub enum Input {
     InputCensus(crate::data_plane::InputCensus),
 }
 
-/// What the queue owner hands [`Runtime::handle`](crate::runtime::Runtime::handle): an event in
-/// arrival order, or time reaching [`Driver::wake_at`].
+/// What the runtime queue owner handles: an event in arrival order, or time reaching
+/// [`Driver::wake_at`].
 pub enum Event {
     /// For the decision core.
     Input(Input),
@@ -332,7 +332,7 @@ pub enum Event {
 }
 
 /// The session's decision core: handed every [`Input`] in arrival order by the
-/// [`Runtime`](crate::runtime::Runtime), it merges them with its timers and orchestrates the
+/// runtime queue owner, it merges them with its timers and orchestrates the
 /// components in sequence: the [`AgentSession`], its running
 /// [`AgentActivity`](crate::agent_activity::AgentActivity), and the [`AgentInput`] legs. Every
 /// decision is journalled, dated on the session clock.

@@ -655,25 +655,34 @@ mod tests {
         sent: Mutex<Vec<proto::AgentSessionMessage>>,
     }
 
-    #[async_trait]
     impl SessionTransport for Pipe {
-        async fn start(&self) -> Result<(), HostError> {
-            Ok(())
+        fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+            Box::pin(async move { Ok(()) })
         }
-        async fn send_message(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
-            if self.fail.load(Ordering::SeqCst) {
-                return Err(HostError::new("transport is down"));
-            }
-            self.sent.lock().unwrap().push(msg.clone());
-            let _ = self.tx.send(msg.clone());
-            Ok(())
+        fn send_message<'a>(
+            &'a self,
+            msg: &'a proto::AgentSessionMessage,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+            Box::pin(async move {
+                if self.fail.load(Ordering::SeqCst) {
+                    return Err(HostError::new("transport is down"));
+                }
+                self.sent.lock().unwrap().push(msg.clone());
+                let _ = self.tx.send(msg.clone());
+                Ok(())
+            })
         }
         fn send_message_nowait(&self, _msg: &proto::AgentSessionMessage) {}
-        async fn recv(&self) -> Result<Option<proto::AgentSessionMessage>, HostError> {
-            Ok(self.rx.lock().await.recv().await)
+        fn recv(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>>
+        {
+            Box::pin(async move { Ok(self.rx.lock().await.recv().await) })
         }
-        async fn close(&self) {
-            self.closed.store(true, Ordering::SeqCst);
+        fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+            Box::pin(async move {
+                self.closed.store(true, Ordering::SeqCst);
+            })
         }
     }
 

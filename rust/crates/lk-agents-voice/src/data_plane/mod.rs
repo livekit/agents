@@ -1,5 +1,5 @@
 //! The data plane: what moves frames, stepped beside the decision core by the
-//! [`Runtime`](crate::runtime::Runtime). Sans-IO: no lock, no task, no clock read. Its state
+//! runtime queue owner. Sans-IO: no lock, no task, no clock read. Its state
 //! changes only by the decision core's [`ForwarderCommand`]s, and it answers with
 //! [`ForwarderEffect`]s the runtime performs, reports to the decision core among them.
 //!

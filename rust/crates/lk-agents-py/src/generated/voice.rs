@@ -77,6 +77,49 @@ impl DataStreamAudioOutput {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/console.rs.
+type ConsoleIoImpl = <crate::Selected as super::Implementations>::ConsoleIo;
+
+/// `lk agent console`'s socket, opened when the session starts.
+#[pyclass(frozen, name = "ConsoleIo", module = "livekit.agents._core")]
+pub struct ConsoleIo(::std::sync::Arc<ConsoleIoImpl>);
+
+#[pymethods]
+impl ConsoleIo {
+    #[new]
+    #[pyo3(signature = (addr))]
+    fn new(addr: ::std::string::String) -> PyResult<ConsoleIo> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <ConsoleIoImpl as ::lk_agents_abi::voice::console::ConsoleIo>::new(addr).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(ConsoleIo(::std::sync::Arc::new(out)))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::console::ConsolePort`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::console::ConsolePort>(),
+        read: |obj| {
+            let this = obj.cast::<ConsoleIo>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::console::ConsolePort> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/console.rs.
+type VoiceSessionExecutionImpl = <crate::Selected as super::Implementations>::VoiceSessionExecution;
+
+#[pyfunction]
+#[pyo3(signature = (session, capture_run))]
+pub fn _core_voice_session_start<'py>(py: Python<'py>, session: ::lk_agents_abi::HostRef, capture_run: bool) -> PyResult<Bound<'py, PyAny>> {
+    ::lk_agents_abi::python::check_pid()?;
+    ::lk_agents_abi::python::future_into_py(py, async move {
+        let out = <VoiceSessionExecutionImpl as ::lk_agents_abi::voice::console::VoiceSessionExecution>::start(session, capture_run).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 
 /// [`::lk_agents_abi::voice::avatar::ClearBufferListener`] over a host `livekit.agents.voice.avatar.DataStreamAudioReceiver`.

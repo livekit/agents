@@ -42,6 +42,8 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
+    type VoiceSessionExecution = Selected;
     type ExpFilter = lk_agents_runtime::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::filters::MovingAverage;
     type LlmAlgorithms = lk_agents_runtime::llm_algorithms::LlmAlgorithms;
@@ -96,4 +98,21 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let _ = pyo3_log::try_init();
     runtime::register_all(m)?;
     generated::register(m)
+}
+
+impl lk_agents_abi::voice::console::VoiceSessionExecution for Selected {
+    async fn start(
+        session: lk_agents_abi::HostRef,
+        capture_run: bool,
+    ) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        use lk_agents_abi::python::{HostException as _, captured};
+        let reply = Python::attach(|py| {
+            let obj = (&session).into_pyobject(py)?;
+            let api = obj.extract::<PyRef<'_, lk_agents_runtime::voice::SessionApi>>()?;
+            api.start(capture_run, Box::new(lk_agents_runtime::voice::queue_owner))
+                .map_err(|e| e.to_py_err())
+        })
+        .map_err(captured)?;
+        reply.await.map_err(|e| Python::attach(|_| captured(e.to_py_err())))
+    }
 }

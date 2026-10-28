@@ -4,7 +4,6 @@
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
@@ -76,28 +75,32 @@ impl Inner {
     }
 }
 
-#[async_trait]
 impl SessionTransport for RoomTransport {
-    async fn start(&self) -> Result<(), HostError> {
-        let this = &self.0;
-        {
-            let mut state = this.state.lock().expect("transport state");
-            if state.registered || state.closed {
-                return Ok(());
+    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            let this = &self.0;
+            {
+                let mut state = this.state.lock().expect("transport state");
+                if state.registered || state.closed {
+                    return Ok(());
+                }
+                state.registered = true;
             }
-            state.registered = true;
-        }
-        let streams = this
-            .room
-            .byte_streams(TOPIC_SESSION_MESSAGES)
-            .map_err(|e| HostError::new(e.to_string()))?;
-        *this.incoming.lock().await = Some(streams);
-        Ok(())
+            let streams = this
+                .room
+                .byte_streams(TOPIC_SESSION_MESSAGES)
+                .map_err(|e| HostError::new(e.to_string()))?;
+            *this.incoming.lock().await = Some(streams);
+            Ok(())
+        })
     }
 
     /// A dropped message is a request the client waits out in full, so a failure is raised.
-    async fn send_message(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
-        self.0.send(msg).await
+    fn send_message<'a>(
+        &'a self,
+        msg: &'a proto::AgentSessionMessage,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move { self.0.send(msg).await })
     }
 
     fn send_message_nowait(&self, msg: &proto::AgentSessionMessage) {
@@ -107,41 +110,47 @@ impl SessionTransport for RoomTransport {
         });
     }
 
-    async fn recv(&self) -> Result<Option<proto::AgentSessionMessage>, HostError> {
-        let mut incoming = self.0.incoming.lock().await;
-        let Some(streams) = incoming.as_mut() else { return Ok(None) };
-        while let Some(mut stream) = streams.recv().await {
-            let mut data = Vec::new();
-            while let Some(chunk) = stream.chunks.recv().await {
-                data.extend_from_slice(&chunk);
-            }
-            match proto::AgentSessionMessage::decode(data.as_slice()) {
-                Ok(msg) => return Ok(Some(msg)),
-                Err(e) => {
-                    log::warn!(target: LOG, error = e.to_string().as_str();
+    fn recv(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<proto::AgentSessionMessage>, HostError>> {
+        Box::pin(async move {
+            let mut incoming = self.0.incoming.lock().await;
+            let Some(streams) = incoming.as_mut() else { return Ok(None) };
+            while let Some(mut stream) = streams.recv().await {
+                let mut data = Vec::new();
+                while let Some(chunk) = stream.chunks.recv().await {
+                    data.extend_from_slice(&chunk);
+                }
+                match proto::AgentSessionMessage::decode(data.as_slice()) {
+                    Ok(msg) => return Ok(Some(msg)),
+                    Err(e) => {
+                        log::warn!(target: LOG, error = e.to_string().as_str();
                         "failed to read binary stream message");
+                    }
                 }
             }
-        }
-        Ok(None)
+            Ok(None)
+        })
     }
 
-    async fn close(&self) {
-        let registered = {
-            let mut state = self.0.state.lock().expect("transport state");
-            if state.closed {
-                return;
+    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let registered = {
+                let mut state = self.0.state.lock().expect("transport state");
+                if state.closed {
+                    return;
+                }
+                state.closed = true;
+                std::mem::take(&mut state.registered)
+            };
+            // The handler's sender goes with it, which ends a receive waiting on the next stream.
+            if registered {
+                self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES);
             }
-            state.closed = true;
-            std::mem::take(&mut state.registered)
-        };
-        // The handler's sender goes with it, which ends a receive waiting on the next stream.
-        if registered {
-            self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES);
-        }
-        if let Ok(mut incoming) = self.0.incoming.try_lock() {
-            incoming.take();
-        }
+            if let Ok(mut incoming) = self.0.incoming.try_lock() {
+                incoming.take();
+            }
+        })
     }
 }
 

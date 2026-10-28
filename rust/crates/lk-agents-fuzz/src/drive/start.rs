@@ -237,7 +237,9 @@ impl Run {
                 Arc::new(fakes::FakeConsolePort)
                     as Arc<dyn lk_agents_voice::remote_session::SessionPort>
             }),
-            console.as_ref().map(|(io, _)| io.clone()),
+            console
+                .as_ref()
+                .map(|(io, _)| io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>),
             None,
             tasks.clone(),
         ));
@@ -277,13 +279,16 @@ impl Run {
                 };
                 host.lock().unwrap().push((stamps.next(), seen));
             });
-            let queue_owner = Box::new(move |cores| {
-                Box::new(super::executor::Handover::new(cores, cores_tx))
-                    as Box<dyn lk_agents_voice::agent_session::QueueOwner>
-            });
-            api.probe(Probe { step, host_event, queue_owner });
+            api.probe(Probe { step, host_event });
         }
-        api.start(false).expect("a new session starts").await.expect("the session started");
+        let queue_owner = Box::new(move |cores| {
+            Box::new(super::executor::Handover::new(cores, cores_tx))
+                as Box<dyn lk_agents_voice::agent_session::QueueOwner>
+        });
+        api.start(false, queue_owner)
+            .expect("a new session starts")
+            .await
+            .expect("the session started");
         let cores = cores_rx.await.expect("the probe takes the session's cores");
         // The session started its host on the console's socket, which then carries the microphone.
         let console = console.map(|(_, cli)| cli);

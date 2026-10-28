@@ -71,14 +71,11 @@ pub struct Probe {
     pub step: Box<dyn FnMut(&Step) + Send>,
     /// Every host event, typed, as the drain takes it and before the host sees its wire form.
     pub host_event: HostEventProbe,
-    /// The queue owner the session's cores go to instead of the runtime: the simulation's own.
-    pub queue_owner: QueueOwnerFactory,
 }
 
 #[cfg(feature = "dst")]
 pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
 
-#[cfg(feature = "dst")]
 pub type QueueOwnerFactory = Box<
     dyn FnOnce(crate::agent_session::SessionCores) -> Box<dyn crate::agent_session::QueueOwner>
         + Send,
@@ -96,10 +93,10 @@ impl SessionApi {
 
 #[cfg(feature = "dst")]
 impl SessionApi {
-    pub fn probe(&self, Probe { step, host_event, queue_owner }: Probe) {
+    pub fn probe(&self, Probe { step, host_event }: Probe) {
         if let Stage::Ready(ready) = &mut *self.lock() {
             ready.builder.journal = crate::trace::Journal::observed(step);
-            ready.builder.probe = Some((host_event, queue_owner));
+            ready.builder.probe = Some(host_event);
         }
     }
 
@@ -127,6 +124,7 @@ impl SessionApi {
     pub fn open(
         &self,
         capture_run: bool,
+        queue_owner: QueueOwnerFactory,
         drain: impl FnOnce(SessionRunner) -> lk_agents_abi::BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<
         impl std::future::Future<Output = Result<(), DriverError>> + Send + 'static,
@@ -174,15 +172,8 @@ impl SessionApi {
             let SessionHandle { api, events, keyterms, chat_ctx, peer, ivr_detection, speech_ids } =
                 handle;
             #[cfg(feature = "dst")]
-            let (host_event, queue_owner) = probe.unzip();
-            #[cfg(feature = "dst")]
-            let mut owner = match queue_owner {
-                Some(make) => make(cores),
-                None => Box::new(crate::runtime::Runtime::new(cores)),
-            };
-            #[cfg(not(feature = "dst"))]
-            let mut owner: Box<dyn crate::agent_session::QueueOwner> =
-                Box::new(crate::runtime::Runtime::new(cores));
+            let host_event = probe;
+            let mut owner = queue_owner(cores);
             // The IVR navigator's task, subscribed before the opening cycle.
             start_ivr(&peer, ivr_detection);
             // The opening cycle: `open` resolves only once the drain took its events, so a host's

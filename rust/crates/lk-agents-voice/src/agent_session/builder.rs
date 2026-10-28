@@ -119,7 +119,7 @@ pub struct DriverBuilder {
     pub journal: Journal,
     /// Test-only: what a simulation installed before `start()`.
     #[cfg(feature = "dst")]
-    pub probe: Option<(super::HostEventProbe, super::QueueOwnerFactory)>,
+    pub probe: Option<super::HostEventProbe>,
 }
 
 impl DriverBuilder {

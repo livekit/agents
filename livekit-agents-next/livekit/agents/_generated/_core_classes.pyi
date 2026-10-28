@@ -884,10 +884,9 @@ class VoiceSession:
         agent_expressive: NotGivenOr[Any] = ...,
         session_id: str | None = None,
         remote_session: Any | None = None,
-        console: ConsoleIo | None = None,
+        console: Any | None = None,
         job: Any | None = None,
     ) -> None: ...
-    async def start(self, *, capture_run: bool = False) -> None: ...
     @property
     def usage(self) -> list[dict[str, Any]]: ...
     @property
@@ -1169,14 +1168,6 @@ class AudioDecoder:
 
 class FrameDecoder:
     def __init__(self) -> None: ...
-
-
-class ConsoleIo:
-    """The `lk agent console` socket: the session takes it as its audio input and output and as its
-    remote session's transport and console.
-    """
-
-    def __init__(self, addr: str) -> None: ...
 
 
 class Markup:

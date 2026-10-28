@@ -23,3 +23,9 @@ class DataStreamAudioOutput:
     def sample_rate(self) -> int | None: ...
     async def aclose(self) -> None:
         """Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes."""
+
+class ConsoleIo:
+    """`lk agent console`'s socket, opened when the session starts."""
+    def __init__(self, addr: str) -> None: ...
+
+async def _core_voice_session_start(session: object, capture_run: bool) -> None: ...

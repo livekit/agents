@@ -122,7 +122,7 @@ impl SessionApi {
         remote_session: Option<Arc<dyn crate::remote_session::SessionPort>>,
         // `lk agent console`'s socket: the session's audio input and output, and the remote
         // session's transport.
-        console: Option<Arc<crate::remote_session::console::ConsoleIo>>,
+        console: Option<Arc<dyn lk_agents_abi::voice::console::ConsolePort>>,
         // The job whose room this is: `start()` connects it beside the opening.
         job: Option<Arc<dyn SessionJob>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
@@ -150,9 +150,9 @@ impl SessionApi {
             ..RoomIoConfig::default()
         });
         let host_audio_input =
-            host_audio_input.or_else(|| console.as_ref().map(|c| c.as_audio_input()));
+            host_audio_input.or_else(|| console.as_ref().map(|c| c.clone().as_audio_input()));
         let host_audio_output =
-            host_audio_output.or_else(|| console.as_ref().map(|c| c.as_audio_output()));
+            host_audio_output.or_else(|| console.as_ref().map(|c| c.clone().as_audio_output()));
         // `start()`: an audio leg the host set replaces the room's, which is then neither published
         // nor subscribed ("RoomIO audio output is enabled but output.audio is already set,
         // ignoring"). The room's text output stays: it paces a host transcription leg.
@@ -208,7 +208,7 @@ impl SessionApi {
         let room = room.rtc();
         let remote = remote_session.map(|port| {
             let transport = match &console {
-                Some(console) => console.as_transport(),
+                Some(console) => console.clone().as_transport(),
                 None => Arc::new(crate::remote_session::room::RoomTransport::new(
                     Arc::clone(&room),
                     spawner.clone(),
@@ -218,7 +218,7 @@ impl SessionApi {
             Arc::new(crate::remote_session::driver::Hosting::new(
                 port,
                 transport,
-                console.as_ref().map(|c| c.as_console()),
+                console.as_ref().map(|c| c.clone().as_console()),
                 clock.clone(),
                 spawner.clone(),
                 Box::new(move || wall.wall_secs()),
@@ -387,14 +387,14 @@ impl SessionApi {
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// Publish the agent's track, open every provider stream, and start the loop. Awaitable, since
-    /// the provider factories must be opened on the loop.
+    /// Open the providers and run the injected queue owner beside the host event drain.
     ///
-    /// Does not wait for a participant; await `wait_until_ready` for that. `capture_run=True` opens
-    /// `start(capture_run=True)`'s run before the opening agent's `AgentHandoff` record and its
-    /// `on_enter`.
-    #[host(method(kw_only, defaults(capture_run = false)))]
-    pub fn start(&self, capture_run: bool) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
+    /// `capture_run` opens the run before the opening agent's handoff and `on_enter`.
+    pub fn start(
+        &self,
+        capture_run: bool,
+        queue_owner: super::QueueOwnerFactory,
+    ) -> Result<Reply<Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         let events = self.host.events.clone();
         let remote = self.host.remote.clone();
@@ -406,7 +406,7 @@ impl SessionApi {
         let spawner = Arc::clone(&self.spawner);
         // The drain: one event per call, in driver order; a hook call handed to the host loop in
         // that order, then awaited on its own task.
-        let opening = self.open(capture_run, move |mut runner: SessionRunner| {
+        let opening = self.open(capture_run, queue_owner, move |mut runner: SessionRunner| {
             Box::pin(async move {
                 let mut running: Vec<lk_agents_abi::AbortHandle> = Vec::new();
                 while let Some(ev) = runner.next_host_event().await {

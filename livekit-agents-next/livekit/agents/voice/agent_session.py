@@ -526,7 +526,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 await self._recorder.ready()
                 self._core.attach_recorder(self._recorder)
             job_ctx.add_shutdown_callback(lambda: self._aclose(CloseReason.JOB_SHUTDOWN))
-        await self._core.start(capture_run=capture_run)
+        await _core._core_voice_session_start(self._core, capture_run)
         if self.options["ivr_detection"]:
             await self._start_ivr_detection()
 

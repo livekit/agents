@@ -87,7 +87,6 @@ from ._generated._core_classes import (
     ChatItem as ChatItem,
     ChatRequest as ChatRequest,
     ConnectionPoolState as ConnectionPoolState,
-    ConsoleIo as ConsoleIo,
     CoreTextOutput as CoreTextOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     FakeRoom as FakeRoom,
@@ -364,7 +363,9 @@ from ._generated._core_utils import (
     MovingAverage as MovingAverage,
 )
 from ._generated._core_voice import (
+    ConsoleIo as ConsoleIo,
     DataStreamAudioOutput as DataStreamAudioOutput,
+    _core_voice_session_start as _core_voice_session_start,
 )
 from ._generated._core_worker import (
     ExitSignals as ExitSignals,

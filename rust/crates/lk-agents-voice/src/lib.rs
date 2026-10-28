@@ -26,7 +26,6 @@ pub mod recorder_io;
 pub mod remote_session;
 pub mod room_io;
 pub mod run_result;
-pub mod runtime;
 pub mod speech_handle;
 pub mod telemetry;
 pub mod tool_executor;

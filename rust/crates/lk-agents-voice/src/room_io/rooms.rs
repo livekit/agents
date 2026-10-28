@@ -16,9 +16,11 @@ use std::time::Duration;
 
 use lk_agents_abi::VirtualClock;
 use lk_agents_rtc::{
-    DisconnectReason, FakeRoom, FakeRtc, FakeTrackPublication, FrameSynth, ParticipantKind,
-    RtcRoom, StreamInfo, UnknownDisconnectReason,
+    DisconnectReason, FakeTrackPublication, FrameSynth, ParticipantKind, RtcRoom, StreamInfo,
+    UnknownDisconnectReason,
 };
+
+pub use lk_agents_rtc::{FakeRoom, FakeRtc};
 
 use crate::agent_session::SessionRoom;
 use crate::agent_session::Timebase;
@@ -172,7 +174,9 @@ impl ScriptedRoom {
 
     /// Every byte stream the agent opened, as `(topic, destinations, attributes, bytes, closed)`.
     #[host(method)]
-    pub fn byte_streams(&self) -> Vec<(String, Vec<String>, std::collections::HashMap<String, String>, usize, bool)> {
+    pub fn byte_streams(
+        &self,
+    ) -> Vec<(String, Vec<String>, std::collections::HashMap<String, String>, usize, bool)> {
         self.room
             .local_participant()
             .byte_streams()

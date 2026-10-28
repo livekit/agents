@@ -32,6 +32,8 @@ use crate::{
 };
 
 mod avatar;
+mod console;
+pub use console::{FakeCli, FakeConsolePort};
 mod eot;
 mod interruption;
 mod llm;
@@ -50,8 +52,8 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
 pub use nodes::FakeNodes;
 pub use output::{
-    FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
-    FakeTextOutput, FakeVideoInput, HALF, room_camera,
+    FakeAudioInput, FakeAudioOutput, FakeRecorder, FakeSoundStream, FakeTextOutput, FakeVideoInput,
+    HALF, room_camera,
 };
 pub use realtime::{FakeDuplex, FakeRealtime, FallbackRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
