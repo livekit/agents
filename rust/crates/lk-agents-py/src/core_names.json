@@ -151,6 +151,7 @@
   "WARM_TRANSFER_IDENTITY",
   "WarmTransfer",
   "_core_Credentials",
+  "_core_a2a_agent_card",
   "_core_auth_grant_allows",
   "accuracy",
   "agent_join_token",

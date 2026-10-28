@@ -22,6 +22,7 @@ pub mod avatar;
 pub mod host;
 pub mod a2a;
 pub mod a2a_auth;
+pub mod a2a_card;
 pub mod a2a_client;
 pub mod http;
 pub mod llm;

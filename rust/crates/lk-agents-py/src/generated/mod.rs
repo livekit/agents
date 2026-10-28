@@ -22,14 +22,15 @@ pub mod worker;
 pub trait Implementations: 'static {
     type Credentials: ::lk_agents_abi::a2a::auth::Credentials;
     type AuthPermissions: ::lk_agents_abi::a2a::auth::AuthPermissions;
+    type EndpointCard: ::lk_agents_abi::a2a::card::EndpointCard;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
-    type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
+    type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
@@ -43,6 +44,7 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::_core_Credentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
     m.add_class::<inference::InferenceAvatar>()?;
@@ -50,7 +52,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;
     m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
-    m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<llm::McpSession>()?;
     m.add_function(wrap_pyfunction!(llm::resolve_mcp_tool_options, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_raw_schema, m)?)?;
@@ -58,6 +59,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::mcp_http_transport, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_render_result, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_check_result, m)?)?;
+    m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;

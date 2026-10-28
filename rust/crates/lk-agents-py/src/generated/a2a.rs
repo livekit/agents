@@ -66,6 +66,18 @@ pub fn _core_auth_grant_allows(grant: ::lk_agents_abi::a2a::auth::AuthGrant, ope
     Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
+type EndpointCardImpl = <crate::Selected as super::Implementations>::EndpointCard;
+
+/// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
+#[pyfunction]
+#[pyo3(signature = (descriptor))]
+pub fn _core_a2a_agent_card(descriptor: ::lk_agents_abi::a2a::card::EndpointDescriptor) -> PyResult<::std::string::String> {
+    ::lk_agents_abi::python::check_pid()?;
+    let out = <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_agent_card(descriptor).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
 
 /// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.context.TurnHost`.

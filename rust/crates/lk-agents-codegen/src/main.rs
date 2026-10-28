@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 /// Codegen inputs in output order: ABI records and the storage/A2A boundary records with Python
 /// targets.
 const SOURCES: &[&str] = &[
+    "rust/crates/lk-agents-abi/src/a2a/metadata.rs",
     "rust/crates/lk-agents-abi/src/telemetry/attributes.rs",
     "rust/crates/lk-agents-abi/src/voice/events.rs",
     "rust/crates/lk-agents-abi/src/metrics/base.rs",

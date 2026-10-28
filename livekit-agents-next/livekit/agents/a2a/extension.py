@@ -1,11 +1,7 @@
-"""The LiveKit agents extension to A2A.
+"""Host SDK adapters for LiveKit A2A metadata and cards.
 
-A2A extensions are named by a URI, declared on the agent card, activated by a client with the
-``A2A-Extensions`` header, echoed by the server, and keep their fields in the ``metadata`` maps
-under keys prefixed by the URI. This module holds the URI, every key written short
-(``livekit/<name>``), the per-request negotiation, the protobuf helpers and the agent card an
-endpoint publishes. The specification is ``docs/protocol/a2a.md``. A stock client that sends
-no header gets plain A2A, and a stock server that offers no extension is read as plain A2A.
+The keys are generated from the native schema. The optional extension header advertises peer
+capability; it grants no authority and is not required to use the documented metadata fields.
 """
 
 from __future__ import annotations
@@ -14,39 +10,30 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from a2a.types import a2a_pb2 as pb
-from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
+from a2a.utils.constants import TransportProtocol
 from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message as ProtoMessage
 from pydantic import JsonValue
 
-EXTENSION_URI = "https://livekit.io/a2a/ext/agents/v1"
-"""The Live extension. A key on the wire is ``f"{EXTENSION_URI}/{name}"``."""
+from .._core import _core_a2a_agent_card
+from .._generated.a2a_card import EndpointDescriptor
+from .._generated.a2a_metadata import (
+    ANSWER_ARTIFACT_NAME,
+    CHANNEL,
+    EXTENSION_URI,
+    EXTENSIONS_HEADER,
+    INTERRUPTED,
+    INTERRUPTION_REASON,
+    KIND,
+    KIND_CHAT_CTX,
+    KIND_DELEGATION,
+    MERGED_INTO,
+    REASON,
+    VERBATIM,
+)
 
-EXTENSIONS_HEADER = "A2A-Extensions"
 JSONRPC_BINDING = TransportProtocol.JSONRPC.value
-"""``JSONRPC``: JSON-RPC 2.0 over HTTP, server-sent events for the streams; mandatory."""
-
 Metadata = dict[str, JsonValue]
-"""A ``metadata`` map as the wire carries it."""
-
-
-# LiveKit's keys, as the wire and the stored rows carry them; ``livekit/<name>`` is the shorthand
-# docs/protocol/a2a.md writes, never a key
-CHANNEL = f"{EXTENSION_URI}/channel"
-KIND = f"{EXTENSION_URI}/kind"
-INTERRUPTED = f"{EXTENSION_URI}/interrupted"
-INTERRUPTION_REASON = f"{EXTENSION_URI}/interruptionReason"
-MERGED_INTO = f"{EXTENSION_URI}/mergedInto"
-REASON = f"{EXTENSION_URI}/reason"
-VERBATIM = f"{EXTENSION_URI}/verbatim"
-"""The part of a reply that reaches the person exactly as written; the rest is phrased by the
-agent facing them."""
-
-KIND_DELEGATION = "delegation"
-KIND_CHAT_CTX = "chat_ctx"
-
-ANSWER_ARTIFACT_NAME = "answer"
-"""The one artifact that is the answer; a caller reads it whole at the terminal status."""
 
 
 @dataclass(frozen=True)
@@ -111,9 +98,6 @@ def to_json(message: ProtoMessage) -> dict[str, JsonValue]:
 
 # -- the agent card --
 
-SecuritySchemes = Mapping[str, Mapping[str, JsonValue]]
-"""The developer's own schemes, by name, as the JSON of a ``SecurityScheme``."""
-
 
 def agent_card(
     *,
@@ -121,57 +105,10 @@ def agent_card(
     name: str,
     description: str,
     version: str = "1.0.0",
-    security_schemes: SecuritySchemes | None = None,
 ) -> pb.AgentCard:
-    """The card an endpoint serves: one ``delegate`` skill, text in and text out, the
-    extension offered and not required, JSON-RPC over HTTP+SSE as the one interface.
-    ``url`` is the HTTP interface, ``<endpoint>/v1``."""
-    interface = pb.AgentInterface(
-        url=url, protocol_binding=JSONRPC_BINDING, protocol_version=PROTOCOL_VERSION_1_0
-    )
-    skill = pb.AgentSkill(
-        id="delegate", name="delegate", description=description, tags=["delegation"]
-    )
-    card = pb.AgentCard(
-        name=name,
-        description=description,
-        version=version,
-        capabilities=pb.AgentCapabilities(streaming=True, extensions=[_offered_extension()]),
-        default_input_modes=["text/plain"],
-        default_output_modes=["text/plain"],
-        skills=[skill],
-        supported_interfaces=[interface],
-    )
-
-    _add_security(card, security_schemes=security_schemes)
-    return card
-
-
-def _offered_extension() -> pb.AgentExtension:
-    return pb.AgentExtension(
-        uri=EXTENSION_URI,
-        description=(
-            "LiveKit agents extension: durable sessions as contexts, typed chat items, "
-            "interrupt and merge semantics."
-        ),
-        required=False,
-    )
-
-
-def _add_security(card: pb.AgentCard, *, security_schemes: SecuritySchemes | None) -> None:
-    """A LiveKit project token is always accepted; the developer's own schemes beside it."""
-    bearer = pb.HTTPAuthSecurityScheme(
-        scheme="bearer",
-        bearer_format="JWT",
-        description="A required LiveKit project token or thread grant",
-    )
-    card.security_schemes["livekit"].http_auth_security_scheme.CopyFrom(bearer)
-
-    for scheme_name, scheme in (security_schemes or {}).items():
-        json_format.ParseDict(dict(scheme), card.security_schemes[scheme_name])
-
-    requirement = card.security_requirements.add()
-    requirement.schemes["livekit"].list.extend([])
+    """Adapt the native card to the Python A2A SDK's protobuf representation."""
+    descriptor = EndpointDescriptor(name=name, description=description, version=version, url=url)
+    return json_format.Parse(_core_a2a_agent_card(descriptor), pb.AgentCard())
 
 
 __all__ = [
@@ -187,9 +124,9 @@ __all__ = [
     "KIND_DELEGATION",
     "MERGED_INTO",
     "REASON",
+    "VERBATIM",
     "Extensions",
     "Metadata",
-    "SecuritySchemes",
     "agent_card",
     "as_dict",
     "pb",
