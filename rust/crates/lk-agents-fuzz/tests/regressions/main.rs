@@ -33,6 +33,7 @@ mod mic_replaced_with_frames;
 mod manual_turn_closed_empty;
 mod model_failure_reported;
 mod model_metrics_reported;
+mod ordinary_completed_replies;
 mod path_needs_both_switches;
 mod pause_outlives_its_speech;
 mod paused_sink_released_when_done;

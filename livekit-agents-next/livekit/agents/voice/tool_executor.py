@@ -107,26 +107,27 @@ class ToolRunner:
         token = _BindingContextVar.set(binding)
         scope_token = _approval_scope.set(approval)
         try:
-            task = asyncio.create_task(tool(*args, **kwargs), name=f"tool_{fnc_call.name}")
+            body = asyncio.create_task(tool(*args, **kwargs), name=f"tool_{fnc_call.name}")
         finally:
             _approval_scope.reset(scope_token)
             _BindingContextVar.reset(token)
-        self._running[fnc_call.call_id] = task
-        task.add_done_callback(lambda _: self._running.pop(fnc_call.call_id, None))
+        self._running[fnc_call.call_id] = body
+        body.add_done_callback(lambda _: self._running.pop(fnc_call.call_id, None))
         first_update = ctx._first_update
-        await asyncio.wait({task, first_update}, return_when=asyncio.FIRST_COMPLETED)
-        if task.done():
-            outcome = _ended(fnc_call, task, approval)
-            # in a VoiceTask's speech a `Completed` ends the task, once validated
+        await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
+        if body.done():
+            outcome = _ended(fnc_call, body, approval)
+            # in a VoiceTask's speech a `Completed` ends the task, once validated; from an
+            # ordinary tool it is the call's output, with a reply
             if task and outcome["kind"] == "completed":
-                return await self._validated(ctx, task.result().value, outcome)
+                return await self._validated(ctx, body.result().value, outcome)
             return outcome
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
             self._session._core.tool_update(fnc_call.call_id, _ended(fnc_call, task, approval))
 
-        task.add_done_callback(_final)
+        body.add_done_callback(_final)
         message, raw = first_update.result()
         return {"kind": "update", "text": message, "raw": raw}
 

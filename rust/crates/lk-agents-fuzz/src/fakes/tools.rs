@@ -61,7 +61,7 @@ impl HostToolRunner for FakeTools {
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
         granted: bool,
-        task: bool,
+        _task: bool,
     ) -> Result<ToolReport, HostError> {
         let handle = Arc::clone(&speech.0)
             .downcast::<SpeechHandle>()
@@ -90,9 +90,11 @@ impl HostToolRunner for FakeTools {
         if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
             *tool = Some(call.name.clone());
         }
-        // In a task's speech the completion is validated and its value handed over.
+        // Every completion is handed over with a value, in a task's speech or not: whether it
+        // ends a task is the core's to decide (a host that validated an ordinary tool's
+        // `Completed` as a task's once silenced the call), so the rules see what it decides.
         let transition =
-            (task && matches!(outcome, ToolOutcome::Completed { .. })).then(|| {
+            matches!(outcome, ToolOutcome::Completed { .. }).then(|| {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });

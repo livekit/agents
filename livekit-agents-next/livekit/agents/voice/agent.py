@@ -413,30 +413,29 @@ class Agent(Generic[Context_T, Output_T]):
             async def find_appointment(ctx: RunContext, last_name: str) -> str: ...
         """
 
+        options: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "raw_schema": raw_schema,
+            "flags": flags,
+            "on_duplicate": on_duplicate,
+            "duplicate_scope": duplicate_scope,
+            "needs_approval": needs_approval,
+        }
+
         def register(func: Callable[_P, _R]) -> FunctionTool[_P, _R] | RawFunctionTool[_P, _R]:
             self._check_not_frozen("a tool")
             tool: FunctionTool[_P, _R] | RawFunctionTool[_P, _R]
             if isinstance(func, (FunctionTool, RawFunctionTool)):
-                # an already built tool, registered as it is
+                # an already built tool, registered as it is: its options were given when built
+                default = inspect.signature(Agent.tool).parameters
+                given = [k for k, v in options.items() if v != default[k].default]
+                if given:
+                    raise ValueError(f"{given} apply to a function, not to a built tool")
                 tool = func
-            elif raw_schema is not None:
-                tool = function_tool(
-                    func,
-                    raw_schema=raw_schema,
-                    flags=flags,
-                    on_duplicate=on_duplicate,
-                    duplicate_scope=duplicate_scope,
-                )
             else:
-                tool = function_tool(
-                    func,
-                    name=name,
-                    description=description,
-                    flags=flags,
-                    on_duplicate=on_duplicate,
-                    duplicate_scope=duplicate_scope,
-                    needs_approval=needs_approval,
-                )
+                # `function_tool` refuses what a raw schema cannot take (`needs_approval`)
+                tool = function_tool(func, **options)
             self._tools.append(tool)
             return tool
 

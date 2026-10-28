@@ -100,6 +100,7 @@ TOOL_CALLS = [
     ("keypad", "send_dtmf_events", lambda text: {"events": ["1", "#"]}),
     ("bye", "end_call", lambda text: {}),
     ("book", "book", lambda text: {"day": "Monday"}),
+    ("table", "reserve_table", lambda text: {"guests": 2}),
     ("receipt", "change_receipt_email", lambda text: {}),
     ("@", "confirm_email", lambda text: {"email_address": text.split()[-1]}),
 ]
@@ -1136,11 +1137,20 @@ async def filler() -> None:
 
 
 async def tool_outcomes() -> None:
-    """A toolset that lists its tools in ``setup()`` (as an MCP server's does) runs them, and a
-    tool that requires approval asks its read-back, then runs on the repeat after the answer."""
+    """A toolset that lists its tools in ``setup()`` (as an MCP server's does) runs them, a
+    tool that requires approval asks its read-back, then runs on the repeat after the answer, and
+    an ordinary tool's ``Completed(value)`` is its call's output, replied to."""
     print("== tool outcomes")
     room = _core.FakeRoom(sample_rate=48000)
     room.join("user")
+
+    # approval is held for typed tools only: a raw one asking for it is refused, never dropped
+    raw = {"name": "transfer", "description": "Transfer.", "parameters": {"type": "object"}}
+    try:
+        Agent(instructions="x").tool(raw_schema=raw, needs_approval=True)(lambda **_: None)
+        raise AssertionError("@agent.tool(raw_schema=, needs_approval=True) must raise")
+    except ValueError as e:
+        print(f"raw tool needing approval: {e}")
 
     @function_tool
     async def look_up_order(ctx: RunContext) -> str:
@@ -1152,13 +1162,19 @@ async def tool_outcomes() -> None:
         """Book an appointment."""
         return f"booked {day}"
 
+    @function_tool
+    async def reserve_table(ctx: RunContext, guests: int) -> Completed[dict[str, int]]:
+        """Reserve a table."""
+        # not the agent's `output_type` (`str`): only a VoiceTask's tool is held to it
+        return Completed({"table_for": guests})
+
     class Late(llm.Toolset):
         async def setup(self) -> Late:
             self._tools = [look_up_order]
             return self
 
     session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
-    agent = Agent(instructions="You book.", tools=[Late(id="late"), book])
+    agent = Agent(instructions="You book.", tools=[Late(id="late"), book, reserve_table])
     await session.start(agent, room=room)
     session.generate_reply(user_input="where is my order?")
     await settle(room, 4)
@@ -1166,8 +1182,11 @@ async def tool_outcomes() -> None:
     await settle(room, 4)
     session.generate_reply(user_input="yes, book it")
     await settle(room, 4)
+    session.generate_reply(user_input="a table for two")
+    await settle(room, 4)
     spoken = [text for topic, text in room.text_streams() if topic == "lk.transcription"]
     print(f"tool outcomes spoken={spoken}")
+    assert "The tool said: {'table_for': 2}" in spoken, spoken
     assert "The tool said: shipped" in spoken, spoken
     readback = "Please confirm: Book an appointment (day='Monday'). Yes or no?"
     assert readback in spoken, spoken
