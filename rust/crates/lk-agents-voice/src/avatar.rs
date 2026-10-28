@@ -2,7 +2,9 @@
 //! remote avatar worker as one byte stream per segment, with the worker reporting playback back
 //! over RPC. The wire (topic, RPC methods, attributes) is the reference's, byte for byte.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
@@ -29,9 +31,11 @@ fn stream_name() -> String {
 
 // ----------------------------------------------------------------------------- the RPC routes
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The reference's class-level handler tables: one RPC method per room serves every output on it,
 /// routed by the caller (the avatar each output streams to).
 type Routes = HashMap<(String, &'static str), HashMap<String, Weak<Inner>>>;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 static ROUTES: LazyLock<Mutex<Routes>> = LazyLock::new(Mutex::default);
 
 fn route(room: &str, method: &'static str, caller: &str) -> Option<Arc<Inner>> {
@@ -77,10 +81,13 @@ struct Inner {
     spawner: Arc<dyn Spawner>,
     /// `None` while starting, then whether the avatar became ready.
     started: watch::Sender<Option<std::result::Result<(), String>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Option<Arc<Segment>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pushed: Mutex<f64>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(AbortHandle, Ts)>>,
 }
@@ -88,6 +95,7 @@ struct Inner {
 /// One segment's byte stream: opened by its first frame, in order behind the async lock.
 #[derive(Default)]
 struct Segment {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     writer: tokio::sync::Mutex<Option<Box<dyn ByteStreamWriter>>>,
 }
 
@@ -142,6 +150,7 @@ impl Inner {
         self.started.send_replace(Some(Ok(())));
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One frame into `segment`, opening its stream on the first.
     async fn write(&self, segment: &Segment, frame: &AudioFrame) -> Result<()> {
         let mut writer = segment.writer.lock().await;
@@ -232,6 +241,7 @@ impl Inner {
 /// DataStream, which reports its playback back.
 pub struct DataStreamAudioOutput {
     inner: Arc<Inner>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     start: Mutex<Option<AbortHandle>>,
 }
 
@@ -244,6 +254,7 @@ impl Drop for DataStreamAudioOutput {
 }
 
 impl DataStreamAudioOutput {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         destination_identity: String,
@@ -463,19 +474,27 @@ struct RxInner {
     rpc_max_retries: u32,
     clock: Arc<dyn Clock>,
     on_clear: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     remote: Mutex<Option<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     out: Mutex<RxOut>,
     out_ready: tokio::sync::Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     streams: Mutex<std::collections::VecDeque<lk_agents_rtc::ByteStream>>,
     streams_ready: tokio::sync::Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A segment is being read.
     reading: std::sync::atomic::AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_current_reader_cleared`.
     cleared: std::sync::atomic::AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_current_reader_superseded`: a newer stream or a clear means its trailer no longer matters.
     superseded: std::sync::atomic::AtomicBool,
     superseded_wake: tokio::sync::Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rpc: tokio::sync::mpsc::UnboundedSender<RpcEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<RpcEvent>>>,
 }
 
@@ -524,6 +543,7 @@ impl RxInner {
         "ok".to_owned()
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `_recv_task`: each stream is one segment, framed at `frame_size_ms`.
     async fn recv(self: Arc<Self>) -> std::result::Result<(), ReceiverEnd> {
         use std::sync::atomic::Ordering;
@@ -658,6 +678,7 @@ impl RxInner {
 pub struct DataStreamAudioReceiver {
     inner: Arc<RxInner>,
     spawner: Arc<dyn Spawner>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
@@ -725,6 +746,7 @@ impl DataStreamAudioReceiver {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `start()`: wait for the agent, then serve its streams and the clear RPC.
     #[host(method)]
     pub async fn start(&self) -> std::result::Result<(), ReceiverEnd> {
@@ -853,7 +875,9 @@ impl DataStreamAudioReceiver {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 type RxRoutes = HashMap<String, HashMap<String, Weak<RxInner>>>;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 static RX_ROUTES: LazyLock<Mutex<RxRoutes>> = LazyLock::new(Mutex::default);
 
 // ----------------------------------------------------------------------------- the avatar's join

@@ -2,7 +2,9 @@ use crate::agent_activity::scheduling::SpeechId;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, Modality, Monotone};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -201,6 +203,7 @@ pub struct SpeechHandle {
     creation: watch::Sender<Creation>,
     /// The loop, for what the host asks of the speech.
     api: Api,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `interrupt()` was called from the host; `interrupted` reads `true` from this tick on, even
     /// before the loop has acted on it.
     interrupt_requested: AtomicBool,
@@ -215,10 +218,13 @@ pub struct SpeechHandle {
     // `watch` so the hold/release read-modify-write runs under one write lock.
     interruptions: watch::Sender<Interruptions>,
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// One cell per tool-loop step, addressed absolutely.
     generations: Mutex<Vec<Arc<Monotone<bool>>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     num_steps: AtomicU32,
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     inner: Mutex<Inner>,
 }
 
@@ -237,6 +243,7 @@ impl Eq for SpeechHandle {}
 use lk_agents_abi::lock;
 
 impl SpeechHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn base(
         creation: Creation,
         reserved: Option<SpeechId>,

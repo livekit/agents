@@ -4,6 +4,7 @@ use lk_agents_abi::{TokioSpawner, VirtualClock};
 use lk_agents_rtc::{FakeRoom, FakeRtc, ParticipantKind, TrackSource};
 
 #[derive(Default)]
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Events(Mutex<Vec<String>>);
 
 impl PlaybackObserver for Events {
@@ -58,6 +59,7 @@ async fn settle() {
 
 // Catches: audio streamed before the avatar is in the room, a stream per frame instead of per
 // segment, the wrong topic/destination/attributes, or a segment left open by flush.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_segment_is_one_byte_stream_to_the_avatar_once_it_has_joined() {
     let f = fixture("r1", None, false);
@@ -147,6 +149,7 @@ async fn an_unanswered_clear_buffer_finishes_the_segment_after_its_timeout() {
 }
 
 // Catches: audio sent before the avatar's video track is up, when the plugin asks to wait for it.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn wait_remote_track_holds_audio_until_the_avatar_publishes_video() {
     let f = fixture("r4", Some(lk_agents_rtc::TRACK_KIND_VIDEO), true);
@@ -184,9 +187,11 @@ struct RxFixture {
     room: Arc<FakeRoom>,
     clock: Arc<VirtualClock>,
     rx: DataStreamAudioReceiver,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     cleared: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 async fn receiver(name: &str) -> RxFixture {
     let (rtc, clock) = FakeRtc::with_virtual_clock();
     let room = rtc.room(name);
@@ -223,6 +228,7 @@ fn kinds(items: &[Received]) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn take(rx: &DataStreamAudioReceiver, n: usize) -> Vec<Received> {
     let mut out = Vec::new();
     for _ in 0..n {
@@ -276,6 +282,7 @@ async fn clear_buffer_from_the_agent_drops_the_segment_and_is_raised() {
 
 // Catches: playback reports with the wrong method or payload, or a failing report retried forever
 // (the reference gives up after `rpc_max_retries` and fails the receiver).
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() {
     let f = receiver("rx4").await;
@@ -304,6 +311,7 @@ async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() 
 }
 
 // Catches: a stream with no format read as some default, which would play garbage.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_stream_without_its_format_fails_the_receiver() {
     let f = receiver("rx5").await;
@@ -318,6 +326,7 @@ async fn a_stream_without_its_format_fails_the_receiver() {
 
 // Catches: a join wait that starts before the room connects (the reference arms it on the
 // connection), or that ends at the participant without its video track.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
     let (rtc, clock) = FakeRtc::with_virtual_clock();

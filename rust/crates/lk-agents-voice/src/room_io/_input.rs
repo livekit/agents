@@ -11,7 +11,9 @@ use lk_agents_rtc::{
     AudioStreamOptions, AudioTrackFeature, ParticipantIdentity, RemoteParticipant, RoomEvent,
     RtcRoom, TrackPublication, TrackSid, TrackSource, VideoFrameRef, silence_frame,
 };
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -84,6 +86,7 @@ impl ParticipantVideoInput {
         true
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Read one track until it ends, is superseded, or the consumer hangs up. Returning drops the
     /// stream, which releases the subscription; hence the stop signal.
     async fn pump(self: Arc<Self>, lease: Lease, mut stream: BoundedLossy<VideoFrameRef>) {
@@ -155,6 +158,7 @@ impl VideoInput for ParticipantVideoInput {
 /// instant moves only on a pass, so the rate doesn't depend on the camera's frame rate.
 #[lk_agents_abi::class]
 pub struct VideoSampler {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<SamplerState>,
 }
 
@@ -167,6 +171,7 @@ struct SamplerState {
 
 #[lk_agents_abi::host(object(pid = false))]
 impl VideoSampler {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The reference's defaults (1.0 and 0.3) live at the call site.
     #[host(new(kw_only = "speaking_fps"))]
     pub fn new(speaking_fps: f64, silent_fps: f64) -> Self {
@@ -289,17 +294,23 @@ impl Lease {
 /// Which track a leg reads and the one pump reading it: linking, claiming, releasing, the
 /// generation check and the bounded queue.
 pub(crate) struct TrackReader<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<ReaderState>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Drop-oldest. `Option` so [`close`](Self::close) can drop the sender, ending the consumer's
     /// `recv`.
     tx: Mutex<Option<LossyTx<T>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: tokio::sync::Mutex<BoundedLossy<T>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     attached: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The running pump's handle; a superseded pump returns on its own stop.
     pump: Mutex<Option<AbortHandle>>,
 }
 
 impl<T> TrackReader<T> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub(crate) fn new((tx, rx): (LossyTx<T>, BoundedLossy<T>)) -> Self {
         TrackReader {
             state: Mutex::new(ReaderState {
@@ -464,6 +475,7 @@ pub struct ParticipantAudioInput {
     spawner: Arc<dyn Spawner>,
     config: AudioInputConfig,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The publications whose pre-connect buffer was awaited once already: a track read again
     /// (a participant switched back, a fallback) goes straight to its live audio.
     pre_connect_done: Mutex<std::collections::HashSet<(ParticipantIdentity, TrackSid)>>,
@@ -486,6 +498,7 @@ impl ParticipantAudioInput {
         self.reader.reading()
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         spawner: Arc<dyn Spawner>,
@@ -552,6 +565,7 @@ impl ParticipantAudioInput {
         true
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn pump(
         self: Arc<Self>,
         lease: Lease,

@@ -1007,6 +1007,8 @@ impl Driver {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `asked`: the speech is a host command's (`say`, `generate_reply`), with its call. `turn`: it
     /// answers a user turn the client committed.
     fn start_realtime_speech(

@@ -12,6 +12,7 @@ use lk_agents_abi::worker::remote_session::{
 };
 use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Extra, MetricsReport, Role};
 use prost::Message as _;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -380,6 +381,7 @@ pub type AgentInfo = (String, Option<String>, Vec<String>, Vec<ChatItem>);
 /// `(items, None)` or `(None, error)`.
 pub type RunOutcome = (Option<Vec<ChatItem>>, Option<String>);
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `(agent_state, user_state, agent_id, options, started_at)` as the host holds them: an unknown
 /// state word answers `AS_IDLE` / `US_LISTENING`; `options` keys are [`STATE_OPTION_FIELDS`];
 /// `started_at` is epoch seconds, `None` or `0` stamped with the answer time.
@@ -438,6 +440,7 @@ impl SessionHost {
         SessionHost { port, sdk }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `_handle_request` (`remote_session.py:715`). `Err` is a host failure. `Ok(None)` for an
     /// unset or unknown arm: the reference sends no response (the client times out); kept for parity.
     pub async fn handle_request(
@@ -759,6 +762,7 @@ pub fn encode_metrics(m: &MetricsReport) -> proto::MetricsReport {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `{k: str(v) ...}` (`_proto.py:88`), but compact JSON rather than Python `str(dict)`. `extra` does
 /// not round-trip in either implementation.
 fn encode_extra(extra: &Extra) -> std::collections::HashMap<String, String> {

@@ -510,6 +510,7 @@ impl Pump {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// One connection: open, replay on a reconnect, run until it ends. `Err` is the attempt's
     /// failure, retryable or not.
     async fn connect_and_run(
@@ -565,6 +566,7 @@ impl Pump {
         outcome
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn run_ws(
         &self,

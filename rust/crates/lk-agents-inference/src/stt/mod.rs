@@ -92,16 +92,22 @@ impl std::ops::Deref for NativeStt {
 
 /// What every session's view of one client shares: its options, connections and open streams.
 pub struct SttShared {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     opts: Mutex<SttOptions>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     capabilities: Mutex<SttCapabilities>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Framework-managed keyterms, merged into `extra` at connect and by `session.update`.
     session_keyterms: Mutex<Vec<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
     vad: Mutex<Option<Arc<dyn crate::abi::Vad>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Every open stream, which `update_options` and keyterm changes reach mid-stream.
     live: Mutex<Vec<Weak<StreamControl>>>,
 }
@@ -122,6 +128,7 @@ pub struct SttShared {
     stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceStt: ..."
 ))]
 impl NativeStt {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let capabilities =
             options::capabilities(opts.model.as_deref(), &opts.fallback, Some(&opts.extra_kwargs));

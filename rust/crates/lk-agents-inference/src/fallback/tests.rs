@@ -22,6 +22,7 @@ use crate::fallback::policy::ChainPolicy;
 
 const LIMIT: Duration = Duration::from_secs(5);
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn within<F: std::future::Future>(what: &str, fut: F) -> F::Output {
     match tokio::time::timeout(LIMIT, fut).await {
         Ok(v) => v,
@@ -29,6 +30,7 @@ async fn within<F: std::future::Future>(what: &str, fut: F) -> F::Output {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn until(what: &str, mut cond: impl FnMut() -> bool) {
     within(what, async {
         while !cond() {
@@ -44,7 +46,9 @@ async fn until(what: &str, mut cond: impl FnMut() -> bool) {
 
 #[derive(Default)]
 struct Recorder {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     events: Mutex<Vec<AvailabilityChanged>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     all_unavailable: AtomicUsize,
 }
 
@@ -84,20 +88,27 @@ enum Step {
 
 struct Fake {
     label: String,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     script: Mutex<VecDeque<Step>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     opened: Mutex<Vec<ApiConnectOptions>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     probes: Mutex<Vec<(RecoverySlot, ApiConnectOptions)>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     probe_verdict: Mutex<VecDeque<Recovery>>,
     /// A probe on slot `i` waits here. Starts saturated, so probes complete immediately unless a
     /// test closes the gate.
     gate: [Arc<Semaphore>; 2],
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     probes_entered: AtomicUsize,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// Incremented as the last statement of `recover`, so a test can `until` on "the probe
     /// finished" without racing the availability event.
     probes_done: AtomicUsize,
 }
 
 impl Fake {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn new(label: &str, script: &[Step]) -> Arc<Self> {
         Arc::new(Fake {
             label: label.into(),
@@ -480,9 +491,12 @@ async fn a_probe_that_finds_the_provider_already_back_announces_nothing() {
 
 // Catches: closing the consumer's half without stopping the chain task and its member; an ignored
 // stop is aborted and reported `TimedOut`.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     use std::sync::Arc;
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     use std::sync::atomic::{AtomicBool, Ordering};
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<u8, ProviderError>>(4);

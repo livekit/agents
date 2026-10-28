@@ -73,6 +73,7 @@ pub struct SessionApi {
     resources: lk_agents_abi::resources::Resources,
     /// `conn_options=`: every leg handed over, at start or later, is bound to its budget.
     conn: lk_agents_abi::voice::session_options::SessionConnOptions,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     #[cfg(feature = "dst")]
     probe: Mutex<Option<(HostEventProbe, oneshot::Sender<crate::runtime::Runtime>)>>,
 }
@@ -573,6 +574,7 @@ impl SessionApi {
         Ok((speech, Pusher(Mutex::new(Some(tx)))))
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A `say` of pre-synthesised frames, `text` still committed: the speech and its feeding end.
     pub fn say_audio_channel(
         &self,
@@ -709,6 +711,7 @@ struct Running {
     /// Resolves when the host's drain has handed over the last event, so `close` handlers are
     /// queued before the close completes.
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The loop's id counter: a speech call's handle has its id before the loop creates it.
     speech_ids: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -722,6 +725,7 @@ struct HostParts {
     hooks: Option<Arc<dyn SessionHooks>>,
     /// Set once the close sequence ran; a second `aclose()` waits for the first.
     closed: Arc<tokio::sync::OnceCell<()>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Handoffs in call order: one waits for the previous one's toolset setup.
     handoffs: Arc<tokio::sync::Mutex<()>>,
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
@@ -732,6 +736,7 @@ struct HostParts {
     remote: Option<Arc<crate::remote_session::driver::Hosting>>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn SessionJob>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `session.usage`: every metrics record the host is handed, folded per model.
     usage: Arc<Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>>,
 }
@@ -1083,6 +1088,7 @@ impl SessionRoom for FixedRoom {
 /// The host's `Agent` objects by agent id. The hooks and the handoff record name an agent by
 /// id; the host reads the object it installed.
 #[derive(Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct HostAgents(Arc<Mutex<std::collections::HashMap<String, lk_agents_abi::HostRef>>>);
 
 impl HostAgents {
@@ -1272,6 +1278,7 @@ pub struct NotAnImage;
 
 /// The feeding end of a streamed `say`: what the speech reads, chunk by chunk. Dropping it, or
 /// [`end`](Self::end), finishes the speech.
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct Pusher<T>(std::sync::Mutex<Option<tokio::sync::mpsc::Sender<T>>>);
 
 impl<T: Send + 'static> Pusher<T> {
@@ -1298,6 +1305,7 @@ impl<T: Send + 'static> Pusher<T> {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `source` read into the speech to its end, or until the speech is gone; then closed. A
     /// failing source ends the speech with what it gave.
     async fn feed(

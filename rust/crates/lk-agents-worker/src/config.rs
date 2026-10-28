@@ -88,6 +88,7 @@ impl Default for WorkerOptions {
 }
 
 impl WorkerOptions {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub(crate) fn resolve(self) -> (WorkerConfig, crate::RuntimeConfig, crate::TransportConfig) {
         self.resolve_with(|name| std::env::var(name).ok(), || crate::CpuMonitor::new().cpu_count())
     }
@@ -148,6 +149,7 @@ impl WorkerOptions {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Must be unique across processes, not unpredictable: the clock and the pid suffice.
 fn new_instance_id() -> String {
     let nanos = std::time::SystemTime::now()

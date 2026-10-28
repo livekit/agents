@@ -292,6 +292,7 @@ impl AmdSystem {
         system
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The loop: a due deadline fires before same-instant items; ends at close or when the
     /// session's queue is gone.
@@ -718,6 +719,7 @@ async fn await_callee(
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The tap's drain onto the system's channel: source closed once, tap removed if still installed.
 fn spawn_tap_drain(
@@ -755,6 +757,7 @@ fn spawn_tap_drain(
     });
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// The classification task. A cancelled run reports nothing. A native source may be abandoned
 /// mid-poll; a host stream may not, so the cancel waits for the chunk.

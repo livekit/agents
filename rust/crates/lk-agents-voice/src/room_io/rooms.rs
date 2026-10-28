@@ -2,6 +2,7 @@
 //! console` / `daemon` pass as `room`). Both are the Rust room itself where an `Arc<dyn RtcRoom>`
 //! is taken (`as_dyn`), never proxied back through Python.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -43,6 +44,7 @@ pub struct ScriptedRoom {
     rtc: Arc<FakeRtc>,
     room: Arc<FakeRoom>,
     time: Timebase,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The microphone of the last participant to join, which [`speak`](Self::speak) pushes into.
     mic: Mutex<Option<Arc<FakeTrackPublication>>>,
     /// The microphone's audio: distinct speech per frame.
@@ -51,6 +53,7 @@ pub struct ScriptedRoom {
 
 #[lk_agents_abi::host(object(name = "FakeRoom", as_dyn(RtcRoom = room, SessionRoom = session_room)))]
 impl ScriptedRoom {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `sample_rate` is what the room carries; 48 kHz is what a real WebRTC track publishes. On
     /// the host loop's virtual clock when it has one, else on a virtual clock of its own.
     #[host(new(defaults(name = "fake".to_owned(), sample_rate = 48_000)))]

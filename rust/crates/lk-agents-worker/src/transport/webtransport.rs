@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::Mutex;
 use web_transport_quinn::proto::ConnectRequest;
 use web_transport_quinn::{ClientBuilder, Session};
@@ -128,6 +129,7 @@ fn transport_err(e: impl std::fmt::Display) -> TransportError {
 
 #[async_trait]
 impl WorkerTransport for WtTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     async fn connect(
         &self,
         url: &str,
@@ -184,6 +186,7 @@ fn parse_control(buf: &[u8]) -> Result<Option<(Vec<u8>, usize)>, TransportError>
 }
 
 struct WtSink {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     send: Mutex<SendStream>,
     session: Session,
 }
@@ -221,6 +224,7 @@ struct WtStream {
 
 #[async_trait]
 impl WorkerStream for WtStream {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn recv(&mut self) -> Result<TransportEvent, TransportError> {
         loop {
             if let Some((msg, used)) = parse_control(&self.buf)? {
@@ -290,6 +294,7 @@ mod tests {
     // Catches: the preamble framing read as HTTP bytes (or HTTP bytes eaten by the preamble read),
     // `session_id` dropped, a finished response not reaching the peer as EOF, or a bad preamble
     // answered with anything but HSR_PROTOCOL.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn an_exchange_stream_yields_its_preamble_then_opaque_bytes_and_a_bad_one_is_reset() {
         use prost::Message as _;

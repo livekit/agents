@@ -37,6 +37,7 @@ pub enum SystemTap {
 /// One unbounded channel per subscriber; a departed one is forgotten on publish.
 #[derive(Clone, Default)]
 pub struct WatchHub {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     taps: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>>>,
 }
 
@@ -45,6 +46,8 @@ impl WatchHub {
         Self::default()
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.taps.lock().unwrap_or_else(|p| p.into_inner()).push(tx);
@@ -75,6 +78,7 @@ impl std::fmt::Debug for WatchHub {
 pub struct PeerHandle {
     /// The loop's queue: commands, and the audio taps' installs.
     pub queue: Tx,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub journal: Journal,
     pub time: crate::agent_session::Timebase,
@@ -86,6 +90,7 @@ pub struct PeerHandle {
 }
 
 impl PeerHandle {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         self.watch.subscribe()
     }

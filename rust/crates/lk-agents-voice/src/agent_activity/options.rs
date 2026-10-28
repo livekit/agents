@@ -580,6 +580,7 @@ pub fn resolve_interruption_detector(inputs: &InterruptionGateInputs) -> Interru
 /// `update_options` so far).
 #[lk_agents_abi::class(name = "SessionOptions")]
 pub struct HostOptions {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: std::sync::Mutex<HostOptionsState>,
 }
 
@@ -614,6 +615,7 @@ impl HostOptions {
 /// configuration comes back as the dict `session.options` views.
 #[lk_agents_abi::host(object(name = "SessionOptions"))]
 impl HostOptions {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Read the kwargs once; keep the session layer.
     #[host(new)]
     pub fn new(kwargs: SessionKwargs) -> Self {

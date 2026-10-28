@@ -17,6 +17,7 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
@@ -29,12 +30,15 @@ pub(super) enum Voice {
     Silent,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// Synthesis starts when permitted; playback is authorized separately. `None`: never authorized.
 pub(super) async fn voice_leg(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
     voice: Voice,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate::default();
@@ -105,6 +109,7 @@ pub(super) struct PlaybackGate {
 }
 
 impl PlaybackGate {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     pub(super) async fn wait(&mut self, shared: &SessionShared, handle: &SpeechHandle) -> bool {
         if self.at.is_some() {
             return !handle.interrupted();
@@ -138,6 +143,7 @@ struct Pump<'a> {
     /// Both flags are fixed for the speech, as of the voice leg.
     text_enabled: bool,
     audio_enabled: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: mpsc::UnboundedReceiver<SegEvent>,
 }
 
@@ -176,6 +182,7 @@ impl Pump<'_> {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// One segment's `forward_generation`: its synthesis (or frames), audio and transcript.
     async fn forward_generation(
         &mut self,
@@ -340,13 +347,16 @@ impl Segment for Frames<'_> {
 /// points. `buffered` queues the words behind the audio synthesised before authorization.
 pub(super) struct TextLeg<'a> {
     out: Option<&'a dyn TextOutput>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     flushed: AtomicBool,
     shared: &'a Arc<SessionShared>,
     speech: SpeechId,
 }
 
 impl<'a> TextLeg<'a> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub(super) fn new(
         out: Option<&'a dyn TextOutput>,
         buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
@@ -425,9 +435,11 @@ pub(super) fn first_text_started_speaking(
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `wait`: everything left (stopping at what is buffered made every chunk its own segment).
 /// Otherwise only what is buffered: the duplex open must not wait on the model.
 pub(super) async fn take_text(
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &mut mpsc::UnboundedReceiver<SegEvent>,
     words: &mut Visible,
     text_out: Option<&TextLeg<'_>>,
@@ -456,7 +468,9 @@ pub(super) async fn take_text(
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 pub(super) async fn drain_segment_text(
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &mut mpsc::UnboundedReceiver<SegEvent>,
     mut words: Visible,
     text_out: Option<&TextLeg<'_>>,

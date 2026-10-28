@@ -23,6 +23,7 @@ use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::{Llm, Maybe, Spawner, SpawnerExt, Stt, Tts, Vad};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +32,7 @@ use std::time::Duration;
 /// borrow flag: `aclose()` can be awaited while the event drain calls back into the same object.
 #[lk_agents_abi::host(object(name = "VoiceSession"))]
 impl SessionApi {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Assemble a session; the loop begins at `start()`.
     ///
     /// `room` is a `livekit.rtc.Room`, a `_core.FakeRoom` or a `_core.OfflineRoom`. `on_event`
@@ -383,6 +385,7 @@ impl SessionApi {
         api
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Publish the agent's track, open every provider stream, and start the loop. Awaitable, since
     /// the provider factories must be opened on the loop.
     ///
@@ -1359,6 +1362,7 @@ impl SessionApi {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
 /// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
 fn session_usage_updated(

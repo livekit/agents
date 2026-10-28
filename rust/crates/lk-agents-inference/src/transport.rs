@@ -89,9 +89,11 @@ pub async fn open_ws(
     Ok((sender, receiver))
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The receive side of a pump whose first error is terminal (the reference raises out of `_run`):
 /// after an error or the channel's end, every call is `Ok(None)`.
 pub(crate) async fn next_terminal<T>(
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<Result<T, ApiError>>,
     done: &mut bool,
 ) -> Result<Option<T>, ProviderError> {

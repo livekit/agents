@@ -19,17 +19,22 @@ use lk_agents_rtc::{
     TrackSource, Transcription, TranscriptionSegment,
 };
 use lk_agents_voice::transcription::{Visible, VisibleStream};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 /// Transcript segment ids: `utils.shortuuid("SG_")`, unique across sessions in one room (a
 /// frontend keys its transcript rows on them), or counted for a test that compares them.
 #[derive(Debug, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub struct SegmentIds(Option<AtomicU64>);
 
 impl SegmentIds {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn counting() -> Self {
         SegmentIds(Some(AtomicU64::new(0)))
     }
@@ -117,6 +122,7 @@ struct Writer {
     tags: Vec<ExpressiveTag>,
     /// The one place a delta becomes visible text. Per segment; replacements split whole.
     visible: VisibleStream,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     effects: Option<mpsc::UnboundedSender<WriterEffect>>,
 }
 
@@ -284,6 +290,7 @@ impl Subject {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn on_track_published(
         &mut self,
         owner: &ParticipantIdentity,
@@ -321,6 +328,7 @@ impl Subject {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// A transcription stream's header: final or not, and the subject's microphone when known.
 fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> HashMap<String, String> {
     let mut attributes = HashMap::new();
@@ -333,6 +341,7 @@ fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> HashMap<String
 
 struct Performer {
     room: Arc<dyn RtcRoom>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     subject: Arc<Mutex<Subject>>,
     writer: Option<Box<dyn TextStreamWriter>>,
 }
@@ -418,14 +427,19 @@ impl Performer {
 pub struct ParticipantTranscriptionOutput {
     room: Arc<dyn RtcRoom>,
     ids: Arc<SegmentIds>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     writer: Mutex<Writer>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     subject: Arc<Mutex<Subject>>,
     performer_done: Monotone<bool>,
     next_in_chain: Option<Arc<dyn TextOutput>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
 impl ParticipantTranscriptionOutput {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `is_delta_stream`: the agent's transcript arrives as deltas, the user's as full replacements.
     pub fn new(
         room: Arc<dyn RtcRoom>,

@@ -87,6 +87,7 @@ pub enum Origination {
         sip_call_to: String,
         sip_trunk_id: Option<String>,
         sip_number: String,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         sip_headers: HashMap<String, String>,
         dtmf: Option<String>,
     },
@@ -137,6 +138,7 @@ pub enum TransferFailed {
     Host(#[from] HostError),
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// What the host does for a transfer. Each method is one SDK call or two.
 #[lk_agents_abi::host(proxy(live, cancel_on_drop))]
 #[async_trait::async_trait]
@@ -208,6 +210,7 @@ pub struct HostWarmTransfer {
     instructions: Instructions,
     origination: Origination,
     ringing_timeout: Option<Duration>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     running: Mutex<Running>,
     done: tokio::sync::Notify,
 }
@@ -353,6 +356,7 @@ impl HostWarmTransfer {
         transfer_tools()
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The transfer: the caller on hold with their session's io off, the human agent dialled and
     /// briefed, until one of the tools or the human agent's room settles it; the human agent's
     /// identity once they joined the caller. Whatever ends the
@@ -545,6 +549,7 @@ impl HostWarmTransfer {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `connect_to_caller`: the human agent moved into the caller's room, the transfer settled,
     /// and the caller's room deleted once the caller or the human agent leaves it.
     async fn connect(self: &Arc<Self>) -> Result<(), TransferFailed> {
@@ -605,6 +610,7 @@ enum DialError {
     Rtc(#[from] lk_agents_rtc::RtcError),
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// A Twilio request: a form `POST` under the account, with basic auth; the JSON body, `{}` when it
 /// is not an object.
 async fn twilio_request(
@@ -712,6 +718,7 @@ impl Drop for CancelOnDrop {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Dial through Twilio: the connector's stream URL, the call created from the caller's number
 /// when a call token preserves it (from the business number again if Twilio rejects that caller
 /// ID, errors 21210 and 21212, which create no call), then the human agent's audio track awaited

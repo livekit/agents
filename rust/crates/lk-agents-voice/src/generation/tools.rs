@@ -32,6 +32,7 @@ impl ToolStep {
         self.calls.is_empty()
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Run once the step is authorized to play (a call made while another speech plays, or by a
     /// preemptive generation, waits). The runner's task is **not** registered on the speech
     /// handle: a tool may outlive the turn.

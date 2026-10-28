@@ -13,6 +13,7 @@ pub struct TungsteniteTransport;
 
 #[async_trait]
 impl WsTransport for TungsteniteTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Unbounded: the clients wrap this in `lk_agents_abi::timeout` on their session clock.
     async fn connect(
         &self,
@@ -75,10 +76,12 @@ type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct TungsteniteSender {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// A `tokio` mutex: held across the `send` await, and `&self` is required.
     sink: tokio::sync::Mutex<
         futures_util::stream::SplitSink<WsStream, tokio_tungstenite::tungstenite::Message>,
     >,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: std::sync::atomic::AtomicBool,
 }
 

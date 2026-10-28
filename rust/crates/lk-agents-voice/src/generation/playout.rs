@@ -69,6 +69,8 @@ impl From<DriverError> for SourceFailed {
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.
 pub(crate) async fn perform_audio_forwarding<S: Segment>(
@@ -203,6 +205,7 @@ fn synchronized(heard: Option<String>, text: String) -> String {
     heard.map(|heard| Visible::of(&heard).text).unwrap_or(text)
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `false` when interrupted while parked. Every source and every sink goes through here.
 async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool {
     let speech = handle.id();
@@ -275,6 +278,7 @@ enum SinkReport {
     Reset,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 struct SinkReports(mpsc::UnboundedSender<SinkReport>);
 
 impl PlaybackObserver for SinkReports {
@@ -310,6 +314,7 @@ struct Playing<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     out: &'a dyn AudioOutput,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: mpsc::UnboundedReceiver<SinkReport>,
     chain: OutputChain,
     started: bool,
@@ -435,6 +440,7 @@ impl Playing<'_> {
         self.settle(segment);
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// `biased`, so an event already reported is folded before the push it may explain.
     async fn watched<T>(&mut self, fut: impl std::future::Future<Output = T>) -> Option<T> {
         tokio::pin!(fut);

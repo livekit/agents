@@ -43,6 +43,7 @@ struct Failed {
     synchronized: Option<String>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// `perform_tts_inference`, retried: opens are retried until a frame arrives; a later failure, or a
 /// spent budget, loses the voice.
 #[allow(clippy::too_many_arguments)]
@@ -53,6 +54,7 @@ pub(super) async fn perform_tts_inference(
     tts: &dyn Tts,
     segment: usize,
     first: Visible,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &mut mpsc::UnboundedReceiver<SegEvent>,
     text_out: Option<&TextLeg<'_>>,
     mut aligned: Option<&mut Aligned<'_>>,
@@ -219,6 +221,7 @@ struct Streaming<'a, 'b> {
     acc: &'a mut TurnAccumulator,
     sink: &'a lk_agents_abi::TtsSink,
     source: lk_agents_abi::TtsSource,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &'a mut mpsc::UnboundedReceiver<SegEvent>,
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
@@ -237,6 +240,7 @@ impl Segment for Streaming<'_, '_> {
         first_frame(self.shared, self.acc, at);
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next(&mut self) -> Result<Next, DriverError> {
         if self.ended {
             return Ok(Next::End);
@@ -423,7 +427,9 @@ pub(super) enum SynthesisEvent {
 }
 
 pub(super) struct SynthesisPlayout<'a> {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) tx: mpsc::UnboundedSender<SynthesisEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) rx: mpsc::UnboundedReceiver<SynthesisEvent>,
     pub(super) gate: &'a mut PlaybackGate,
     /// The reply's agent's `transcription_node`.
@@ -431,6 +437,7 @@ pub(super) struct SynthesisPlayout<'a> {
 }
 
 impl SynthesisPlayout<'_> {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Authorization blocks only the consumer; it never cancels a pending provider read.
     async fn run(
         &mut self,
@@ -508,6 +515,7 @@ impl SynthesisPlayout<'_> {
 
 /// The buffered side of [`SynthesisPlayout`]: what the synthesiser produced, played in order.
 struct SynthesizedSegment<'a, 'b> {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: &'a mut mpsc::UnboundedReceiver<SynthesisEvent>,
     text: String,
     leg: &'a TextLeg<'b>,

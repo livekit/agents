@@ -166,6 +166,7 @@ async fn perform_llm_inference(
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Tool calls are dispatched on arrival. `Err` carries whether output came first, which forbids a
 /// retry.
 async fn read_llm_stream(
@@ -353,6 +354,7 @@ pub(super) async fn retry(
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 pub(crate) async fn until_interrupted<T>(
     handle: &SpeechHandle,
     fut: impl std::future::Future<Output = T>,

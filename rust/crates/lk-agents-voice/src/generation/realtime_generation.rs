@@ -197,6 +197,7 @@ struct Generation<'a> {
     handle: &'a Arc<SpeechHandle>,
     ctx: &'a ReplyContext,
     acc: &'a mut TurnAccumulator,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events: &'a mut mpsc::UnboundedReceiver<Event>,
     /// The message the text deltas append to: a provider may interleave two.
     current: Option<usize>,
@@ -334,6 +335,7 @@ impl Generation<'_> {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The voiced message's next frame, its text fed meanwhile; `None` once its audio is over.
     async fn voice(&mut self) -> Option<Result<Next, DriverError>> {
         let v = self.voiced.as_mut()?;

@@ -206,6 +206,7 @@ pub(super) struct VideoForwarderParts {
 }
 
 impl VideoForwarderParts {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     pub(super) async fn pump(self, input: Arc<dyn lk_agents_abi::voice::io::VideoInput>) {
         let mut p = self;
         let cause = loop {
@@ -259,6 +260,7 @@ pub(super) fn on_leg_ended(end: ChannelEnd, out: &mut Out) {
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// Drain a provider source into the loop, close it once, then report the end with the stream's
 /// sink, which the loop removes if it is still installed: a sink of a closed stream would raise on
 /// every frame for the rest of the call.

@@ -295,6 +295,7 @@ impl Hosting {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 async fn write_loop(
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     mut rx: mpsc::UnboundedReceiver<proto::AgentSessionMessage>,

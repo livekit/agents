@@ -312,6 +312,7 @@ pub struct Request {
     pub expressive: Option<String>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Assemble one request. Order matters: stale prompts removed, pending and new items by
 /// `created_at`, prompt first, per-turn instructions, expressive guide, placeholders last.
 pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
@@ -459,6 +460,7 @@ pub fn stable_hash(text: &str) -> u64 {
     h.finish()
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// Inject a flagged in-progress pair for each tool still running, so the model doesn't re-issue it.
 fn inject_running_tool_calls(ctx: &mut ChatContext, running: &[RunningToolCall]) {
     // Owned, since the loop inserts into `ctx`.

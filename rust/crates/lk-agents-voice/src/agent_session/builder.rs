@@ -269,6 +269,7 @@ impl DriverBuilder {
         ))
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// What the spawned tasks share with the loop.
     fn shared(
         &self,
@@ -531,6 +532,7 @@ struct RealtimeStart {
     resolved: crate::audio_recognition::TurnDetectionMode,
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
 /// Ends on `Closed` (forwarded first), when the loop is gone, or at `Closing`. None is an error:
 /// the session goes on with VAD-only interruption.
 pub(super) fn spawn_leg_pump<L>(
@@ -558,6 +560,7 @@ pub(super) fn spawn_leg_pump<L>(
     });
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
 fn spawn_forward<T: Into<Event> + Send + 'static>(
     spawner: &Arc<dyn Spawner>,
     mut rx: Rx<T>,

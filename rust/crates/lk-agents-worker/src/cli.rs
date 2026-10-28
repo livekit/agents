@@ -3,8 +3,10 @@
 //! colored in dev), the dev channel to the CLI (server info, running jobs kept across reloads), and
 //! the exit policy on SIGINT/SIGTERM. Python keeps the event loop and imports the user's module.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +30,7 @@ pub enum CliError {
 
 // ------------------------------------------------------------------------------------ arguments
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The command line `lk agent` passes, as the dict the host dispatches on: `command` (`start`,
 /// `console` or `download-files`), `entrypoint`, and for `start` `log_level`, `log_format`
 /// (`json` or `colored`), `log_style` (the line style: `json`, `dev` or `compact`), `dev`,
@@ -563,6 +566,7 @@ struct ExitState {
 /// frame. A second signal forces the exit, and so does any signal once the worker drains. Built on
 /// the main thread, which the watchdog signals.
 pub struct ExitSignals {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Arc<Mutex<ExitState>>,
     /// Whether an unserved exit is raised in the blocked main thread (the worker, not the
     /// console).
@@ -573,6 +577,7 @@ pub struct ExitSignals {
 
 #[lk_agents_abi::host(object(cell = "arc", pid = false))]
 impl ExitSignals {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(new(defaults(escalate = true)))]
     pub fn new(escalate: bool) -> Self {
         ExitSignals {
@@ -624,6 +629,7 @@ impl ExitSignals {
 }
 
 impl ExitSignals {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn arm_watchdog(&self) {
         let state = self.state.clone();
         #[cfg(unix)]

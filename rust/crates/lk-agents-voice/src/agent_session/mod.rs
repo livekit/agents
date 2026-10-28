@@ -332,6 +332,7 @@ impl ErrorCounts {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// `AS_` and twelve random hex digits, as `utils.shortuuid("AS_")`.
 pub(crate) fn mint_session_id() -> String {
     use std::hash::BuildHasher;
@@ -343,6 +344,7 @@ pub(crate) fn mint_session_id() -> String {
 /// host's `say()` / `generate_reply()` take their speech's id from it as they return the handle.
 pub(crate) struct IdMint {
     session: String,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     next: Arc<std::sync::atomic::AtomicU64>,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
@@ -358,6 +360,7 @@ impl IdMint {
         SpeechId(self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The counter, for the host's speech calls.
     pub(crate) fn speech_ids(&self) -> Arc<std::sync::atomic::AtomicU64> {
         Arc::clone(&self.next)

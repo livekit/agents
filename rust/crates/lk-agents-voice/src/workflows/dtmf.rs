@@ -11,6 +11,7 @@ use crate::workflows::prompts::dtmf as p;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use std::sync::Arc;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -189,11 +190,13 @@ pub struct DtmfCollector {
     timeout: Duration,
     stop_event: DtmfEvent,
     inputs: Vec<DtmfEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `self._dtmf_reply_running`, shared with the host's `dtmf_reply_running()`.
     reply_running: Arc<AtomicBool>,
 }
 
 impl DtmfCollector {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         num_digits: usize,
         ask_for_confirmation: bool,
@@ -218,6 +221,7 @@ impl DtmfCollector {
         self.reply_running.load(Ordering::SeqCst)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The guard, for the host to read at any time.
     pub fn reply_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.reply_running)
@@ -540,6 +544,7 @@ pub enum ReceiveDtmfError {
     Incomplete(usize, usize),
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `receive_dtmf(room, num_digits, timeout, stop_event)`: the keys a SIP caller presses in
 /// `room`, until `num_digits` of them, the stop key, or `timeout` seconds without a key once the
 /// first is in. Fewer than `num_digits` is [`ReceiveDtmfError::Incomplete`].

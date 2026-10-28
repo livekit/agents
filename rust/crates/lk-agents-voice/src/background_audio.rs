@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 use std::future::Future;
 use std::pin::Pin;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -274,6 +276,7 @@ pub trait RandomDraw: Send + Sync {
 /// (`PlayHandle`'s two write-once futures).
 pub struct PlaybackHandle {
     fade_out: f64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     stopped: AtomicBool,
     done: tokio::sync::watch::Sender<bool>,
 }
@@ -293,6 +296,7 @@ impl PlaybackHandle {
     pub fn already_done() -> Arc<Self> {
         Arc::new(Self::with(0.0, true))
     }
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn with(fade_out: f64, done: bool) -> Self {
         let (done, _) = tokio::sync::watch::channel(done);
         Self { fade_out, stopped: AtomicBool::new(false), done }
@@ -347,14 +351,21 @@ pub enum PlaybackError {
 }
 
 pub struct BackgroundAudioPlayer {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     state: tokio::sync::Mutex<MixerState>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queued: Arc<Mutex<Vec<Source>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     output: tokio::sync::Mutex<Option<PublishedOutput>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     thinking: Mutex<Option<Arc<PlaybackHandle>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `aclose()` is stopping the sounds: agent states no longer start a thinking sound. Cleared
     /// if that close is cancelled, as the reference re-attaches its listener.
     closing: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     started: AtomicBool,
     /// Woken by `play` and `close`: an idle mixer waits on it rather than polling.
     wake: tokio::sync::Notify,
@@ -408,6 +419,7 @@ impl BackgroundAudioPlayer {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
     /// sound (drawn by probability with `choose`; a file loops), and returns the track's sid,
     /// which the host resolves to its own `rtc.LocalTrackPublication`. A second start returns the
@@ -556,6 +568,7 @@ impl BackgroundAudioPlayer {
         Ok(handle)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub async fn next_block(&self) -> Option<Vec<i16>> {
         while !self.closed.load(Ordering::Acquire) {
             let woken = self.wake.notified();
@@ -576,6 +589,7 @@ impl BackgroundAudioPlayer {
         }
         None
     }
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn pump(
         &self,
         source: Arc<dyn AudioSource>,
@@ -599,6 +613,7 @@ impl BackgroundAudioPlayer {
         self.closed.load(Ordering::Acquire)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `aclose()`: stops every playing sound, then the output. Cancelled while the sounds stop,
     /// the player stays open with its output running (`closed` stays false), as the reference
     /// keeps its mixer; past that, the close runs to its end.
@@ -610,6 +625,7 @@ impl BackgroundAudioPlayer {
             return;
         }
         /// Clears `closing` unless the close got past stopping the sounds.
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         struct Reopen<'a>(&'a AtomicBool, bool);
         impl Drop for Reopen<'_> {
             fn drop(&mut self) {
@@ -670,6 +686,7 @@ struct MixerState {
     mixer: Mixer,
     sources: BTreeMap<StreamId, Source>,
     retired: Vec<tokio::task::JoinHandle<()>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     queued: Arc<Mutex<Vec<Source>>>,
 }
 
@@ -697,6 +714,7 @@ impl MixerState {
         self.retired.pop();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn round(&mut self, timeout: Duration) -> Option<Vec<i16>> {
         for source in self.queued.lock().unwrap().drain(..) {
             let id = self.mixer.add_stream();
@@ -807,6 +825,7 @@ impl Source {
     async fn close(mut self) {
         let _ = self.teardown().await;
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn teardown(&mut self) -> tokio::task::JoinHandle<()> {
         if let Input::Stream(stream) = &self.input {
             stream.cancel_pending();
@@ -848,6 +867,7 @@ struct FileInput {
 }
 
 impl FileInput {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn next(
         &mut self,
         sample_rate: u32,

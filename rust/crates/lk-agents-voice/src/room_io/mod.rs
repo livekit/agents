@@ -28,7 +28,9 @@ use lk_agents_rtc::{
     ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity, ParticipantKind,
     RoomEvent, RtcRoom, TrackSid, TrackSource,
 };
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -118,6 +120,7 @@ pub struct RoomIo {
     agent_tr: Option<Arc<ParticipantTranscriptionOutput>>,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     target: Mutex<Option<ParticipantIdentity>>,
     /// `_participant_available_fut`. Always `send_replace`: `send` fails with no receiver, which
     /// would drop a link made before `_init_task` subscribes.
@@ -125,18 +128,26 @@ pub struct RoomIo {
     connected: Monotone<bool>,
     ready: Monotone<bool>,
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events_tx: mpsc::UnboundedSender<RoomIoEvent>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<RoomIoEvent>>>,
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tasks: Mutex<Vec<AbortHandle>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The in-flight `set_attributes`, cancelled before the next as in the reference.
     state_task: Mutex<Option<AbortHandle>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The agent's last state, written again once the room connects.
     agent_state: Mutex<Option<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     chat_registered: Mutex<bool>,
 }
 
 impl RoomIo {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         clock: Arc<dyn Clock>,
@@ -217,6 +228,7 @@ impl RoomIo {
         })
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub fn events(&self) -> Option<mpsc::UnboundedReceiver<RoomIoEvent>> {
         self.events_rx.lock().unwrap().take()
     }
@@ -464,6 +476,7 @@ impl RoomIo {
         }));
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_on_agent_state_changed`: cancels the in-flight write so changes land in order.
     pub fn on_agent_state_changed(self: &Arc<Self>, state: &str) {
         let room = self.room.clone();
@@ -584,6 +597,7 @@ pub fn decide_link(
     !already_linked && target_ok && accepted_kinds.contains(&candidate_kind)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub fn publishes_on_behalf_of(
     attributes: &std::collections::HashMap<String, String>,
 ) -> Option<&str> {

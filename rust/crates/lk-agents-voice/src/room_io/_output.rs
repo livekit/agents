@@ -10,6 +10,7 @@ use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Monotone, Spawner, SpawnerExt, Ts};
 use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, frame_duration};
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -202,6 +203,7 @@ impl Playback {
 struct Shared {
     clock: Arc<dyn Clock>,
     tracker: Arc<PlaybackTracker>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<Playback>,
     /// One wake for every waiter; each re-checks its own condition.
     wake: Notify,
@@ -483,12 +485,14 @@ pub struct ParticipantAudioOutput {
     spawner: Arc<dyn Spawner>,
     config: AudioOutputConfig,
     shared: Arc<Shared>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The pump, the watcher and the progress reporter: for the life of the output, not one per
     /// segment.
     tasks: Mutex<Vec<AbortHandle>>,
 }
 
 impl ParticipantAudioOutput {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         clock: Arc<dyn Clock>,

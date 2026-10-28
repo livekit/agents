@@ -6,6 +6,7 @@ use crate::agent_session::host_events::{HookCall, HookKind};
 use crate::agent_session::{HandoffRefused, SpeechId};
 use crate::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::events::CloseReason;
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
@@ -38,6 +39,7 @@ fn fake_room(name: &str) -> (Arc<lk_agents_rtc::FakeRoom>, FixedRoom) {
 /// A session and the steps it journals.
 struct Recorded {
     api: SessionApi,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     steps: Arc<Mutex<Vec<Step>>>,
 }
 
@@ -54,6 +56,7 @@ impl Recorded {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 /// A room-only session whose journal the test reads.
 fn room_only(room: FixedRoom, hook_bound: Option<f64>) -> Recorded {
     let api = unobserved(room, hook_bound);
@@ -89,6 +92,8 @@ fn assembled(
 
 // Catches: a `close` that waits for the host's drain while still holding a `PeerHandle` sender on
 // the host stream, so the drain can never end.
+#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     let api = room_only(fake_room("session-api-test").1, None);
@@ -202,6 +207,8 @@ async fn the_agent_state_is_written_to_the_room_as_it_changes() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 /// A room-only session whose host answers every hook but `on_exit`, which the test answers.
 async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedReceiver<HookId>) {
     // A host that runs hooks: without a bound the driver treats `on_exit` as over at once.
@@ -319,10 +326,12 @@ fn say_from(
     (words, handle)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// A host handoff whose drain waits on a speech still being said: the window a switch holds the
 /// host's speech in. Dropping the returned sender ends that speech, and the swap follows.
 async fn handoff_draining(
     api: &Recorded,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     exits: &mut tokio::sync::mpsc::UnboundedReceiver<HookId>,
 ) -> (
     tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
@@ -440,6 +449,7 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
 
 // Catches: a held say left unanswered when the close refuses the switch it waited on: the host
 // awaiting it hung. It is refused as any speech into a closing session is.
+#[allow(clippy::disallowed_macros, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
     for drain in [true, false] {
@@ -622,7 +632,9 @@ struct ScriptedHooks {
     raise: bool,
     user_text: Option<String>,
     stop: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     failed: Mutex<Vec<String>>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     toolsets_closed: Mutex<usize>,
 }
 
@@ -699,6 +711,7 @@ impl SessionHooks for ScriptedHooks {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 /// What `answer_hook` sends back for `call`.
 async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
     use crate::agent_session::commands::Sent;

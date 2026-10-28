@@ -95,6 +95,7 @@ impl SpeechSpec {
 }
 
 impl Driver {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand, out: &mut Out) {
         // The host's speech during the drain is the arriving agent's (`_next_activity`); the
         // leaving agent's own tools and hooks are refused by the paused scheduler, as before.
