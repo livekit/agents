@@ -60,8 +60,15 @@ class ResponsesWebsocket:
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
-        self._endpoint = base_url
-        self._base_url = self._resolve_url(base_url, model)
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
+        if url.host != _OPENAI_HOST:
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        self._base_url = str(url)
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -71,18 +78,6 @@ class ResponsesWebsocket:
             max_session_duration=max_session_duration,
             connect_timeout=self._timeout,
         )
-
-    @staticmethod
-    def _resolve_url(base_url: str | None, model: str) -> str:
-        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
-        if url.scheme in ("http", "https"):
-            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
-        if url.host != _OPENAI_HOST:
-            # OpenAI's native endpoint takes the model in the response.create
-            # payload; gateways need it on the upgrade URL to route the
-            # connection before the first frame.
-            url = url.update_query(model=model)
-        return str(url)
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -273,6 +268,9 @@ class ResponsesLLMStream(llm.LLMStream):
 
         self._client = client
         self._llm = cast(ResponsesLLMHost, llm)
+        # bound at construction: a gateway transport routes by the model on its URL, so a
+        # turn must keep the transport matching the model it sends, across retries
+        self._ws = self._llm._ws
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
 
@@ -320,7 +318,7 @@ class ResponsesLLMStream(llm.LLMStream):
         if self._llm._opts.use_websocket is not False:
             retryable = True
             try:
-                if self._llm._ws is None:
+                if self._ws is None:
                     raise RuntimeError("use_websocket is True but _ws is None")
 
                 payload = {
@@ -330,7 +328,7 @@ class ResponsesLLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(
+                async for raw_event in self._ws.generate_response(
                     payload,
                     receive_timeout=self._idle_timeout(),
                     connect_timeout=self._conn_options.timeout,

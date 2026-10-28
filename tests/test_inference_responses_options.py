@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
+import aiohttp
 import httpx2 as httpx
 import openai
 import pytest
@@ -12,6 +15,7 @@ from yarl import URL
 from livekit.agents import llm as agents_llm
 from livekit.agents.inference import responses as inference_responses
 from livekit.agents.inference.responses import LLM as ResponsesLLM
+from livekit.agents.types import APIConnectOptions
 
 pytestmark = pytest.mark.unit
 
@@ -115,38 +119,133 @@ class _FakeSocket:
         self.closed = True
 
 
-async def test_update_model_rebuilds_ws_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+class _WsMsg:
+    def __init__(self, data: str) -> None:
+        self.type = aiohttp.WSMsgType.TEXT
+        self.data = data
+        self.extra = None
+
+
+class _ScriptedSocket(_FakeSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent: list[str] = []
+        self._frames = list(_FRAMES)
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(data)
+
+    async def receive(self, timeout: float | None = None) -> _WsMsg:
+        return _WsMsg(json.dumps(self._frames.pop(0)))
+
+
+class _ScriptedSession:
+    """Answers each dial with a socket that completes one turn; can fail the first dial."""
+
+    def __init__(self, fail_first: Callable[[], None] | None = None) -> None:
+        self.urls: list[str] = []
+        self.sockets: list[_ScriptedSocket] = []
+        self._fail_first = fail_first
+
+    async def ws_connect(
+        self, url: str, *, headers: dict[str, str], heartbeat: float
+    ) -> _ScriptedSocket:
+        self.urls.append(url)
+        if self._fail_first is not None:
+            fail, self._fail_first = self._fail_first, None
+            fail()
+            raise aiohttp.ClientConnectionError("dial failed")
+        sock = _ScriptedSocket()
+        self.sockets.append(sock)
+        return sock
+
+
+def _gateway_ws(model: ResponsesLLM) -> inference_responses._GatewayResponsesWebsocket:
+    transport = model._ws
+    assert isinstance(transport, inference_responses._GatewayResponsesWebsocket)
+    return transport
+
+
+async def _consume(stream: agents_llm.LLMStream) -> None:
+    try:
+        async for _ in stream:
+            pass
+    finally:
+        await stream.aclose()
+
+
+async def test_update_model_builds_new_ws_transport() -> None:
     model = _make_ws_llm()
     transport = model._ws
-    assert transport is not None
-    calls: list[bool] = []
-    monkeypatch.setattr(transport._pool, "invalidate", lambda: calls.append(True))
 
     model.update_options(model="openai/gpt-4.1-mini")
 
-    assert model._ws is transport
+    assert model._ws is not None and model._ws is not transport
     expected = str(URL("wss://gw.test/v1/responses").update_query(model="openai/gpt-4.1-mini"))
-    assert transport._base_url == expected
-    assert calls == [True]
+    assert model._ws._base_url == expected
 
 
-async def test_update_model_keeps_in_flight_ws_socket() -> None:
+async def test_update_model_closes_idle_ws_transport() -> None:
     model = _make_ws_llm()
-    transport = model._ws
-    assert transport is not None
+    transport = _gateway_ws(model)
     sock = _FakeSocket()
 
     async def _connect(_timeout: float) -> _FakeSocket:
         return sock
 
     transport._pool._connect_cb = _connect  # type: ignore[assignment]
-    checked_out = await transport._pool.get(timeout=1.0)
+    transport._pool.put(await transport._pool.get(timeout=1.0))
 
     model.update_options(model="openai/gpt-4.1-mini")
+    await asyncio.gather(*model._ws_close_tasks)
 
-    assert checked_out is sock
-    assert sock.closed is False
-    assert sock in transport._pool._retired
+    assert sock.closed is True
+    assert transport not in model._retired_ws
+
+
+async def test_stream_created_before_model_swap_dials_its_model() -> None:
+    model = _make_ws_llm()
+    session = _ScriptedSession()
+    _gateway_ws(model)._session = session  # type: ignore[assignment]
+
+    stream = model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0))
+    model.update_options(model="openai/gpt-4.1-mini")
+    await _consume(stream)
+
+    assert URL(session.urls[0]).query["model"] == "openai/gpt-4.1"
+    assert json.loads(session.sockets[0].sent[0])["model"] == "openai/gpt-4.1"
+
+
+async def test_retry_after_model_swap_dials_its_model() -> None:
+    model = _make_ws_llm()
+    session = _ScriptedSession(fail_first=lambda: model.update_options(model="openai/gpt-4.1-mini"))
+    _gateway_ws(model)._session = session  # type: ignore[assignment]
+
+    stream = model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    await _consume(stream)
+
+    assert [URL(u).query["model"] for u in session.urls] == ["openai/gpt-4.1", "openai/gpt-4.1"]
+    assert json.loads(session.sockets[0].sent[0])["model"] == "openai/gpt-4.1"
+
+
+async def test_retired_ws_transport_closes_after_its_last_stream() -> None:
+    model = _make_ws_llm()
+    transport = _gateway_ws(model)
+    session = _ScriptedSession()
+    transport._session = session  # type: ignore[assignment]
+
+    stream = model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0))
+    model.update_options(model="openai/gpt-4.1-mini")
+    assert transport in model._retired_ws
+
+    await _consume(stream)
+    await asyncio.sleep(0)
+    await asyncio.gather(*model._ws_close_tasks)
+
+    assert transport not in model._retired_ws
+    assert session.sockets[0].closed is True
 
 
 async def test_update_same_model_keeps_ws_pool(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,6 +326,70 @@ async def test_response_format_keeps_other_text_options(monkeypatch: pytest.Monk
     text = transport.body()["text"]
     assert text["verbosity"] == "low"
     assert text["format"]["type"] == "json_schema"
+
+
+async def test_response_format_chat_completions_dict_maps_to_text_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport)
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    await _drain(
+        model,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "Answer", "schema": schema, "strict": True},
+        },
+    )
+
+    assert transport.body()["text"]["format"] == {
+        "type": "json_schema",
+        "name": "Answer",
+        "schema": schema,
+        "strict": True,
+    }
+
+
+async def test_response_format_responses_dict_passes_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport)
+    fmt = {"type": "json_schema", "name": "Answer", "schema": {"type": "object"}}
+
+    await _drain(model, response_format=fmt)
+
+    assert transport.body()["text"]["format"] == fmt
+
+
+async def test_response_format_json_object_dict_passes_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport)
+
+    await _drain(model, response_format={"type": "json_object"})
+
+    assert transport.body()["text"]["format"] == {"type": "json_object"}
+
+
+async def test_response_format_json_schema_dict_without_schema_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _make_rest_llm(monkeypatch, _GatewayTransport())
+
+    with pytest.raises(TypeError, match="name and a schema"):
+        model.chat(chat_ctx=_ctx(), response_format={"type": "json_schema", "name": "Answer"})
+
+
+async def test_response_format_dict_with_unknown_type_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _make_rest_llm(monkeypatch, _GatewayTransport())
+
+    with pytest.raises(TypeError, match="unsupported response_format type"):
+        model.chat(chat_ctx=_ctx(), response_format={"type": "xml"})
 
 
 async def test_prewarm_ws_prewarms_pool(monkeypatch: pytest.MonkeyPatch) -> None:
