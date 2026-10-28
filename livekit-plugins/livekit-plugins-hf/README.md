@@ -28,6 +28,9 @@ session = AgentSession(
 with models whose chat template supports tools (Qwen 2.5, Llama 3.1+, Hermes, Mistral and
 others).
 
+For reasoning models such as Qwen3, pass `chat_template_kwargs={"enable_thinking": False}`
+so the agent answers without a long silent think first. Text inside `<think>` tags is never spoken.
+
 ## Downloading models ahead of time
 
 By default the plugin never downloads at runtime (`local_files_only=True`). Fetch weights

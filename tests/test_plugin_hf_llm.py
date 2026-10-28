@@ -265,9 +265,11 @@ def fake_model(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     monkeypatch.setattr(transformers, "TextIteratorStreamer", _FakeStreamer)
 
-    def _install(model: _FakeModel, chat_template: str = "") -> tuple[hf.LLM, _FakeTokenizer]:
+    def _install(
+        model: _FakeModel, chat_template: str = "", **llm_kwargs: Any
+    ) -> tuple[hf.LLM, _FakeTokenizer]:
         tokenizer = _FakeTokenizer(chat_template)
-        instance = hf.LLM(model="fake/model")
+        instance = hf.LLM(model="fake/model", **llm_kwargs)
         loaded = hf_llm._LoadedModel(
             model=model, tokenizer=tokenizer, generate_lock=threading.Lock()
         )
@@ -481,3 +483,43 @@ async def test_parallel_tool_calls_false_keeps_first(fake_model: Any) -> None:
 
     assert await _names() == ["get_weather", "get_weather", "get_time"]
     assert await _names(parallel_tool_calls=False) == ["get_weather"]
+
+
+def _text(chunks: list[llm.ChatChunk]) -> str:
+    return "".join(c.delta.content for c in chunks if c.delta and c.delta.content)
+
+
+async def test_thinking_is_not_spoken(fake_model: Any) -> None:
+    instance, _ = fake_model(_FakeModel(["<thi", "nk>the user wants Paris</th", "ink>Paris."]))
+    chunks = [c async for c in instance.chat(chat_ctx=_user_ctx())]
+    assert _text(chunks) == "Paris."
+
+    # cut off by max_new_tokens before </think>: nothing is spoken
+    instance, _ = fake_model(_FakeModel(["<think>still reasoning"]))
+    chunks = [c async for c in instance.chat(chat_ctx=_user_ctx())]
+    assert _text(chunks) == ""
+
+
+async def test_tool_call_after_thinking(fake_model: Any) -> None:
+    instance, _ = fake_model(
+        _FakeModel(
+            [
+                "<think>I should check the weather</think>\n",
+                '<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>',
+            ]
+        )
+    )
+    chunks = [c async for c in instance.chat(chat_ctx=_user_ctx(), tools=[get_weather])]
+
+    assert "weather" not in _text(chunks)
+    calls = [tc for c in chunks if c.delta and c.delta.tool_calls for tc in c.delta.tool_calls]
+    assert [c.name for c in calls] == ["get_weather"]
+
+
+async def test_chat_template_kwargs_reach_the_template(fake_model: Any) -> None:
+    instance, tokenizer = fake_model(
+        _FakeModel(["ok"]), chat_template_kwargs={"enable_thinking": False}
+    )
+    _ = [c async for c in instance.chat(chat_ctx=_user_ctx())]
+    assert tokenizer.template_kwargs["enable_thinking"] is False
+    assert tokenizer.template_kwargs["add_generation_prompt"] is True

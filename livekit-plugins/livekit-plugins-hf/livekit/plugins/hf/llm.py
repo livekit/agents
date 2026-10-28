@@ -24,6 +24,7 @@ from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
+from livekit.agents.llm.utils import ThinkingTokenFilter, strip_thinking_tokens
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -76,6 +77,7 @@ class _LLMOptions:
     repetition_penalty: float
     trust_remote_code: bool
     local_files_only: bool
+    chat_template_kwargs: dict[str, Any]
 
     @property
     def key(self) -> _ModelKey:
@@ -102,6 +104,7 @@ class LLM(llm.LLM):
         repetition_penalty: float = 1.0,
         trust_remote_code: bool = False,
         local_files_only: bool = True,
+        chat_template_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Run a Hugging Face chat model locally with ``transformers``.
 
@@ -124,6 +127,9 @@ class LLM(llm.LLM):
             local_files_only: Load only from the local Hugging Face cache and never
                 download at runtime. Fetch weights ahead of time with the
                 ``download-files`` CLI command or :func:`download_model`.
+            chat_template_kwargs: Extra arguments for the model's chat template, e.g.
+                ``{"enable_thinking": False}`` to turn off reasoning in Qwen3. Text
+                inside ``<think>`` tags is never spoken either way.
         """
         super().__init__()
 
@@ -138,6 +144,7 @@ class LLM(llm.LLM):
             repetition_penalty=repetition_penalty,
             trust_remote_code=trust_remote_code,
             local_files_only=local_files_only,
+            chat_template_kwargs=dict(chat_template_kwargs or {}),
         )
 
     @property
@@ -244,7 +251,11 @@ class LLMStream(llm.LLMStream):
         opts = self._hf_llm._opts
 
         messages = _to_chat_template_messages(self._chat_ctx)
-        template_kwargs: dict[str, Any] = {"add_generation_prompt": True, "tokenize": False}
+        template_kwargs: dict[str, Any] = {
+            **opts.chat_template_kwargs,
+            "add_generation_prompt": True,
+            "tokenize": False,
+        }
         if self._tool_schemas:
             template_kwargs["tools"] = self._tool_schemas
 
@@ -312,6 +323,8 @@ class LLMStream(llm.LLMStream):
             hold_content=bool(self._required_tool),
         )
         parser.feed(prefill)
+        # reasoning models think inside <think> tags; that text must not reach TTS
+        thinking = ThinkingTokenFilter()
         completion = ""
 
         gen_fut = loop.run_in_executor(None, _generate_blocking)
@@ -319,7 +332,8 @@ class LLMStream(llm.LLMStream):
         try:
             while (text := await text_ch.get()) is not None:
                 completion += text
-                self._send_content(request_id, parser.feed(text))
+                visible = strip_thinking_tokens(text, thinking) or ""
+                self._send_content(request_id, parser.feed(visible))
         finally:
             # stops generate() early when the stream is cancelled mid-reply
             stop_event.set()
@@ -328,6 +342,9 @@ class LLMStream(llm.LLMStream):
         # surface generate() errors that ended the stream early
         gen_fut.result()
 
+        # an unterminated <think> block (cut off by max_new_tokens) is dropped here
+        rest = strip_thinking_tokens(None, thinking, final=True) or ""
+        self._send_content(request_id, parser.feed(rest))
         content, tool_calls = parser.flush()
         if not self._parallel_tool_calls:
             tool_calls = tool_calls[:1]
