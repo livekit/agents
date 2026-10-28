@@ -88,12 +88,25 @@ class _ScriptedWs:
 
 
 class _SilentWs(_ScriptedWs):
-    """Never answers; times out the way aiohttp's receive(timeout=...) does."""
+    """Never answers."""
 
     async def receive(self, timeout: float | None = None) -> _FakeWsMsg:
-        assert timeout is not None, "the gateway stream must bound each read"
-        await asyncio.sleep(timeout)
-        raise asyncio.TimeoutError
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class _PongingWs(_ScriptedWs):
+    """Never returns a frame, but keeps the socket busy the way heartbeat pongs do."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.pongs = 0
+
+    async def receive(self, timeout: float | None = None) -> _FakeWsMsg:
+        # aiohttp consumes pongs inside receive() and restarts its own timer on each
+        while True:
+            await asyncio.sleep(0.01)
+            self.pongs += 1
 
 
 class _DialRecord:
@@ -172,6 +185,11 @@ def _ctx() -> agents_llm.ChatContext:
     chat_ctx = agents_llm.ChatContext()
     chat_ctx.add_message(role="user", content="hi")
     return chat_ctx
+
+
+async def _consume(stream: agents_llm.LLMStream) -> None:
+    async for _ in stream:
+        pass
 
 
 async def _drain(llm_model: ResponsesLLM) -> str:
@@ -265,26 +283,47 @@ async def test_ws_keepalive_mid_stream_is_ignored() -> None:
 
 
 async def test_ws_receive_uses_stream_idle_timeout() -> None:
-    llm_model = _make_llm(stream_idle_timeout=30.0)
-    ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
-    timeouts: list[float | None] = []
-    scripted_receive = ws.receive
-
-    async def _receive(timeout: float | None = None) -> _FakeWsMsg:
-        timeouts.append(timeout)
-        return await scripted_receive(timeout)
-
-    ws.receive = _receive  # type: ignore[method-assign]
-    _use_connection(llm_model, ws)
+    llm_model = _make_llm(stream_idle_timeout=0.05)
+    _use_connection(llm_model, _SilentWs([]))
 
     stream = llm_model.chat(
-        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=1.5)
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0, timeout=30)
     )
-    async for _ in stream:
-        pass
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(_consume(stream), 5)
+    await stream.aclose()
+    await llm_model.aclose()
+
+
+async def test_ws_pongs_do_not_reset_idle_timeout() -> None:
+    llm_model = _make_llm(stream_idle_timeout=0.1)
+    ws = _PongingWs()
+    _use_connection(llm_model, ws)
+
+    stream = llm_model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0))
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(_consume(stream), 5)
     await stream.aclose()
 
-    assert timeouts and set(timeouts) == {30.0}
+    assert ws.pongs > 0
+    assert ws not in _transport(llm_model)._pool._available
+    await llm_model.aclose()
+
+
+async def test_ws_text_frame_resets_idle_timeout() -> None:
+    llm_model = _make_llm(stream_idle_timeout=0.2)
+    ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
+    scripted_receive = ws.receive
+
+    async def _slow_receive(timeout: float | None = None) -> _FakeWsMsg:
+        # each frame lands inside the window, though together they outlast it
+        await asyncio.sleep(0.08)
+        return await scripted_receive(timeout)
+
+    ws.receive = _slow_receive  # type: ignore[method-assign]
+    _use_connection(llm_model, ws)
+
+    assert await _drain(llm_model) == "hi"
     await llm_model.aclose()
 
 
