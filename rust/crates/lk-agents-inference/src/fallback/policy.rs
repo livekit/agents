@@ -20,8 +20,8 @@ pub fn bound_views<T: ?Sized>(
     )
 }
 
-/// The `conn_options` fields the chain rewrites before handing a request to a child, plus
-/// `retry_on_chunk_sent`. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
+/// The `conn_options` fields the chain rewrites before handing a request to a child.
+/// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
 /// are [`caller_default`] and [`conn_options_for_recovery`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
@@ -38,7 +38,7 @@ pub struct ChainPolicy {
 
 impl ChainPolicy {
     /// `llm/fallback_adapter.py:45-49`: `attempt_timeout=5.0`, `max_retry_per_llm=0`,
-    /// `retry_interval=0.5`, `retry_on_chunk_sent=False`.
+    /// `retry_interval=0.5`.
     pub fn llm_defaults() -> Self {
         ChainPolicy {
             max_retry_per_backend: 0,
@@ -68,11 +68,6 @@ impl ChainPolicy {
             retry_interval: None,
             sticky: false,
         }
-    }
-
-    /// A legacy flag cannot establish a deduplication protocol; visible output still forbids replay.
-    pub fn with_retry_on_chunk_sent(self, _retry: bool) -> Self {
-        self
     }
 }
 

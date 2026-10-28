@@ -110,7 +110,6 @@ impl FallbackLlm {
             attempt_timeout = 5.0,
             max_retry_per_llm = 0,
             retry_interval = 0.5,
-            retry_on_chunk_sent = false,
             sticky = false
         )
     ))]
@@ -120,7 +119,6 @@ impl FallbackLlm {
         attempt_timeout: f64,
         max_retry_per_llm: u32,
         retry_interval: f64,
-        retry_on_chunk_sent: bool,
         sticky: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
         #[host(ambient)] clock: Arc<dyn Clock>,
@@ -134,8 +132,7 @@ impl FallbackLlm {
             attempt_timeout: Some(attempt_timeout),
             retry_interval: Some(retry_interval),
             sticky,
-        }
-        .with_retry_on_chunk_sent(retry_on_chunk_sent);
+        };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         FallbackLlm::new(llms, policy, clock, spawner, observer)
     }

@@ -2,7 +2,9 @@
 //! [`Backend`]. Probes are real tasks, gated by semaphores and observed through [`until`].
 
 use std::collections::VecDeque;
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -507,6 +509,7 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
     use std::sync::Arc;
@@ -549,7 +552,7 @@ async fn cancellation_is_not_a_backend_health_penalty() {
 #[tokio::test]
 async fn every_modality_fails_after_partial_output_without_replay() {
     for policy in [
-        ChainPolicy::llm_defaults().with_retry_on_chunk_sent(true),
+        ChainPolicy::llm_defaults(),
         ChainPolicy::tts_defaults(),
         ChainPolicy::stt_defaults(),
     ] {

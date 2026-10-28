@@ -31,7 +31,6 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         attempt_timeout: float = 5.0,
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
-        retry_on_chunk_sent: bool = False,
         sticky: bool = False,
     ) -> None:
         """
@@ -40,7 +39,6 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             attempt_timeout: The timeout of one attempt.
             max_retry_per_llm: Retries of each before moving to the next.
             retry_interval: The wait between retries.
-            retry_on_chunk_sent: Whether a failure after output was sent moves to the next LLM.
             sticky: Keep the LLM that last served until it fails, even once a preferred one
                 recovers; on failure the rest are tried in order.
         """
@@ -52,7 +50,6 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
             "attempt_timeout": attempt_timeout,
             "max_retry_per_llm": max_retry_per_llm,
             "retry_interval": retry_interval,
-            "retry_on_chunk_sent": retry_on_chunk_sent,
             "sticky": sticky,
         }
 
@@ -139,8 +136,6 @@ class FallbackLLMStream(LLMStream):
     def __init__(self, llm: FallbackAdapter, *, request: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(llm, **kwargs)
         self._request = request
-        # a failure after output reaches the caller as final unless asked otherwise
-        self._retry_on_chunk_sent = llm._opts["retry_on_chunk_sent"]
 
     async def _run(self) -> None:
         from .._core_view import tool_specs
