@@ -19,12 +19,15 @@ Run standalone:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from speechmatics.agent_stt import (
     DEFAULT_MODEL,
     AudioEncoding,
@@ -34,7 +37,7 @@ from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
 )
 
-from livekit.agents import APIError, stt
+from livekit.agents import APIConnectOptions, APIError, stt
 from livekit.agents.utils.aio import ChanEmpty
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
@@ -716,34 +719,56 @@ stt.update_speakers(focus_speakers=["S1"])
         assert deprecated in caplog.text
 
 
-async def test_requested_speaker_ids_are_sdk_records() -> None:
-    stream = _stream(vad=None)
-
+async def test_invalid_speaker_reply_fails_request_without_stopping_recognition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class SpeakerClient:
-        is_connected = True
-        speakers: list[dict[str, object]] = [{"label": "Agent", "speaker_identifiers": ["voice-1"]}]
+        def __init__(self) -> None:
+            self.is_connected = False
+            self.connected = asyncio.Event()
+            self.handlers: dict[ServerMessageType, Callable[[dict[str, object]], None]] = {}
+            self.speakers: list[dict[str, object]] = [{"label": "Agent", "speaker_identifiers": 7}]
+
+        def on(
+            self, event: ServerMessageType, callback: Callable[[dict[str, object]], None]
+        ) -> None:
+            self.handlers[event] = callback
+
+        async def connect(self) -> None:
+            self.is_connected = True
+            self.connected.set()
 
         async def send_message(self, message: dict[str, object]) -> None:
-            stream._handle_message(
-                {
-                    "message": ServerMessageType.SPEAKERS_RESULT.value,
-                    "speakers": self.speakers,
-                }
+            self.handlers[ServerMessageType.SPEAKERS_RESULT](
+                {"message": ServerMessageType.SPEAKERS_RESULT.value, "speakers": self.speakers}
             )
 
         async def disconnect(self) -> None:
             self.is_connected = False
 
     client = SpeakerClient()
-    stream._client = client
+    monkeypatch.setattr(speechmatics_stt, "AgentSttAsyncClient", lambda **kwargs: client)
+    provider = _stt(vad=None)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     try:
-        speakers = await stream._stt.get_speaker_ids()
+        await asyncio.wait_for(client.connected.wait(), timeout=0.5)
+        with pytest.raises(APIError, match="invalid speaker identifiers") as error:
+            await asyncio.wait_for(provider.get_speaker_ids(), timeout=0.5)
+        assert isinstance(error.value.__cause__, ValidationError)
+        assert not stream._task.done()
+
+        client.speakers = [{"label": "Agent", "speaker_identifiers": ["voice-1"]}]
+        speakers = await asyncio.wait_for(provider.get_speaker_ids(), timeout=0.5)
         assert len(speakers) == 1
         assert speakers[0].label == "Agent"
         assert speakers[0].speaker_identifiers == ["voice-1"]
 
-        client.speakers = [{"label": "Agent", "speaker_identifiers": 7}]
-        with pytest.raises(APIError, match="invalid speaker identifiers"):
-            await stream._stt.get_speaker_ids()
+        client.handlers[ServerMessageType.ADD_SEGMENT](
+            _segment_message(transcript="Still listening")
+        )
+        event = await asyncio.wait_for(anext(stream), timeout=0.5)
+        assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        assert event.alternatives[0].text == "Still listening"
+        assert not stream._task.done()
     finally:
         await stream.aclose()

@@ -548,6 +548,7 @@ class SpeechStream(stt.RecognizeStream):
         # Speaker result event
         self._speaker_result_event: asyncio.Event = asyncio.Event()
         self._speaker_result: list[SpeakerIdentifier] | None = None
+        self._speaker_error: ValidationError | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -577,12 +578,17 @@ class SpeechStream(stt.RecognizeStream):
             return []
 
         self._speaker_result_event.clear()
+        self._speaker_error = None
         await self._client.send_message({"message": ClientMessageType.GET_SPEAKERS.value})
         try:
             await asyncio.wait_for(self._speaker_result_event.wait(), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning(f"GetSpeakers timed-out for stream {self._id}")
             return []
+        if self._speaker_error is not None:
+            raise APIError(
+                "Speechmatics returned invalid speaker identifiers", retryable=False
+            ) from self._speaker_error
         return self._speaker_result or []
 
     async def _run(self) -> None:
@@ -812,10 +818,11 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 speakers = _SPEAKERS.validate_python(message.get("speakers", []))
             except ValidationError as exc:
-                raise APIError(
-                    "Speechmatics returned invalid speaker identifiers", retryable=False
-                ) from exc
-            self._handle_speakers_result(speakers)
+                self._speaker_error = exc
+                self._speaker_result = None
+                self._speaker_result_event.set()
+            else:
+                self._handle_speakers_result(speakers)
 
         # Log all other messages
         else:
@@ -878,6 +885,7 @@ class SpeechStream(stt.RecognizeStream):
         """Handle SpeakersResult events."""
         logger.debug("SpeakersResult received")
         self._speaker_result = speakers
+        self._speaker_error = None
         self._speaker_result_event.set()
 
     async def aclose(self) -> None:
