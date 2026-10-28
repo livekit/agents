@@ -17,8 +17,7 @@
 //! | trait method | `name = "x"` | the host name, when the Rust one cannot be it |
 //! | parameter | `kw` | keyword-only from this parameter on |
 //! | parameter | `default = <literal>` | omittable: `None`, `true`/`false`, a number or a string |
-//! | error type | `error(with = path)` | `Result<_, E>` raises through `path(E) -> PyErr` |
-//! | error type | `error(kind = "ValueError")` | `Result<_, E>` raises that builtin with E's message |
+//! | error type | `error(with = path)`, `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate` | `Result<_, E>` raises through E's `HostException`, the one conversion its declaration expands to |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
 //!

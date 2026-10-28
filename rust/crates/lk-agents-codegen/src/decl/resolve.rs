@@ -274,46 +274,24 @@ impl Resolver<'_> {
             return Err(format!("{at}: a declared error is a concrete type"));
         }
         if voc::find(&entries, "error").is_none() {
-            return Err(format!(
-                "{at}: `{rust}` is not a declared error: #[host(error(..))]"
-            ));
+            return Err(format!("{at}: `{rust}` is not a declared error: #[host(error(..))]"));
         }
         Ok((*module, *item, rust, entries))
     }
 
+    /// A declared error raises through the one conversion its declaration expands to
+    /// (`HostException`: `with`, `kind`, per-variant kinds, delegation, `original`).
     fn error(&self, shape: &Shape, at: &str) -> Result<ErrorDecl, String> {
-        let (module, _, rust, entries) = self.error_item(shape, at)?;
-        let module = &module;
-        let k = self.krate;
+        let (_, _, rust, entries) = self.error_item(shape, at)?;
         let declared = voc::find(&entries, "error").expect("error_item checked it");
-        let with = match (
-            voc::rust(at, &declared.nested, "with")?,
-            voc::text(at, &declared.nested, "kind")?,
-        ) {
-            // `with` is written in the error's module: resolve it there.
-            (Some(syn::Type::Path(p)), None) => match k.resolve(*module, &p.path)? {
-                Found::Item { module, item } => {
-                    k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?
-                }
-                other => {
-                    return Err(format!(
-                        "{at}: `with` names {other:?}, not a function of the crate"
-                    ));
-                }
-            },
-            // A builtin exception carrying the error's message.
-            (None, Some(kind)) if BUILTIN_ERRORS.contains(&kind.as_str()) => {
-                format!(
-                    "|e: {rust}| ::pyo3::exceptions::Py{kind}::new_err(::std::string::ToString::to_string(&e))"
-                )
-            }
-            _ => {
-                return Err(format!(
-                    "{at}: `{rust}` declares its conversion as one of `with = path` or `kind = \"<{}>\"`",
-                    BUILTIN_ERRORS.join("|")
-                ));
-            }
-        };
+        if declared.nested.iter().all(|e| e.key == "raised") {
+            return Err(format!(
+                "{at}: `{rust}` is a refusal the host raises (error(raised)), not an error raised to it"
+            ));
+        }
+        let with = format!(
+            "|e: {rust}| <{rust} as ::lk_agents_abi::python::HostException>::to_py_err(&e)"
+        );
         Ok(ErrorDecl { rust, with })
     }
 
@@ -509,8 +487,9 @@ impl Resolver<'_> {
     fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
         let at = self.at;
         voc::only(at, &proxy.nested, &["host"])?;
-        let host = voc::text(at, &proxy.nested, "host")?
-            .ok_or_else(|| format!("{at}: proxy(host = \"module.Class\") names the class it calls"))?;
+        let host = voc::text(at, &proxy.nested, "host")?.ok_or_else(|| {
+            format!("{at}: proxy(host = \"module.Class\") names the class it calls")
+        })?;
         if !tr.generics.params.is_empty() {
             return Err(format!("{at}: a generic trait has no single proxy"));
         }
@@ -606,7 +585,9 @@ impl Resolver<'_> {
             });
         }
         let context = context.ok_or_else(|| {
-            format!("{at}: a proxy call runs in the host context one #[host(context)] parameter carries")
+            format!(
+                "{at}: a proxy call runs in the host context one #[host(context)] parameter carries"
+            )
         })?;
         let ret = match kind {
             ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
@@ -632,7 +613,11 @@ impl Resolver<'_> {
             }
             _ => None,
         };
-        let refused = || format!("{at}: an awaited proxy call returns `Result<T, E>` (E a declared #[host(error)]): a host failure is reported, never swallowed");
+        let refused = || {
+            format!(
+                "{at}: an awaited proxy call returns `Result<T, E>` (E a declared #[host(error)]): a host failure is reported, never swallowed"
+            )
+        };
         let syn::ReturnType::Type(_, t) = out else { return Err(refused()) };
         let (ok, err) = result(&self.shape(self.module, t, &[], at)?).ok_or_else(refused)?;
         let (_, _, err, _) = self.error_item(&err, at)?;
@@ -747,9 +732,6 @@ impl Resolver<'_> {
         ))
     }
 }
-
-/// The Python builtins an error may declare as its `kind`.
-const BUILTIN_ERRORS: &[&str] = &["ValueError", "TypeError", "RuntimeError", "KeyError"];
 
 /// Some method declares its call (`await`, `notify`): a declaration-model proxy.
 fn declares_calls(tr: &syn::ItemTrait) -> bool {

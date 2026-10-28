@@ -27,7 +27,7 @@ impl AgentRunner {
         ::lk_agents_abi::python::check_pid()?;
         let llm = <dyn ::lk_agents_abi::Llm as ::lk_agents_abi::python::HostProxy>::from_host(&llm, None)?;
         let host = super::agent::AgentHostProxy::from_host(&host)?;
-        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunner(::std::sync::Arc::new(out)))
     }
 
@@ -35,7 +35,7 @@ impl AgentRunner {
     #[pyo3(signature = (request))]
     fn run(&self, request: ::lk_agents_abi::agent::run::RunRequest) -> PyResult<AgentRunUpdates> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 }

@@ -100,10 +100,7 @@ fn aliases_generics_reexports_and_declared_kinds_resolve() {
     assert_eq!(c.native, ["::lk_agents_abi::llm::chat::Llm"]);
     let new = &c.methods[0];
     assert_eq!(new.ret.ok, Ty::This);
-    assert_eq!(
-        new.ret.err.as_ref().map(|e| e.with.as_str()),
-        Some("::lk_agents_abi::errors::raise")
-    );
+    assert!(new.ret.err.as_ref().is_some_and(|e| e.rust == "::lk_agents_abi::errors::ApiError"));
     assert_eq!(new.params[1].ty, Ty::Optional(Box::new(Ty::JsonObject)));
     assert!(new.params[1].kw_only && new.params[1].default == Some(Literal::None));
     let chat = &c.methods[1];
@@ -154,7 +151,8 @@ fn a_type_is_what_it_resolves_to_never_its_name() {
 }
 
 // Catches: a record crossing in a direction it never declared, a proxy handed back to the host,
-// or an error with no declared conversion falling back to a generic exception.
+// or an error raised through anything but its declaration's one conversion (a per-variant kind
+// or delegation flattened into one builtin).
 #[test]
 fn directions_and_errors_are_declared_or_refused() {
     let err = refuse("#[host(call)] fn f(&self, r: Report);");
@@ -163,12 +161,15 @@ fn directions_and_errors_are_declared_or_refused() {
     assert!(err.contains("not returned to the host"), "{err}");
     let err = refuse("#[host(call)] fn f(&self) -> Result<String, std::fmt::Error>;");
     assert!(err.contains("Native::f") && err.contains("not an ABI declaration"), "{err}");
-    let err = refuse("#[host(call)] fn f(&self) -> Result<String, crate::errors::Worse>;");
-    assert!(err.contains("Native::f") && err.contains("`with = path` or `kind"), "{err}");
-    let decls = read(&class("#[host(call)] fn f(&self) -> Result<String, crate::errors::Bad>;"))
+    let err = refuse("#[host(call)] fn f(&self) -> Result<String, crate::errors::Refused>;");
+    assert!(err.contains("Native::f") && err.contains("a refusal the host raises"), "{err}");
+    let decls = read(&class("#[host(call)] fn f(&self) -> Result<String, crate::errors::Worse>;"))
         .expect("resolves");
     let with = &decls.classes[0].methods[0].ret.err.as_ref().expect("declared").with;
-    assert!(with.contains("PyValueError::new_err"), "{with}");
+    assert!(
+        with.contains("<::lk_agents_abi::errors::Worse as ::lk_agents_abi::python::HostException>::to_py_err(&e)"),
+        "{with}"
+    );
 }
 
 // Catches: a method's kind guessed from its signature (an `async fn` declared `call`, a `&mut
@@ -232,7 +233,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
             && llm.contains("value_from_py(&v, \"extra\")"),
         "{llm}"
     );
-    assert!(llm.contains(".map_err(::lk_agents_abi::errors::raise)?"), "{llm}");
+    assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?"), "{llm}");
     assert!(llm.contains("HostProxy>::from_host(&v, None)"), "{llm}");
     assert!(llm.contains("(&self.0, &items, conn, reporter)"), "{llm}");
     assert!(llm.contains("NativeStream(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");

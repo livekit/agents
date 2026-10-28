@@ -26,7 +26,7 @@ impl InferenceLlm {
     fn new(model: ::std::string::String, provider: ::std::option::Option<::std::string::String>, base_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, inference_class: ::std::option::Option<::std::string::String>, extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<InferenceLlm> {
         ::lk_agents_abi::python::check_pid()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
-        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs).map_err(::lk_agents_abi::errors::api_error_to_py)?;
+        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
 
@@ -72,7 +72,7 @@ impl InferenceLlm {
         ::lk_agents_abi::python::check_pid()?;
         let response_format = response_format.map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format")).transpose()?;
         let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
-        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(::lk_agents_abi::errors::api_error_to_py)?;
+        let out = <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(InferenceLlmChunks(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 }
@@ -129,7 +129,7 @@ impl LlmChoiceParser {
     fn parse(&mut self, id: ::std::string::String, choice: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
         ::lk_agents_abi::python::check_pid()?;
         let choice = ::lk_agents_abi::python::value_from_py(&choice, "choice")?;
-        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 }
@@ -143,6 +143,6 @@ type CompletionWireImpl = <crate::Selected as super::Implementations>::Completio
 pub fn llm_usage_chunk(chunk: Bound<'_, PyAny>) -> PyResult<::std::option::Option<::lk_agents_abi::LlmChunk>> {
     ::lk_agents_abi::python::check_pid()?;
     let chunk = ::lk_agents_abi::python::value_from_py(&chunk, "chunk")?;
-    let out = <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e)))?;
+    let out = <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
