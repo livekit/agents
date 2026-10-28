@@ -154,7 +154,7 @@ fn label(event: &Event) -> &'static str {
         Event::Wake => "Wake",
         Event::Forwarder(_) => "Forwarder",
         Event::LegOpened(_) => "StreamOpened",
-        Event::Input(input) => match input {
+        Event::Input(input) | Event::Awaited(input, _) => match input {
             Input::Host(sent) => sent.command.kind(),
             Input::Stt(..) => "Stt",
             Input::Vad(_) => "Vad",
@@ -205,20 +205,24 @@ impl crate::sched::Source for Source {
 }
 
 impl Source {
+    /// An awaited input comes from the source the same input would without its reply.
     fn of(event: &Event) -> Self {
-        match event {
-            Event::Input(Input::Host(sent)) => Source::Host(format!("{:?}", sent.origin)),
-            Event::Input(Input::Stt(tagged, _)) => Source::Stt(tagged.stream),
-            Event::Input(Input::Vad(_)) => Source::Leg("vad"),
-            Event::Input(Input::Eot(..)) => Source::Leg("eot"),
-            Event::Input(Input::Overlap(_)) => Source::Leg("interruption"),
-            Event::Input(input @ Input::ChannelEnded(end)) => match (end.leg(), end.sink()) {
+        let input = match event {
+            Event::Input(input) | Event::Awaited(input, _) => input,
+            other => return Source::Event(std::mem::discriminant(other)),
+        };
+        match input {
+            Input::Host(sent) => Source::Host(format!("{:?}", sent.origin)),
+            Input::Stt(tagged, _) => Source::Stt(tagged.stream),
+            Input::Vad(_) => Source::Leg("vad"),
+            Input::Eot(..) => Source::Leg("eot"),
+            Input::Overlap(_) => Source::Leg("interruption"),
+            Input::ChannelEnded(end) => match (end.leg(), end.sink()) {
                 ("stt", Some(stream)) => Source::Stt(stream),
                 (leg @ ("vad" | "eot" | "interruption"), _) => Source::Leg(leg),
                 _ => Source::Kind(std::mem::discriminant(input)),
             },
-            Event::Input(other) => Source::Kind(std::mem::discriminant(other)),
-            other => Source::Event(std::mem::discriminant(other)),
+            other => Source::Kind(std::mem::discriminant(other)),
         }
     }
 }

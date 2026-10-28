@@ -136,8 +136,8 @@ pub struct SessionHandle {
     pub api: Tx,
     /// Every event, in the order the driver emitted it.
     pub events: Rx<HostEvent>,
-    /// Each awaited command's answer, once, by its call id.
-    pub calls: crate::agent_session::api::Calls,
+    /// The ids of awaited calls.
+    pub calls: crate::agent_session::api::CallIds,
     /// The last keyterm list pushed to the recogniser; `None` before any push.
     pub keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// The driving agent's context and state, as last published.
@@ -185,6 +185,20 @@ impl Tx {
 
     pub fn send_from(&self, origin: Origin, command: Command) -> Result<(), QueueClosed> {
         self.send(Input::Host(Sent { origin, command }))
+    }
+
+    /// `command`, with the reply of the call it names when it is awaited.
+    pub fn send_command(
+        &self,
+        origin: Origin,
+        command: Command,
+        call: Option<crate::agent_session::api::Call>,
+    ) -> Result<(), QueueClosed> {
+        let input = Input::Host(Sent { origin, command });
+        match call {
+            Some(call) => self.send(Event::Awaited(input, call)),
+            None => self.send(input),
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -299,6 +313,9 @@ pub enum Input {
 pub enum Event {
     /// For the decision core.
     Input(Input),
+    /// For the decision core, from a sender awaiting the answer to the call it names: the
+    /// runtime keeps the call's reply until the core answers it.
+    Awaited(Input, crate::agent_session::api::Call),
     /// A provider completion, adopted into runtime resources before entering the core.
     LegOpened(StreamOpened),
     /// For the data plane, from the decision core.

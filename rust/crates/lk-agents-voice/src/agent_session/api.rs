@@ -25,7 +25,6 @@ use lk_agents_abi::{
     Clock, Llm, LlmStream, Maybe, Spawner, SpawnerExt, Stt, SttSink, SttSource, Tts, TtsSink,
     TtsSource, Vad,
 };
-use std::collections::BTreeMap;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -276,11 +275,12 @@ impl SessionApi {
         self.running(|r| Ok(r.api.clone()))
     }
 
-    /// A call to await: its id goes in the command, `pick` takes its answer.
-    pub fn call<T: Send + 'static>(
+    /// A call to await: its id goes in the command, which carries its reply; `pick` takes its
+    /// answer.
+    pub fn call<T>(
         &self,
         pick: fn(Answer) -> Option<T>,
-    ) -> Result<(RequestId, tokio::sync::oneshot::Receiver<T>), SessionRefused> {
+    ) -> Result<(Call, Awaited<T>), SessionRefused> {
         self.running(|r| Ok(r.calls.open(pick)))
     }
 
@@ -290,7 +290,7 @@ impl SessionApi {
     pub fn speech_call(
         &self,
         allow_interruptions: Option<bool>,
-    ) -> Result<(Arc<SpeechHandle>, SpeechCall), SessionRefused> {
+    ) -> Result<(Arc<SpeechHandle>, SpeechCall, Call), SessionRefused> {
         let allow = allow_interruptions
             .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
@@ -298,8 +298,8 @@ impl SessionApi {
                 r.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             );
             let speech = SpeechHandle::pending(r.api.clone(), id, allow);
-            let id = r.calls.open_speech(&speech);
-            Ok((Arc::clone(&speech), SpeechCall { id, speech }))
+            let call = r.calls.open_speech(&speech);
+            Ok((Arc::clone(&speech), SpeechCall { id: call.id, speech }, call))
         })
     }
 
@@ -307,12 +307,44 @@ impl SessionApi {
         self.send_from(Origin::Host, cmd)
     }
 
-    /// A command the loop never takes releases the providers it hands over.
     pub fn send_from(&self, origin: Origin, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
-        let cmd = cmd.into();
+        self.send_command(origin, cmd.into(), None)
+    }
+
+    /// The command `make` builds around a new call's id, sent with its reply; `pick` takes the
+    /// answer.
+    pub fn ask<T>(
+        &self,
+        origin: Origin,
+        pick: fn(Answer) -> Option<T>,
+        make: impl FnOnce(RequestId) -> Command,
+    ) -> Result<Awaited<T>, SessionRefused> {
+        let (call, answer) = self.call(pick)?;
+        self.send_awaited(origin, make(call.id), call)?;
+        Ok(answer)
+    }
+
+    /// A command naming `call`, sent with its reply.
+    pub fn send_awaited(
+        &self,
+        origin: Origin,
+        cmd: impl Into<Command>,
+        call: Call,
+    ) -> Result<(), SessionRefused> {
+        self.send_command(origin, cmd.into(), Some(call))
+    }
+
+    /// A command the loop never takes releases the providers it hands over.
+    fn send_command(
+        &self,
+        origin: Origin,
+        cmd: Command,
+        call: Option<Call>,
+    ) -> Result<(), SessionRefused> {
         let handed = cmd.resources();
-        let sent =
-            self.running(|r| r.api.send_from(origin, cmd).map_err(|_| SessionRefused::LoopEnded));
+        let sent = self.running(|r| {
+            r.api.send_command(origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
+        });
         if sent.is_err() {
             handed.into_iter().for_each(|id| self.resources.release(id));
         }
@@ -507,11 +539,12 @@ impl SessionApi {
         origin: Option<&str>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
         let origin = origin_of(origin)?;
-        let (speech, call) = self.speech_call(allow_interruptions)?;
+        let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         let call = Some(call);
-        self.send_from(
+        self.send_awaited(
             origin,
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call },
+            reply,
         )?;
         Ok(speech)
     }
@@ -655,7 +688,7 @@ struct Ready {
 
 struct Running {
     api: Tx,
-    calls: Calls,
+    calls: CallIds,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
@@ -695,6 +728,26 @@ struct HostParts {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `session.usage`: every metrics record the host is handed, folded per model.
     usage: Arc<Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>>,
+}
+
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+/// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
+/// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
+fn session_usage_updated(
+    usage: &Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>,
+    wire: &lk_agents_abi::voice::events::HostWire,
+) -> Option<lk_agents_abi::voice::events::HostWire> {
+    use lk_agents_abi::metrics::base::AgentMetrics;
+    let lk_agents_abi::voice::events::HostWire::MetricsCollected(m) = wire else { return None };
+    if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
+        return None;
+    }
+    let mut usage = usage.lock().unwrap_or_else(|p| p.into_inner());
+    usage.collect(&m.metrics);
+    let model_usage = usage.flatten();
+    Some(lk_agents_abi::voice::events::HostWire::SessionUsageUpdated(
+        lk_agents_abi::voice::events::SessionUsageWire { model_usage },
+    ))
 }
 
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
@@ -1225,83 +1278,94 @@ impl<T: Send + 'static> Pusher<T> {
 // After `UpdateAgentArgs`, whose kwargs macro the host methods expand against.
 mod host;
 
-/// The caller's side of awaited commands: a call gets an id for its command and a typed receiver,
-/// settled from the session's answer stream.
-
-type Settle = Box<dyn FnOnce(Answer) + Send>;
-
-/// One session's open calls, shared by everyone who sends it commands.
-#[derive(Clone, Default)]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-pub struct Calls(Arc<Mutex<Table>>);
-
-#[derive(Default)]
-struct Table {
-    next: u64,
-    open: BTreeMap<RequestId, Settle>,
-    closed: bool,
+/// Where an awaited input's answer goes. It travels with the input that names its call; the
+/// runtime keeps it until the core answers that call, and drops it unanswered when the session
+/// ends.
+pub enum ReplyTo {
+    Answer(oneshot::Sender<Answer>),
+    /// A `say()` / `generate_reply()`: [`Answer::Speech`] marks the speech created; another
+    /// answer, or none, marks it lost.
+    Speech(SpeechReply),
 }
 
-impl Calls {
-    /// `pick` takes the answer's payload; an answer of another kind, or none before the session
-    /// ends, closes the receiver.
-    pub fn open<T: Send + 'static>(
-        &self,
-        pick: fn(Answer) -> Option<T>,
-    ) -> (RequestId, oneshot::Receiver<T>) {
+impl ReplyTo {
+    pub(crate) fn settle(self, answer: Answer) {
+        match self {
+            ReplyTo::Answer(tx) => {
+                let _ = tx.send(answer);
+            }
+            ReplyTo::Speech(speech) => speech.0.answered(matches!(answer, Answer::Speech)),
+        }
+    }
+}
+
+impl std::fmt::Debug for ReplyTo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReplyTo::Answer(_) => f.write_str("ReplyTo::Answer"),
+            ReplyTo::Speech(_) => f.write_str("ReplyTo::Speech"),
+        }
+    }
+}
+
+/// Lost unless answered first.
+pub struct SpeechReply(Arc<SpeechHandle>);
+
+impl Drop for SpeechReply {
+    fn drop(&mut self) {
+        self.0.answered(false);
+    }
+}
+
+/// An awaited call: its id goes in the input, its reply is sent with it.
+#[derive(Debug)]
+pub struct Call {
+    pub id: RequestId,
+    pub reply_to: ReplyTo,
+}
+
+/// The answer to an awaited call, picked by kind.
+pub struct Awaited<T> {
+    rx: oneshot::Receiver<Answer>,
+    pick: fn(Answer) -> Option<T>,
+}
+
+/// The session ended before answering, or answered with another kind.
+#[derive(Debug)]
+pub struct Unanswered;
+
+impl<T> std::future::Future for Awaited<T> {
+    type Output = Result<T, Unanswered>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let pick = self.pick;
+        std::pin::Pin::new(&mut self.rx)
+            .poll(cx)
+            .map(|answer| answer.ok().and_then(pick).ok_or(Unanswered))
+    }
+}
+
+/// The session's call ids, shared by everyone who sends it awaited inputs.
+#[derive(Clone, Default)]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+pub struct CallIds(Arc<std::sync::atomic::AtomicU64>);
+
+impl CallIds {
+    fn next(&self) -> RequestId {
+        RequestId(self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `pick` takes the answer's payload.
+    pub fn open<T>(&self, pick: fn(Answer) -> Option<T>) -> (Call, Awaited<T>) {
         let (tx, rx) = oneshot::channel();
-        let call = self.insert(Box::new(move |answer| {
-            if let Some(value) = pick(answer) {
-                let _ = tx.send(value);
-            }
-        }));
-        (call, rx)
+        (Call { id: self.next(), reply_to: ReplyTo::Answer(tx) }, Awaited { rx, pick })
     }
 
-    /// A speech call: its answer marks `speech` created; another answer, or none before the
-    /// session ends, marks it lost.
-    pub fn open_speech(&self, speech: &Arc<SpeechHandle>) -> RequestId {
-        struct Answering(Arc<SpeechHandle>);
-        impl Drop for Answering {
-            fn drop(&mut self) {
-                self.0.answered(false);
-            }
-        }
-        let answering = Answering(Arc::clone(speech));
-        self.insert(Box::new(move |answer| {
-            answering.0.answered(matches!(answer, Answer::Speech));
-        }))
-    }
-
-    fn insert(&self, settle: Settle) -> RequestId {
-        let mut table = self.lock();
-        let call = RequestId(table.next);
-        table.next += 1;
-        if !table.closed {
-            table.open.insert(call, settle);
-        }
-        call
-    }
-
-    /// A late or unknown call's answer is dropped.
-    pub fn settle(&self, call: RequestId, answer: Answer) {
-        let settle = self.lock().open.remove(&call);
-        if let Some(settle) = settle {
-            settle(answer);
-        }
-    }
-
-    pub fn close(&self) {
-        let open = {
-            let mut table = self.lock();
-            table.closed = true;
-            std::mem::take(&mut table.open)
-        };
-        drop(open);
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Table> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    pub fn open_speech(&self, speech: &Arc<SpeechHandle>) -> Call {
+        Call { id: self.next(), reply_to: ReplyTo::Speech(SpeechReply(Arc::clone(speech))) }
     }
 }
 

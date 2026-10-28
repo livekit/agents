@@ -1,10 +1,11 @@
 //! Host methods assembling, opening, closing or commanding a VoiceSession.
 
 use super::{
-    CLOSE_TIMEOUT, CommandRefused, HostParts, InterruptionPortFactory, ModelRefs, NodeFactory,
-    NotAnImage, NotInterruptible, OpenRefused, Ready, Reply, SessionApi, SessionEvents, SessionJob,
-    SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed, UnknownCloseReason,
-    UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools, stt_leg, tts_leg,
+    CLOSE_TIMEOUT, Call, CommandRefused, HostParts, InterruptionPortFactory, ModelRefs,
+    NodeFactory, NotAnImage, NotInterruptible, OpenRefused, Ready, Reply, SessionApi,
+    SessionEvents, SessionJob, SessionRefused, SessionRoom, SessionRunner, Stage, StartFailed,
+    UnknownCloseReason, UpdateAgentArgs, host_toolset, llm_leg, origin_of, session_tools,
+    session_usage_updated, stt_leg, tts_leg,
 };
 use crate::agent_activity::DriverConfig;
 use crate::agent_session::DriverBuilder;
@@ -567,9 +568,11 @@ impl SessionApi {
         // The answer first: a refused handoff registers no provider it would never release.
         let (call, rx) = self.call(Answer::handoff)?;
         let mut update = self.frame(frame);
-        update.call = Some(call);
+        update.call = Some(call.id);
         let answer = Reply::new(async move { matches!(rx.await, Ok(Ok(()))) });
-        self.send_frame(Origin::Host, update, |u| ActivityCommand::Update(Box::new(u)).into())?;
+        self.send_frame(Origin::Host, update, call, |u| {
+            ActivityCommand::Update(Box::new(u)).into()
+        })?;
         Ok(answer)
     }
 
@@ -590,10 +593,11 @@ impl SessionApi {
     > {
         use crate::agent_activity::voice_task::{VoiceTaskCommand, VoiceTaskEnded, VoiceTaskRun};
         let origin = origin_of(origin)?;
-        let (call, rx) = self.call(Answer::voice_task)?;
+        let (awaited, rx) = self.call(Answer::voice_task)?;
+        let call = awaited.id;
         let tx = self.api()?;
         let update = self.frame(frame);
-        self.send_frame(origin, update, move |update| {
+        self.send_frame(origin, update, awaited, move |update| {
             let run = VoiceTaskRun { update: Box::new(update), opens_with_reply, call };
             VoiceTaskCommand::Run(Box::new(run)).into()
         })?;
@@ -621,11 +625,12 @@ impl SessionApi {
         &self,
         origin: Origin,
         mut update: crate::agent_session::AgentUpdate,
+        call: Call,
         wrap: impl FnOnce(crate::agent_session::AgentUpdate) -> Command + Send + 'static,
     ) -> Result<(), SessionRefused> {
         let (Some(hooks), Some(tools)) = (self.host.hooks.clone(), update.toolset.host.clone())
         else {
-            return self.send_from(origin, wrap(update));
+            return self.send_awaited(origin, wrap(update), call);
         };
         let api = self.running(|r| Ok(r.api.clone()))?;
         let resources = self.resources.clone();
@@ -646,7 +651,7 @@ impl SessionApi {
             });
             let cmd = wrap(update);
             let handed = cmd.resources();
-            if api.send_from(origin, cmd).is_err() {
+            if api.send_command(origin, cmd, Some(call)).is_err() {
                 handed.into_iter().for_each(|id| resources.release(id));
             }
         };
@@ -822,8 +827,8 @@ impl SessionApi {
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(host_toolset(Some(specs), tools_host, tool_runner)));
-        let (speech, call) = self.speech_call(allow_interruptions)?;
-        self.send_from(
+        let (speech, call, reply) = self.speech_call(allow_interruptions)?;
+        self.send_awaited(
             origin,
             SpeechCommand::GenerateReply {
                 user_input,
@@ -835,6 +840,7 @@ impl SessionApi {
                 on_enter,
                 call: Some(call),
             },
+            reply,
         )?;
         Ok(speech)
     }
@@ -1064,8 +1070,9 @@ impl SessionApi {
         &self,
         force: bool,
     ) -> Result<Reply<Result<(), NotInterruptible>>, SessionRefused> {
-        let (call, rx) = self.call(Answer::interrupt)?;
-        self.send(SpeechCommand::Interrupt { force, call: Some(call) })?;
+        let rx = self.ask(Origin::Host, Answer::interrupt, |call| {
+            SpeechCommand::Interrupt { force, call: Some(call) }.into()
+        })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => Ok(()),
@@ -1080,8 +1087,9 @@ impl SessionApi {
     /// speech is left; the session stays open. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(method)]
     pub fn drain(&self) -> Result<Reply<Option<String>>, SessionRefused> {
-        let (call, rx) = self.call(Answer::drain)?;
-        self.send(ActivityCommand::Drain { call: Some(call) })?;
+        let rx = self.ask(Origin::Host, Answer::drain, |call| {
+            ActivityCommand::Drain { call: Some(call) }.into()
+        })?;
         Ok(Reply::new(async move {
             match rx.await {
                 Ok(Ok(())) => None,
@@ -1113,8 +1121,9 @@ impl SessionApi {
         let collector = DtmfCollector::new(num_digits, ask_for_confirmation, timeout, stop)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let guard = collector.reply_flag();
-        let (call, rx) = self.call(Answer::dtmf)?;
-        self.send(DtmfCommand::Start { collector, call: Some(call) })?;
+        let rx = self.ask(Origin::Host, Answer::dtmf, |call| {
+            DtmfCommand::Start { collector, call: Some(call) }.into()
+        })?;
         *self.dtmf_reply.lock().unwrap_or_else(|p| p.into_inner()) = Some(guard);
         Ok(Reply::new(async move { rx.await.unwrap_or(DtmfOutcome::Stopped).wire() }))
     }
@@ -1154,8 +1163,9 @@ impl SessionApi {
         &self,
         hold: Option<u64>,
     ) -> Result<Reply<Result<(), IdleRefused>>, SessionRefused> {
-        let (call, rx) = self.call(Answer::idle)?;
-        self.send(SpeechCommand::WaitForIdle { hold: hold.map(HoldId), call: Some(call) })?;
+        let rx = self.ask(Origin::Host, Answer::idle, |call| {
+            SpeechCommand::WaitForIdle { hold: hold.map(HoldId), call: Some(call) }.into()
+        })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)) }))
     }
 
@@ -1166,8 +1176,10 @@ impl SessionApi {
         &self,
         origin: Option<&str>,
     ) -> Result<Reply<Result<u64, IdleRefused>>, CommandRefused> {
-        let (call, rx) = self.call(Answer::hold)?;
-        self.send_from(origin_of(origin)?, SpeechCommand::WaitForIdleAndHold { call: Some(call) })?;
+        let origin = origin_of(origin)?;
+        let rx = self.ask(origin, Answer::hold, |call| {
+            SpeechCommand::WaitForIdleAndHold { call: Some(call) }.into()
+        })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)).map(|h| h.0) }))
     }
 
@@ -1350,33 +1362,15 @@ impl SessionApi {
         stt_flush_duration: f64,
         skip_reply: bool,
     ) -> Result<Reply<Result<String, CommitSuperseded>>, SessionRefused> {
-        let (call, rx) = self.call(Answer::commit)?;
-        self.send(SpeechCommand::CommitUserTurn {
-            transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
-            stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
-            skip_reply,
-            call: Some(call),
+        let rx = self.ask(Origin::Host, Answer::commit, |call| {
+            SpeechCommand::CommitUserTurn {
+                transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
+                stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
+                skip_reply,
+                call: Some(call),
+            }
+            .into()
         })?;
         Ok(Reply::new(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }
-}
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
-/// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
-fn session_usage_updated(
-    usage: &Mutex<lk_agents_abi::metrics::usage::ModelUsageCollector>,
-    wire: &HostWire,
-) -> Option<HostWire> {
-    use lk_agents_abi::metrics::base::AgentMetrics;
-    let HostWire::MetricsCollected(m) = wire else { return None };
-    if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
-        return None;
-    }
-    let mut usage = usage.lock().unwrap_or_else(|p| p.into_inner());
-    usage.collect(&m.metrics);
-    let model_usage = usage.flatten();
-    Some(HostWire::SessionUsageUpdated(lk_agents_abi::voice::events::SessionUsageWire {
-        model_usage,
-    }))
 }

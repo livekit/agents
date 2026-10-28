@@ -166,8 +166,11 @@ impl Runtime {
                 });
             }
             E::Journal(step) => self.shared.journal.record(*step),
+            // A late or unknown call's answer is dropped.
             E::Answer(call, answer) => {
-                self.shared.calls.settle(call, answer);
+                if let Some(reply_to) = self.calls.remove(&call) {
+                    reply_to.settle(answer);
+                }
             }
             E::Host(event) => {
                 if let Err(error) = self.events.send(event) {

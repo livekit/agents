@@ -271,18 +271,37 @@ async fn accepted_views_are_published_before_receipts() {
     let (mut runtime, handle) = ready.builder.start().await.unwrap();
     let mut accepted = (**api.view.borrow()).clone();
     accepted.config.configure(&crate::agent_activity::options::aec_warmup_layer(Some(9.0)));
-    let view = api.view.clone();
-    let call = handle.calls.insert(Box::new(move |_| {
-        assert_eq!(
-            view.borrow().config.effective.timers.aec_warmup(),
-            Some(Duration::from_secs(9)),
-            "receipt observed options from before acceptance"
-        );
-    }));
+    // The receipt's waker reads the view at the instant the answer is sent.
+    struct ReadsView(tokio::sync::watch::Receiver<Arc<crate::agent_session::SessionView>>);
+    impl std::task::Wake for ReadsView {
+        fn wake(self: Arc<Self>) {
+            assert_eq!(
+                self.0.borrow().config.effective.timers.aec_warmup(),
+                Some(Duration::from_secs(9)),
+                "receipt observed options from before acceptance"
+            );
+        }
+    }
+    let (call, mut receipt) = handle.calls.open(Answer::interrupt);
+    let call_id = call.id;
+    let waker = std::task::Waker::from(Arc::new(ReadsView(api.view.clone())));
+    let polled = std::pin::Pin::new(&mut receipt).poll(&mut std::task::Context::from_waker(&waker));
+    assert!(polled.is_pending());
+    runtime.handle(
+        crate::agent_session::Event::Awaited(
+            crate::agent_session::Input::Host(crate::agent_session::Sent {
+                origin: Origin::Host,
+                command: Command::SetStaticKeyterms(Vec::new()),
+            }),
+            call,
+        ),
+        handle.peer.time.read(),
+    );
     runtime.perform_voice(vec![
-        Effect::Answer(call, Answer::Speech),
+        Effect::Answer(call_id, Answer::Interrupt(Ok(()))),
         Effect::SessionView(Arc::new(accepted)),
     ]);
+    assert!(receipt.await.is_ok(), "the receipt was not delivered");
 }
 
 /// [`unobserved`], with the host's `SessionOptions` object when given.
@@ -475,6 +494,12 @@ async fn settle() {
     }
 }
 
+/// Whether `call` has no answer yet.
+fn unanswered<T>(call: &mut Awaited<T>) -> bool {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    std::pin::Pin::new(call).poll(&mut cx).is_pending()
+}
+
 // Catches: a `drain()` refused while a handoff is in flight; it must wait for the swap,
 // without running the arriving agent's `on_exit`.
 #[tokio::test(start_paused = true)]
@@ -482,17 +507,16 @@ async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (api, mut exits) = session_holding_exits().await;
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = agent_update("next", Instructions::plain("You are next."));
-    update.call = Some(call);
-    api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
+    update.call = Some(call.id);
+    api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call)
+        .expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send(ActivityCommand::Drain { call: Some(call) }).expect("the loop runs");
+    api.send_awaited(Origin::Host, ActivityCommand::Drain { call: Some(call.id) }, call)
+        .expect("the loop runs");
     settle().await;
-    assert!(
-        matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
-        "the drain was answered while the handoff's on_exit still ran"
-    );
+    assert!(unanswered(&mut drain), "the drain was answered while the handoff's on_exit still ran");
 
     answer_exit(&api, exit);
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
@@ -509,12 +533,10 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     let exit = exits.recv().await.expect("the close issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send(ActivityCommand::Drain { call: Some(call) }).expect("the loop runs");
+    api.send_awaited(Origin::Host, ActivityCommand::Drain { call: Some(call.id) }, call)
+        .expect("the loop runs");
     settle().await;
-    assert!(
-        matches!(drain.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
-        "the drain was answered while the close's on_exit still ran"
-    );
+    assert!(unanswered(&mut drain), "the drain was answered while the close's on_exit still ran");
 
     answer_exit(&api, exit);
     assert_eq!(drain.await.expect("answered"), Ok(()), "joined the close, not refused");
@@ -528,7 +550,7 @@ fn say_from(
     origin: Origin,
 ) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Arc<SpeechHandle>) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
-    let (handle, call) = api.speech_call(None).expect("the loop runs");
+    let (handle, call, reply) = api.speech_call(None).expect("the loop runs");
     let text = SayText::Audio { text: "Hello there.".into(), rx };
     let say = SpeechCommand::Say {
         text,
@@ -536,7 +558,7 @@ fn say_from(
         add_to_chat_ctx: true,
         call: Some(call),
     };
-    api.send_from(origin, say).expect("the loop runs");
+    api.send_awaited(origin, say, reply).expect("the loop runs");
     (words, handle)
 }
 
@@ -547,16 +569,14 @@ async fn handoff_draining(
     api: &Recorded,
     #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     exits: &mut tokio::sync::mpsc::UnboundedReceiver<HookId>,
-) -> (
-    tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>,
-    tokio::sync::oneshot::Receiver<Result<(), HandoffRefused>>,
-) {
+) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Awaited<Result<(), HandoffRefused>>) {
     let (words, _) = say_from(api, Origin::Host);
     settle().await;
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = agent_update("next", Instructions::plain("You are next."));
-    update.call = Some(call);
-    api.send(ActivityCommand::Update(Box::new(update))).expect("the loop runs");
+    update.call = Some(call.id);
+    api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call)
+        .expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
     answer_exit(api, exit);
     settle().await;
@@ -814,7 +834,8 @@ async fn options_view_changes_only_after_core_acceptance() {
     api.set_aec_warmup(None).unwrap();
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     let (call, answer) = api.call(Answer::idle).unwrap();
-    api.send(SpeechCommand::WaitForIdle { hold: None, call: Some(call) }).unwrap();
+    let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
+    api.send_awaited(Origin::Host, wait, call).unwrap();
     assert!(answer.await.unwrap().is_ok());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.close(CloseReason::UserInitiated, false, None).await;

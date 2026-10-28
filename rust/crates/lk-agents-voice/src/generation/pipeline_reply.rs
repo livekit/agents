@@ -384,7 +384,7 @@ async fn request_plan(
     plan: crate::generation::ReplyPlan,
 ) -> Option<crate::generation::PlannedReply> {
     let (call, result) = shared.calls.open(crate::agent_session::Answer::reply_plan);
-    shared.report(GenEvent::Plan { call, plan: Box::new(plan) });
+    shared.report_awaited(GenEvent::Plan { call: call.id, plan: Box::new(plan) }, call);
     result.await.ok().flatten().map(|planned| *planned)
 }
 

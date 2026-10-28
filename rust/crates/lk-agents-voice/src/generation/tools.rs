@@ -104,15 +104,16 @@ impl ToolStep {
                 let call = Box::new(call.clone());
                 // A hosted call's approval is the loop's to decide, from the record as the start
                 // reaches it: the body waits for the answer.
-                let (grant, granted) = match &runner {
-                    Some(_) => {
-                        let (call, rx) = shared.calls.open(crate::agent_session::Answer::approval);
-                        (Some(call), Some(rx))
-                    }
-                    None => (None, None),
-                };
-                shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
-                granted
+                if runner.is_none() {
+                    let grant = None;
+                    shared.report(GenEvent::ToolCallStarted { speech, step, call, runner, grant });
+                    return None;
+                }
+                let (grant, granted) = shared.calls.open(crate::agent_session::Answer::approval);
+                let started =
+                    GenEvent::ToolCallStarted { speech, step, call, runner, grant: Some(grant.id) };
+                shared.report_awaited(started, grant);
+                Some(granted)
             };
         let mut one = call.clone();
         let (deferred, granted) = if handle.step_authorized(step) {

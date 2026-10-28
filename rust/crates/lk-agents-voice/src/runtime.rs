@@ -36,6 +36,9 @@ pub struct Runtime {
     frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, AbortHandle)>,
+    /// Where each awaited call's answer goes, until the core answers it.
+    calls:
+        std::collections::BTreeMap<crate::agent_session::RequestId, crate::agent_session::ReplyTo>,
     /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, AbortHandle)>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
@@ -92,6 +95,7 @@ impl Runtime {
             frames_tx,
             source: None,
             pending_legs: Default::default(),
+            calls: Default::default(),
             keyterms: None,
             realtime_players: Default::default(),
             video_parts,
@@ -159,6 +163,10 @@ impl Runtime {
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
             }
+            Event::Awaited(input, call) => {
+                self.calls.insert(call.id, call.reply_to);
+                self.handle(Event::Input(input), now);
+            }
             Event::Wake => {
                 let effects = self.driver.handle(None, now);
                 self.perform_voice(effects);
@@ -190,6 +198,11 @@ impl Runtime {
         for event in undelivered {
             match event {
                 Event::Input(input) => inputs.push(input),
+                // Kept, so the core's refusal reaches it.
+                Event::Awaited(input, call) => {
+                    self.calls.insert(call.id, call.reply_to);
+                    inputs.push(input);
+                }
                 Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
                 // A microphone attached too late to be read is let go, not left in the table.
                 Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
@@ -311,7 +324,6 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.shared.closing.send_replace(true);
-        self.shared.calls.close();
         self.release();
         self.driver.release_all_providers();
         let effects = std::mem::take(&mut self.driver.outbox);
