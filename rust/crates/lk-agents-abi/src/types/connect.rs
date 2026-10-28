@@ -165,14 +165,7 @@ pub fn api_connect_options_check(
 
 pub const FIRST_RETRY_INTERVAL: f64 = 0.1;
 
-/// [`ApiConnectOptions::attempt_connected`] for the host's stream retry loop.
-#[crate::host(export(pid = false))]
-pub fn api_attempt_connected(connect_timeout: Option<f64>, lasted_seconds: f64) -> bool {
-    ApiConnectOptions { connect_timeout, ..DEFAULT_API_CONNECT_OPTIONS }
-        .attempt_connected(lasted_seconds)
-}
-
-/// `APIConnectOptions._interval_for_retry` (`types.py:138`) for the host's retry loops; only
+/// `APIConnectOptions.interval_for_retry` (`types.py:138`) for the host's retry loops; only
 /// `retry_interval` affects the answer.
 #[crate::host(export(pid = false))]
 pub fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {

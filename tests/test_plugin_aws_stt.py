@@ -12,7 +12,6 @@ from livekit.agents.metrics import STTMetrics
 from livekit.plugins.aws import stt as aws_stt
 
 if sys.version_info >= (3, 12):
-    import aws_sdk_transcribe_streaming.client as transcribe_client
     from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig
     from aws_sdk_transcribe_streaming.models import (
         AudioStream,
@@ -101,7 +100,7 @@ def _make_stream(
         ) -> _FakeTranscribeStream:
             return transcribe_stream
 
-    monkeypatch.setattr(transcribe_client, "AsyncTranscribeStreamingClient", _FakeTranscribeClient)
+    monkeypatch.setattr(aws_stt, "TranscribeStreamingClient", _FakeTranscribeClient)
     provider = aws_stt.STT(
         region="us-east-1",
         sample_rate=16000,

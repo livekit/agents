@@ -455,12 +455,12 @@ async def test_output_streams_close_on_generation_complete(
         assert gen.audio_ch.closed
         assert gen.text_ch.closed
         # but the generation is still open for trailing input transcription until turn_complete
-        assert not gen._done
+        assert not gen.done
         assert not gen.message_ch.closed
 
         session._handle_server_content(types.LiveServerContent(turn_complete=True))
 
-        assert gen._done
+        assert gen.done
         assert gen.message_ch.closed
 
 
@@ -485,7 +485,7 @@ async def test_late_content_after_generation_complete_is_dropped(
 
         assert gen.audio_ch.closed and gen.text_ch.closed
         assert gen.output_text == ""
-        assert not gen._done
+        assert not gen.done
         assert any("after generation completed" in r.message for r in caplog.records)
 
 
@@ -499,7 +499,7 @@ async def test_input_transcription_uses_generation_timestamp(
         session._start_new_generation()
         gen = session._current_generation
         assert gen is not None
-        gen._created_timestamp = 1234.5
+        gen.created_timestamp = 1234.5
 
         session._handle_server_content(
             types.LiveServerContent(input_transcription=types.Transcription(text="hello"))

@@ -288,6 +288,7 @@ class LLM(llm.LLM):
             session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
+            cache_system=self._opts.cache_system,
         )
 
 
@@ -301,10 +302,12 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
+        cache_system: bool,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._llm: LLM = llm
         self._opts = extra_kwargs
+        self._cache_system = cache_system
         self._session = session
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
@@ -320,7 +323,7 @@ class LLMStream(llm.LLMStream):
                 system_messages: list[SystemContentBlockTypeDef] = [
                     {"text": content} for content in extra_data.system_messages
                 ]
-                if self._llm._opts.cache_system:
+                if self._cache_system:
                     system_messages.append({"cachePoint": {"type": "default"}})
                 self._opts["system"] = system_messages
 

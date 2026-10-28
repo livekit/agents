@@ -36,16 +36,18 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -56,6 +58,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
 from ._endpoint import resolve_endpoint
+from ._stt_response import TranscriptResponse, decode_transcript
 
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
@@ -85,7 +88,7 @@ class _STTOptions:
     vad_speech_pad_ms: int
     word_timestamps: bool
 
-    def handshake(self) -> dict[str, Any]:
+    def handshake(self) -> dict[str, JsonValue]:
         return {
             "whisper_params": {
                 "audio_language": self.audio_language,
@@ -104,7 +107,7 @@ class _STTOptions:
         }
 
 
-class _Qwen3Backend:
+class Qwen3Backend:
     """Connection settings for a Qwen3-ASR deployment, owned by `STT`.
 
     Not an `stt.STT` itself — `STT` selects this when ``model="qwen3-asr"`` and
@@ -215,7 +218,14 @@ class _Qwen3Backend:
         opts = replace(self._opts)
         if is_given(language):
             opts.audio_language = language
-        return Qwen3SpeechStream(stt=owner, backend=self, opts=opts, conn_options=conn_options)
+        return Qwen3SpeechStream(
+            stt=owner,
+            ensure_session=self._ensure_session,
+            model_endpoint=self._model_endpoint,
+            api_key=self._api_key,
+            opts=opts,
+            conn_options=conn_options,
+        )
 
     async def recognize_via_stream(
         self,
@@ -255,20 +265,24 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
         self,
         *,
         stt: stt_module.STT,
-        backend: _Qwen3Backend,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+        model_endpoint: str,
+        api_key: str,
         opts: _STTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
-        self._backend = backend
+        self._ensure_session = ensure_session
+        self._model_endpoint = model_endpoint
+        self._api_key = api_key
         self._opts = opts
 
     async def _run(self) -> None:
         try:
             ws = await utils.http_context.ws_connect(
-                self._backend._ensure_session(),
-                self._backend._model_endpoint,
-                headers={"Authorization": f"Api-Key {self._backend._api_key}"},
+                self._ensure_session(),
+                self._model_endpoint,
+                headers={"Authorization": f"Api-Key {self._api_key}"},
                 conn_options=self._conn_options,
             )
         except asyncio.TimeoutError:
@@ -341,20 +355,20 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(msg.data)
-                if event.get("type") == "error":
+                event = decode_transcript(msg.data)
+                if event.type == "error":
                     raise APIStatusError(
-                        message=str(event.get("message", "unknown STT error")),
+                        message=event.message,
                         status_code=500,
                         request_id=None,
                         body=None,
                     )
-                if event.get("type") != "transcription":
+                if event.type != "transcription":
                     continue
 
-                segments = event.get("segments") or []
-                text = " ".join(s.get("text", "") for s in segments).strip()
-                is_final = bool(event.get("is_final"))
+                segments = event.segments or []
+                text = " ".join(s.text for s in segments).strip()
+                is_final = bool(event.is_final)
 
                 # Only real words open a turn. An empty final (VAD closed on
                 # noise, recognizer returned nothing) would otherwise emit
@@ -372,7 +386,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
                             if is_final
                             else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech_data(event, segments, text)],
+                            alternatives=[self._speech_data(event, text)],
                         )
                     )
 
@@ -384,7 +398,7 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                         speaking = False
                     # Only the commit-triggered final ends the session; VAD
                     # finals just close a turn and the stream keeps going.
-                    if event.get("is_end_of_audio_flush") and input_ended.is_set():
+                    if event.is_end_of_audio_flush and input_ended.is_set():
                         return
 
         try:
@@ -395,39 +409,37 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
                 await asyncio.gather(send_task, recv_task)
             finally:
                 await utils.aio.gracefully_cancel(send_task, recv_task)
-        except (APIConnectionError, APIStatusError, APITimeoutError):
+        except APIError:
             raise
         except Exception as e:
             raise APIConnectionError() from e
         finally:
             await ws.close()
 
-    def _speech_data(
-        self, event: dict[str, Any], segments: list[dict[str, Any]], text: str
-    ) -> stt_module.SpeechData:
+    def _speech_data(self, event: TranscriptResponse, text: str) -> stt_module.SpeechData:
+        segments = event.segments or []
         words = None
         if self._opts.word_timestamps:
             words = [
                 TimedString(
-                    text=w.get("word", ""),
-                    start_time=float(w.get("start_time", 0.0)) + self.start_time_offset,
-                    end_time=float(w.get("end_time", 0.0)) + self.start_time_offset,
-                    confidence=float(w.get("prob", 0.0)),
+                    text=w.word,
+                    start_time=float(w.start_time) + self.start_time_offset,
+                    end_time=float(w.end_time) + self.start_time_offset,
+                    confidence=float(w.prob),
                     start_time_offset=self.start_time_offset,
                 )
                 for s in segments
-                for w in (s.get("word_timestamps") or [])
+                for w in (s.word_timestamps or [])
             ] or None
 
         return stt_module.SpeechData(
-            language=_language_code(event.get("language_code")),
+            language=_language_code(event.language_code),
             text=text,
             # Server times are socket-relative; the framework grows
             # start_time_offset on every reconnect so consumers see one timeline.
-            start_time=(float(segments[0].get("start_time", 0.0)) if segments else 0.0)
+            start_time=(float(segments[0].start_time) if segments else 0.0)
             + self.start_time_offset,
-            end_time=(float(segments[-1].get("end_time", 0.0)) if segments else 0.0)
-            + self.start_time_offset,
+            end_time=(float(segments[-1].end_time) if segments else 0.0) + self.start_time_offset,
             confidence=1.0,
             words=words,
         )

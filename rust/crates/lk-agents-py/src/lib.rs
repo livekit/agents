@@ -20,6 +20,8 @@ extern crate lk_agents_voice as _;
 
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
+/// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
+pub mod avatar_output;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over the core's `NodeFactory`.
 pub mod nodes;
 /// `init(role)` and the registration table.
@@ -75,6 +77,7 @@ impl generated::Implementations for Selected {
     type TextSessionRunner = lk_agents_runtime::text_session::Runner;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
+    type DataStreamAudioOutput = crate::avatar_output::DataStreamAudioOutput;
     type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;
     type FallbackLlm = lk_agents_runtime::fallback::FallbackLlm;
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;

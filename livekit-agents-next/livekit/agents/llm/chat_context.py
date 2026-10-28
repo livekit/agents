@@ -33,6 +33,14 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
+    from ._provider_format import (
+        AnthropicMessage,
+        BedrockMessage,
+        GoogleMessage,
+        MistralMessage,
+        OpenAIMessage,
+        OpenAIResponseItem,
+    )
 
 
 class ImageContent(BaseModel):
@@ -500,11 +508,13 @@ class ChatContext:
 
     @overload
     async def to_provider_format(
-        self,
-        format: Literal["openai", "openai.responses"],
-        *,
-        inject_dummy_user_message: bool = True,
-    ) -> tuple[list[dict], Literal[None]]: ...
+        self, format: Literal["openai"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[OpenAIMessage], None]: ...
+
+    @overload
+    async def to_provider_format(
+        self, format: Literal["openai.responses"], *, inject_dummy_user_message: bool = True
+    ) -> tuple[list[OpenAIResponseItem], None]: ...
 
     @overload
     async def to_provider_format(
@@ -513,45 +523,57 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
-    ) -> tuple[list[dict], _provider_format.GoogleFormatData]: ...
+    ) -> tuple[list[GoogleMessage], _provider_format.GoogleFormatData]: ...
 
     @overload
     async def to_provider_format(
         self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.BedrockFormatData]: ...
+    ) -> tuple[list[BedrockMessage], _provider_format.BedrockFormatData]: ...
 
     @overload
     async def to_provider_format(
-        self, format: Literal["anthropic"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.AnthropicFormatData]: ...
+        self,
+        format: Literal["anthropic"],
+        *,
+        inject_dummy_user_message: bool = True,
+        inject_trailing_user_message: bool = False,
+    ) -> tuple[list[AnthropicMessage], _provider_format.AnthropicFormatData]: ...
 
     @overload
     async def to_provider_format(
         self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], _provider_format.MistralFormatData]: ...
-
-    @overload
-    async def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
+    ) -> tuple[list[MistralMessage], _provider_format.MistralFormatData]: ...
 
     async def to_provider_format(
         self,
-        format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"]
-        | str,
+        format: Literal["openai", "openai.responses", "google", "aws", "anthropic", "mistralai"],
         *,
         inject_dummy_user_message: bool = True,
-        **kwargs: Any,
-    ) -> tuple[list[dict], Any]:
-        """Convert the chat context to a provider-specific format.
-
-        If ``inject_dummy_user_message`` is ``True``, a dummy user message will be added
-        to the beginning or end of the chat context depending on the provider.
-
-        This is necessary because some providers expect a user message to be present for
-        generating a response.
-        """
-        return await _provider_format.to_chat_ctx(
-            self, format, inject_dummy_user_message=inject_dummy_user_message, **kwargs
+        inject_trailing_user_message: bool = False,
+        thought_signatures: dict[str, bytes] | None = None,
+    ) -> tuple[
+        list[OpenAIMessage]
+        | list[OpenAIResponseItem]
+        | list[GoogleMessage]
+        | list[BedrockMessage]
+        | list[AnthropicMessage]
+        | list[MistralMessage],
+        _provider_format.GoogleFormatData
+        | _provider_format.BedrockFormatData
+        | _provider_format.AnthropicFormatData
+        | _provider_format.MistralFormatData
+        | None,
+    ]:
+        """Convert history to the upstream SDK's request types for the selected provider."""
+        # The native dialect writes the SDK wire schema; annotations preserve that contract.
+        messages, data = await _provider_format.to_chat_ctx(
+            self,
+            format,
+            inject_dummy_user_message=inject_dummy_user_message,
+            inject_trailing_user_message=inject_trailing_user_message,
+            thought_signatures=thought_signatures,
         )
+        return messages, data
 
     def find_insertion_index(self, *, created_at: float) -> int:
         """

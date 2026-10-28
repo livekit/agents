@@ -175,6 +175,9 @@ pub struct RunRequest {
     pub delegated: bool,
     pub conn_options: ApiConnectOptions,
     pub host_context: HostRef,
+    /// Canonical host tool objects offered by this invocation.
+    #[host(default = None)]
+    pub tools_host: Option<HostRef>,
 }
 
 /// A settled invocation, with the value the host validated when the output is one.

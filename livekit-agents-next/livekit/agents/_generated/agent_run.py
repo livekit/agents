@@ -434,6 +434,8 @@ class RunRequest:
     """Another agent asked this run: questions pass up as written."""
     conn_options: APIConnectOptions
     host_context: object
+    tools_host: object | None = None
+    """Canonical host tool objects offered by this invocation."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

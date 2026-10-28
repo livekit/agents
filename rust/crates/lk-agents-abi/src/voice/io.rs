@@ -250,6 +250,7 @@ impl PlaybackTracker {
     /// `_reset_playback_count`, plus: a parked `wait_for_playout` is released with
     /// `Finished { interrupted: true }` at what the open segment played (never the previous
     /// segment's finish), rather than left waiting forever.
+    #[host(method)]
     pub fn reset(&self) {
         let mut s = self.state.lock().unwrap();
         let played = s.open_progress();

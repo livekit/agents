@@ -7,10 +7,17 @@ from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
-from livekit.agents import APIConnectOptions, LanguageCode
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
-from livekit.agents.types import TimedString
+from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode
+from livekit.agents.stt import (
+    STT as BaseSTT,
+    SpeechData,
+    SpeechEvent,
+    SpeechEventType,
+    STTCapabilities,
+)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils.aio import ChanClosed
+from livekit.agents.utils.audio import AudioBuffer
 from livekit.plugins.google.stt import (
     SpeechStream,
     STTOptions,
@@ -28,13 +35,21 @@ def mock_google_adc(monkeypatch):
     monkeypatch.setattr(google_stt, "gauth_default", lambda: (None, "test-project"))
 
 
-class _FakeSTT:
-    _label = "google.STT"
+class _FakeSTT(BaseSTT):
     model = "default"
     provider = "Google Cloud Platform"
 
-    def emit(self, *_args, **_kwargs):
-        pass
+    def __init__(self) -> None:
+        super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
+
+    async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -> SpeechEvent:
+        raise NotImplementedError("only the Google streaming transport is under test")
 
 
 class _FakeStreamingCall:
@@ -68,7 +83,7 @@ class _FakeSpeechClient:
         self.call: _FakeStreamingCall | None = None
         self.call_ready = asyncio.Event()
 
-    async def streaming_recognize(self, *, requests):
+    async def streaming_recognize(self, *, requests, timeout=None, retry=None):
         self.call = _FakeStreamingCall(requests)
         self.call_ready.set()
         return self.call
@@ -82,7 +97,7 @@ class _FakeConnectionPool:
         self._client = client
 
     @contextlib.asynccontextmanager
-    async def connection(self, *, timeout):
+    async def connection(self, *, conn_options):
         yield self._client
 
     def remove(self, _client):
@@ -106,10 +121,13 @@ def _default_stt_options() -> STTOptions:
     )
 
 
-async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
+async def test_google_stt_premature_peer_end_reports_failure_without_leaking_chanclosed():
     client = _FakeSpeechClient()
+    owner = _FakeSTT()
+    errors = []
+    owner.on("error", errors.append)
     stream = SpeechStream(
-        stt=_FakeSTT(),
+        stt=owner,
         conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1),
         pool=_FakeConnectionPool(client),
         recognizer_cb=lambda _client: "",
@@ -126,7 +144,19 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
         assert client.call is not None
         await asyncio.wait_for(client.call.awaiting_audio.wait(), timeout=1)
 
-        await asyncio.wait_for(stream._task, timeout=1)
+        # The peer ends while the user input remains open. The sole attempt owner
+        # must report that as an error, and cancel the blocked SDK input consumer.
+        with pytest.raises(
+            APIConnectionError, match="before input and transcript completion"
+        ) as error:
+            await asyncio.wait_for(stream._task, timeout=1)
+        assert error.value.retryable is False
+        assert len(errors) == 1
+        assert errors[0].error is error.value
+        assert errors[0].recoverable is False
+        with pytest.raises(APIConnectionError) as public_error:
+            await anext(stream)
+        assert public_error.value is error.value
         await asyncio.wait_for(client.call.consumer_done.wait(), timeout=1)
 
         await stream.aclose()
@@ -134,6 +164,7 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
             gc.collect()
             await asyncio.sleep(0)
     finally:
+        await stream.aclose()
         loop.set_exception_handler(original_exception_handler)
 
     unhandled_chanclosed = [

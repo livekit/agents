@@ -12,6 +12,7 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    ClassVar,
     Generic,
     Literal,
     TypeGuard,
@@ -19,7 +20,7 @@ from typing import (
     overload,
 )
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict, TypeVar
 
 from .. import _core
@@ -37,12 +38,18 @@ class Tool(ABC):
 
 
 class ProviderTool(Tool):
+    provider: ClassVar[str | None] = None
+
     def __init__(self, *, id: str) -> None:
         self._id = id
 
     @property
     def id(self) -> str:
         return self._id
+
+    def to_dict(self) -> dict[str, JsonValue] | None:
+        """Return a native wire declaration, when this tool supports a native transport."""
+        return None
 
 
 class Toolset:
@@ -466,7 +473,7 @@ def function_tool(
 
 
 def function_tool(
-    f: Callable[_P, _R] | None = None,
+    f: Callable[..., object] | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
@@ -476,9 +483,9 @@ def function_tool(
     duplicate_scope: DuplicateScope = "name",
     needs_approval: bool | ReadBack = False,
 ) -> (
-    FunctionTool[_P, _R]
-    | RawFunctionTool[_P, _R]
-    | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
+    FunctionTool[..., object]
+    | RawFunctionTool[..., object]
+    | Callable[[Callable[..., object]], FunctionTool[..., object] | RawFunctionTool[..., object]]
 ):
     """``needs_approval``: the framework asks the person to confirm each call with a read-back
     and runs the body only on a repeat of the same validated call after the answer (tools.md
@@ -643,22 +650,21 @@ class ToolContext:
         )
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
-        self._tools = list(tools)
-        self._fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
-        self._provider_tools: list[ProviderTool] = []
-        self._tool_sets: list[Toolset] = []
+        fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
+        provider_tools: list[ProviderTool] = []
+        tool_sets: list[Toolset] = []
 
         def add_tool(tool: Tool | Toolset) -> None:
             if isinstance(tool, ProviderTool):
-                self._provider_tools.append(tool)
+                provider_tools.append(tool)
             elif isinstance(tool, (FunctionTool, RawFunctionTool)):
                 # the same instance twice is one tool
-                if self._fnc_tools_map.setdefault(tool.info.name, tool) is not tool:
+                if fnc_tools_map.setdefault(tool.info.name, tool) is not tool:
                     raise ValueError(f"duplicate function name: {tool.info.name}")
             elif isinstance(tool, Toolset):
                 for t in tool.tools:
                     add_tool(t)
-                self._tool_sets.append(tool)
+                tool_sets.append(tool)
             else:
                 raise ValueError(
                     f"unknown tool type: {type(tool)}; a wrapped function tool is not one: wrap "
@@ -667,6 +673,16 @@ class ToolContext:
 
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
+
+        collisions = set(fnc_tools_map).intersection(tool.id for tool in provider_tools)
+        if collisions:
+            raise ValueError(
+                "provider tool ID conflicts with function name: " + ", ".join(sorted(collisions))
+            )
+        self._tools = list(tools)
+        self._fnc_tools_map = fnc_tools_map
+        self._provider_tools = provider_tools
+        self._tool_sets = tool_sets
 
     def copy(self) -> ToolContext:
         return ToolContext(self._tools.copy())

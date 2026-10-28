@@ -677,7 +677,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         toolset: dict[str, Any] = {}
         if is_given(tools):
             pool = self._pool(self.current_agent)
-            specs = [s for s in tool_specs(pool) if s["name"] in tools]
+            specs = [
+                s for s in tool_specs(pool) if s["name"] in tools or s["provider_tool"] is not None
+            ]
             toolset = {
                 "tools": specs,
                 "tools_host": pool,

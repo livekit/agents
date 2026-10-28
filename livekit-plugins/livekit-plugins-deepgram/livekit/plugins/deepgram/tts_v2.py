@@ -26,12 +26,12 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import _to_deepgram_url
+from ._utils import to_deepgram_url
 from .log import logger
 from .models import FluxTTSModels
 
 # Flux TTS is served on the /v2/speak endpoint over both WebSocket (streaming) and
-# REST (batch). A single https base URL works for both: `_to_deepgram_url` flips the
+# REST (batch). A single https base URL works for both: `to_deepgram_url` flips the
 # scheme to wss when a WebSocket connection is requested.
 # https://developers.deepgram.com/docs/flux-tts/overview
 BASE_URL_V2 = "https://api.deepgram.com/v2/speak"
@@ -165,12 +165,14 @@ class TTSv2(tts.TTS):
         }
         ws = await utils.http_context.ws_connect(
             session,
-            _to_deepgram_url(config, self._opts.base_url, websocket=True),
+            to_deepgram_url(config, self._opts.base_url, websocket=True),
             headers={"Authorization": f"Token {self._opts.api_key}"},
             conn_options=conn_options,
         )
         ws_headers = {
-            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            k: v
+            for k, v in utils.http_context.websocket_headers(ws).items()
+            if k.startswith("dg-") or k == "Date"
         }
         logger.debug(
             "Established new Deepgram Flux TTS WebSocket connection:",
@@ -299,7 +301,7 @@ class ChunkedStreamv2(tts.ChunkedStream):
             async with utils.http_context.request(
                 self._get_session(),
                 "POST",
-                _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
+                to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={
                     "Authorization": f"Token {self._opts.api_key}",
                     "Content-Type": "application/json",

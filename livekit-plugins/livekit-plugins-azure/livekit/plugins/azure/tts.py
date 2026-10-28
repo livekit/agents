@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlparse
@@ -250,14 +251,29 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=replace(self._opts),
+            session_factory=self._ensure_session,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        session_factory: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = options
+        self._session_factory = session_factory
 
     def _build_ssml(self) -> str:
         lang = self._opts.language or "en-US"
@@ -313,7 +329,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._session_factory(),
                 "POST",
                 url=self._opts.get_endpoint_url(),
                 headers=headers,

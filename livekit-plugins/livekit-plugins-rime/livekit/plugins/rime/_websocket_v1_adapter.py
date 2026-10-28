@@ -127,11 +127,11 @@ class WebSocketV1Adapter:
         stream = _WebSocketV1SynthesizeStream(
             tts_instance=tts_instance,
             pool=pool,
+            pool_manager=self._pools,
             options=protocol_options,
             conn_options=conn_options,
             sentence_tokenizer=self._sentence_tokenizer,
         )
-        self._pools.track_stream(pool, stream._task)
         return stream
 
     def prewarm(self) -> None:
@@ -165,6 +165,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         *,
         tts_instance: tts.TTS,
         pool: _Pool,
+        pool_manager: PoolManager[_websocket_v1.Connection],
         options: _websocket_v1.SynthesisOptions,
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
@@ -177,6 +178,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
         self._end_input_sentinel: object | None = None
+        pool_manager.track_stream(pool, self._task)
 
     def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream.Flush:
         sentinel = self.Flush()

@@ -62,6 +62,8 @@ pub fn emit(decls: &[Decl], x: &Exposed) -> Result<Vec<Bases>, String> {
     Ok(out)
 }
 
+const EVENT_TYPE_VAR: &str = "TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n";
+
 struct Writer<'a> {
     decls: &'a [Decl],
     x: &'a Exposed,
@@ -287,7 +289,8 @@ impl Writer<'_> {
             self.need("typing", "Generic");
             self.need("typing", "Literal");
             self.need("livekit", "rtc");
-            b.push_str("TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n\n");
+            b.push_str(EVENT_TYPE_VAR);
+            b.push('\n');
             let events = p.events.iter().map(|e| format!("\"{e}\"")).collect::<Vec<_>>().join(", ");
             b.push_str(&format!(
                 "class {class}(\n    ABC,\n    rtc.EventEmitter[Literal[{events}] | TEvent],\n    Generic[TEvent],\n):\n"
@@ -950,11 +953,7 @@ impl Writer<'_> {
             .and_then(|x| x.ret.clone())
             .ok_or_else(|| format!("{}: a realtime model has init capabilities", m.rust))?;
         let caps = self.core_ty(m, &caps)?;
-        let event = if self.p.events.is_empty() {
-            "TEvent = TypeVar(\"TEvent\", default=Never, contravariant=True)\n\n"
-        } else {
-            ""
-        };
+        let event = if self.p.events.is_empty() { EVENT_TYPE_VAR } else { "" };
         let text = REALTIME
             .replace("{TEVENT}", event)
             .replace("{Stream}", &s.name)

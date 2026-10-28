@@ -147,15 +147,11 @@ class APIConnectOptions:
                 "Operation exceeded total_timeout", retryable=False, phase="total"
             ) from e
 
-    def _interval_for_retry(self, num_retries: int) -> float:
-        """
-        Return the interval for the given number of retries.
-
-        The first retry is immediate, and then uses specified retry_interval
-        """
+    def interval_for_retry(self, num_retries: int) -> float:
+        """Return the delay selected by the shared policy for this retry index."""
         from . import _core
 
-        return _core.api_retry_interval(self.retry_interval, num_retries)  # type: ignore[no-any-return]
+        return _core.api_retry_interval(self.retry_interval, num_retries)
 
 
 DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()

@@ -127,7 +127,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input_data in self.input:
                 if isinstance(input_data, str):
                     segment_text += input_data
-                elif isinstance(input_data, self.Flush):
+                else:
                     if segment_text:
                         self._segments_ch.send_nowait(segment_text)
                         segment_text = ""

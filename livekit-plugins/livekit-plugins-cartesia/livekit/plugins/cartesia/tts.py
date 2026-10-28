@@ -239,7 +239,7 @@ class TTS(tts.TTS):
             # transport errors can contain credentials in URLs.
             raise APIConnectionError(type(e).__name__) from None
 
-        c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
+        c_request_id = utils.http_context.websocket_headers(ws).get(REQUEST_ID_HEADER)
         logger.debug(
             "Established new Cartesia TTS WebSocket connection",
             extra={"cartesia_request_id": c_request_id},
@@ -535,8 +535,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if segment_id is not None and segment_id != cartesia_context_id:
                     continue
                 if current_segment_id is None:
-                    current_segment_id = segment_id
-                    output_emitter.start_segment(segment_id=segment_id)
+                    current_segment_id = cartesia_context_id
+                    output_emitter.start_segment(segment_id=cartesia_context_id)
                 if data.get("data"):
                     b64data = base64.b64decode(data["data"])
                     output_emitter.push(b64data)

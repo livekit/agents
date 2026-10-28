@@ -245,7 +245,9 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self, conn_options=conn_options, opts=replace(self._opts), pool=self._pool
+        )
         self._streams.add(stream)
         return stream
 
@@ -264,10 +266,17 @@ class SynthesizeStream(tts.SynthesizeStream):
     synthesis.
     """
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -289,7 +298,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
@@ -371,7 +380,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected xAI message", extra={"lk.pii.data": data})
 
-        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(_send_task(ws)),
                 asyncio.create_task(_recv_task(ws)),

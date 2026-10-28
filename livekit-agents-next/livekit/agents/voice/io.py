@@ -6,7 +6,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never
+
+from typing_extensions import TypeVar
 
 from livekit import rtc
 
@@ -131,8 +133,15 @@ class AudioOutputCapabilities:
     pause: bool
 
 
+_AudioEventT = TypeVar("_AudioEventT", default=Never, contravariant=True)
+
+
 class AudioOutput(
-    ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started", "playback_progressed"]]
+    ABC,
+    rtc.EventEmitter[
+        Literal["playback_finished", "playback_started", "playback_progressed"] | _AudioEventT
+    ],
+    Generic[_AudioEventT],
 ):
     """An audio sink. Implement ``capture_frame``, ``flush`` and ``clear_buffer``, and report
     playback with ``on_playback_started`` / ``on_playback_finished``: the core paces the
@@ -343,22 +352,22 @@ class AgentOutput:
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
-        self._audio: AudioOutput | None = None
+        self._audio: AudioOutput | _core.DataStreamAudioOutput | None = None
         self._transcription: TextOutput | None = None
         self._audio_enabled = True
         self._transcription_enabled = True
 
     @property
-    def audio(self) -> AudioOutput | None:
+    def audio(self) -> AudioOutput | _core.DataStreamAudioOutput | None:
         return self._audio
 
     @audio.setter
-    def audio(self, sink: AudioOutput | None) -> None:
+    def audio(self, sink: AudioOutput | _core.DataStreamAudioOutput | None) -> None:
         self._audio = sink
         if self._session._core is not None:
             self._session._core.set_audio_output(sink)
 
-    def replace_audio_tail(self, sink: AudioOutput) -> None:
+    def replace_audio_tail(self, sink: AudioOutput | _core.DataStreamAudioOutput) -> None:
         """Switch the sink at the bottom of the chain, keeping the wrappers above it: the core
         owns those (transcript synchroniser, recorder), so this is ``audio = sink``."""
         self.audio = sink

@@ -143,6 +143,85 @@ pub struct Dialect {
     pub extra_fatal_codes: &'static [&'static str],
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "type")]
+enum XaiProviderTool {
+    #[serde(rename = "web_search")]
+    WebSearch,
+    #[serde(rename = "x_search")]
+    XSearch {
+        #[serde(default)]
+        #[serde(rename = "allowed_x_handles")]
+        _allowed_x_handles: Option<Vec<String>>,
+    },
+    #[serde(rename = "file_search")]
+    FileSearch {
+        #[serde(rename = "vector_store_ids")]
+        _vector_store_ids: Vec<String>,
+        #[serde(default)]
+        #[serde(rename = "max_num_results")]
+        _max_num_results: Option<i64>,
+    },
+}
+
+impl XaiProviderTool {
+    fn reserved_names(self) -> &'static [&'static str] {
+        match self {
+            Self::WebSearch => &["web_search", "browse_page"],
+            Self::XSearch { .. } => {
+                &["x_keyword_search", "x_semantic_search", "x_user_search", "x_thread_fetch"]
+            }
+            Self::FileSearch { .. } => &["collections_search", "file_search"],
+        }
+    }
+}
+
+impl Dialect {
+    /// Validate external provider declarations before they replace the current tool set.
+    pub fn prepare_tools(
+        &self,
+        tools: Vec<lk_agents_abi::ToolSpec>,
+    ) -> Result<Vec<lk_agents_abi::ToolSpec>, String> {
+        use serde::Deserialize as _;
+        // Current OpenAI/Azure realtime dialects support client functions. xAI additionally
+        // supports its own server-side declarations; foreign SDK tools stay in the host pool.
+        let tools = tools
+            .into_iter()
+            .filter(|tool| {
+                tool.provider_tool.as_ref().is_none_or(|declaration| {
+                    self.provider_label == XAI.provider_label
+                        && declaration.provider.as_deref() == Some("xai")
+                })
+            })
+            .collect::<Vec<_>>();
+        let function_names = tools
+            .iter()
+            .filter(|tool| tool.provider_tool.is_none())
+            .map(|tool| tool.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for tool in &tools {
+            let Some(declaration) = &tool.provider_tool else { continue };
+            let provider = XaiProviderTool::deserialize(&declaration.payload).map_err(|_| {
+                format!("xAI provider tool {:?} has an invalid declaration", tool.name)
+            })?;
+            let conflicts = provider
+                .reserved_names()
+                .iter()
+                .copied()
+                .filter(|name| function_names.contains(name))
+                .collect::<std::collections::BTreeSet<_>>();
+            if !conflicts.is_empty() {
+                return Err(format!(
+                    "xAI provider tool {:?} already uses function name(s) {}. Rename or remove the client functions.",
+                    tool.name,
+                    conflicts.into_iter().collect::<Vec<_>>().join(", "),
+                ));
+            }
+        }
+        Ok(tools)
+    }
+}
+
 /// `livekit-plugins-openai/realtime`, the protocol everything else here is a delta on.
 pub const OPENAI: Dialect = Dialect {
     provider_label: "OpenAI Realtime API",

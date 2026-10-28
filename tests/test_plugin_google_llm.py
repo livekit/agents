@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from google.genai import types
 
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
@@ -23,6 +23,7 @@ def llm_stream():
     with patch.object(LLMStream, "__init__", lambda self, *a, **kw: None):
         stream = LLMStream.__new__(LLMStream)
         stream._llm = mock_llm
+        stream._thought_signatures = mock_llm._thought_signatures
         stream._model = "gemini-2.0-flash"
     return stream
 
@@ -257,7 +258,7 @@ class TestCachedContentRequestSuppression:
         assert config.tools is not None and len(config.tools) >= 1
 
     @pytest.mark.asyncio
-    async def test_request_merges_timeout_into_caller_http_options(self) -> None:
+    async def test_request_preserves_headers_and_disables_sdk_retry_timeout(self) -> None:
         caller_http_options = types.HttpOptions(headers={"X-Vertex-Test": "1"})
         llm = LLM(
             model="gemini-2.5-flash",
@@ -278,7 +279,8 @@ class TestCachedContentRequestSuppression:
                 await stream.aclose()
 
         config = captured["config"]
-        assert config.http_options.timeout == 7500
+        assert config.http_options.timeout == 0
+        assert config.http_options.retry_options.attempts == 1
         assert config.http_options.headers["X-Vertex-Test"] == "1"
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
@@ -623,3 +625,62 @@ class TestThinkingConfigRequestConstruction:
         assert thinking_config is not None
         assert thinking_config.thinking_budget == 1024
         assert thinking_config.thinking_level is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("schema", "expected_type"),
+    [
+        ({"type": "object", "properties": {"answer": {"type": "string"}}}, types.Type.OBJECT),
+        (
+            types.Schema(
+                type=types.Type.OBJECT, properties={"answer": types.Schema(type=types.Type.STRING)}
+            ),
+            types.Type.OBJECT,
+        ),
+        (list[str], types.Type.ARRAY),
+    ],
+)
+async def test_declared_response_schema_forms_reach_the_provider(
+    schema: object, expected_type: types.Type
+) -> None:
+    provider = LLM(api_key="test")
+    fake, captured = TestCachedContentRequestSuppression._patched_stream_capture()
+    try:
+        with patch.object(provider._client.aio.models, "generate_content_stream", fake):
+            async with provider.chat(
+                chat_ctx=ChatContext.empty(), response_format=schema
+            ) as stream:
+                _ = [chunk async for chunk in stream]
+        config = captured["config"]
+        assert config.response_mime_type == "application/json"
+        resolved = types.Schema.model_validate(config.response_schema)
+        assert resolved.type == expected_type
+    finally:
+        await provider.aclose()
+
+
+def test_function_call_missing_name_is_a_non_retryable_provider_error(
+    llm_stream: LLMStream,
+) -> None:
+    part = types.Part(function_call=types.FunctionCall(args={}))
+    with pytest.raises(APIConnectionError) as failure:
+        llm_stream._parse_part("response", part)
+    assert not failure.value.retryable
+
+
+@pytest.mark.asyncio
+async def test_no_system_messages_omit_the_system_instruction() -> None:
+    provider = LLM(api_key="test")
+    fake, captured = TestCachedContentRequestSuppression._patched_stream_capture()
+    context = ChatContext.empty()
+    context.add_message(role="user", content="hello")
+    try:
+        with patch.object(provider._client.aio.models, "generate_content_stream", fake):
+            async with provider.chat(chat_ctx=context) as stream:
+                _ = [chunk async for chunk in stream]
+        config = captured["config"]
+        assert config.system_instruction is None
+        assert "systemInstruction" not in config.model_dump(by_alias=True, exclude_none=True)
+    finally:
+        await provider.aclose()

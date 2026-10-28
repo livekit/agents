@@ -66,6 +66,7 @@ pub fn outgoing(frame: &Value, minted: &mut u32) -> Vec<Outgoing> {
                 vec![Outgoing::SessionUpdate { event_id: event_id.clone(), opts, dialect: INFERENCE }];
             if let Some(tools) = session["tools"].as_array() {
                 let tool = |t: &Value| ToolSpec {
+                    provider_tool: None,
                     name: t["name"].as_str().unwrap().to_owned(),
                     description: String::new(),
                     json_schema: json!({}),

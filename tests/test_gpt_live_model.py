@@ -548,7 +548,11 @@ async def test_transport_errors_do_not_expose_provider_payloads(
         conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0),
     )
     if operation == "connect":
-        monkeypatch.setattr(model, "_ensure_http_session", lambda: SimpleNamespace(ws_connect=fail))
+        monkeypatch.setattr(
+            model,
+            "_ensure_http_session",
+            lambda: SimpleNamespace(ws_connect=fail, trace_configs=[]),
+        )
     else:
         monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
         monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
@@ -905,26 +909,40 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
 async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from livekit.agents import Agent, VoiceSession
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    from .fake_io import FakeAudioOutput
+
     ws = _connect_hook(monkeypatch)
-    model = GPTLiveModel(api_key="sk-test")
-    adapted = llm.DuplexRealtimeAdapter(model).session()
-    session = adapted.duplex_session
-    assert isinstance(session, GPTVoiceSession)
-    generations: list[llm.GenerationCreatedEvent] = []
-    errors: list[llm.RealtimeModelError] = []
-    adapted.on("generation_created", generations.append)
-    adapted.on("error", errors.append)
-    next_audio: asyncio.Task[rtc.AudioFrame] | None = None
+    options = APIConnectOptions(read_timeout=1, max_retry=0)
+    model = GPTLiveModel(api_key="sk-test", conn_options=options)
+    voice = VoiceSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
+    speeches: list[SpeechHandle] = []
+    errors: list[object] = []
+    delivered: list[rtc.AudioFrame] = []
+
+    class Output(FakeAudioOutput):
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            delivered.append(frame)
+            await super().capture_frame(frame)
+
+    voice.output.audio = Output()
+    voice.on("speech_created", lambda event: speeches.append(event.speech_handle))
+    voice.on("error", errors.append)
     try:
-        await adapted._update_session()
+        await voice.start(Agent(instructions="", name="desk"))
         await asyncio.sleep(0.05)
+        session = ws.session
+        assert isinstance(session, GPTVoiceSession)
         session.append_instructions("Be concise.")
         session.append_thinking("The caller is returning a chair.")
         session.append_commentary("Ask for the order number.")
         session.push_audio(_silence(100))
 
         # A context receipt can outlast the read timeout without holding later commands.
-        await asyncio.sleep(model._opts.conn_options.read_timeout * 2)
+        assert options.read_timeout is not None
+        await asyncio.sleep(options.read_timeout * 2)
         assert [event["type"] for event in ws.sent] == [
             "session.start",
             "session.instructions.append",
@@ -933,7 +951,7 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
             "session.input_audio.append",
         ]
         assert not errors
-        assert not generations
+        assert not speeches
 
         speech = {
             "type": "session.output_audio.delta",
@@ -942,24 +960,23 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
         session._handle_event(_transcript("assistant", "What is", 0))
         session._handle_event(speech)
         await asyncio.sleep(0.05)
-        assert len(generations) == 1
-        message = await anext(generations[0].message_stream.__aiter__())
-        audio = message.audio_stream.__aiter__()
-        assert (await anext(audio)).duration == pytest.approx(0.1)
-        next_audio = asyncio.create_task(anext(audio))
+        assert len(speeches) == 1
+        handle = speeches[0]
+        assert sum(frame.duration for frame in delivered) == pytest.approx(0.1)
 
         for append in ws.sent[1:4]:
             session._handle_event(
                 {"type": f"{append['type']}ed", "client_event_id": append["event_id"]}
             )
             await asyncio.sleep(0.05)
-            assert not next_audio.done()
-            assert len(generations) == 1
-            assert not adapted.chat_ctx.items
+            assert not handle.done()
+            assert len(speeches) == 1
+            assert not any(item.role == "assistant" for item in voice.history.messages())
 
         session._handle_event(_transcript("assistant", " your order number?", 100))
         session._handle_event(speech)
-        assert (await asyncio.wait_for(next_audio, timeout=1)).duration == pytest.approx(0.1)
+        await asyncio.sleep(0.05)
+        assert sum(frame.duration for frame in delivered) == pytest.approx(0.2)
 
         for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
             session._handle_event(
@@ -968,17 +985,14 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
                     "delta": base64.b64encode(_silence(100).data).decode(),
                 }
             )
-        async for _ in audio:
-            pass
-        assert "".join([text async for text in message.text_stream]) == "What is your order number?"
-        assert len(generations) == 1
+        await asyncio.wait_for(handle, timeout=5)
+        assert [
+            item.text_content for item in voice.history.messages() if item.role == "assistant"
+        ] == ["What is your order number?"]
+        assert len(speeches) == 1
         assert not errors
     finally:
-        if next_audio is not None:
-            next_audio.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await next_audio
-        await adapted.aclose()
+        await voice.aclose()
         await model.aclose()
 
 

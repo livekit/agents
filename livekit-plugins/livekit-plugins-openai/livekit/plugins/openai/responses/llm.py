@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncGenerator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 import aiohttp
@@ -16,7 +16,7 @@ import openai
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext, ChatItem
+from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import (
     Tool,
 )
@@ -24,6 +24,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -34,9 +35,9 @@ from openai.types.responses import (
     ResponseErrorEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
-    ResponseInputParam,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
+    ResponseTextConfig,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -45,7 +46,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
-from ..models import _supports_reasoning_effort
+from ..models import supports_reasoning_effort
 from ..tools import OpenAITool
 from ..utils import http_timeout
 
@@ -77,7 +78,7 @@ class _ResponsesWebsocket:
             # payload; gateways need it on the upgrade URL to route the
             # connection before the first frame.
             url = url.update_query(model=model)
-        self._base_url = str(url)
+        self.base_url = str(url)
 
         self._session: aiohttp.ClientSession | None = None
 
@@ -97,7 +98,7 @@ class _ResponsesWebsocket:
         try:
             return await utils.http_context.ws_connect(
                 self._ensure_http_session(),
-                self._base_url,
+                self.base_url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 heartbeat=_WS_HEARTBEAT,
                 conn_options=conn_options,
@@ -109,6 +110,9 @@ class _ResponsesWebsocket:
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
 
     async def aclose(self) -> None:
         await self._pool.aclose()
@@ -232,6 +236,47 @@ class _LLMOptions:
     use_websocket: bool
 
 
+@dataclass
+class _ResponseCache:
+    _active_streams: int = 0
+    _parallel_generation: bool = False
+    _response_id: str = ""
+    _chat_ctx: ChatContext | None = None
+    _pending_tool_calls: set[str] = field(default_factory=set[str])
+
+    def prepare(self, chat_ctx: ChatContext) -> tuple[ChatContext, str | None]:
+        if self._active_streams or self._chat_ctx is None or not self._response_id:
+            return chat_ctx, None
+        n = len(self._chat_ctx.items)
+        if not ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._chat_ctx):
+            return chat_ctx, None
+        completed = {
+            item.call_id for item in chat_ctx.items[n:] if item.type == "function_call_output"
+        }
+        if not self._pending_tool_calls.issubset(completed):
+            return chat_ctx, None
+        return ChatContext(items=chat_ctx.items[n:]), self._response_id
+
+    def begin(self) -> None:
+        self._parallel_generation |= self._active_streams > 0
+        self._active_streams += 1
+
+    def end(self) -> None:
+        self._active_streams -= 1
+        if self._active_streams == 0 and self._parallel_generation:
+            self._response_id = ""
+            self._chat_ctx = None
+            self._pending_tool_calls.clear()
+            self._parallel_generation = False
+
+    def complete(
+        self, response_id: str, chat_ctx: ChatContext, pending_tool_calls: set[str]
+    ) -> None:
+        self._response_id = response_id
+        self._chat_ctx = chat_ctx
+        self._pending_tool_calls = set(pending_tool_calls)
+
+
 class LLM(llm.LLM):
     # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
     # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
@@ -265,7 +310,7 @@ class LLM(llm.LLM):
         """
         super().__init__()
 
-        if not is_given(reasoning) and _supports_reasoning_effort(model):
+        if not is_given(reasoning) and supports_reasoning_effort(model):
             if model in [
                 "gpt-5.1",
                 "gpt-5.2",
@@ -302,11 +347,7 @@ class LLM(llm.LLM):
         self._owns_client = client is None
         self._ws: _ResponsesWebsocket | None = None
 
-        self._active_streams: int = 0
-        self._parallel_generation: bool = False
-        self._prev_resp_id = ""
-        self._prev_chat_ctx: ChatContext | None = None
-        self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
+        self._response_cache = _ResponseCache()
 
         if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -342,7 +383,7 @@ class LLM(llm.LLM):
 
     async def _prewarm_impl(self) -> None:
         if self._ws is not None:
-            self._ws._pool.prewarm()
+            self._ws.prewarm()
         elif self._client is not None:
             await self._client.models.list()
 
@@ -362,9 +403,9 @@ class LLM(llm.LLM):
         if self._opts.use_websocket and self._ws is not None:
             from urllib.parse import urlparse
 
-            return urlparse(self._ws._base_url).netloc
+            return urlparse(self._ws.base_url).netloc
         if self._client is not None:
-            return self._client._base_url.netloc.decode("utf-8")
+            return self._client.base_url.netloc.decode("utf-8")
         return ""
 
     def chat(
@@ -375,9 +416,9 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra = {}
+        extra: dict[str, Any] = {}
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
@@ -401,8 +442,9 @@ class LLM(llm.LLM):
             extra["service_tier"] = self._opts.service_tier
 
         if is_given(self._opts.verbosity):
-            text_cfg = extra.get("text") or {}
-            extra["text"] = {**text_cfg, "verbosity": self._opts.verbosity}
+            text_cfg = ResponseTextConfig.model_validate(extra.get("text") or {})
+            text_cfg.verbosity = self._opts.verbosity
+            extra["text"] = text_cfg.model_dump(by_alias=True, exclude_unset=True)
 
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
@@ -413,8 +455,10 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        if is_given(tool_choice):
+        tool_choice = (
+            tool_choice if not isinstance(tool_choice, NotGiven) else self._opts.tool_choice
+        )
+        if not isinstance(tool_choice, NotGiven):
             oai_tool_choice: response_create_params.ToolChoice
             if not isinstance(tool_choice, str):
                 oai_tool_choice = {
@@ -427,20 +471,10 @@ class LLM(llm.LLM):
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
-        if (
-            self._opts.store is not False
-            and self._active_streams == 0
-            and self._prev_chat_ctx is not None
-            and self._prev_resp_id
-        ):
-            n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
-                self._prev_chat_ctx
-            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
-                # send only the new items appended since the last response
-                input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
-                extra["previous_response_id"] = self._prev_resp_id
-            # if the context was modified otherwise, resend the whole context and omit previous response id
+        if self._opts.store is not False:
+            input_chat_ctx, previous_response_id = self._response_cache.prepare(chat_ctx)
+            if previous_response_id is not None:
+                extra["previous_response_id"] = previous_response_id
         return LLMStream(
             self,
             model=self._opts.model,
@@ -451,16 +485,11 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
+            options=replace(self._opts),
+            websocket=self._ws,
+            cache=self._response_cache,
+            provider_tool_type=self._provider_tool_type,
         )
-
-    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
-        if not self._pending_tool_calls:
-            return True
-
-        completed_tool_calls = {
-            item.call_id for item in items if item.type == "function_call_output"
-        }
-        return all(call_id in completed_tool_calls for call_id in self._pending_tool_calls)
 
 
 class LLMStream(llm.LLMStream):
@@ -474,8 +503,12 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
-        extra_kwargs: dict[str, Any],
+        extra_kwargs: Mapping[str, object],
         full_chat_ctx: llm.ChatContext,
+        options: _LLMOptions,
+        websocket: _ResponsesWebsocket | None,
+        cache: _ResponseCache,
+        provider_tool_type: type[llm.ProviderTool],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
@@ -485,22 +518,19 @@ class LLMStream(llm.LLMStream):
         self._pending_tool_calls = set[str]()
 
         self._client = client
-        self._llm: LLM = llm
-        self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
+        self._options = options
+        self._websocket = websocket
+        self._cache = cache
+        self._provider_tool_type = provider_tool_type
+        self._extra_kwargs = drop_unsupported_params(model, dict(extra_kwargs))
         self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
-        if self._llm._active_streams > 0:
-            self._llm._parallel_generation = True
-        self._llm._active_streams += 1
+        self._cache.begin()
         try:
             await self._run_impl()
         finally:
-            self._llm._active_streams -= 1
-            if self._llm._active_streams == 0 and self._llm._parallel_generation:
-                self._llm._prev_resp_id = ""
-                self._llm._prev_chat_ctx = None
-                self._llm._parallel_generation = False
+            self._cache.end()
 
     async def _run_impl(self) -> None:
         self._response_completed = False
@@ -511,14 +541,14 @@ class LLMStream(llm.LLMStream):
             self._tool_ctx.parse_function_tools(
                 "openai.responses",
                 strict=self._strict_tool_schema,
-                provider_tool_type=self._llm._provider_tool_type,
+                provider_tool_type=self._provider_tool_type,
             ),
         )
 
-        if self._llm._opts.use_websocket is not False:
+        if self._options.use_websocket is not False:
             retryable = True
             try:
-                if self._llm._ws is None:
+                if self._websocket is None:
                     raise RuntimeError("use_websocket is True but _ws is None")
 
                 payload = {
@@ -528,7 +558,7 @@ class LLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                async for raw_event in self._llm._ws.generate_response(
+                async for raw_event in self._websocket.generate_response(
                     payload, conn_options=self._conn_options
                 ):
                     parsed_ev = self._parse_ws_event(raw_event)
@@ -544,20 +574,20 @@ class LLMStream(llm.LLMStream):
                 raise APIConnectionError(retryable=retryable) from e
 
         else:
+            assert self._client is not None
             timeout = http_timeout(self._conn_options)
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
             retryable = True
             try:
-                self._oai_stream = stream = cast(
-                    openai.AsyncStream[ResponseStreamEvent],
-                    await self._client.with_options(max_retries=0).responses.create(  # type: ignore
-                        model=self._model,
-                        tools=tool_schemas,
-                        input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
-                        stream=True,
-                        timeout=timeout,
-                        **self._extra_kwargs,
-                    ),
+                self._oai_stream = stream = await self._client.with_options(
+                    max_retries=0
+                ).responses.create(
+                    model=self._model,
+                    tools=tool_schemas,
+                    input=chat_ctx,
+                    stream=True,
+                    timeout=timeout,
+                    **self._extra_kwargs,
                 )
 
                 async with stream:
@@ -685,9 +715,7 @@ class LLMStream(llm.LLMStream):
                 )
 
         self._response_completed = True
-        self._llm._prev_chat_ctx = self._full_chat_ctx
-        self._llm._prev_resp_id = self._response_id
-        self._llm._pending_tool_calls = self._pending_tool_calls
+        self._cache.complete(self._response_id, self._full_chat_ctx, self._pending_tool_calls)
 
         chunk = None
         if usage := event.response.usage:
@@ -700,7 +728,7 @@ class LLMStream(llm.LLMStream):
                     if usage.input_tokens_details
                     else 0,
                     total_tokens=usage.total_tokens,
-                    service_tier=getattr(event.response, "service_tier", None),
+                    service_tier=event.response.service_tier,
                 ),
             )
         return chunk

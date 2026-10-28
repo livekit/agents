@@ -160,7 +160,7 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
     """
     from livekit.agents.llm import utils as llm_utils
 
-    if isinstance(tool, llm.FunctionTool):
+    if llm.is_function_tool(tool):
         schema = llm_utils.build_legacy_openai_schema(tool, internally_tagged=True)
         return FunctionTool(
             name=schema["name"],
@@ -168,7 +168,7 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
             parameters=schema.get("parameters", {}),
         )
 
-    if isinstance(tool, llm.RawFunctionTool):
+    if llm.is_raw_function_tool(tool):
         raw_schema = tool.info.raw_schema
         return FunctionTool(
             name=tool.info.name,

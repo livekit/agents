@@ -335,7 +335,7 @@ class RecognizeStream(stt.RecognizeStream):
                             mime_type=f"audio/pcm;rate={sample_rate}",
                         )
                     )
-            elif isinstance(data, self.Flush):
+            else:
                 pass
 
         # Tell Gemini the audio stream ended so it finalizes the pending transcript

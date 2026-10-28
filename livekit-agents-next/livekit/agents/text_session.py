@@ -125,6 +125,7 @@ class TextSession(Generic[Context_T, Output_T]):
                                 if isinstance(tool, _LocalAgentTool)
                             },
                             host_context=(asyncio.get_running_loop(), captured),
+                            tools_host=run.tools.flatten(),
                         )
                     )
                 runner = _core.TextSessionRunner(self._agent.name, bindings, self._max_depth)

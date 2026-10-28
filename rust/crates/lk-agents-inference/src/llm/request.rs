@@ -21,6 +21,8 @@ pub fn tool_choice_to_json(choice: &ToolChoice) -> Value {
 pub fn tool_schemas(tools: &[ToolSpec]) -> Result<Vec<Value>, ApiError> {
     tools
         .iter()
+        // The inference gateway's chat-completions endpoint supports client functions only.
+        .filter(|tool| tool.provider_tool.is_none())
         .map(|tool| {
             lk_agents_abi::llm::schema::build_strict_openai_schema(
                 &tool.name,
@@ -127,6 +129,23 @@ mod tests {
         pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
     }
 
+    #[test]
+    fn gateway_chat_completions_ignores_all_server_side_provider_declarations() {
+        for family in [None, Some("openai"), Some("xai"), Some("gemini"), Some("mistral")] {
+            let declaration = ToolSpec {
+                name: "provider_id".into(),
+                description: String::new(),
+                json_schema: Value::Null,
+                flags: Default::default(),
+                provider_tool: Some(lk_agents_abi::llm::llm::ProviderToolDeclaration {
+                    provider: family.map(str::to_owned),
+                    payload: json!({"type": "web_search"}),
+                }),
+            };
+            assert!(tool_schemas(&[declaration]).unwrap().is_empty());
+        }
+    }
+
     // Catches: "fixing" the precedence so per-call arguments win.
     #[test]
     fn the_instance_kwargs_override_the_per_call_ones() {
@@ -172,6 +191,7 @@ mod tests {
     #[test]
     fn tool_schemas_are_built_in_the_strict_openai_form() {
         let tool = crate::abi::ToolSpec {
+            provider_tool: None,
             name: "lookup".into(),
             description: "look it up".into(),
             json_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
@@ -233,8 +253,12 @@ mod tests {
 }
 
 /// Whether a tool selection is valid for the available tools.
-pub fn retain_tool_choice(has_tools: bool) -> bool { has_tools }
+pub fn retain_tool_choice(has_tools: bool) -> bool {
+    has_tools
+}
 
 pub fn normalize_tool_choice(extra: &mut Map<String, Value>, has_tools: bool) {
-    if !retain_tool_choice(has_tools) { extra.remove("tool_choice"); }
+    if !retain_tool_choice(has_tools) {
+        extra.remove("tool_choice");
+    }
 }

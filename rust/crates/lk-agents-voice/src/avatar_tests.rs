@@ -371,3 +371,114 @@ async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
     assert!((started - connected_at).abs() < 0.01, "{started} {connected_at}");
     assert!((joined - connected_at - 2.0).abs() < 0.01, "{joined} {connected_at}");
 }
+
+#[tokio::test]
+async fn closing_output_releases_startup_and_refuses_later_audio() {
+    let f = fixture("close_waiting_output", None, false);
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let output = Arc::clone(&f.out);
+    let capture = TokioSpawner::current().spawn_unboxed(async move {
+        let _ = sent.send(output.capture_frame(&frame()).await);
+    });
+    settle().await;
+    assert!(!capture.is_finished());
+    assert_eq!(f.out.aclose().await, Closed::Clean);
+    assert!(received.await.unwrap().is_err());
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    assert!(f.out.capture_frame(&frame()).await.is_err());
+    assert!(f.room.local_participant().byte_streams().is_empty());
+}
+
+#[tokio::test]
+async fn closing_output_cancels_a_blocked_write_and_retires_its_playback_route() {
+    let f = fixture("close_writing_output", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.room.local_participant().flow_byte_writes(false);
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let output = Arc::clone(&f.out);
+    let capture = TokioSpawner::current().spawn_unboxed(async move {
+        let _ = sent.send(output.capture_frame(&frame()).await);
+    });
+    settle().await;
+    assert!(!capture.is_finished());
+    assert_eq!(f.out.aclose().await, Closed::Clean);
+    assert!(received.await.unwrap().is_err());
+    assert!(f.room.local_participant().byte_streams()[0].closed);
+    assert_eq!(f.out.aclose().await, Closed::Clean);
+    assert!(f.out.wait_for_playout().await.interrupted);
+    assert_eq!(
+        f.room.local_participant().invoke_rpc(RPC_PLAYBACK_FINISHED, "avatar", "{}").as_deref(),
+        Some("reject")
+    );
+    assert_eq!(*f.events.0.lock().unwrap(), ["started"]);
+}
+
+#[tokio::test]
+async fn cancelling_close_does_not_leave_the_avatar_playback_route_live() {
+    let f = fixture("cancel_output_close", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.room.local_participant().flow_byte_writes(false);
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let output = Arc::clone(&f.out);
+    TokioSpawner::current().spawn_unboxed(async move {
+        let _ = sent.send(output.capture_frame(&frame()).await);
+    });
+    settle().await;
+    let mut close = Box::pin(f.out.aclose());
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(close.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(close);
+    assert_eq!(
+        f.room.local_participant().invoke_rpc(RPC_PLAYBACK_FINISHED, "avatar", "{}").as_deref(),
+        Some("reject")
+    );
+    assert_eq!(f.out.aclose().await, Closed::Clean);
+    assert!(received.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn close_deadline_retains_a_blocked_writer_until_its_acknowledgement() {
+    let f = fixture("close_deadline_output", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    f.out.capture_frame(&frame()).await.unwrap();
+    f.room.local_participant().flow_byte_closes(false);
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let output = Arc::clone(&f.out);
+    TokioSpawner::current().spawn_unboxed(async move {
+        let _ = sent.send(output.aclose().await);
+    });
+    settle().await;
+    assert!(!f.room.local_participant().byte_streams()[0].closed);
+    f.clock.advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+    assert_eq!(received.await.unwrap(), Closed::TimedOut);
+    assert_eq!(f.out.inner.closing.names(), ["avatar_stream_close"]);
+    f.room.local_participant().flow_byte_closes(true);
+    settle().await;
+    assert!(f.room.local_participant().byte_streams()[0].closed);
+    assert!(f.out.inner.closing.is_empty());
+    assert_eq!(f.out.aclose().await, Closed::Clean);
+}
+
+#[tokio::test]
+async fn a_retired_segment_cannot_be_reopened_by_an_admitted_write() {
+    let f = fixture("close_before_write", None, false);
+    f.room.add_participant("avatar", ParticipantKind::Agent);
+    let segment = Arc::new(Segment::default());
+    f.out.inner.close_segment(Arc::clone(&segment));
+    settle().await;
+    assert!(f.out.inner.write(&segment, &frame()).await.is_err());
+    assert!(f.room.local_participant().byte_streams().is_empty());
+    f.out.aclose().await;
+}
+
+#[tokio::test]
+async fn dropping_a_native_owner_cancels_startup_and_releases_its_inner() {
+    let f = fixture("drop_waiting_output", None, false);
+    let inner = Arc::downgrade(&f.out.inner);
+    drop(f.out);
+    settle().await;
+    assert!(inner.upgrade().is_none(), "the start task retained a dropped native output");
+}

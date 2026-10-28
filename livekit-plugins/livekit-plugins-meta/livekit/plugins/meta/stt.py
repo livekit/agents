@@ -21,7 +21,7 @@ import os
 import weakref
 from collections import OrderedDict, deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Never
 from urllib.parse import urlparse
 
 import aiohttp
@@ -108,6 +108,7 @@ _LANGUAGE_CODES = {
     "vi": "Vietnamese",
     "zh": "Mandarin Chinese",
 }
+_MESSAGE = TypeAdapter(dict[str, object])
 _RETRYABLE_CLOSE_CODES = frozenset((1011, 1013))
 _NON_RETRYABLE_CLOSE_CODES = frozenset((1008,))
 
@@ -207,7 +208,7 @@ def _parse_ws_message(
     phase: str,
     close_code: int | None = None,
     retryable_on_normal_close: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if raw.type != aiohttp.WSMsgType.TEXT or not isinstance(raw.data, str):
         if raw.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
             raw_close_code = raw.data if isinstance(raw.data, int) else close_code
@@ -223,7 +224,7 @@ def _parse_ws_message(
         raise _protocol_error(f"invalid JSON during {phase}") from None
     if not isinstance(message, dict):
         raise _protocol_error(f"non-object message during {phase}")
-    return TypeAdapter(dict[str, object]).validate_python(message)
+    return _MESSAGE.validate_python(message)
 
 
 async def _close_quietly(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -255,7 +256,7 @@ class _TurnState:
     usage_captured: bool = False
 
 
-class STT(stt.STT[Any]):
+class STT(stt.STT[Never]):
     """Streaming speech recognition with Meta Muse Voice Transcribe."""
 
     def __init__(
@@ -509,7 +510,7 @@ class SpeechStream(stt.RecognizeStream):
             handshake["languageBias"] = self._language_bias
         return handshake
 
-    def _accept_handshake(self, message: dict[str, Any]) -> None:
+    def _accept_handshake(self, message: dict[str, object]) -> None:
         if message.get("type") == "error":
             raise _server_error(phase="handshake")
         session_id = message.get("sessionId")
@@ -637,7 +638,7 @@ class SpeechStream(stt.RecognizeStream):
             elif event_type == "audioProgress":
                 self._audio_progress(message)
 
-    def _audio_progress(self, message: dict[str, Any]) -> None:
+    def _audio_progress(self, message: dict[str, object]) -> None:
         processed_ms = message.get("audioProcessedMs")
         if (
             isinstance(processed_ms, bool)
@@ -652,7 +653,7 @@ class SpeechStream(stt.RecognizeStream):
         self._last_audio_processed_ms = float(processed_ms)
         self._pending_usage_seconds += delta_seconds
 
-    def _speech_start(self, message: dict[str, Any]) -> None:
+    def _speech_start(self, message: dict[str, object]) -> None:
         turn_id = self._required_turn_id(message, event="speechStart")
         if turn_id in self._completed_turn_ids:
             return
@@ -661,7 +662,7 @@ class SpeechStream(stt.RecognizeStream):
         self._provider_active_turn_id = turn_id
         self._drain_turns()
 
-    def _transcript(self, message: dict[str, Any]) -> None:
+    def _transcript(self, message: dict[str, object]) -> None:
         text = message.get("transcript")
         if not isinstance(text, str):
             raise _protocol_error("transcript event has invalid text")
@@ -676,7 +677,7 @@ class SpeechStream(stt.RecognizeStream):
         turn.latest_interim = text
         self._drain_turns()
 
-    def _speech_end(self, message: dict[str, Any]) -> None:
+    def _speech_end(self, message: dict[str, object]) -> None:
         turn_id = self._required_turn_id(message, event="speechEnd")
         if turn_id in self._completed_turn_ids:
             return
@@ -687,7 +688,7 @@ class SpeechStream(stt.RecognizeStream):
         self._capture_turn_usage(turn)
         self._drain_turns()
 
-    def _speech_complete(self, message: dict[str, Any]) -> None:
+    def _speech_complete(self, message: dict[str, object]) -> None:
         turn_id = self._required_turn_id(message, event="speechComplete")
         if turn_id in self._completed_turn_ids:
             return
@@ -775,7 +776,7 @@ class SpeechStream(stt.RecognizeStream):
             turn.usage_seconds = 0.0
         self._emit_usage(duration)
 
-    def _transcript_turn_id(self, message: dict[str, Any]) -> str:
+    def _transcript_turn_id(self, message: dict[str, object]) -> str:
         value = message.get("turnId")
         if value is not None:
             return _normalize_turn_id(value, event="transcript")
@@ -784,7 +785,7 @@ class SpeechStream(stt.RecognizeStream):
             return self._provider_active_turn_id
         raise _protocol_error("transcript event is missing turnId outside an active turn")
 
-    def _required_turn_id(self, message: dict[str, Any], *, event: str) -> str:
+    def _required_turn_id(self, message: dict[str, object], *, event: str) -> str:
         value = message.get("turnId")
         if value is None:
             raise _protocol_error(f"{event} event is missing turnId")

@@ -61,9 +61,6 @@ _AVATAR_AGENT_NAME = "spatius-avatar-agent"
 _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE = "livekit_agent_identity"
 _RPC_PLAYBACK_STARTED = "lk.playback_started"
 _RPC_PLAYBACK_FINISHED = "lk.playback_finished"
-# fall back to finishing the segment locally if the worker never confirms an
-# interrupt, so VoiceSession.wait_for_playout() cannot hang
-_CLEAR_BUFFER_TIMEOUT = 2.0
 
 
 class SpatiusException(Exception):
@@ -157,7 +154,6 @@ class AvatarSession(BaseAvatarSession):
         self._forward_atask: asyncio.Task[None] | None = None
         self._interrupt_atask: asyncio.Task[None] | None = None
         self._aclose_atask: asyncio.Task[None] | None = None
-        self._clear_buffer_timer: asyncio.TimerHandle | None = None
         self._closed = False
 
     @property
@@ -268,7 +264,7 @@ class AvatarSession(BaseAvatarSession):
 
             self._audio = QueueAudioOutput(sample_rate=sample_rate, wait_playback_start=True)
             await self._audio.start()
-            self._audio.on("clear_buffer", self._on_clear_buffer)  # type: ignore[arg-type]
+            self._audio.on("clear_buffer", self._on_clear_buffer)
 
             room.local_participant.register_rpc_method(
                 _RPC_PLAYBACK_STARTED, self._on_playback_started_rpc
@@ -343,7 +339,6 @@ class AvatarSession(BaseAvatarSession):
         )
         # forward every notification to the base AudioOutput, which does the 1:1
         # segment accounting and ignores extras on its own
-        self._cancel_clear_buffer_timeout()
         if self._audio is not None:
             self._audio.notify_playback_finished(
                 playback_position=max(0.0, playback_position),
@@ -364,34 +359,10 @@ class AvatarSession(BaseAvatarSession):
         return False
 
     def _on_clear_buffer(self) -> None:
-        # the framework signals an interruption by clearing the output buffer:
-        # interrupt the avatar worker and wait for its playback-finished RPC,
-        # with a timeout fallback so wait_for_playout() cannot hang
-        if self._audio is None or self._audio._pending_playback_count == 0:
+        if self._closed or self._spatius_session is None:
             return
-
-        if self._spatius_session is not None and (
-            self._interrupt_atask is None or self._interrupt_atask.done()
-        ):
+        if self._interrupt_atask is None or self._interrupt_atask.done():
             self._interrupt_atask = asyncio.create_task(self._interrupt())
-
-        self._cancel_clear_buffer_timeout()
-        self._clear_buffer_timer = asyncio.get_event_loop().call_later(
-            _CLEAR_BUFFER_TIMEOUT, self._on_clear_buffer_timeout
-        )
-
-    def _on_clear_buffer_timeout(self) -> None:
-        self._clear_buffer_timer = None
-        if self._audio is None or self._audio._pending_playback_count == 0:
-            return
-        logger.warning("no Spatius playback-finished RPC after interrupt; marking playout done")
-        self._audio.notify_playback_finished(playback_position=0.0, interrupted=True)
-        self._audio._reset_playback_count()
-
-    def _cancel_clear_buffer_timeout(self) -> None:
-        if self._clear_buffer_timer is not None:
-            self._clear_buffer_timer.cancel()
-            self._clear_buffer_timer = None
 
     async def _interrupt(self) -> None:
         if self._spatius_session is None:
@@ -451,7 +422,6 @@ class AvatarSession(BaseAvatarSession):
         if self._agent_session is not None:
             self._agent_session.off("close", self._on_session_close)
 
-        self._cancel_clear_buffer_timeout()
         if self._interrupt_atask is not None:
             await utils.aio.cancel_and_wait(self._interrupt_atask)
             self._interrupt_atask = None
@@ -459,11 +429,7 @@ class AvatarSession(BaseAvatarSession):
             await utils.aio.cancel_and_wait(self._forward_atask)
             self._forward_atask = None
 
-        # release any segment still awaiting a playback-finished RPC so that
-        # VoiceSession.wait_for_playout() cannot hang during teardown
         if self._audio is not None:
-            for _ in range(self._audio._pending_playback_count):
-                self._audio.notify_playback_finished(playback_position=0.0, interrupted=True)
             await self._audio.aclose()
             self._audio = None
 

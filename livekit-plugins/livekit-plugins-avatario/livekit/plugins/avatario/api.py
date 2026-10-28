@@ -120,7 +120,7 @@ class AvatarioAPI:
             raise RuntimeError("Session not initialized. Use 'async with AvatarioAPI(...)'.")
         last_exc: Exception | None = None
         async with self._conn_options.total_deadline():
-            for i in range(self._conn_options.max_retry):
+            for i in range(self._conn_options.max_retry + 1):
                 try:
                     async with http_context.request(
                         self._session,
@@ -154,7 +154,7 @@ class AvatarioAPI:
                     last_exc = e
                     logger.exception("failed to call Avatario API")
 
-                if i < self._conn_options.max_retry - 1:
+                if i < self._conn_options.max_retry:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
         if isinstance(last_exc, APIStatusError):

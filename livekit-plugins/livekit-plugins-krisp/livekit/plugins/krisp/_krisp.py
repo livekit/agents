@@ -15,7 +15,7 @@
 """License-mode Krisp internals.
 
 This module is private to the plugin. It wraps the public ``krisp_audio``
-wheel and exposes a :class:`_KrispLicenseFrameProcessor` that
+wheel and exposes a :class:`KrispLicenseFrameProcessor` that
 :class:`KrispVivaFilterFrameProcessor` instantiates when the user picks
 :class:`KrispLicenseAuthProvider`.
 """
@@ -218,7 +218,7 @@ class _KrispLicenseSDKManager:
         logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
 
 
-class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
+class KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     """License-mode FrameProcessor wrapping ``krisp_audio``.
 
     Internal implementation detail — users construct
@@ -430,7 +430,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 # Silently ignore errors during shutdown
                 pass
 
-    def __enter__(self) -> _KrispLicenseFrameProcessor:
+    def __enter__(self) -> KrispLicenseFrameProcessor:
         return self
 
     def __exit__(

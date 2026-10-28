@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
@@ -14,6 +15,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIStatusError
 from livekit.agents.inference import AvatarSession, avatar as avatar_mod
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 
 pytestmark = pytest.mark.unit
 
@@ -91,11 +93,20 @@ class _Room:
         pass
 
 
+class _AudioSink:
+    def __init__(self, room: object, *, sample_rate: int | None = None, **kwargs: object) -> None:
+        self.sample_rate = sample_rate
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class _Output:
     def __init__(self) -> None:
-        self.audio_tails: list[Any] = []
+        self.audio_tails: list[_AudioSink] = []
 
-    def replace_audio_tail(self, sink: Any) -> None:
+    def replace_audio_tail(self, sink: _AudioSink) -> None:
         self.audio_tails.append(sink)
 
 
@@ -125,7 +136,8 @@ async def _start(avatar: AvatarSession, session: _VoiceSession | None = None) ->
 @pytest.fixture(autouse=True)
 def _audio_sink(monkeypatch: pytest.MonkeyPatch) -> None:
     """The avatar's audio sink is the room's; these tests own the gateway, not the room."""
-    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", lambda room, **kwargs: kwargs)
+    monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _AudioSink)
+    monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", AsyncMock())
 
 
 async def test_a_second_start_while_the_first_creates_is_refused() -> None:
@@ -153,10 +165,11 @@ async def test_aclose_terminates_the_provider_session() -> None:
         avatar = _avatar(base_url)
         session = _VoiceSession()
         await _start(avatar, session)
-        assert session.output.audio_tails[0]["sample_rate"] == 24000
+        assert session.output.audio_tails[0].sample_rate == 24000
         assert avatar.provider_session_id == "ls_1"
 
         await avatar.aclose()
+        assert session.output.audio_tails[0].closed
 
     assert gateway.terminates == [
         {"provider": "lemonslice", "provider_session_id": "ls_1", "terminate_token": "tt_1"}

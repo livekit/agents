@@ -44,7 +44,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, to_deepgram_url
 from .log import logger
 from .models import (
     STREAM_RESPONSE,
@@ -278,7 +278,7 @@ class STT(stt.STT):
             async with utils.http_context.request(
                 self._ensure_session(),
                 "POST",
-                url=_to_deepgram_url(
+                url=to_deepgram_url(
                     recognize_config,
                     self._opts.endpoint_url,
                     websocket=False,
@@ -445,7 +445,7 @@ class STT(stt.STT):
         merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
         self._opts.keyterm = merged
         for stream in self._streams:
-            stream._update_session_keyterms(merged)
+            stream.update_session_keyterms(merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -589,7 +589,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._reconnect_event.set()
 
-    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+    def update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Apply session keyterms at the next safe speech boundary."""
         if self._speaking:
             self._pending_keyterm = keyterms
         else:
@@ -795,7 +796,7 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await utils.http_context.ws_connect(
                 self._session,
-                _to_deepgram_url(
+                to_deepgram_url(
                     live_config,
                     base_url=self._opts.endpoint_url,
                     websocket=True,
@@ -824,7 +825,9 @@ class SpeechStream(stt.SpeechStream):
             ) from None
 
         ws_headers = {
-            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            k: v
+            for k, v in utils.http_context.websocket_headers(ws).items()
+            if k.startswith("dg-") or k == "Date"
         }
         logger.debug(
             "Established new Deepgram STT WebSocket connection:",

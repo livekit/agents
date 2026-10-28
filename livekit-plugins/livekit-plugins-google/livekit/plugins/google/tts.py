@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Protocol, cast
 
 import google.auth
 import google.auth.credentials
@@ -32,7 +32,6 @@ from google.cloud.texttospeech_v1.types import (
 )
 from livekit.agents import (
     APIConnectOptions,
-    APIStatusError,
     APITimeoutError,
     LanguageCode,
     tokenize,
@@ -44,6 +43,28 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import GeminiTTSModels, Gender, SpeechLanguages
+from .utils import ServiceAccountClient, api_status_error, auth
+
+
+class TextToSpeechClient(Protocol):
+    async def synthesize_speech(
+        self,
+        *,
+        input: texttospeech.SynthesisInput,
+        voice: texttospeech.VoiceSelectionParams,
+        audio_config: texttospeech.AudioConfig,
+        timeout: None,
+        retry: None,
+    ) -> SynthesizeSpeechResponse: ...
+
+    async def streaming_synthesize(
+        self,
+        requests: AsyncIterator[texttospeech.StreamingSynthesizeRequest],
+        *,
+        timeout: None,
+        retry: None,
+    ) -> AsyncIterable[texttospeech.StreamingSynthesizeResponse]: ...
+
 
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
@@ -264,12 +285,16 @@ class TTS(tts.TTS):
                     client_options=ClientOptions(api_endpoint=api_endpoint),
                 )
             elif self._credentials_info:
-                self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_info(
+                factory = cast(
+                    ServiceAccountClient[texttospeech.TextToSpeechAsyncClient],
+                    texttospeech.TextToSpeechAsyncClient,
+                )
+                self._client = factory.from_service_account_info(
                     self._credentials_info, client_options=ClientOptions(api_endpoint=api_endpoint)
                 )
 
             elif self._credentials_file:
-                credentials, _ = google.auth.load_credentials_from_file(  # type: ignore[no-untyped-call]
+                credentials, _ = auth.load_credentials_from_file(
                     self._credentials_file,
                     scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
@@ -287,14 +312,25 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            options=replace(self._opts),
+            client_factory=self._ensure_client,
+        )
         self._streams.add(stream)
         return stream
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=replace(self._opts),
+            client_factory=self._ensure_client,
+        )
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
@@ -303,10 +339,18 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        client_factory: Callable[[], texttospeech.TextToSpeechAsyncClient],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = options
+        self._client_factory = client_factory
 
     def _build_ssml(self) -> str:
         ssml = "<speak>"
@@ -332,7 +376,9 @@ class ChunkedStream(tts.ChunkedStream):
             if self._opts.prompt is not None:
                 tts_input.prompt = self._opts.prompt
 
-            response: SynthesizeSpeechResponse = await self._tts._ensure_client().synthesize_speech(
+            response: SynthesizeSpeechResponse = await cast(
+                TextToSpeechClient, self._client_factory()
+            ).synthesize_speech(
                 input=tts_input,
                 voice=self._opts.voice,
                 audio_config=texttospeech.AudioConfig(
@@ -358,14 +404,21 @@ class ChunkedStream(tts.ChunkedStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
+            raise api_status_error(e) from e
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        client_factory: Callable[[], texttospeech.TextToSpeechAsyncClient],
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = options
+        self._client_factory = client_factory
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
@@ -404,7 +457,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         input_stream = self._opts.tokenizer.stream()
                         segments_ch.send_nowait(input_stream)
                     input_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if input_stream:
                         input_stream.end_input()
                     input_stream = None
@@ -430,31 +483,26 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter: tts.AudioEmitter,
         streaming_config: texttospeech.StreamingSynthesizeConfig,
     ) -> None:
-        @utils.log_exceptions(logger=logger)
         async def input_generator() -> AsyncGenerator[
             texttospeech.StreamingSynthesizeRequest, None
         ]:
-            try:
-                yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
+            yield texttospeech.StreamingSynthesizeRequest(streaming_config=streaming_config)
 
-                is_first_input = True
-                async for input in input_stream:
-                    self.mark_started()
-                    # prompt is only supported in the first input chunk (for Gemini TTS)
-                    synthesis_input = texttospeech.StreamingSynthesisInput(
-                        markup=input.token if self._opts.use_markup else None,
-                        text=None if self._opts.use_markup else input.token,
-                        prompt=self._opts.prompt if is_first_input else None,
-                    )
-                    is_first_input = False
-                    yield texttospeech.StreamingSynthesizeRequest(input=synthesis_input)
-
-            except Exception:
-                logger.exception("an error occurred while streaming input to google TTS")
+            is_first_input = True
+            async for input in input_stream:
+                self.mark_started()
+                # prompt is only supported in the first input chunk (for Gemini TTS)
+                synthesis_input = texttospeech.StreamingSynthesisInput(
+                    markup=input.token if self._opts.use_markup else None,
+                    text=None if self._opts.use_markup else input.token,
+                    prompt=self._opts.prompt if is_first_input else None,
+                )
+                is_first_input = False
+                yield texttospeech.StreamingSynthesizeRequest(input=synthesis_input)
 
         input_gen = input_generator()
         try:
-            stream = await self._tts._ensure_client().streaming_synthesize(
+            stream = await cast(TextToSpeechClient, self._client_factory()).streaming_synthesize(
                 input_gen, timeout=None, retry=None
             )
             output_emitter.start_segment(segment_id=utils.shortuuid())
@@ -467,7 +515,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except DeadlineExceeded:
             raise APITimeoutError() from None
         except GoogleAPICallError as e:
-            raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
+            raise api_status_error(e) from e
         finally:
             # the transport may still be parked inside input_gen; closing it then raises
             # RuntimeError and would mask the real error

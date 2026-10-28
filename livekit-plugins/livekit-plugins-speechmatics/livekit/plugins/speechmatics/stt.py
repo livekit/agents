@@ -469,7 +469,7 @@ class STT(stt.STT):
         """
 
         for stream in self._streams:
-            stream._finalize()
+            stream.finalize()
 
     async def get_speaker_ids(
         self,
@@ -484,7 +484,7 @@ class STT(stt.STT):
             list[SpeakerIdentifier]: List of speakers in the session.
         """
 
-        results = [await stream._get_speaker_ids() for stream in self._streams]
+        results = [await stream.get_speaker_ids() for stream in self._streams]
         if len(results) == 1:
             return results[0]
         return results
@@ -562,13 +562,13 @@ class SpeechStream(stt.RecognizeStream):
         info = self._client.session_info
         return info.session_id
 
-    def _finalize(self) -> None:
+    def finalize(self) -> None:
         """End the current turn when external endpointing controls this stream."""
         if self._client is not None and self._client.is_connected:
             if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
                 self._client.finalize()
 
-    async def _get_speaker_ids(self) -> list[SpeakerIdentifier]:
+    async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
         """Request the current session's speaker identifiers."""
         if self._client is None or not self._client.is_connected:
             logger.warning(f"Not connected in stream {self._id}")
@@ -642,70 +642,43 @@ class SpeechStream(stt.RecognizeStream):
             # The inherited SDK emitter types RT events, while Agent STT adds its own enum.
             self._client.on(event, add_message)  # type: ignore[arg-type]
 
-        # Connect to the service. A rejected session (e.g. invalid config) surfaces as an
-        # APIError so it reaches the caller instead of dying in a log; transient transport
-        # failures surface as a (retryable) APIConnectionError.
+        message_task: asyncio.Task[None] | None = None
         try:
-            await self._client.connect()
+            async with self._client:
+                logger.debug("Connected to Speechmatics STT service")
+                if (
+                    self._vad is not None
+                    and self._turn_detection_mode == TurnDetectionMode.EXTERNAL
+                ):
+                    self._vad_stream = self._vad.stream()
+
+                audio_task = asyncio.create_task(self._process_audio())
+                message_task = asyncio.create_task(self._process_messages())
+                self._tasks = [audio_task, message_task]
+                vad_task: asyncio.Task[None] | None = None
+                if self._vad_stream is not None:
+                    vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
+                    self._tasks.append(vad_task)
+
+                try:
+                    done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()
+                finally:
+                    await utils.aio.cancel_and_wait(audio_task)
+                    if self._vad_stream is not None:
+                        await self._vad_stream.aclose()
+                        self._vad_stream = None
+                    if vad_task is not None:
+                        await utils.aio.cancel_and_wait(vad_task)
+                # SDK exit flushes final messages while the receiver is still running.
         except (TranscriptionError, SessionError) as e:
             raise APIError(f"Speechmatics rejected the session: {e}", retryable=False) from e
         except (SMConnectionError, SMTimeoutError, TransportError) as e:
             raise APIConnectionError(f"failed to connect to Speechmatics: {e}") from e
-        logger.debug("Connected to Speechmatics STT service")
-
-        # Open external VAD stream (if provided) before tasks start pushing frames.
-        # Only in EXTERNAL mode: the VAD exists solely to drive finalize(), and in VAD
-        # mode the server endpoints itself, so finalizing here would double-endpoint.
-        if self._vad is not None and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
-            self._vad_stream = self._vad.stream()
-
-        # Audio and messaging tasks
-        audio_task = asyncio.create_task(self._process_audio())
-        message_task = asyncio.create_task(self._process_messages())
-
-        # Tasks
-        self._tasks = [audio_task, message_task]
-
-        # Optional VAD task: calls `client.finalize()` on end of speech
-        vad_task: asyncio.Task[None] | None = None
-        if self._vad_stream is not None:
-            vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
-            self._tasks.append(vad_task)
-
-        # Wait for tasks to complete
-        try:
-            done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
-
-        # Disconnect the client
         finally:
-            # Cancel audio first — stops sending audio to the STT engine
-            audio_task.cancel()
-            try:
-                await audio_task
-            except asyncio.CancelledError:
-                pass
-
-            # Close the VAD stream so its task drains and exits
-            if self._vad_stream is not None:
-                await self._vad_stream.aclose()
-                self._vad_stream = None
-
-            if vad_task is not None:
-                await utils.aio.cancel_and_wait(vad_task)
-
-            # Disconnect flushes final messages from the STT engine
-            await self._client.disconnect()
-
-            # Cancel message task after disconnect — final messages have been processed
-            message_task.cancel()
-            try:
-                await message_task
-            except asyncio.CancelledError:
-                pass
-
-            # Remove from active streams so stale streams aren't iterated
+            if message_task is not None:
+                await utils.aio.cancel_and_wait(message_task)
             if self in self._streams:
                 self._streams.remove(self)
 

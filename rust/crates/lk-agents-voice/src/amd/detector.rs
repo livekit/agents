@@ -37,6 +37,7 @@ const TAP: &str = "amd";
 
 fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
     lk_agents_abi::ToolSpec {
+        provider_tool: None,
         name: SAVE_PREDICTION_TOOL.to_owned(),
         description: "Save the prediction to the verdict.".to_owned(),
         json_schema: serde_json::json!({
@@ -55,6 +56,7 @@ fn save_prediction_spec() -> lk_agents_abi::ToolSpec {
 
 fn postpone_termination_spec() -> lk_agents_abi::ToolSpec {
     lk_agents_abi::ToolSpec {
+        provider_tool: None,
         name: POSTPONE_TERMINATION_TOOL.to_owned(),
         description: "Postpone the termination of the classification task.\n\
             Use when the transcript is ambiguous and more audio is expected.\n\n\

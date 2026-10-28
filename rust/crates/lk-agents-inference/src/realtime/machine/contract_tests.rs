@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod provider_tools;
 mod server_items;
 mod review_fixes;
 use crate::realtime::dialect::OPENAI;

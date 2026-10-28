@@ -324,7 +324,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 },
                 conn_options=self._conn_options,
             )
-            self._request_id = ws._response.headers.get(REQUEST_ID_HEADER) or ""
+            self._request_id = utils.http_context.websocket_headers(ws).get(REQUEST_ID_HEADER) or ""
             logger.debug(
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": self._request_id},

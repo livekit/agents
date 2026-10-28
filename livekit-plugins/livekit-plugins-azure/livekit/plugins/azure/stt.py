@@ -17,9 +17,10 @@ import contextlib
 import os
 import time
 import weakref
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, cast
 
 import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit import rtc
@@ -38,6 +39,14 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
+
+
+class _EventSignal(Protocol):
+    def connect(self, callback: Callable[..., None]) -> None: ...
+
+
+def _connect_signal(signal: speechsdk.EventSignal, callback: Callable[..., None]) -> None:
+    cast(_EventSignal, signal).connect(callback)
 
 
 @dataclass
@@ -268,13 +277,13 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
             self._recognizer = _create_speech_recognizer(config=self._opts, stream=self._stream)
-            self._recognizer.recognizing.connect(self._on_recognizing)
-            self._recognizer.recognized.connect(self._on_recognized)
-            self._recognizer.speech_start_detected.connect(self._on_speech_start)
-            self._recognizer.speech_end_detected.connect(self._on_speech_end)
-            self._recognizer.session_started.connect(self._on_session_started)
-            self._recognizer.session_stopped.connect(self._on_session_stopped)
-            self._recognizer.canceled.connect(self._on_canceled)
+            _connect_signal(self._recognizer.recognizing, self._on_recognizing)
+            _connect_signal(self._recognizer.recognized, self._on_recognized)
+            _connect_signal(self._recognizer.speech_start_detected, self._on_speech_start)
+            _connect_signal(self._recognizer.speech_end_detected, self._on_speech_end)
+            _connect_signal(self._recognizer.session_started, self._on_session_started)
+            _connect_signal(self._recognizer.session_stopped, self._on_session_stopped)
+            _connect_signal(self._recognizer.canceled, self._on_canceled)
             self._recognizer.start_continuous_recognition()
 
             try:
@@ -288,7 +297,7 @@ class SpeechStream(stt.SpeechStream):
                             self._audio_duration += input.duration
                             self._maybe_emit_recognition_usage()
                             self._stream.write(input.data.tobytes())
-                        elif isinstance(input, self.Flush):
+                        else:
                             self._emit_recognition_usage()
                     self._emit_recognition_usage()
 

@@ -193,7 +193,9 @@ impl Run {
             },
             match &console {
                 Some((io, _)) => Some(io.as_audio_output()),
-                None if setup.avatar => avatar_sink.as_ref().map(|sink| sink.as_output()),
+                None if setup.avatar => avatar_sink
+                    .as_ref()
+                    .map(|sink| sink.clone() as Arc<dyn lk_agents_abi::voice::io::AudioOutput>),
                 None => legs.is_none().then(|| {
                     fakes::FakeAudioOutput::new(
                         registry.clone(),
@@ -547,6 +549,7 @@ pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
     tools
         .iter()
         .map(|name| lk_agents_abi::ToolSpec {
+            provider_tool: None,
             name: name.clone(),
             description: format!("fixture tool {name}"),
             // The shapes `ToolArgs` draws: a string first, which an `InputRequired(tool=)`

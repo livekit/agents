@@ -23,7 +23,7 @@ from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import SpeechStreamAudioDelta
 
-from ._http import request_timeout_ms
+from ._http import close_client, request_timeout_ms
 from .models import TTSModels, TTSVoices
 
 
@@ -97,11 +97,7 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         if self._owns_client:
-            try:
-                await self._client.__aexit__(None, None, None)
-            finally:
-                # Mistral creates both transports; this plugin never uses the sync one.
-                self._client.__exit__(None, None, None)
+            await close_client(self._client)
 
     @property
     def model(self) -> str:
@@ -144,17 +140,31 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            client=self._client,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
     """ChunkedStream for MistralAI TTS. Sends the full text to the API and
     returns the synthesized audio as a single chunk."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        client: Mistral,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._client = client
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         timeout_ms = request_timeout_ms(self._conn_options)
@@ -166,7 +176,7 @@ class ChunkedStream(tts.ChunkedStream):
                 mime_type=f"audio/{self._opts.response_format}",
             )
             if self._opts.ref_audio is not None:
-                stream = await self._tts._client.audio.speech.complete_async(
+                stream = await self._client.audio.speech.complete_async(
                     model=self._opts.model,
                     input=self.input_text,
                     ref_audio=self._opts.ref_audio,
@@ -176,7 +186,7 @@ class ChunkedStream(tts.ChunkedStream):
                     stream=True,
                 )
             else:
-                stream = await self._tts._client.audio.speech.complete_async(
+                stream = await self._client.audio.speech.complete_async(
                     model=self._opts.model,
                     input=self.input_text,
                     voice_id=self._opts.voice or DEFAULT_VOICE,

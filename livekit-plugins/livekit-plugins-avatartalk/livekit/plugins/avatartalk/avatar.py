@@ -133,7 +133,8 @@ class AvatarSession(BaseAvatarSession):
         )
 
         await super().start(agent_session, room)
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity="listener",

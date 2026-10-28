@@ -26,7 +26,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -138,9 +138,6 @@ SUPPORTED_LANGUAGES = {
     "doi-IN",
     "auto",
 }
-
-
-_APPLIED_KEYS = TypeAdapter(list[str])
 
 
 @dataclass
@@ -705,17 +702,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         The server echoes each applied key as ``"<key>=<value>"``, optionally
         suffixed when the change is deferred to the next utterance boundary.
-        Returns ``None`` when ``applied`` is missing or not a list of strings, so
-        the caller can fall back instead of stalling on an unexpected shape.
+        Returns ``None`` when ``applied`` is absent, so the caller can accept
+        acknowledgements from servers that omit the optional key list.
         """
-        applied = data.applied
-        if not isinstance(applied, list):
+        if data.applied is None:
             return None
-        try:
-            applied_keys = _APPLIED_KEYS.validate_python(applied, strict=True)
-        except ValidationError:
-            return None
-        return any(entry.split("=", 1)[0].strip() == "endpointing" for entry in applied_keys)
+        return any(entry.split("=", 1)[0].strip() == "endpointing" for entry in data.applied)
 
     def _handle_config_updated(self, data: RealtimeMessage) -> None:
         if self._pending_endpointing is None:
@@ -1084,7 +1076,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             self._reset_utterance_state()
             self._utterance_in_progress = True
             utterance_idx = data.utterance_idx
-            self._utterance_idx = utterance_idx if isinstance(utterance_idx, int) else None
+            self._utterance_idx = utterance_idx
             self.send(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
@@ -1174,7 +1166,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         text = data.text
         # Whitespace carries no content, and emitting it would commit a user turn
         # with no words.
-        return isinstance(text, str) and bool(text.strip())
+        return text is not None and bool(text.strip())
 
     def _handle_speech_end(self) -> None:
         self._utterance_speech_end_audio_pos = self._audio_position
@@ -1253,7 +1245,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self, event_type: stt.SpeechEventType, data: RealtimeMessage
     ) -> bool:
         text = data.text
-        if not isinstance(text, str) or not text.strip():
+        if text is None or not text.strip():
             return False
 
         language = data.language or self._opts.language
@@ -1261,9 +1253,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         # score and stays in metadata. The endpoint sends no per-segment confidence
         # today, and an absent value falls back to 1.0 (as `_extract_confidence` in
         # stt.py does) so it isn't averaged downstream as "no confidence".
-        # bool is a subclass of int, so exclude it explicitly.
         confidence = data.confidence
-        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        if confidence is None:
             confidence = 1.0
 
         metadata: dict[str, object] = data.model_dump(
@@ -1279,9 +1270,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if event_type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             start_s = data.start_s
             end_s = data.end_s
-            if isinstance(start_s, (int, float)) and not isinstance(start_s, bool):
+            if start_s is not None:
                 start_time = max(float(start_s), 0.0)
-            if isinstance(end_s, (int, float)) and not isinstance(end_s, bool):
+            if end_s is not None:
                 end_time = max(float(end_s), 0.0)
         if (
             event_type == stt.SpeechEventType.FINAL_TRANSCRIPT
@@ -1317,11 +1308,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._capture_server_ids(data)
         self._flush_terminal_utterance()
         audio_duration = data.audio_duration_s
-        if (
-            isinstance(audio_duration, (int, float))
-            and not isinstance(audio_duration, bool)
-            and not self._server_audio_duration_reported
-        ):
+        if audio_duration is not None and not self._server_audio_duration_reported:
             # Report whatever audio is still buffered locally, then top up to Sarvam's
             # authoritative total so the session bills exactly once for it.
             self._audio_duration_collector.flush()
@@ -1350,9 +1337,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         code = data.code if "code" in data.model_fields_set else "unknown"
         error_message = data.message if "message" in data.model_fields_set else code
-        status_code = data.status_code
-        if not isinstance(status_code, int):
-            status_code = -1
+        status_code = data.status_code if data.status_code is not None else -1
         self._logger.error(
             "Fatal Sarvam realtime STT error",
             extra={

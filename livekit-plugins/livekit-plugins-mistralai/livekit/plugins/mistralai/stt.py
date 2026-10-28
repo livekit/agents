@@ -38,7 +38,7 @@ from mistralai.client.models import (
 )
 from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
 
-from ._http import request_timeout_ms
+from ._http import close_client, request_timeout_ms
 from .log import logger
 from .models import STTModels
 
@@ -120,8 +120,9 @@ class STT(stt.STT):
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
+        self._owns_client = client is None
         self._client = client or Mistral(api_key=mistral_api_key)
-        self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
+        self._reconnect_events: weakref.WeakSet[asyncio.Event] = weakref.WeakSet()
         self._pool = utils.ConnectionPool[RealtimeConnection](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -147,16 +148,17 @@ class STT(stt.STT):
 
     async def _close_ws(self, conn: RealtimeConnection) -> None:
         await conn.close()
-        ws = conn._websocket
-        if ws.keepalive_task is not None:
-            ws.keepalive_task.cancel()
 
     def prewarm(self) -> None:
         if _is_realtime(self._opts.model):
             self._pool.prewarm()
 
     async def aclose(self) -> None:
-        await self._pool.aclose()
+        try:
+            await self._pool.aclose()
+        finally:
+            if self._owns_client:
+                await close_client(self._client)
 
     @property
     def model(self) -> str:
@@ -190,8 +192,8 @@ class STT(stt.STT):
         if is_given(target_streaming_delay_ms):
             self._opts.target_streaming_delay_ms = target_streaming_delay_ms
             self._pool.invalidate()
-            for stream in self._streams:
-                stream._reconnect_event.set()
+            for event in self._reconnect_events:
+                event.set()
 
     async def _recognize_impl(
         self,
@@ -260,14 +262,16 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        reconnect_event = asyncio.Event()
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
             conn_options=conn_options,
             language=language,
             vad_instance=self._vad,
+            reconnect_event=reconnect_event,
         )
-        self._streams.add(stream)
+        self._reconnect_events.add(reconnect_event)
         return stream
 
 
@@ -279,6 +283,7 @@ class SpeechStream(stt.RecognizeStream):
         *,
         stt: STT,
         pool: utils.ConnectionPool[RealtimeConnection],
+        reconnect_event: asyncio.Event,
         conn_options: APIConnectOptions,
         language: NotGivenOr[str] = NOT_GIVEN,
         vad_instance: VAD | None = None,
@@ -289,9 +294,8 @@ class SpeechStream(stt.RecognizeStream):
             sample_rate=SAMPLE_RATE,
         )
         self._pool = pool
-        self._opts = stt._opts
         self._vad = vad_instance
-        self._reconnect_event = asyncio.Event()
+        self._reconnect_event = reconnect_event
         self._request_id = ""
         self._audio_duration = 0.0
         self._speaking = False

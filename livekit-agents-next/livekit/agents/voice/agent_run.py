@@ -258,6 +258,7 @@ async def start_run(
                 delegated=hooks.delegated if hooks is not None else False,
                 conn_options=conn_options,
                 host_context=(asyncio.get_running_loop(), captured),
+                tools_host=run.tools.flatten(),
             )
         )
     except BaseException:
@@ -326,7 +327,7 @@ def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
     from .._core_view import tool_specs
 
-    specs = {spec["name"]: spec for spec in tool_specs(tools.flatten())}
+    specs = {spec["name"]: spec for spec in tool_specs(list(tools.function_tools.values()))}
     infos = []
     for name, tool in tools.function_tools.items():
         approval: ReadBack | None = None

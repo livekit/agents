@@ -46,7 +46,7 @@ class _ErrorDetail(BaseModel):
     code: str | int | None = None
 
 
-class _ErrorResponse(BaseModel):
+class ErrorResponse(BaseModel):
     error: _ErrorDetail | None = None
 
 
@@ -182,7 +182,7 @@ def speech_payload(
 def raise_http_error(status: int, body: str) -> None:
     """Raise ``APIStatusError`` from a Vakyam HTTP error envelope."""
     try:
-        parsed = _ErrorResponse.model_validate_json(body)
+        parsed = ErrorResponse.model_validate_json(body)
     except ValidationError:
         parsed = None
 
@@ -198,7 +198,7 @@ def raise_http_error(status: int, body: str) -> None:
     raise APIStatusError(message, status_code=status, body=safe_body)
 
 
-def raise_ws_error(data: _ErrorResponse) -> None:
+def raise_ws_error(data: ErrorResponse) -> None:
     """Raise ``APIStatusError`` from a Vakyam WebSocket ``error`` frame."""
     code = data.error.code if data.error is not None else None
     error_code = str(code) if code is not None else None

@@ -17,11 +17,12 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeAlias, cast
 
 import httpx2 as httpx
 
 import anthropic
+from anthropic.types.beta import BetaMessageParam, BetaRawMessageStreamEvent
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
@@ -30,12 +31,37 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
 
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
+
+_MessageEvent: TypeAlias = anthropic.types.RawMessageStreamEvent | BetaRawMessageStreamEvent
+_MessageStream: TypeAlias = (
+    anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]
+    | anthropic.AsyncStream[BetaRawMessageStreamEvent]
+)
+
+
+def _cache_last_block(message: anthropic.types.MessageParam) -> None:
+    content = message["content"]
+    if isinstance(content, str):
+        return
+    blocks = list(content)
+    if not blocks:
+        return
+    last = blocks[-1]
+    if isinstance(last, dict) and (
+        last["type"] == "text"
+        or last["type"] == "image"
+        or last["type"] == "tool_use"
+        or last["type"] == "tool_result"
+    ):
+        last["cache_control"] = CACHE_CONTROL_EPHEMERAL
+
 
 # Claude 4.6+ no longer supports prefilling (trailing assistant messages).
 _NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
@@ -169,7 +195,7 @@ class LLM(llm.LLM):
                 pool=conn_options.pool_timeout,
             ),
         )
-        extra = {}
+        extra: dict[str, Any] = {}
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
@@ -208,8 +234,10 @@ class LLM(llm.LLM):
 
             extra["tools"] = tool_schemas
 
-            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            if is_given(tool_choice):
+            tool_choice = (
+                tool_choice if not isinstance(tool_choice, NotGiven) else self._opts.tool_choice
+            )
+            if not isinstance(tool_choice, NotGiven):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if not isinstance(tool_choice, str):
                     anthropic_tool_choice = {
@@ -234,15 +262,13 @@ class LLM(llm.LLM):
 
         chat_ctx = chat_ctx.copy()
 
-        async def create_anthropic_stream() -> anthropic.AsyncStream[
-            anthropic.types.RawMessageStreamEvent
-        ]:
+        async def create_anthropic_stream() -> _MessageStream:
             # Claude 4.6+ does not support prefilling (trailing assistant messages).
             inject_trailing = _model_disables_prefill(self._opts.model)
             anthropic_ctx, extra_data = await chat_ctx.to_provider_format(
                 format="anthropic", inject_trailing_user_message=inject_trailing
             )
-            messages = cast(list[anthropic.types.MessageParam], anthropic_ctx)
+            messages = anthropic_ctx
             if extra_data.system_messages:
                 extra["system"] = [
                     anthropic.types.TextBlockParam(text=content, type="text")
@@ -259,22 +285,19 @@ class LLM(llm.LLM):
 
                 seen_assistant = False
                 for msg in reversed(messages):
-                    if (
-                        msg["role"] == "assistant"
-                        and (content := msg["content"])
-                        and not seen_assistant
-                    ):
-                        content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
+                    if msg["role"] == "assistant" and msg["content"] and not seen_assistant:
+                        _cache_last_block(msg)
                         seen_assistant = True
 
-                    elif msg["role"] == "user" and (content := msg["content"]) and seen_assistant:
-                        content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
+                    elif msg["role"] == "user" and msg["content"] and seen_assistant:
+                        _cache_last_block(msg)
                         break
 
+            stream: _MessageStream
             if beta_flag:
                 stream = await client.beta.messages.create(
                     betas=[beta_flag],
-                    messages=messages,  # type: ignore[arg-type]
+                    messages=cast(list[BetaMessageParam], messages),
                     model=self._opts.model,
                     stream=True,
                     **extra,
@@ -286,7 +309,7 @@ class LLM(llm.LLM):
                     stream=True,
                     **extra,
                 )
-            return cast(anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent], stream)
+            return stream
 
         return LLMStream(
             self,
@@ -302,9 +325,7 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        create_anthropic_stream: Callable[
-            [], Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]]
-        ],
+        create_anthropic_stream: Callable[[], Awaitable[_MessageStream]],
         chat_ctx: llm.ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
@@ -363,7 +384,7 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
-    def _parse_event(self, event: anthropic.types.RawMessageStreamEvent) -> llm.ChatChunk | None:
+    def _parse_event(self, event: _MessageEvent) -> llm.ChatChunk | None:
         if event.type == "message_start":
             self._request_id = event.message.id
             self._input_tokens = event.message.usage.input_tokens
@@ -384,13 +405,11 @@ class LLMStream(llm.LLMStream):
             if delta.type == "text_delta":
                 text = delta.text
 
-                if self._tools is not None:
-                    # anthropic may inject COC when using functions
-                    if text.startswith("<thinking>"):
-                        self._ignoring_cot = True
-                    elif self._ignoring_cot and "</thinking>" in text:
-                        text = text.split("</thinking>")[-1]
-                        self._ignoring_cot = False
+                if text.startswith("<thinking>"):
+                    self._ignoring_cot = True
+                elif self._ignoring_cot and "</thinking>" in text:
+                    text = text.split("</thinking>")[-1]
+                    self._ignoring_cot = False
 
                 if self._ignoring_cot:
                     return None

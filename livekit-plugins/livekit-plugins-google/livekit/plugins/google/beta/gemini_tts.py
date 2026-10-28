@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from google.genai import Client, types
@@ -18,7 +18,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from ..log import logger
-from ..utils import genai_http_options
+from ..utils import auth, genai_http_options
 
 GEMINI_TTS_MODELS = Literal[
     "gemini-2.5-flash-preview-tts",
@@ -160,9 +160,7 @@ class TTS(tts.TTS):
 
         if use_vertexai:
             if not gcp_project:
-                from google.auth._default_async import default_async
-
-                _, gcp_project = default_async(  # type: ignore
+                _, gcp_project = auth.default(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
             gemini_api_key = None  # VertexAI does not require an API key
@@ -224,7 +222,7 @@ class TTS(tts.TTS):
         # others a marker would have nowhere to go and would be read aloud
         def _provider_key(self) -> str:
             assert isinstance(self._tts, TTS)
-            return "gemini" if _styles_per_part(self._tts._opts.model) else ""
+            return "gemini" if _styles_per_part(self._tts.model) else ""
 
     @property
     def model(self) -> str:
@@ -240,7 +238,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=replace(self._opts),
+            client=self._client,
+        )
 
     def update_options(
         self,
@@ -299,9 +303,18 @@ def _speech_config(opts: _TTSOptions) -> types.SpeechConfig:
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        client: Client,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._options = options
+        self._client = client
 
     def _styled_parts(self) -> list[dict[str, Any]] | None:
         """Build one request part per delivery style, or ``None`` if none is carried.
@@ -321,7 +334,7 @@ class ChunkedStream(tts.ChunkedStream):
         its own, which travels as a plain part. Hence ``split_expr_markup``, not
         ``split_all_markup`` -- the latter would take the inline tags out too.
         """
-        opts = self._tts._opts
+        opts = self._options
         if not _styles_per_part(opts.model):
             return None
 
@@ -367,7 +380,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         http_options = genai_http_options(self._conn_options, None)
         try:
-            opts = self._tts._opts
+            opts = self._options
             config = types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
                 speech_config=_speech_config(opts),
@@ -389,8 +402,8 @@ class ChunkedStream(tts.ChunkedStream):
             if extra_body:
                 http_options.extra_body = extra_body
 
-            response = await self._tts._client.aio.models.generate_content_stream(
-                model=self._tts._opts.model,
+            response = await self._client.aio.models.generate_content_stream(
+                model=self._options.model,
                 contents=input_text,
                 config=config,
             )

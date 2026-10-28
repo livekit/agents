@@ -4,12 +4,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from livekit.agents import _core, llm
 
 if TYPE_CHECKING:
+    from anthropic.types import MessageParam as AnthropicMessage
+    from google.genai.types import ContentDict as GoogleMessage
+    from mistralai.client.models import InputEntriesTypedDict as MistralMessage
+    from openai.types.chat import ChatCompletionMessageParam as OpenAIMessage
+    from openai.types.responses import ResponseInputItemParam as OpenAIResponseItem
+    from types_aiobotocore_bedrock_runtime.type_defs import MessageTypeDef as BedrockMessage
+
     from .chat_context import ChatContext
+
+    ProviderMessages: TypeAlias = (
+        list[OpenAIMessage]
+        | list[OpenAIResponseItem]
+        | list[GoogleMessage]
+        | list[BedrockMessage]
+        | list[AnthropicMessage]
+        | list[MistralMessage]
+    )
     from .tool_context import ProviderTool, ToolContext
 
 __all__ = [
@@ -81,7 +97,10 @@ async def to_chat_ctx(
     inject_dummy_user_message: bool = True,
     inject_trailing_user_message: bool = False,
     thought_signatures: dict[str, bytes] | None = None,
-) -> tuple[list[dict], Any]:
+) -> tuple[
+    ProviderMessages,
+    GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
+]:
     from .._core_view import to_core_items
     from .chat_context import ImageContent
     from .utils import serialize_image
@@ -102,7 +121,7 @@ async def to_chat_ctx(
         thought_signatures=thought_signatures,
     )
     cls = _DATA.get(format)
-    return messages, cls(**data) if cls is not None else None
+    return cast("ProviderMessages", messages), cls(**data) if cls is not None else None
 
 
 def to_fnc_ctx(

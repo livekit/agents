@@ -19,10 +19,9 @@ import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import google.auth.credentials
-from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
@@ -31,13 +30,14 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import ChatModels
-from .utils import create_tools_config, genai_http_options, to_response_format
+from .utils import ResponseSchema, auth, create_tools_config, genai_http_options, to_response_format
 from .version import __version__
 
 
@@ -108,7 +108,7 @@ class _LLMOptions:
     top_k: NotGivenOr[float]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
-    thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
+    thinking_config: NotGivenOr[types.ThinkingConfig]
     retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
     http_options: NotGivenOr[types.HttpOptions]
@@ -207,7 +207,7 @@ class LLM(llm.LLM):
 
         if use_vertexai:
             if not gcp_project:
-                _, gcp_project = default_async(  # type: ignore
+                _, gcp_project = auth.default(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
             if not gcp_project or not gcp_location:
@@ -229,33 +229,18 @@ class LLM(llm.LLM):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        # Validate thinking_config
+        normalized_thinking: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
         if is_given(thinking_config):
-            _thinking_budget = None
-            _thinking_level = None
-            if isinstance(thinking_config, dict):
-                _thinking_budget = thinking_config.get("thinking_budget")
-                _thinking_level = thinking_config.get("thinking_level")
-            elif isinstance(thinking_config, types.ThinkingConfig):
-                _thinking_budget = thinking_config.thinking_budget
-                _thinking_level = thinking_config.thinking_level
-
-            if _thinking_budget is not None:
-                if not isinstance(_thinking_budget, int):
-                    raise ValueError("thinking_budget inside thinking_config must be an integer")
-
-            # gemma 4 toggles thinking on and off with nothing in between, and answers any other
-            # level with 400 INVALID_ARGUMENT
-            # https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api
+            normalized_thinking = types.ThinkingConfig.model_validate(thinking_config)
+            level = normalized_thinking.thinking_level
             if (
-                _thinking_level is not None
+                level is not None
                 and _is_gemma_4_model(model)
-                and _thinking_level.upper()
-                not in (types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH)
+                and level.upper() not in (types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH)
             ):
                 raise ValueError(
                     f"Model {model} only supports thinking_level 'minimal' (thinking off) "
-                    f"or 'high' (thinking on), got {_thinking_level!r}."
+                    f"or 'high' (thinking on), got {level!r}."
                 )
 
         self._opts = _LLMOptions(
@@ -270,7 +255,7 @@ class LLM(llm.LLM):
             top_k=top_k,
             presence_penalty=presence_penalty,
             frequency_penalty=frequency_penalty,
-            thinking_config=thinking_config,
+            thinking_config=normalized_thinking,
             retrieval_config=retrieval_config,
             automatic_function_calling_config=automatic_function_calling_config,
             http_options=http_options,
@@ -313,12 +298,10 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            types.SchemaUnion | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        response_format: NotGivenOr[ResponseSchema | type[llm_utils.ResponseFormatT]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra = {}
+        extra: dict[str, object] = {}
 
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
@@ -367,7 +350,7 @@ class LLM(llm.LLM):
             if tools_config:
                 extra["tools"] = tools_config
 
-        if is_given(response_format):
+        if not isinstance(response_format, NotGiven):
             extra["response_schema"] = to_response_format(response_format)
             extra["response_mime_type"] = "application/json"
 
@@ -390,18 +373,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.thinking_config):
             thinking_cfg = self._opts.thinking_config
 
-            # Extract the parameters
-            _budget = None
-            _level: str | types.ThinkingLevel | None = None
-            _include_thoughts: bool | None = None
-            if isinstance(thinking_cfg, dict):
-                _budget = thinking_cfg.get("thinking_budget")
-                _level = thinking_cfg.get("thinking_level")
-                _include_thoughts = thinking_cfg.get("include_thoughts")
-            elif isinstance(thinking_cfg, types.ThinkingConfig):
-                _budget = thinking_cfg.thinking_budget
-                _level = thinking_cfg.thinking_level
-                _include_thoughts = thinking_cfg.include_thoughts
+            _budget = thinking_cfg.thinking_budget
+            _level = thinking_cfg.thinking_level
+            _include_thoughts = thinking_cfg.include_thoughts
 
             if _supports_thinking_level(self._opts.model):
                 # Gemini 3 and Gemma 4 configure thinking with a level, not a token budget
@@ -459,6 +433,8 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            http_options=self._opts.http_options if is_given(self._opts.http_options) else None,
+            thought_signatures=self._thought_signatures,
         )
 
     async def aclose(self) -> None:
@@ -481,27 +457,28 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
-        extra_kwargs: dict[str, Any],
+        extra_kwargs: dict[str, object],
+        http_options: types.HttpOptions | None,
+        thought_signatures: dict[str, bytes],
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._client = client
         self._model = model
         self._llm: LLM = llm_v
         self._extra_kwargs = extra_kwargs
+        self._http_options = http_options
+        self._thought_signatures = thought_signatures
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
         retryable = True
         request_id = utils.shortuuid()
-        http_options = genai_http_options(
-            self._conn_options,
-            self._llm._opts.http_options if is_given(self._llm._opts.http_options) else None,
-        )
+        http_options = genai_http_options(self._conn_options, self._http_options)
 
         try:
             # Pass thought_signatures for Gemini 2.5+ multi-turn function calling
             thought_sigs = (
-                self._llm._thought_signatures if _requires_thought_signatures(self._model) else None
+                self._thought_signatures if _requires_thought_signatures(self._model) else None
             )
             turns_dict, extra_data = await self._chat_ctx.to_provider_format(
                 format="google", thought_signatures=thought_sigs
@@ -515,19 +492,14 @@ class LLMStream(llm.LLMStream):
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
             http_options.headers = headers
-            config = types.GenerateContentConfig(
-                system_instruction=(
-                    None
-                    if using_cache
-                    else (
-                        [types.Part(text=content) for content in extra_data.system_messages]
-                        if extra_data.system_messages
-                        else None
-                    )
-                ),
-                http_options=http_options,
-                **self._extra_kwargs,
+            config_values = dict(self._extra_kwargs)
+            config_values["system_instruction"] = (
+                None
+                if using_cache or not extra_data.system_messages
+                else [types.Part(text=text) for text in extra_data.system_messages]
             )
+            config_values["http_options"] = http_options
+            config = types.GenerateContentConfig.model_validate(config_values)
 
             stream = await self._client.aio.models.generate_content_stream(
                 model=self._model,
@@ -634,6 +606,10 @@ class LLMStream(llm.LLMStream):
 
     def _parse_part(self, id: str, part: types.Part) -> llm.ChatChunk | None:
         if part.function_call:
+            if not part.function_call.name:
+                raise APIConnectionError(
+                    "Gemini sent a function call without a name", retryable=False
+                )
             tool_call = llm.FunctionToolCall(
                 arguments=json.dumps(part.function_call.args),
                 name=part.function_call.name,
@@ -641,12 +617,8 @@ class LLMStream(llm.LLMStream):
             )
 
             # Store thought_signature for Gemini 2.5+ multi-turn function calling
-            if (
-                _requires_thought_signatures(self._model)
-                and hasattr(part, "thought_signature")
-                and part.thought_signature
-            ):
-                self._llm._thought_signatures[tool_call.call_id] = part.thought_signature
+            if _requires_thought_signatures(self._model) and part.thought_signature:
+                self._thought_signatures[tool_call.call_id] = part.thought_signature
 
             chat_chunk = llm.ChatChunk(
                 id=id,

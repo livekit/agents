@@ -276,7 +276,7 @@ SambaNovaChatModels = Literal[
 ]
 
 
-def _supports_reasoning_effort(model: ChatModels | str) -> bool:
+def supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
         "gpt-5.6-luna",
         "gpt-5.6-sol",

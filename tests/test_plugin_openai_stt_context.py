@@ -26,7 +26,10 @@ class _FakeMessage:
 
 
 class _FakeWebSocket:
-    def __init__(self) -> None:
+    def __init__(self, changed: asyncio.Event) -> None:
+        self.changed = changed
+        self.blocked = asyncio.Event()
+        self.closed_event = asyncio.Event()
         self.sent: list[dict[str, Any]] = []
         self.incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.fail_next = False
@@ -39,25 +42,40 @@ class _FakeWebSocket:
             raise ConnectionResetError("socket went away")
         if self.block_first is not None:
             blocked, self.block_first = self.block_first, None
+            self.blocked.set()
             await blocked.wait()
         self.sent.append(data)
+        self.changed.set()
 
     async def receive(self) -> object:
         return _FakeMessage(await self.incoming.get())
 
     async def close(self) -> None:
         self.closed = True
+        self.closed_event.set()
+        self.changed.set()
 
 
 class _FakeSession:
-    def __init__(self) -> None:
-        self.ws = _FakeWebSocket()
-        self.connects = 0
+    def __init__(self, setup: Callable[[_FakeWebSocket], None] | None = None) -> None:
+        self.changed = asyncio.Event()
+        self.opened: asyncio.Queue[_FakeWebSocket] = asyncio.Queue()
+        self.sockets: list[_FakeWebSocket] = []
+        self.setup = setup
         self.trace_configs: list[aiohttp.TraceConfig] = []
 
+    @property
+    def connects(self) -> int:
+        return len(self.sockets)
+
     async def ws_connect(self, url: str, **_kwargs: object) -> _FakeWebSocket:
-        self.connects += 1
-        return self.ws
+        ws = _FakeWebSocket(self.changed)
+        if self.setup is not None:
+            self.setup(ws)
+        self.sockets.append(ws)
+        self.opened.put_nowait(ws)
+        self.changed.set()
+        return ws
 
 
 def _offline_stt(**kwargs: Any) -> stt.STT:
@@ -230,17 +248,37 @@ def test_keyterms_capability_follows_the_model(model: str, supported: bool) -> N
     assert instance.capabilities.keyterms is supported
 
 
-async def _connected(stream: stt.SpeechStream) -> _FakeWebSocket:
-    for _ in range(200):
-        if stream._ws is not None:
-            return stream._ws  # type: ignore[return-value]
-        await asyncio.sleep(0.005)
-    raise AssertionError("the stream never opened a connection")
+async def _connected(
+    stream: stt.SpeechStream,
+    *,
+    after: _FakeWebSocket | None = None,
+) -> _FakeWebSocket:
+    session = stream._stt._session
+    assert isinstance(session, _FakeSession)
+    async with asyncio.timeout(3):
+        while True:
+            session.changed.clear()
+            ws = stream._ws
+            if (
+                isinstance(ws, _FakeWebSocket)
+                and ws is not after
+                and _of_type(ws, "session.update")
+            ):
+                return ws
+            await session.changed.wait()
+
+
+async def _closed(ws: _FakeWebSocket) -> None:
+    async with asyncio.timeout(3):
+        await ws.closed_event.wait()
 
 
 async def _settle(stream: stt.SpeechStream) -> None:
-    if stream._update_task is not None:
-        await asyncio.wait([stream._update_task])
+    # A completed update is the wire barrier, including any previous update it awaited.
+    while (task := stream._update_task) is not None:
+        await task
+        if stream._update_task is task:
+            return
 
 
 def _transcription_of(payload: dict[str, Any]) -> dict[str, Any]:
@@ -315,13 +353,17 @@ async def test_a_new_model_reconnects() -> None:
     # gateways route on the ?model= in the upgrade URL, so this one can't be a session.update
     instance = _offline_stt(model="gpt-live-transcribe")
     stream = instance.stream()
-    await _connected(stream)
+    old_ws = await _connected(stream)
 
     instance.update_options(model="gpt-4o-mini-transcribe", language="fr")
 
     assert stream._reconnect_event.is_set()
     # the transcripts of the rebuilt connection carry the new language, not the old one
     assert stream._language == "fr"
+    rebuilt = await _connected(stream, after=old_ws)
+    await _closed(old_ws)
+    assert _sent_transcription(rebuilt)["model"] == "gpt-4o-mini-transcribe"
+    assert _sent_transcription(rebuilt)["language"] == "fr"
 
     await stream.aclose()
 
@@ -345,12 +387,16 @@ async def test_clearing_the_language_reconnects() -> None:
     # the API rejects both an empty array and null for `languages`
     instance = _offline_stt(model="gpt-live-transcribe", language=["en", "fr"])
     stream = instance.stream()
-    await _connected(stream)
+    old_ws = await _connected(stream)
 
     instance.update_options(detect_language=True)
 
     assert instance._opts.languages == []
     assert stream._reconnect_event.is_set()
+    rebuilt = await _connected(stream, after=old_ws)
+    await _closed(old_ws)
+    assert "languages" not in _sent_transcription(rebuilt)
+    assert "language" not in _sent_transcription(rebuilt)
 
     await stream.aclose()
 
@@ -508,12 +554,13 @@ def _of_type(ws: _FakeWebSocket, type: str) -> list[dict[str, Any]]:
     return [payload for payload in ws.sent if payload.get("type") == type]
 
 
-async def _wait_for(what: str, ready: Callable[[], bool]) -> None:
-    for _ in range(200):
-        if ready():
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError(f"timed out waiting for {what}")
+async def _wait_for(what: str, ready: Callable[[], bool], changed: asyncio.Event) -> None:
+    async with asyncio.timeout(3):
+        while True:
+            changed.clear()
+            if ready():
+                return
+            await changed.wait()
 
 
 async def test_the_vad_stops_committing_once_the_server_endpoints() -> None:
@@ -528,21 +575,26 @@ async def test_the_vad_stops_committing_once_the_server_endpoints() -> None:
         async for ev in stream:
             if ev.type == SpeechEventType.END_OF_SPEECH:
                 ends += 1
+                ws.changed.set()
 
     collector = asyncio.create_task(collect())
 
     stream.push_frame(_silence())
-    await _wait_for("the first commit", lambda: len(_of_type(ws, "input_audio_buffer.commit")) == 1)
+    await _wait_for(
+        "the first commit", lambda: len(_of_type(ws, "input_audio_buffer.commit")) == 1, ws.changed
+    )
 
     instance.update_options(model="gpt-4o-mini-transcribe")
-    await _wait_for("the rebuilt connection", lambda: len(_of_type(ws, "session.update")) == 2)
-    assert "turn_detection" in _audio_input_of(_of_type(ws, "session.update")[-1])
+    rebuilt = await _connected(stream, after=ws)
+    await _closed(ws)
+    assert "turn_detection" in _audio_input_of(_of_type(rebuilt, "session.update")[-1])
 
     # the rebuilt connection has its own VAD stream, so the segment closes a second time
     stream.push_frame(_silence())
-    await _wait_for("the second segment", lambda: ends == 2)
-    await asyncio.sleep(0.05)  # a commit would follow the segment straight away
+    await _wait_for("the second segment", lambda: ends == 2, rebuilt.changed)
+    # The fake write completes synchronously: any VAD commit precedes the observed END event.
     assert len(_of_type(ws, "input_audio_buffer.commit")) == 1
+    assert _of_type(rebuilt, "input_audio_buffer.commit") == []
 
     await stream.aclose()
     await collector
@@ -550,19 +602,13 @@ async def test_the_vad_stops_committing_once_the_server_endpoints() -> None:
 
 async def test_an_update_during_connection_setup_is_not_lost() -> None:
     instance = _offline_stt(model="gpt-live-transcribe")
-    session = _FakeSession()
-    instance._session = session  # type: ignore[assignment]
     release = asyncio.Event()
-    session.ws.block_first = release  # hold the stream inside its setup send
-
+    session = _FakeSession(setup=lambda ws: setattr(ws, "block_first", release))
+    instance._session = session  # type: ignore[assignment]
     stream = instance.stream()
-    ws = session.ws
-    for _ in range(200):  # wait until the stream is suspended inside that send
-        if ws.block_first is None:
-            break
-        await asyncio.sleep(0.005)
-    else:
-        raise AssertionError("the setup send never started")
+    async with asyncio.timeout(3):
+        ws = await session.opened.get()
+        await ws.blocked.wait()
     assert ws.sent == []
 
     instance.update_options(keywords=["Acme Corp"])
@@ -578,16 +624,18 @@ async def test_an_update_during_connection_setup_is_not_lost() -> None:
 async def test_a_reused_connection_is_reconfigured() -> None:
     # the pool hands back sockets it configured earlier, so acquiring must re-send the config
     instance = _offline_stt(model="gpt-live-transcribe")
-    first = instance.stream()
-    ws = await _connected(first)
-    await first.aclose()
+    ws = await instance._pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    await ws.send_json(
+        stt._session_update(instance._opts).model_dump(by_alias=True, exclude_unset=True)
+    )
+    instance._pool.put(ws)
 
     # the change lands while nothing is streaming, so no live socket receives it
     instance.update_options(keywords=["Acme Corp"])
     assert _sent_transcription(ws)["keywords"] == []  # the idle socket has not seen it
 
     second = instance.stream()
-    await _connected(second)
+    assert await _connected(second) is ws
 
     assert _sent_transcription(ws)["keywords"] == ["Acme Corp"]
 
@@ -663,6 +711,8 @@ async def test_a_stream_switches_its_own_language() -> None:
     stream = instance.stream()
     ws = await _connected(stream)
     other = instance.stream()
+    other_ws = await _connected(other)
+    assert other_ws is not ws
 
     stream.update_options(language="fr")
     await _settle(stream)
@@ -671,6 +721,8 @@ async def test_a_stream_switches_its_own_language() -> None:
     assert _sent_transcription(ws)["languages"] == ["fr"]
     assert stream._language == "fr"
     assert other._opts.languages == ["en"]
+    assert _sent_transcription(other_ws)["languages"] == ["en"]
+    assert not other_ws.closed
     assert instance._opts.languages == ["en"]
 
     # and it is pinned, so an STT change that names no language leaves it alone
@@ -774,7 +826,8 @@ async def test_file_transcription_reports_the_detected_language(
     assert event.alternatives[0].language == dominant
 
 
-async def test_realtime_reports_the_detected_language() -> None:
+@pytest.mark.parametrize("empty_code", [None, ""])
+async def test_realtime_reports_the_detected_language(empty_code: str | None) -> None:
     # the hint is a list, so there is no single code to fall back on
     instance = _offline_stt(model="gpt-live-transcribe", language=["en", "fr"], vad=None)
     stream = instance.stream()
@@ -786,16 +839,17 @@ async def test_realtime_reports_the_detected_language() -> None:
             "type": "conversation.item.input_audio_transcription.completed",
             "item_id": "item_1",
             "transcript": "bonjour, hello",
-            "languages": [{"code": "fr"}, {"code": "en"}],
+            "languages": [{"code": empty_code}, {"code": "fr"}, {"code": "en"}],
         }
     )
 
     final: SpeechEvent | None = None
     try:
-        async for event in stream:
-            if event.type == SpeechEventType.FINAL_TRANSCRIPT:
-                final = event
-                break
+        async with asyncio.timeout(3):
+            async for event in stream:
+                if event.type == SpeechEventType.FINAL_TRANSCRIPT:
+                    final = event
+                    break
     finally:
         await stream.aclose()
 

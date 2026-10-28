@@ -21,7 +21,7 @@ from .types import PersonaConfig, SessionOptions
 DEFAULT_API_URL = "https://api.anam.ai"
 
 
-class _SessionResponse(BaseModel):
+class SessionResponse(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId")
 
 
@@ -76,7 +76,7 @@ class AnamAPI:
         livekit_url: str,
         livekit_token: str,
         session_options: SessionOptions | None = None,
-    ) -> _SessionResponse:
+    ) -> SessionResponse:
         """
         Starts an engine session.
 
@@ -148,7 +148,7 @@ class AnamAPI:
 
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
-    ) -> _SessionResponse:
+    ) -> SessionResponse:
         """
         Internal method to make a POST request with retry logic.
         """
@@ -173,7 +173,7 @@ class AnamAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return _SessionResponse.model_validate(await response.json())
+                            return SessionResponse.model_validate(await response.json())
                     except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Anam returned an invalid response", retryable=False

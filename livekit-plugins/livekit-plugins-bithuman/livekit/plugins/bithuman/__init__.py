@@ -17,11 +17,12 @@
 See https://docs.livekit.io/agents/integrations/avatar/bithuman/ for more information.
 """
 
-from .avatar import AvatarSession, BitHumanException
+from .avatar import AvatarSession, BitHumanException, BitHumanRuntime
 from .version import __version__
 
 __all__ = [
     "BitHumanException",
+    "BitHumanRuntime",
     "AvatarSession",
     "__version__",
 ]

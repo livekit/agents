@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any
+
+from pydantic import JsonValue
 
 from livekit.agents import ProviderTool
 
@@ -8,8 +9,10 @@ from livekit.agents import ProviderTool
 class MistralTool(ProviderTool):
     """Base class for Mistral server-side provider tools."""
 
+    provider = "mistral"
+
     @abstractmethod
-    def to_dict(self) -> dict[str, Any]: ...
+    def to_dict(self) -> dict[str, JsonValue]: ...
 
 
 @dataclass
@@ -19,7 +22,7 @@ class WebSearch(MistralTool):
     def __post_init__(self) -> None:
         super().__init__(id="mistral_web_search")
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, JsonValue]:
         return {"type": "web_search"}
 
 
@@ -32,8 +35,8 @@ class DocumentLibrary(MistralTool):
     def __post_init__(self) -> None:
         super().__init__(id="mistral_document_library")
 
-    def to_dict(self) -> dict[str, Any]:
-        return {"type": "document_library", "library_ids": self.library_ids}
+    def to_dict(self) -> dict[str, JsonValue]:
+        return {"type": "document_library", "library_ids": list(self.library_ids)}
 
 
 @dataclass
@@ -43,7 +46,7 @@ class CodeInterpreter(MistralTool):
     def __post_init__(self) -> None:
         super().__init__(id="mistral_code_interpreter")
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, JsonValue]:
         return {"type": "code_interpreter"}
 
 
@@ -56,5 +59,5 @@ class Connector(MistralTool):
     def __post_init__(self) -> None:
         super().__init__(id=f"mistral_connector_{self.connector_id}")
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, JsonValue]:
         return {"type": "connector", "connector_id": self.connector_id}

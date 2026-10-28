@@ -32,7 +32,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 
 import aiohttp
 
@@ -67,7 +67,7 @@ SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
 
 
-def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__init__") -> None:
+def _check_deprecated_tts_args(kwargs: dict[str, object], *, caller: str = "TTS.__init__") -> None:
     """Warn about deprecated kwargs and raise on truly unknown ones."""
     for name in _DEPRECATED_TTS_KWARGS:
         if name in kwargs:
@@ -129,7 +129,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         _check_deprecated_tts_args(kwargs)
 
@@ -213,7 +213,7 @@ class TTS(tts.TTS):
         voice: GnaniTTSVoices | str | None = None,
         model: GnaniTTSModels | str | None = None,
         language: GnaniTTSLanguages | str | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
@@ -243,7 +243,7 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict[str, object]:
     }
     if opts.bitrate is not None:
         audio_config["bitrate"] = opts.bitrate
-    payload: dict[str, Any] = {
+    payload: dict[str, object] = {
         "text": text,
         "voice": opts.voice,
         "model": opts.model,

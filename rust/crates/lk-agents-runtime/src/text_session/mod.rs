@@ -128,6 +128,7 @@ impl Driver {
             } => {
                 let agent = &self.agents[&agent_name];
                 let ports = Ports {
+                    tools_host: agent.tools_host.clone(),
                     llm: agent.llm.clone(),
                     host: agent.host.clone(),
                     clock: self.clock.clone(),

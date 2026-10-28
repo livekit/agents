@@ -403,10 +403,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
 
                 data = json.loads(msg.data)
-                segment_id = data.get("context_id")
                 if current_segment_id is None:
-                    current_segment_id = segment_id
-                    output_emitter.start_segment(segment_id=current_segment_id)
+                    current_segment_id = request_id
+                    output_emitter.start_segment(segment_id=request_id)
                 if data.get("audio"):
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)

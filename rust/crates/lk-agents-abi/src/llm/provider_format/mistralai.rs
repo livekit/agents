@@ -26,8 +26,11 @@ pub fn to_conversations_ctx(
     images: &dyn ImageResolver,
     inject_dummy_user_message: bool,
 ) -> Result<Formatted<MistralFormatData>, FormatError> {
-    let converted =
-        convert_mid_conversation_instructions(chat_ctx, Role::User, DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE);
+    let converted = convert_mid_conversation_instructions(
+        chat_ctx,
+        Role::User,
+        DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+    );
     let grouping = group_tool_calls(converted.iter().map(Cow::as_ref))?;
     let mut entries: Vec<Value> = Vec::new();
     let mut instructions: Option<String> = None;
@@ -62,6 +65,7 @@ pub fn to_conversations_ctx(
 
         for call in &group.tool_calls {
             entries.push(serde_json::json!({
+                "object": "entry",
                 "type": "function.call",
                 "tool_call_id": call.call_id,
                 "name": call.name,
@@ -71,6 +75,7 @@ pub fn to_conversations_ctx(
 
         for output in &group.tool_outputs {
             entries.push(serde_json::json!({
+                "object": "entry",
                 "type": "function.result",
                 "tool_call_id": output.call_id,
                 "result": output.output,
@@ -79,9 +84,11 @@ pub fn to_conversations_ctx(
     }
 
     if inject_dummy_user_message
-        && entries.last().is_some_and(|e| e.get("role").and_then(Value::as_str) == Some("assistant"))
+        && entries
+            .last()
+            .is_some_and(|e| e.get("role").and_then(Value::as_str) == Some("assistant"))
     {
-        entries.push(serde_json::json!({"type": "message.input", "role": "user", "content": "(empty)"}));
+        entries.push(serde_json::json!({"object": "entry", "type": "message.input", "role": "user", "content": "(empty)"}));
     }
 
     Ok(Formatted {
@@ -109,7 +116,9 @@ fn to_entry(
         Some(list) => Value::Array(list),
     };
 
-    Ok(Some(serde_json::json!({ "type": entry_type, "role": role, "content": content })))
+    Ok(Some(
+        serde_json::json!({ "object": "entry", "type": entry_type, "role": role, "content": content }),
+    ))
 }
 
 /// `mistralai.py:108`: `image_url` as a string, no `detail`.
@@ -150,7 +159,7 @@ mod tests {
         assert_eq!(f.data.instructions.as_deref(), Some("first"));
         assert_eq!(
             text_of(&f),
-            r#"[{"type":"message.input","role":"user","content":"hi"},{"type":"message.input","role":"user","content":"<instructions>\nsecond\n</instructions>"}]"#
+            r#"[{"object":"entry","type":"message.input","role":"user","content":"hi"},{"object":"entry","type":"message.input","role":"user","content":"<instructions>\nsecond\n</instructions>"}]"#
         );
         // A textless later instruction is dropped and cannot erase the preamble.
         let items = vec![
@@ -167,7 +176,7 @@ mod tests {
         let f = to_conversations_ctx(&ctx(items.clone()), &no_images(), true).unwrap();
         assert_eq!(
             f.messages.last().unwrap(),
-            &serde_json::json!({"type": "message.input", "role": "user", "content": "(empty)"})
+            &serde_json::json!({"object": "entry", "type": "message.input", "role": "user", "content": "(empty)"})
         );
         assert_eq!(run(items, &no_images()).messages.len(), 2);
     }
@@ -194,7 +203,7 @@ mod tests {
         ];
         assert_eq!(
             text_of(&run(items, &no_images())),
-            r#"[{"type":"message.input","role":"user","content":"hi"},{"type":"message.output","role":"assistant","content":"hello"},{"type":"function.call","tool_call_id":"c0","name":"f","arguments":"{}"},{"type":"function.result","tool_call_id":"c0","result":"ok"}]"#
+            r#"[{"object":"entry","type":"message.input","role":"user","content":"hi"},{"object":"entry","type":"message.output","role":"assistant","content":"hello"},{"object":"entry","type":"function.call","tool_call_id":"c0","name":"f","arguments":"{}"},{"object":"entry","type":"function.result","tool_call_id":"c0","result":"ok"}]"#
         );
     }
 
@@ -211,7 +220,7 @@ mod tests {
         let m = msg_with("m", Role::User, vec![image("i")]);
         assert_eq!(
             text_of(&run(vec![m], &url_images(&["i"]))),
-            r#"[{"type":"message.input","role":"user","content":[{"type":"image_url","image_url":"https://example.test/i.png"}]}]"#
+            r#"[{"object":"entry","type":"message.input","role":"user","content":[{"type":"image_url","image_url":"https://example.test/i.png"}]}]"#
         );
     }
 }

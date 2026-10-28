@@ -16,6 +16,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -35,19 +36,36 @@ from livekit.agents.voice.io import TimedString
 from .log import logger
 from .utils import DEFAULT_REGION
 
-if TYPE_CHECKING:
-    # The SDK ships annotated namespace modules without a recognized typing marker.
-    from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
-        Result,
-        TranscriptEvent,
+if TYPE_CHECKING or sys.version_info >= (3, 12):
+    # Transcribe requires Python 3.12; its namespace modules have no typing marker.
+    from aws_sdk_transcribe_streaming.client import (  # pyright: ignore[reportMissingTypeStubs]
+        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
     )
+    from aws_sdk_transcribe_streaming.config import (  # pyright: ignore[reportMissingTypeStubs]
+        AsyncTranscribeStreamingConfig as Config,
+    )
+    from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
+        AudioEvent,
+        AudioStream,
+        AudioStreamAudioEvent,
+        BadRequestException,
+        Result,
+        StartStreamTranscriptionInput,
+        TranscriptEvent,
+        TranscriptResultStream,
+        TranscriptResultStreamTranscriptEvent,
+    )
+    from smithy_aws_core.identity import (
+        AWSCredentialsIdentity,
+        ContainerCredentialsResolver,
+        EnvironmentCredentialsResolver,
+        IMDSCredentialsResolver,
+        StaticCredentialsResolver,
+    )
+    from smithy_core.aio.identity import ChainedIdentityResolver
+    from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_core.aio.retries import StandardRetryStrategy
     from smithy_http.aio.crt import AWSCRTHTTPClient
-
-try:
-    # The SDK ships annotated namespace modules without a recognized typing marker.
-    import aws_sdk_transcribe_streaming as _transcribe_sdk  # pyright: ignore[reportMissingTypeStubs]
-except ImportError:
-    _transcribe_sdk = None
 
 
 @dataclass
@@ -82,6 +100,9 @@ class STTOptions:
 
 
 class STT(stt.STT):
+    _config: STTOptions
+    _credentials: Credentials | None
+
     def __init__(
         self,
         *,
@@ -116,7 +137,7 @@ class STT(stt.STT):
             )
         )
 
-        if _transcribe_sdk is None:
+        if sys.version_info < (3, 12):
             raise ImportError(
                 "The 'aws_sdk_transcribe_streaming' package is not installed. "
                 "This implementation requires Python 3.12+ and the 'aws_sdk_transcribe_streaming' dependency."
@@ -220,37 +241,6 @@ class SpeechStream(stt.SpeechStream):
             await self._http_client.close()
 
     async def _run(self) -> None:
-        # The SDK ships annotated namespace modules without a recognized typing marker.
-        from aws_sdk_transcribe_streaming.client import (  # pyright: ignore[reportMissingTypeStubs]
-            AsyncTranscribeStreamingClient as TranscribeStreamingClient,
-        )
-
-        # The SDK ships annotated namespace modules without a recognized typing marker.
-        from aws_sdk_transcribe_streaming.config import (
-            AsyncTranscribeStreamingConfig as Config,  # pyright: ignore[reportMissingTypeStubs]
-        )
-
-        # The SDK ships annotated namespace modules without a recognized typing marker.
-        from aws_sdk_transcribe_streaming.models import (  # pyright: ignore[reportMissingTypeStubs]
-            AudioEvent,
-            AudioStream,
-            AudioStreamAudioEvent,
-            BadRequestException,
-            StartStreamTranscriptionInput,
-            TranscriptResultStream,
-            TranscriptResultStreamTranscriptEvent,
-        )
-        from smithy_aws_core.identity import (
-            AWSCredentialsIdentity,
-            ContainerCredentialsResolver,
-            EnvironmentCredentialsResolver,
-            IMDSCredentialsResolver,
-            StaticCredentialsResolver,
-        )
-        from smithy_core.aio.identity import ChainedIdentityResolver
-        from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
-        from smithy_core.aio.retries import StandardRetryStrategy
-        from smithy_http.aio.crt import AWSCRTHTTPClient
 
         while True:
             # a restarted attempt needs its own transport: the pooled HTTP/2 connection
@@ -288,7 +278,7 @@ class SpeechStream(stt.SpeechStream):
                     )
                 )
 
-            client: TranscribeStreamingClient = TranscribeStreamingClient(
+            client = TranscribeStreamingClient(
                 config=await Config.resolve(
                     transport=self._http_client,
                     retry_strategy=StandardRetryStrategy(max_attempts=1),

@@ -11,7 +11,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use lk_agents_abi::voice::io::{AudioOutput, IoError, PlaybackFinished, PlaybackTracker, Result};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AbortHandle, AudioFrame, Clock, Spawner, SpawnerExt, Ts, unix_secs};
+use lk_agents_abi::{
+    AbortHandle, AudioFrame, Clock, Closed, Spawner, SpawnerExt, TaskSet, Ts, unix_secs,
+};
 use lk_agents_rtc::{
     ByteStreamWriter, ParticipantIdentity, RoomEvent, RpcHandler, RtcRoom, StreamBytesOptions,
 };
@@ -95,17 +97,34 @@ struct Inner {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
     /// capture the playout drops mid-write leaves the stream to the segment's close.
-    segment: Mutex<Option<Arc<Segment>>>,
+    segment: Mutex<Segments>,
+    tasks: Arc<TaskSet>,
+    closing: Arc<TaskSet>,
+    close_outcome: watch::Sender<Closed>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(AbortHandle, Ts)>>,
+}
+
+#[derive(Default)]
+struct Segments {
+    active: Option<Arc<Segment>>,
+    closed: bool,
 }
 
 /// One segment's byte stream: opened by its first frame, in order behind the async lock.
 #[derive(Default)]
 struct Segment {
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    writer: tokio::sync::Mutex<Option<Box<dyn ByteStreamWriter>>>,
+    writer: tokio::sync::Mutex<SegmentWriter>,
+}
+
+#[derive(Default)]
+enum SegmentWriter {
+    #[default]
+    Unopened,
+    Open(Box<dyn ByteStreamWriter>),
+    Closed,
 }
 
 impl Inner {
@@ -126,6 +145,10 @@ impl Inner {
         register(&self, RPC_PLAYBACK_FINISHED);
         if self.wait_playback_start {
             register(&self, RPC_PLAYBACK_STARTED);
+        }
+        if self.segment.lock().unwrap_or_else(|p| p.into_inner()).closed {
+            self.retire_routes();
+            return;
         }
         let identity = ParticipantIdentity(self.destination.clone());
         log::debug!(target: LOG, identity = self.destination.as_str(); "waiting for the remote participant");
@@ -165,7 +188,10 @@ impl Inner {
     /// One frame into `segment`, opening its stream on the first.
     async fn write(&self, segment: &Segment, frame: &AudioFrame) -> Result<()> {
         let mut writer = segment.writer.lock().await;
-        if writer.is_none() {
+        if matches!(*writer, SegmentWriter::Closed) {
+            return Err(IoError::Rtc("the avatar segment closed".into()));
+        }
+        if matches!(*writer, SegmentWriter::Unopened) {
             let opts = StreamBytesOptions {
                 name: stream_name(),
                 topic: AUDIO_STREAM_TOPIC.to_owned(),
@@ -175,13 +201,13 @@ impl Inner {
                     ("num_channels".to_owned(), frame.num_channels.to_string()),
                 ]),
             };
-            *writer = Some(self.room.local().stream_bytes(opts).await?);
+            *writer = SegmentWriter::Open(self.room.local().stream_bytes(opts).await?);
             if !self.wait_playback_start {
                 // approximated: the avatar does not report lk.playback_started
                 self.tracker.report_started(unix_secs(self.clock.wall()));
             }
         }
-        if let Some(writer) = writer.as_ref() {
+        if let SegmentWriter::Open(writer) = &*writer {
             writer.write(&frame.data).await?;
         }
         Ok(())
@@ -256,7 +282,7 @@ impl Inner {
         let Some(timeout) = timeout else { return };
         let me = Arc::clone(&self);
         let at = self.clock.now().saturating_add(timeout);
-        let timer = self.spawner.spawn_unboxed(async move {
+        let timer = self.tasks.try_spawn(&*self.spawner, "avatar_clear_timeout", async move {
             me.clock.wait_until(at).await;
             me.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take();
             log::warn!(target: LOG,
@@ -268,7 +294,60 @@ impl Inner {
             });
             me.tracker.reset();
         });
-        *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some((timer, at));
+        if let Some(timer) = timer {
+            *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some((timer, at));
+        }
+    }
+
+    fn close_segment(&self, segment: Arc<Segment>) {
+        let outcome = self.close_outcome.clone();
+        self.closing.spawn(&*self.spawner, "avatar_stream_close", async move {
+            let writer =
+                std::mem::replace(&mut *segment.writer.lock().await, SegmentWriter::Closed);
+            if let SegmentWriter::Open(writer) = writer {
+                if let Err(error) = writer.close().await {
+                    outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
+                    log::error!(target: LOG, error = error.to_string().as_str();
+                        "failed to close avatar audio stream");
+                }
+            }
+        });
+    }
+
+    fn retire_routes(self: &Arc<Self>) {
+        let this = Arc::downgrade(self);
+        ROUTES.lock().unwrap_or_else(|p| p.into_inner()).retain(|_, destinations| {
+            destinations.retain(|_, target| !target.ptr_eq(&this));
+            !destinations.is_empty()
+        });
+    }
+
+    async fn aclose(self: Arc<Self>) -> Closed {
+        let deadline =
+            self.clock.now().saturating_add(lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT);
+        let segment = {
+            let mut segments = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+            segments.closed = true;
+            segments.active.take()
+        };
+        self.started.send_replace(Some(Err("the avatar output closed".into())));
+        if let Some(segment) = segment {
+            self.close_segment(segment);
+        }
+        self.tracker.reset();
+        if let Some((timer, _)) = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
+        {
+            timer.abort();
+        }
+        self.retire_routes();
+        self.tasks.close();
+        if !self.tasks.wait_empty(&*self.clock, Some(deadline)).await {
+            return Closed::TimedOut;
+        }
+        if !self.closing.wait_empty(&*self.clock, Some(deadline)).await {
+            return Closed::TimedOut;
+        }
+        *self.close_outcome.borrow()
     }
 }
 
@@ -276,15 +355,12 @@ impl Inner {
 /// DataStream, which reports its playback back.
 pub struct DataStreamAudioOutput {
     inner: Arc<Inner>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    start: Mutex<Option<AbortHandle>>,
 }
 
 impl Drop for DataStreamAudioOutput {
     fn drop(&mut self) {
-        if let Some(h) = self.start.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            h.abort();
-        }
+        self.inner.tasks.close();
+        self.inner.retire_routes();
     }
 }
 
@@ -311,46 +387,14 @@ impl DataStreamAudioOutput {
             clock,
             spawner: Arc::clone(&spawner),
             started: watch::channel(None).0,
-            segment: Mutex::new(None),
+            segment: Mutex::new(Segments::default()),
+            tasks: Arc::new(TaskSet::default()),
+            closing: Arc::new(TaskSet::default()),
+            close_outcome: watch::channel(Closed::Clean).0,
             clear_timer: Mutex::new(None),
         });
-        let start = spawner.spawn_unboxed(Arc::clone(&inner).start());
-        DataStreamAudioOutput { inner, start: Mutex::new(Some(start)) }
-    }
-}
-
-#[lk_agents_abi::host(object(name = "DataStreamAudioOutput", cell = "arc", as_dyn(AudioOutput = as_output)))]
-impl DataStreamAudioOutput {
-    /// `destination_identity` is the avatar's participant; `wait_remote_track` a `rtc.TrackKind`
-    /// it must publish before audio flows; `clear_buffer_timeout` how long an interruption waits
-    /// for the avatar's `lk.playback_finished` (`None`: forever); `wait_playback_start` whether the
-    /// avatar reports `lk.playback_started` (else the first frame of a segment stands for it).
-    #[host(new(
-        kw_only = "destination_identity",
-        defaults(clear_buffer_timeout = Some(2.0), wait_playback_start = false)
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_host(
-        room: Arc<dyn RtcRoom>,
-        destination_identity: String,
-        sample_rate: Option<u32>,
-        wait_remote_track: Option<i32>,
-        clear_buffer_timeout: Option<f64>,
-        wait_playback_start: bool,
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        let timeout = clear_buffer_timeout.map(|s| Duration::from_secs_f64(s.max(0.0)));
-        DataStreamAudioOutput::new(
-            room,
-            destination_identity,
-            sample_rate,
-            wait_remote_track,
-            timeout,
-            wait_playback_start,
-            clock,
-            spawner,
-        )
+        inner.tasks.spawn(&*spawner, "avatar_output_start", Arc::clone(&inner).start());
+        DataStreamAudioOutput { inner }
     }
 
     /// When the give-up timer after a clear fires, while one is armed.
@@ -358,19 +402,8 @@ impl DataStreamAudioOutput {
         self.inner.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|(_, at)| *at)
     }
 
-    /// The sink as the session's audio output (a native sink is not proxied).
-    pub fn as_output(self: &Arc<Self>) -> Arc<dyn AudioOutput> {
-        Arc::clone(self) as Arc<dyn AudioOutput>
-    }
-
-    #[host(getter(name = "label"))]
-    pub fn label_for_host(&self) -> String {
-        "DataStreamIO".to_owned()
-    }
-
-    #[host(getter(name = "sample_rate"))]
-    pub fn sample_rate_for_host(&self) -> Option<u32> {
-        self.inner.sample_rate
+    pub async fn aclose(&self) -> Closed {
+        Arc::clone(&self.inner).aclose().await
     }
 }
 
@@ -401,18 +434,18 @@ impl AudioOutput for DataStreamAudioOutput {
             Some(Err(e)) => return Err(IoError::Rtc(e)),
             None => return Err(IoError::Rtc("the avatar output closed".into())),
         }
-        let segment = Arc::clone(
-            self.inner
-                .segment
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .get_or_insert_with(Default::default),
-        );
-        // Spawned, so dropping this capture (an interruption) never drops the host's writer.
+        let segment = {
+            let mut state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
+            if state.closed {
+                return Err(IoError::Rtc("the avatar output closed".into()));
+            }
+            Arc::clone(state.active.get_or_insert_with(Default::default))
+        };
+        // The task retains the writer even if the capture caller is interrupted.
         let (tx, rx) = tokio::sync::oneshot::channel();
         let inner = Arc::clone(&self.inner);
         let frame = frame.clone();
-        self.inner.spawner.spawn_unboxed(async move {
+        self.inner.tasks.try_spawn(&*self.inner.spawner, "avatar_audio_write", async move {
             let _ = tx.send(inner.write(&segment, &frame).await);
         });
         rx.await.unwrap_or_else(|_| Err(IoError::Rtc("the avatar output closed".into())))
@@ -423,13 +456,15 @@ impl AudioOutput for DataStreamAudioOutput {
         if !self.inner.is_started() {
             return;
         }
-        if let Some(segment) = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            // Behind any write still in flight, whose stream it then closes.
-            self.inner.spawner.spawn_unboxed(async move {
-                if let Some(writer) = segment.writer.lock().await.take() {
-                    let _ = writer.close().await;
-                }
-            });
+        let segment = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).active.clone();
+        if let Some(segment) = segment {
+            // Keep the active ownership until the close task is admitted. A concurrent aclose
+            // may also schedule it; taking the writer is serialized and happens exactly once.
+            self.inner.close_segment(Arc::clone(&segment));
+            let mut state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
+            if state.active.as_ref().is_some_and(|active| Arc::ptr_eq(active, &segment)) {
+                state.active.take();
+            }
         }
     }
 
@@ -444,7 +479,11 @@ impl AudioOutput for DataStreamAudioOutput {
         if pushed.is_zero() {
             return;
         }
-        self.inner.spawner.spawn_unboxed(Arc::clone(&self.inner).clear(pushed));
+        self.inner.tasks.try_spawn(
+            &*self.inner.spawner,
+            "avatar_clear_buffer",
+            Arc::clone(&self.inner).clear(pushed),
+        );
     }
 
     fn pause(&self) {

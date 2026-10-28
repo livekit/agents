@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -19,7 +18,7 @@ pytestmark = pytest.mark.plugin("xai")
 
 
 class _FakeWebSocket:
-    def __init__(self, audio: bytes = b"audio") -> None:
+    def __init__(self, audio: bytes = b"\x00\x00" * 240) -> None:
         self._audio = audio
         self._messages: asyncio.Queue[Any] = asyncio.Queue()
         self.close_code: int | None = None
@@ -55,45 +54,9 @@ class _FakeWebSocket:
         self.closed = True
 
 
-class _FakeEmitter:
-    def __init__(self) -> None:
-        self.started_segments: list[str] = []
-        self.ended_segments = 0
-        self.audio_chunks: list[bytes] = []
-
-    def start_segment(self, *, segment_id: str) -> None:
-        self.started_segments.append(segment_id)
-
-    def push(self, audio: bytes) -> None:
-        self.audio_chunks.append(audio)
-
-    def end_segment(self) -> None:
-        self.ended_segments += 1
-
-
-def _new_word_stream(tts: xai_tts.TTS, text: str):
-    word_stream = tts._opts.tokenizer.stream()  # pyright: ignore[reportPrivateUsage]
-    word_stream.push_text(text)
-    word_stream.end_input()
-    return word_stream
-
-
-def _new_synthesize_stream(tts: xai_tts.TTS) -> xai_tts.SynthesizeStream:
-    stream = object.__new__(xai_tts.SynthesizeStream)
-    stream._tts = tts  # pyright: ignore[reportPrivateUsage]
-    stream._opts = replace(tts._opts)  # pyright: ignore[reportPrivateUsage]
-    stream._conn_options = APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)  # pyright: ignore[reportPrivateUsage]
-    stream._started_time = 0.0  # pyright: ignore[reportPrivateUsage]
-    stream._acquire_time = 0.0  # pyright: ignore[reportPrivateUsage]
-    stream._connection_reused = False  # pyright: ignore[reportPrivateUsage]
-    return stream
-
-
 @pytest.mark.asyncio
 async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest.MonkeyPatch):
     tts = xai_tts.TTS(api_key="test-key")
-    stream = _new_synthesize_stream(tts)
-    emitter = _FakeEmitter()
     websockets: list[_FakeWebSocket] = []
 
     async def connect_ws(*_args: object, **_kwargs: object) -> _FakeWebSocket:
@@ -107,14 +70,17 @@ async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest
     monkeypatch.setattr(tts, "_connect_ws", connect_ws)
     monkeypatch.setattr(tts, "_close_ws", close_ws)
 
-    await stream._run_ws(_new_word_stream(tts, "first"), emitter)  # pyright: ignore[reportPrivateUsage]
-    await stream._run_ws(_new_word_stream(tts, "second"), emitter)  # pyright: ignore[reportPrivateUsage]
-
-    assert len(websockets) == 1
-    assert websockets[0].closed is False
-    assert emitter.audio_chunks == [b"audio", b"audio"]
-    assert emitter.ended_segments == 2
-
-    await tts.aclose()
+    try:
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_text("first")
+            stream.flush()
+            stream.push_text("second")
+            stream.end_input()
+            heard = b"".join([event.frame.data.tobytes() async for event in stream])
+        assert len(websockets) == 1
+        assert not websockets[0].closed
+        assert heard == b"\x00\x00" * 480
+    finally:
+        await tts.aclose()
 
     assert websockets[0].closed is True

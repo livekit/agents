@@ -10,10 +10,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ._qwen3_tts import list_voices, register_voice
 from .llm import LLM
 from .log import logger
 from .models import LLMModels, STTModels, TTSModels
-from .qwen3_tts import list_voices, register_voice
 from .stt import STT, SpeechStream
 from .tts import TTS, SynthesizeStream
 from .version import __version__

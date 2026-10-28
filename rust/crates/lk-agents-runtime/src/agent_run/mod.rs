@@ -34,6 +34,7 @@ const PROGRESS_QUEUE: usize = 32;
 #[derive(Clone)]
 pub struct Ports {
     pub llm: Arc<dyn Llm>,
+    pub tools_host: Option<HostRef>,
     pub host: Arc<dyn AgentHost>,
     pub clock: Arc<dyn Clock>,
     pub conn_options: ApiConnectOptions,

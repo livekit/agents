@@ -790,7 +790,6 @@ async def test_streaming_event_mapping_emits_speech_and_transcript_events() -> N
         ({}, 1.0),
         ({"confidence": None}, 1.0),
         ({"confidence": "high"}, 1.0),
-        # bool is a subclass of int; False must not read as zero confidence.
         ({"confidence": False}, 1.0),
     ],
 )
@@ -1991,8 +1990,11 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert {len(payload) for payload in sent} == {expected_bytes}
 
 
-@pytest.mark.parametrize("field", ["request_id", "session_id"])
-async def test_realtime_rejects_nontext_server_identity(field: str) -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("request_id", 42), ("session_id", 42), ("config", 42), ("text", 42), ("is_fatal", "false")],
+)
+async def test_realtime_rejects_malformed_server_fields(field: str, value: object) -> None:
     import aiohttp
     from aiohttp import web
     from aiohttp.test_utils import TestServer
@@ -2003,7 +2005,7 @@ async def test_realtime_rejects_nontext_server_identity(field: str) -> None:
     async def recognize(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        await ws.send_json({"event": "session.begin", field: 42})
+        await ws.send_json({"event": "session.begin", field: value})
         await ws.send_json({"event": "transcript.partial", "text": "hello"})
         async for _ in ws:
             pass
@@ -2021,6 +2023,72 @@ async def test_realtime_rejects_nontext_server_identity(field: str) -> None:
                     await asyncio.wait_for(anext(stream), 1)
                 assert not failure.value.retryable
                 assert isinstance(failure.value.__cause__, ValidationError)
-                assert failure.value.__cause__.errors()[0]["loc"] == (field,)
+                assert failure.value.__cause__.errors()[0]["loc"][0] == field
+        finally:
+            await provider.aclose()
+
+
+@pytest.mark.parametrize("metadata_value", [None, "unavailable"])
+async def test_nullable_realtime_metadata_preserves_transcripts_and_error_status_fallback(
+    metadata_value: object,
+) -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.agents import APIConnectOptions
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"event": "session.begin", "request_id": "request", "config": {}})
+        await ws.send_json(
+            {
+                "event": "transcript.final",
+                "text": "Hello",
+                "utterance_idx": metadata_value,
+                "confidence": metadata_value,
+                "language_confidence": metadata_value,
+                "audio_duration_s": metadata_value,
+                "start_s": metadata_value,
+                "end_s": metadata_value,
+                "is_fatal": None,
+                "status_code": metadata_value,
+            }
+        )
+        await ws.send_json(
+            {
+                "event": "error",
+                "message": "provider failed",
+                "is_fatal": True,
+                "status_code": metadata_value,
+            }
+        )
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/listen", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        provider = sarvam.STTRealtime(
+            api_key="test",
+            base_url=str(server.make_url("/listen")),
+            http_session=session,
+            endpointing="manual",
+        )
+        try:
+            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                event = await asyncio.wait_for(anext(stream), timeout=1)
+                assert event.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
+                speech = event.alternatives[0]
+                assert speech.text == "Hello"
+                assert speech.confidence == 1.0
+                assert speech.start_time == 0.0
+                assert speech.end_time == 0.0
+                with pytest.raises(APIStatusError) as failure:
+                    await asyncio.wait_for(anext(stream), timeout=1)
+                assert failure.value.status_code == -1
+                assert "provider failed" in failure.value.message
         finally:
             await provider.aclose()

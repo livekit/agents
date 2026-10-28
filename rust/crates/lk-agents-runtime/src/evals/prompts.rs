@@ -204,6 +204,7 @@ pub fn check_intent_tool() -> ToolSpec {
 
 fn tool(name: &str, description: &str, json_schema: Value) -> ToolSpec {
     ToolSpec {
+        provider_tool: None,
         name: name.into(),
         description: description.into(),
         json_schema,

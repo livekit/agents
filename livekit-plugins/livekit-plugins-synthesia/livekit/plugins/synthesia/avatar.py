@@ -158,6 +158,8 @@ class AvatarSession(BaseAvatarSession):
                     raise SynthesiaError(
                         "the previous avatar session did not tear down cleanly; not restarting"
                     ) from teardown.exception()
+            if self._state is _State.CLOSED:
+                await self._close_done.wait()
             if self._state is _State.STARTED:
                 return
 
@@ -210,8 +212,7 @@ class AvatarSession(BaseAvatarSession):
                 )
                 # replace_audio_tail keeps any wrapper VoiceSession.start() adds
                 # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
-                agent_session.output.replace_audio_tail(audio_output)
-                self._audio_output = audio_output
+                self._attach_audio_output(agent_session, audio_output)
 
                 await self.wait_for_join(timeout=self._config.join_timeout)
             except asyncio.TimeoutError as e:
@@ -226,7 +227,7 @@ class AvatarSession(BaseAvatarSession):
                 await self._discard_partial_start()
                 raise
 
-            if self._state is _State.CLOSED:
+            if self._ending():
                 await self._close_done.wait()
                 await self._discard_partial_start()
                 raise SynthesiaError("avatar session was closed while starting")
@@ -249,7 +250,7 @@ class AvatarSession(BaseAvatarSession):
         # session ever ran, so neither the current chain head nor its type says
         # what to close.
         audio_output, self._audio_output = self._audio_output, None
-        if audio_output is not None and hasattr(audio_output, "aclose"):
+        if audio_output is not None:
             await audio_output.aclose()
         self._session_id = None
 
@@ -396,14 +397,15 @@ class AvatarSession(BaseAvatarSession):
             # chain itself is left in place; there is no public API to remove a
             # tail sink from it without supplying a replacement.
             audio_output, self._audio_output = self._audio_output, None
-            if audio_output is not None and hasattr(audio_output, "aclose"):
+            if audio_output is not None:
                 await audio_output.aclose()
 
-            if self._room is not None:
-                self._room.off("disconnected", self._on_room_disconnected)
-                self._room.off("track_unpublished", self._on_track_unpublished)
-                self._room.off("participant_disconnected", self._on_participant_disconnected)
-
-            await super().aclose()
         finally:
-            self._close_done.set()
+            try:
+                if self._room is not None:
+                    self._room.off("disconnected", self._on_room_disconnected)
+                    self._room.off("track_unpublished", self._on_track_unpublished)
+                    self._room.off("participant_disconnected", self._on_participant_disconnected)
+                await super().aclose()
+            finally:
+                self._close_done.set()

@@ -170,7 +170,7 @@ class STT(stt.STT):
         base_url: str = BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
         params: STTOptions | None = None,
-    ):
+    ) -> None:
         """Initialize instance of Soniox Speech-to-Text API service.
 
         Args:
@@ -497,6 +497,8 @@ class SpeechStream(stt.SpeechStream):
                 # only translation tokens land in this one. When translation
                 # is off, `final` IS the source side and `final_original`
                 # stays empty.
+                src_segs: Sequence[tuple[str, str]]
+                tgt_segs: Sequence[tuple[str, str]]
                 src_segs, tgt_segs = (
                     (final_original.language_segments, final.language_segments)
                     if is_translation_mode

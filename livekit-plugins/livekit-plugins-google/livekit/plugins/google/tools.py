@@ -1,11 +1,18 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from pydantic import JsonValue
+
 from google.genai import types
 from livekit.agents import llm
 
 
 class GeminiTool(llm.ProviderTool, ABC):
+    provider = "gemini"
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        return self.to_tool_config().model_dump(mode="json", by_alias=True, exclude_none=True)
+
     @abstractmethod
     def to_tool_config(self) -> types.Tool: ...
 

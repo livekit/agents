@@ -1,20 +1,6 @@
-"""Offline tests for the Speechmatics Agent STT plugin.
+"""Offline Speechmatics configuration, message translation, and stream lifecycle tests.
 
-Two halves, and they answer different questions:
-
-- **The plugin's own behaviour** — what a caller configures, what reaches the wire, and
-  what the service's messages become. Every test covers one translation across one seam,
-  so a failure names the thing that broke rather than "Speechmatics is broken".
-- **Back-compatibility** — the public surface the plugin exposed before Agent STT. Those
-  names and arguments still resolve, and each one says so in the log. Deleted after
-  2026-10-05, along with the `speechmatics-voice` dependency they are served from.
-
-Nothing here opens a socket. Live coverage is the k8s-saas e2e suite, which drives the
-real plugin against `/v2/agent`; duplicating it here would only be slower and flakier.
-
-Run standalone:
-
-    .venv/bin/python -m pytest tests/test_plugin_speechmatics_stt.py -v
+Run with ``uv run pytest tests/test_plugin_speechmatics_stt.py --plugin speechmatics``.
 """
 
 from __future__ import annotations
@@ -70,8 +56,6 @@ WIRE_WHITELIST = frozenset(
 )
 
 # The pre-Agent-STT public names, by what a user would have written.
-OPERATING_POINT = "OperatingPoint"
-SPEAKER_FOCUS_MODE = "SpeakerFocusMode"
 REMOVED_TURN_MODES = ("ADAPTIVE", "FIXED", "SMART_TURN")
 LEGACY_OPERATING_POINTS = ("enhanced", "standard")
 
@@ -134,16 +118,6 @@ class _StubClient:
 
     def finalize(self) -> None:
         self.finalize_calls += 1
-
-
-@pytest.fixture(autouse=True)
-def _reset_deprecation_warnings():
-    """Each symbol shim warns once per process, so tests would otherwise shadow each other."""
-    import livekit.plugins.speechmatics as plugin
-
-    plugin._warned_deprecated.clear()
-    yield
-    plugin._warned_deprecated.clear()
 
 
 # --- Construction and validation -----------------------------------------------------
@@ -541,56 +515,14 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
     assert _events(stream) == []
 
 
-# --- Back-compatibility: the pre-Agent-STT public surface ----------------------------
-
-
-def test_operating_point_still_imports_and_warns(caplog) -> None:
-    """`from ... import OperatingPoint` used to fail on upgrade, before any `STT` existed.
-
-    Served from the voice SDK that declared it, so callers get the identical class object
-    they already hold and their `isinstance` checks still pass.
-    """
-    import speechmatics.rt
-    import speechmatics.voice
-
-    with caplog.at_level("WARNING"):
-        from livekit.plugins.speechmatics import OperatingPoint
-
-    assert OperatingPoint is speechmatics.voice.OperatingPoint
-    # voice only re-exported rt's, so the two are one class and either import site matches.
-    assert OperatingPoint is speechmatics.rt.OperatingPoint
-    assert {point.value for point in OperatingPoint} == set(LEGACY_OPERATING_POINTS)
-    assert OPERATING_POINT in caplog.text
-    assert "deprecated" in caplog.text
-
-
-def test_speaker_focus_mode_still_imports_and_warns(caplog) -> None:
-    """Speaker focus has no Agent STT equivalent, so the name resolves and says so."""
-    import speechmatics.voice
-
-    with caplog.at_level("WARNING"):
-        from livekit.plugins.speechmatics import SpeakerFocusMode
-
-    assert SpeakerFocusMode is speechmatics.voice.SpeakerFocusMode
-    assert {member.name for member in SpeakerFocusMode} == {"RETAIN", "IGNORE"}
-    assert SPEAKER_FOCUS_MODE in caplog.text
-    assert "not supported by Agent STT" in caplog.text
-
-
-def test_unknown_attributes_still_raise() -> None:
-    """The shim is a lookup of known names, not a catch-all that invents attributes."""
-    import livekit.plugins.speechmatics as plugin
-
-    with pytest.raises(AttributeError, match="NotAThing"):
-        _ = plugin.NotAThing
+# --- Legacy argument migration -----------------------------------------------------
 
 
 def test_voice_sdk_stays_off_the_runtime_path() -> None:
     """What keeps "this PR removes the voice SDK" true.
 
-    The shim imports live inside the `__getattr__` branches, so importing the plugin,
-    constructing `STT`, building the config and passing deprecated kwargs all leave
-    `speechmatics.voice` out of `sys.modules`. Only touching a deprecated *symbol* loads it.
+    Importing the plugin, constructing `STT`, building the config and passing legacy
+    kwargs leave `speechmatics.voice` out of `sys.modules`.
 
     Runs in a subprocess because import state is process-wide: any earlier test in this
     file has already pulled voice in.
@@ -695,17 +627,15 @@ def test_old_style_usage_runs(caplog) -> None:
     usage = """
 from livekit.plugins.speechmatics import (
     STT,
-    OperatingPoint,
-    SpeakerFocusMode,
     TurnDetectionMode,
 )
 
 stt = STT(
     api_key="test-key",
     vad=None,
-    operating_point=OperatingPoint.ENHANCED,
+    operating_point="enhanced",
     turn_detection_mode=TurnDetectionMode.ADAPTIVE,
-    focus_mode=SpeakerFocusMode.RETAIN,
+    focus_mode="retain",
 )
 stt.update_speakers(focus_speakers=["S1"])
 """
@@ -715,7 +645,7 @@ stt.update_speakers(focus_speakers=["S1"])
         exec(usage, namespace)
 
     assert namespace["stt"].model == DEFAULT_MODEL.value
-    for deprecated in (OPERATING_POINT, SPEAKER_FOCUS_MODE, "ADAPTIVE", "focus_mode"):
+    for deprecated in ("operating_point", "ADAPTIVE", "focus_mode"):
         assert deprecated in caplog.text
 
 
@@ -734,9 +664,13 @@ async def test_invalid_speaker_reply_fails_request_without_stopping_recognition(
         ) -> None:
             self.handlers[event] = callback
 
-        async def connect(self) -> None:
+        async def __aenter__(self) -> SpeakerClient:
             self.is_connected = True
             self.connected.set()
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            await self.disconnect()
 
         async def send_message(self, message: dict[str, object]) -> None:
             self.handlers[ServerMessageType.SPEAKERS_RESULT](

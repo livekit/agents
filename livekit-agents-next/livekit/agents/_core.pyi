@@ -91,7 +91,6 @@ from ._generated._core_classes import (
     ConnectionPoolState as ConnectionPoolState,
     ConsoleIo as ConsoleIo,
     CoreTextOutput as CoreTextOutput,
-    DataStreamAudioOutput as DataStreamAudioOutput,
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     ExpFilter as ExpFilter,
     FakeRoom as FakeRoom,
@@ -177,7 +176,6 @@ from ._generated._core_classes import (
     amd_constants as amd_constants,
     amd_is_evaluated_model as amd_is_evaluated_model,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
-    api_attempt_connected as api_attempt_connected,
     api_connect_options_check as api_connect_options_check,
     api_retry_interval as api_retry_interval,
     base_language as base_language,
@@ -363,6 +361,9 @@ from ._generated._core_text_session import (
 )
 from ._generated._core_types import (
     _core_ProviderAttempts as _core_ProviderAttempts,
+)
+from ._generated._core_voice import (
+    DataStreamAudioOutput as DataStreamAudioOutput,
 )
 from ._generated._core_worker import (
     ExitSignals as ExitSignals,

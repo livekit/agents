@@ -38,7 +38,7 @@ class PeriodicCollector(Generic[T]):
         self._last_flush_time = time.monotonic()
 
 
-def _to_deepgram_url(
+def to_deepgram_url(
     opts: Mapping[str, object],
     base_url: str,
     *,

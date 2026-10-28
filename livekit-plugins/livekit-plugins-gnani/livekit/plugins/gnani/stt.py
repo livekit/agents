@@ -25,7 +25,7 @@ import contextlib
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import aiohttp
 
@@ -44,6 +44,8 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
 if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
     from livekit.agents.utils import AudioBuffer
 
 from .log import logger
@@ -81,7 +83,7 @@ class GnaniSTTOptions:
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
 
 
-def _check_deprecated_args(kwargs: dict[str, Any], *, caller: str = "STT.__init__") -> None:
+def _check_deprecated_args(kwargs: dict[str, object], *, caller: str = "STT.__init__") -> None:
     """Warn about deprecated kwargs and raise on truly unknown ones."""
     for name in _DEPRECATED_STT_KWARGS:
         if name in kwargs:
@@ -125,7 +127,7 @@ class STT(stt.STT):
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
         use_streaming: bool = True,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -374,7 +376,7 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             raise APIConnectionError(f"Gnani STT WebSocket error: {e}") from e
 
-    async def _send_audio(self, ws: Any) -> None:
+    async def _send_audio(self, ws: ClientConnection) -> None:
         audio_buffer = bytearray()
 
         async for data in self.input:
@@ -396,7 +398,7 @@ class SpeechStream(stt.RecognizeStream):
         if audio_buffer:
             await ws.send(bytes(audio_buffer))
 
-    async def _recv_messages(self, ws: Any) -> None:
+    async def _recv_messages(self, ws: ClientConnection) -> None:
         try:
             async for msg in ws:
                 if isinstance(msg, bytes):

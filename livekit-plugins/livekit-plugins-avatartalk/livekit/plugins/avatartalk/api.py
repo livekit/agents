@@ -17,11 +17,11 @@ class AvatarTalkException(Exception):
     """Exception for AvatarTalkAPI errors"""
 
 
-class _SessionResponse(BaseModel):
+class SessionResponse(BaseModel):
     task_id: str | None
 
 
-class _StopResponse(BaseModel):
+class StopResponse(BaseModel):
     pass
 
 
@@ -77,11 +77,11 @@ class AvatarTalkAPI:
         livekit_listener_token: str,
         livekit_room_token: str,
         agent_identity: str,
-    ) -> _SessionResponse:
+    ) -> SessionResponse:
         return await self._request(
             "POST",
             "/livekit/create-session",
-            response_type=_SessionResponse,
+            response_type=SessionResponse,
             json={
                 "livekit_url": livekit_url,
                 "avatar": avatar,
@@ -93,7 +93,7 @@ class AvatarTalkAPI:
             },
         )
 
-    async def stop_session(self, task_id: str) -> _StopResponse:
+    async def stop_session(self, task_id: str) -> StopResponse:
         return await self._request(
-            "DELETE", f"/livekit/delete-session/{task_id}", response_type=_StopResponse
+            "DELETE", f"/livekit/delete-session/{task_id}", response_type=StopResponse
         )

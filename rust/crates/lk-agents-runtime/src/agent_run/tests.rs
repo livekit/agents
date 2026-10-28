@@ -253,6 +253,7 @@ impl AgentHost for FakeHost {
 fn tool(name: &str) -> FunctionToolInfo {
     FunctionToolInfo {
         spec: ToolSpec {
+            provider_tool: None,
             name: name.into(),
             description: "Find a slot.".into(),
             json_schema: json!({"type": "object", "properties": {"day": {"type": "string"}}}),
@@ -314,6 +315,7 @@ fn setup(
         host_context: Some(HostRef::new(0, &registry)),
     };
     let ports = Ports {
+        tools_host: None,
         llm,
         host: host.clone(),
         clock: Arc::new(RealClock::new()),
@@ -543,6 +545,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
     let runner = super::Runner::new(definition(vec![]), llm(), host).unwrap();
     let mut updates = runner
         .run(RunRequest {
+            tools_host: None,
             execution_id: None,
             invocation_id: "run_1".into(),
             message: lk_agents_abi::ChatItem::Message(ChatMessage::text(

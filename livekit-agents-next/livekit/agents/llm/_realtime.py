@@ -50,6 +50,8 @@ RealtimeSession = llm_realtime.RealtimeSession
 
 
 class RealtimeModel(llm_realtime.RealtimeModel):
+    _dialect: str | None = None
+
     def __init__(
         self,
         *,
@@ -122,6 +124,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         )
         self._native = _core.NativeRealtimeModel(
             NativeRealtimeConfig(
+                dialect=self._dialect,
                 api_key=api_key,
                 base_url=base_url or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
                 model=model,

@@ -34,11 +34,11 @@ import contextlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
 
 import aiohttp
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -73,6 +73,43 @@ _KEEPALIVE_INTERVAL = 15.0
 _KEEPALIVE_TIMEOUT = 3.0
 
 
+class WordAlignment(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    words: list[str] = Field(default_factory=list[str])
+    word_start_times_seconds: list[float] = Field(default_factory=list[float])
+    word_end_times_seconds: list[float] = Field(default_factory=list[float])
+
+
+class TimestampInfo(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    word_alignment: WordAlignment | None = None
+
+
+class TTSResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str
+    sample_rate: int = SAMPLE_RATE
+    error: str | bool | None = None
+    sentence_index: int | None = None
+    timestamp_info: TimestampInfo | None = None
+    message: str = "unknown TTS error"
+
+
+def _decode_response(payload: str) -> TTSResponse:
+    try:
+        return TTSResponse.model_validate_json(payload)
+    except ValidationError as error:
+        raise APIConnectionError(
+            "Baseten returned an invalid synthesis response", retryable=False
+        ) from error
+
+
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+
+
 @dataclass
 class _TTSOptions:
     voice: str
@@ -86,13 +123,13 @@ class _TTSOptions:
     ref_audio: str | None
     ref_text: str | None
     word_timestamps: bool
-    extra_config: dict[str, Any] = field(default_factory=dict)
+    extra_config: dict[str, JsonValue] = field(default_factory=dict[str, JsonValue])
 
 
 @dataclass
 class _WarmSocket:
     ws: aiohttp.ClientWebSocketResponse
-    config: dict[str, Any] | None
+    config: dict[str, JsonValue] | None
     last_activity: float
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
 
@@ -111,7 +148,7 @@ class _TurnState:
         return self.sender_finished.is_set() and self.flushes_done >= self.flushes_sent
 
 
-class _Qwen3Backend:
+class Qwen3Backend:
     """Connection state for a Qwen3-TTS deployment, owned by `TTS`.
 
     Not a `tts.TTS` itself — `TTS` selects this when ``model="qwen3-tts"`` and
@@ -138,7 +175,7 @@ class _Qwen3Backend:
         ref_audio: str | None = None,
         ref_text: str | None = None,
         word_timestamps: bool = False,
-        extra_config: dict[str, Any] | None = None,
+        extra_config: Mapping[str, JsonValue] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -237,6 +274,13 @@ class _Qwen3Backend:
         if is_given(max_new_tokens):
             self._opts.max_new_tokens = max_new_tokens
 
+    def make_stream(
+        self, owner: tts_module.TTS, *, conn_options: APIConnectOptions
+    ) -> Qwen3SynthesizeStream:
+        return Qwen3SynthesizeStream(
+            tts=owner, backend=self, opts=replace(self._opts), conn_options=conn_options
+        )
+
     async def aclose(self) -> None:
         self._closing = True
         if self._keepalive_task and not self._keepalive_task.done():
@@ -248,8 +292,7 @@ class _Qwen3Backend:
         if warm:
             await self._shutdown_ws(warm.ws, notify=True)
 
-    def _load_ref_audio(self) -> str | None:
-        ref = self._opts.ref_audio
+    def _load_ref_audio(self, ref: str | None) -> str | None:
         if not ref or ref.startswith(("http://", "https://")):
             return ref
         if self._ref_audio_b64 is None:
@@ -261,21 +304,21 @@ class _Qwen3Backend:
                 self._ref_audio_b64 = base64.b64encode(f.read()).decode()
         return self._ref_audio_b64
 
-    def _build_session_config(self) -> dict[str, Any]:
+    def build_session_config(self, opts: _TTSOptions) -> dict[str, JsonValue]:
         """Doubles as the identity of the config applied to a parked socket.
 
         `split_granularity` is omitted on purpose: it is not in the streaming
         schema, and an unrecognized field invalidates the whole config.
         """
-        o = self._opts
-        config: dict[str, Any] = {
+        o = opts
+        config: dict[str, JsonValue] = {
             "task_type": o.task_type,
             "response_format": "pcm",
             "stream_audio": True,
             "speed": o.speed,
             "voice": o.voice,
         }
-        optional = {
+        optional: dict[str, JsonValue] = {
             "language": o.language,
             "instructions": o.instructions,
             "max_new_tokens": o.max_new_tokens,
@@ -284,7 +327,7 @@ class _Qwen3Backend:
         }
         config.update({k: v for k, v in optional.items() if v is not None})
 
-        ref_audio = self._load_ref_audio()
+        ref_audio = self._load_ref_audio(o.ref_audio)
         if ref_audio:
             config["ref_audio"] = ref_audio
             if o.ref_text:
@@ -302,10 +345,10 @@ class _Qwen3Backend:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _acquire(
+    async def acquire(
         self,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> tuple[aiohttp.ClientWebSocketResponse, dict[str, Any] | None]:
+    ) -> tuple[aiohttp.ClientWebSocketResponse, dict[str, JsonValue] | None]:
         """Reuse the parked socket if live, else dial. Returns its applied config."""
         async with self._warm_lock:
             warm, self._warm = self._warm, None
@@ -330,10 +373,10 @@ class _Qwen3Backend:
         )
         return ws, None
 
-    async def _release(
+    async def release(
         self,
         ws: aiohttp.ClientWebSocketResponse,
-        config: dict[str, Any] | None,
+        config: dict[str, JsonValue] | None,
         *,
         discard: bool,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -366,7 +409,7 @@ class _Qwen3Backend:
         The loop only ever exits on shutdown. It deliberately does not return
         when it finds nothing parked or when a flush fails: it releases
         ``_warm_lock`` for the round trip, so a turn can park a fresh socket at
-        any point, and ``_release`` cannot schedule a keepalive for it while
+        any point, and ``release`` cannot schedule a keepalive for it while
         this task is still running (not ``done()``). Returning early would
         leave that socket to idle out.
         """
@@ -419,11 +462,11 @@ class _Qwen3Backend:
                     continue
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     return False
-                event = json.loads(msg.data)
-                if event.get("type") == "session.done":
+                event = _decode_response(msg.data)
+                if event.type == "session.done":
                     return True
-                if event.get("type") == "error":
-                    logger.warning("keepalive rejected: %s", event.get("message"))
+                if event.type == "error":
+                    logger.warning("keepalive rejected: %s", event.message)
                     return False
         except Exception as e:  # noqa: BLE001
             logger.debug("keepalive failed (%s); dropping socket", e)
@@ -444,12 +487,13 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         self,
         *,
         tts: tts_module.TTS,
-        backend: _Qwen3Backend,
+        backend: Qwen3Backend,
+        opts: _TTSOptions,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._backend = backend
-        self._opts = replace(backend._opts)
+        self._opts = opts
 
     async def _run(self, output_emitter: tts_module.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -462,7 +506,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         )
 
         try:
-            ws, applied_config = await self._backend._acquire(self._conn_options)
+            ws, applied_config = await self._backend.acquire(self._conn_options)
         except APIError:
             raise
         except asyncio.TimeoutError as e:
@@ -474,7 +518,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
 
-        config = self._backend._build_session_config()
+        config = self._backend.build_session_config(self._opts)
         state = _TurnState()
         discard = True
 
@@ -540,11 +584,11 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(msg.data)
-                etype = event.get("type")
+                event = _decode_response(msg.data)
+                etype = event.type
 
                 if etype == "audio.start":
-                    rate = int(event.get("sample_rate", SAMPLE_RATE))
+                    rate = event.sample_rate
                     if rate != SAMPLE_RATE:
                         logger.warning(
                             "server sample_rate=%d, expected %d; audio will be mistimed",
@@ -556,15 +600,13 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                     sentence_offset = segment_bytes / _BYTES_PER_SECOND
 
                 elif etype == "audio.done":
-                    if event.get("error"):
+                    if event.error:
                         logger.error(
                             "synthesis failed for sentence %s",
-                            event.get("sentence_index"),
+                            event.sentence_index,
                         )
                     elif self._opts.word_timestamps:
-                        self._emit_timestamps(
-                            output_emitter, event.get("timestamp_info"), sentence_offset
-                        )
+                        self._emit_timestamps(output_emitter, event.timestamp_info, sentence_offset)
 
                 elif etype == "session.done":
                     state.flushes_done += 1
@@ -574,7 +616,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
 
                 elif etype == "error":
                     raise APIStatusError(
-                        message=str(event.get("message", "unknown TTS error")),
+                        message=event.message,
                         status_code=500,
                         request_id=request_id,
                         body=None,
@@ -604,7 +646,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await self._backend._release(
+            await self._backend.release(
                 ws, config, discard=discard, conn_options=self._conn_options
             )
 
@@ -644,13 +686,15 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
     def _emit_timestamps(
         self,
         output_emitter: tts_module.AudioEmitter,
-        timestamp_info: dict[str, Any] | None,
+        timestamp_info: TimestampInfo | None,
         offset: float,
     ) -> None:
         """Rebase one sentence's word times onto the segment timeline."""
         if not timestamp_info:
             return
-        alignment = timestamp_info.get("word_alignment") or {}
+        alignment = timestamp_info.word_alignment
+        if alignment is None:
+            return
         timed = [
             TimedString(
                 text=f"{word} ",
@@ -660,9 +704,9 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             # strict=False on purpose: a ragged alignment should cost timestamps,
             # not drop the call mid-turn.
             for word, start, end in zip(
-                alignment.get("words") or [],
-                alignment.get("word_start_times_seconds") or [],
-                alignment.get("word_end_times_seconds") or [],
+                alignment.words,
+                alignment.word_start_times_seconds,
+                alignment.word_end_times_seconds,
                 strict=False,
             )
         ]
@@ -671,7 +715,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
 
 
 async def _control(
-    model_endpoint: str, api_key: str | None, message: dict[str, object]
+    model_endpoint: str, api_key: str | None, message: dict[str, JsonValue]
 ) -> dict[str, JsonValue]:
     api_key = api_key or os.environ.get("BASETEN_API_KEY")
     if not api_key:
@@ -694,7 +738,7 @@ async def _control(
                 # on ERROR — json.loads would raise a bare TypeError and hide
                 # what actually went wrong.
                 raise RuntimeError(f"unexpected reply to {message.get('type')!r}: {msg.type.name}")
-            return TypeAdapter(dict[str, JsonValue]).validate_json(msg.data)
+            return _JSON_OBJECT.validate_json(msg.data)
 
 
 async def register_voice(
@@ -712,7 +756,7 @@ async def register_voice(
     """
     with open(ref_audio_path, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode()
-    message: dict[str, Any] = {
+    message: dict[str, JsonValue] = {
         "type": "voice.add",
         "name": name,
         "consent": consent,

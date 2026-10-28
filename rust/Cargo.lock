@@ -1578,6 +1578,7 @@ dependencies = [
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-storage",
+ "lk-agents-voice",
  "lk-agents-worker",
  "log",
  "pbjson-types",

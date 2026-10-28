@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Sequence
+from collections.abc import Sequence
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -11,9 +11,7 @@ _JSON_SCHEMA = TypeAdapter(dict[str, JsonValue])
 
 
 def parse_tools(
-    tools: Sequence[
-        llm.FunctionTool[..., Awaitable[object]] | llm.RawFunctionTool[..., Awaitable[object]]
-    ],
+    tools: Sequence[llm.FunctionTool[..., object] | llm.RawFunctionTool[..., object]],
 ) -> list[dict[str, JsonValue]]:
     """Prepare tools for sending to Ultravox. https://docs.ultravox.ai/essentials/tools#creating-your-first-custom-tool"""
 

@@ -10,7 +10,7 @@
 //! with an [`Event`]; it decides nothing.
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
@@ -58,7 +58,9 @@ pub enum Event {
         call: CallId,
     },
     /// The receiver's `clear_buffer` event.
-    ClearBuffer,
+    ClearBuffer {
+        epoch: u64,
+    },
     /// `aclose()`.
     Close {
         call: CallId,
@@ -68,13 +70,16 @@ pub enum Event {
         connected: bool,
     },
     AudioOpened(Result<(), ProviderError>),
-    Audio(Result<Option<AvatarFrame>, ProviderError>),
+    Audio(Result<(u64, bool, Option<AvatarFrame>), ProviderError>),
     AudioPushed(Result<(), ProviderError>),
     FramesOpened(Result<(), ProviderError>),
     Frame(Result<Option<AvatarFrame>, ProviderError>),
     Published(Result<(), ProviderError>),
     Pushed(Result<(), ProviderError>),
-    Reported(Result<(), ProviderError>),
+    Reported {
+        finished: bool,
+        result: Result<(), ProviderError>,
+    },
     GeneratorCleared {
         clear: u64,
         result: Result<(), ProviderError>,
@@ -167,8 +172,15 @@ pub struct RunnerCore {
     owed: u32,
     /// The segment the receiver is handing over has had audio.
     reading: bool,
-    /// Each clear in flight, and whether a segment was owed a report when it arrived.
-    clears: BTreeMap<u64, bool>,
+    /// Each clear in flight and the actual segments read whose finishes it owes.
+    clears: BTreeMap<u64, Clear>,
+    clear_epoch: u64,
+    held_audio: Option<(u64, bool, AvatarFrame)>,
+    reporting: bool,
+    // Pending finish I/O is bounded by the segments already read; new reads are held.
+    // Repeated zero-position cut acknowledgements share one outbox entry.
+    reports: VecDeque<PendingReport>,
+    frame_pull_paused: bool,
     /// A clear cut the segment the receiver was handing over: its end, read before any new
     /// audio, is the cut segment's, whose finish the clear reported. The reference pushes it on to
     /// the generator, where it reports the next segment finished before it played.
@@ -187,6 +199,19 @@ pub struct RunnerCore {
     closed: bool,
 }
 
+#[derive(Debug)]
+struct Clear {
+    epoch: u64,
+    owed: u32,
+}
+
+#[derive(Debug)]
+struct PendingReport {
+    position: f64,
+    interrupted: bool,
+    repeats: u32,
+}
+
 impl RunnerCore {
     pub fn new(lazy_publish: bool) -> Self {
         RunnerCore {
@@ -203,6 +228,11 @@ impl RunnerCore {
             owed: 0,
             reading: false,
             clears: BTreeMap::new(),
+            clear_epoch: 0,
+            held_audio: None,
+            reporting: false,
+            reports: VecDeque::new(),
+            frame_pull_paused: false,
             stale_end: false,
             next_clear: 0,
             audio_pushing: false,
@@ -251,10 +281,11 @@ impl RunnerCore {
                     }
                 }
             }
-            Event::ClearBuffer if !self.cut() => {
+            Event::ClearBuffer { epoch } if !self.cut() && epoch > self.clear_epoch => {
+                self.clear_epoch = epoch;
                 let clear = self.next_clear;
                 self.next_clear += 1;
-                self.clears.insert(clear, std::mem::take(&mut self.owed) > 0);
+                self.clears.insert(clear, Clear { epoch, owed: std::mem::take(&mut self.owed) });
                 self.stale_end = std::mem::take(&mut self.reading);
                 if self.audio_pushing {
                     self.clears_waiting.push(clear);
@@ -263,25 +294,45 @@ impl RunnerCore {
                 }
             }
             Event::GeneratorCleared { clear, result } if !self.cut() => {
-                let playing = self.clears.remove(&clear).unwrap_or(false);
-                match result {
-                    Ok(()) if playing => {
-                        let position = std::mem::take(&mut self.position);
-                        out.push(Effect::Io(IoOp::ReportFinished { position, interrupted: true }));
-                    }
-                    Ok(()) => {}
-                    Err(e) => log_error("_handle_clear_buffer", &e),
+                let owed = self.clears.remove(&clear).map_or(0, |clear| clear.owed);
+                if let Err(error) = result {
+                    log_error("_handle_clear_buffer", &error);
                 }
+                // The receiver has cut this input even if the generator could not clear.
+                for _ in 0..owed {
+                    let position = std::mem::take(&mut self.position);
+                    self.report_finished(position, true, &mut out);
+                }
+                self.release_audio(&mut out);
             }
             Event::AudioOpened(result) if !self.cut() => match result {
                 Ok(()) => out.push(Effect::Io(IoOp::NextAudio)),
                 Err(e) => self.loop_ended(true, Err(e), &mut out),
             },
             Event::Audio(result) if !self.cut() => match result {
-                Ok(Some(AvatarFrame::SegmentEnd)) if std::mem::take(&mut self.stale_end) => {
+                Ok((epoch, starts_segment, Some(_))) if epoch < self.clear_epoch => {
+                    if starts_segment {
+                        if let Some(clear) =
+                            self.clears.values_mut().find(|clear| clear.epoch > epoch)
+                        {
+                            clear.owed += 1;
+                        } else {
+                            self.report_finished(0.0, true, &mut out);
+                        }
+                    }
                     out.push(Effect::Io(IoOp::NextAudio));
                 }
-                Ok(Some(item)) => {
+                Ok((_, _, Some(AvatarFrame::SegmentEnd)))
+                    if std::mem::take(&mut self.stale_end) =>
+                {
+                    out.push(Effect::Io(IoOp::NextAudio));
+                }
+                Ok((epoch, starts_segment, Some(item)))
+                    if !self.clears.is_empty() || self.reporting =>
+                {
+                    self.held_audio = Some((epoch, starts_segment, item));
+                }
+                Ok((_, _, Some(item))) => {
                     let frame = match item {
                         AvatarFrame::Audio(frame) => {
                             if !std::mem::replace(&mut self.reading, true) {
@@ -299,7 +350,7 @@ impl RunnerCore {
                     self.audio_pushing = true;
                     out.push(Effect::Io(IoOp::PushAudio(frame)));
                 }
-                Ok(None) => self.loop_ended(true, Ok(()), &mut out),
+                Ok((_, _, None)) => self.loop_ended(true, Ok(()), &mut out),
                 Err(e) => self.loop_ended(true, Err(e), &mut out),
             },
             Event::AudioPushed(result) if !self.cut() => {
@@ -313,7 +364,7 @@ impl RunnerCore {
                 }
             }
             Event::FramesOpened(result) if !self.cut() => match result {
-                Ok(()) => out.push(Effect::Io(IoOp::NextFrame)),
+                Ok(()) => self.next_frame(&mut out),
                 Err(e) => self.loop_ended(false, Err(e), &mut out),
             },
             Event::Frame(result) if !self.cut() => match result {
@@ -322,9 +373,9 @@ impl RunnerCore {
                     if self.owed > 0 {
                         self.owed -= 1;
                         let position = std::mem::take(&mut self.position);
-                        out.push(Effect::Io(IoOp::ReportFinished { position, interrupted: false }));
+                        self.report_finished(position, false, &mut out);
                     }
-                    out.push(Effect::Io(IoOp::NextFrame));
+                    self.next_frame(&mut out);
                 }
                 Ok(Some(AvatarFrame::Audio(frame))) => {
                     let duration = frame.duration();
@@ -371,14 +422,40 @@ impl RunnerCore {
                             out.push(Effect::Io(IoOp::ReportStarted));
                         }
                     }
-                    out.push(Effect::Io(IoOp::NextFrame));
+                    self.next_frame(&mut out);
                 }
                 Err(e) => {
                     self.pushing = None;
                     self.loop_ended(false, Err(e), &mut out);
                 }
             },
-            Event::Reported(Err(e)) => log_error("the playback report", &e),
+            Event::Reported { finished, result } => {
+                let delivered = match result {
+                    Ok(()) => true,
+                    Err(error) => {
+                        log_error("the playback report", &error);
+                        if finished {
+                            // Delivery is unknown. Preserve the ordering barrier and held input
+                            // until explicit close; a failed callback is not an acknowledgement.
+                            self.failed.get_or_insert(RunnerError::Failed(error));
+                            self.answer_waiting(&mut out);
+                        }
+                        false
+                    }
+                };
+                if finished && delivered {
+                    self.reporting = false;
+                    if let Some(mut report) = self.reports.pop_front() {
+                        let (position, interrupted) = (report.position, report.interrupted);
+                        if report.repeats > 1 {
+                            report.repeats -= 1;
+                            self.reports.push_front(report);
+                        }
+                        self.report_finished(position, interrupted, &mut out);
+                    }
+                    self.release_audio(&mut out);
+                }
+            }
             Event::Close { call } => match self.closing {
                 _ if self.closed => out.push(Effect::Answer { call, result: Ok(()) }),
                 // a second close while one is under way waits for nothing more: the first answers
@@ -406,6 +483,10 @@ impl RunnerCore {
             Event::IoCancelled => {
                 if let Some((Closing::Cancelling, call)) = self.closing {
                     self.held = None;
+                    self.held_audio = None;
+                    self.reports.clear();
+                    self.reporting = false;
+                    self.frame_pull_paused = false;
                     self.pushing = None;
                     self.clears.clear();
                     self.clears_waiting.clear();
@@ -443,6 +524,49 @@ impl RunnerCore {
         out.push(Effect::Io(IoOp::OpenAudio));
         out.push(Effect::Io(IoOp::OpenFrames));
         self.answer_waiting(out);
+    }
+
+    /// One actual host report at a time, so async delivery cannot reverse segment accounting.
+    fn report_finished(&mut self, position: f64, interrupted: bool, out: &mut Vec<Effect>) {
+        if self.reporting {
+            if position == 0.0
+                && interrupted
+                && self
+                    .reports
+                    .back()
+                    .is_some_and(|report| report.position == 0.0 && report.interrupted)
+            {
+                self.reports.back_mut().unwrap().repeats += 1;
+            } else {
+                self.reports.push_back(PendingReport { position, interrupted, repeats: 1 });
+            }
+        } else {
+            self.reporting = true;
+            out.push(Effect::Io(IoOp::ReportFinished { position, interrupted }));
+        }
+    }
+
+    fn next_frame(&mut self, out: &mut Vec<Effect>) {
+        if self.reporting || !self.clears.is_empty() {
+            self.frame_pull_paused = true;
+        } else {
+            out.push(Effect::Io(IoOp::NextFrame));
+        }
+    }
+
+    fn release_audio(&mut self, out: &mut Vec<Effect>) {
+        if self.clears.is_empty() && !self.reporting {
+            if let Some(observation) = self.held_audio.take() {
+                out.extend(self.handle(
+                    Event::Audio(Ok((observation.0, observation.1, Some(observation.2)))),
+                    Ts::ZERO,
+                ));
+            }
+            if !self.reporting && self.frame_pull_paused {
+                self.frame_pull_paused = false;
+                out.push(Effect::Io(IoOp::NextFrame));
+            }
+        }
     }
 
     /// `_publish_track`: once the room has connected.
@@ -531,10 +655,14 @@ impl AvatarIo {
             IoOp::NextFrame => Event::Frame(self.generator.next_frame().await),
             IoOp::Publish => Event::Published(self.media.publish().await),
             IoOp::Push(frame) => Event::Pushed(self.media.push(frame).await),
-            IoOp::ReportStarted => Event::Reported(self.receiver.notify_playback_started().await),
-            IoOp::ReportFinished { position, interrupted } => {
-                Event::Reported(self.receiver.notify_playback_finished(position, interrupted).await)
-            }
+            IoOp::ReportStarted => Event::Reported {
+                finished: false,
+                result: self.receiver.notify_playback_started().await,
+            },
+            IoOp::ReportFinished { position, interrupted } => Event::Reported {
+                finished: true,
+                result: self.receiver.notify_playback_finished(position, interrupted).await,
+            },
             IoOp::ClearGenerator { clear } => {
                 Event::GeneratorCleared { clear, result: self.generator.clear_buffer().await }
             }
@@ -698,8 +826,8 @@ impl AvatarRunner {
 
     /// The receiver's `clear_buffer` event.
     #[host(method)]
-    pub fn clear_buffer(&self) {
-        let _ = self.events.send(Event::ClearBuffer);
+    pub fn clear_buffer(&self, epoch: u64) {
+        let _ = self.events.send(Event::ClearBuffer { epoch });
     }
 
     /// `aclose()`: the receiver, then the loops and what is in flight, then the media.

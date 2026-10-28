@@ -398,7 +398,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                 },
                 conn_options=self._conn_options,
             )
-            c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
+            c_request_id = utils.http_context.websocket_headers(ws).get(REQUEST_ID_HEADER)
             logger.debug(
                 "Established new Cartesia STT WebSocket connection",
                 extra={"cartesia_request_id": c_request_id},

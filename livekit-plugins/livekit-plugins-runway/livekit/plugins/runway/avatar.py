@@ -141,7 +141,8 @@ class AvatarSession(BaseAvatarSession):
         def _on_agent_session_close(_: CloseEvent) -> None:
             self._ensure_end_session_task()
 
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
@@ -283,6 +284,8 @@ class AvatarSession(BaseAvatarSession):
             )
 
     async def aclose(self) -> None:
-        if end_session_task := self._ensure_end_session_task():
-            await asyncio.shield(end_session_task)
-        await super().aclose()
+        try:
+            if end_session_task := self._ensure_end_session_task():
+                await asyncio.shield(end_session_task)
+        finally:
+            await super().aclose()

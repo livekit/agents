@@ -6,6 +6,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectOptions
+from livekit.plugins.avatario.api import AvatarioAPI
 from livekit.plugins.bey import AvatarSession as BeySession
 from livekit.plugins.bithuman import AvatarSession as BitHumanSession
 from livekit.plugins.liveavatar.api import LiveAvatarAPI
@@ -14,8 +15,8 @@ from livekit.plugins.runway import AvatarSession as RunwaySession
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("provider", ["bey", "bithuman", "liveavatar", "runway"])
-async def test_zero_retries_still_creates_avatar(provider):
+@pytest.mark.parametrize("provider", ["avatario", "bey", "bithuman", "liveavatar", "runway"])
+async def test_zero_retries_still_creates_avatar(provider, monkeypatch):
     requests = []
 
     async def create(request):
@@ -29,7 +30,11 @@ async def test_zero_retries_still_creates_avatar(provider):
     async with TestServer(app) as server, aiohttp.ClientSession() as http:
         options = APIConnectOptions(max_retry=0)
         url = str(server.make_url("")).rstrip("/")
-        if provider == "bey":
+        if provider == "avatario":
+            monkeypatch.setattr("livekit.plugins.avatario.api.DEFAULT_API_URL", url)
+            api = AvatarioAPI(api_key="key", avatar_id="avatar", session=http, conn_options=options)
+            await api.start_session(livekit_agent_identity="agent")
+        elif provider == "bey":
             avatar = BeySession(api_key="key", api_url=url, conn_options=options)
             avatar._http_session = http
             await avatar._start_agent("wss://livekit.test", "token")

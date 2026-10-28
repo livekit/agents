@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from importlib import import_module
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -41,9 +41,6 @@ from livekit.agents.voice.avatar import (
 )
 
 from .log import logger
-
-if TYPE_CHECKING:
-    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -103,34 +100,37 @@ class BitHumanException(Exception):
     """Exception for BitHuman errors"""
 
 
-class _RuntimeSettings(Protocol):
+class RuntimeSettings(Protocol):
     FPS: int
     INPUT_SAMPLE_RATE: int
 
 
-class _AudioChunk(Protocol):
-    bytes: bytes
-    array: NDArray[np.int16]
+class AudioChunk(Protocol):
+    @property
+    def bytes(self) -> bytes: ...
+
+    @property
+    def array(self) -> NDArray[np.int16]: ...
+
     sample_rate: int
 
 
-class _RenderedFrame(Protocol):
+class RenderedFrame(Protocol):
     bgr_image: NDArray[np.uint8] | None
-    audio_chunk: _AudioChunk | None
+    audio_chunk: AudioChunk | None
     end_of_speech: bool
 
 
-class _BithumanRuntime(Protocol):
-    settings: _RuntimeSettings
-    transaction_id: str
+class BitHumanRuntime(Protocol):
+    """SDK capabilities consumed by a local avatar session and its video generator."""
 
-    def _regenerate_transaction_id(self) -> None: ...
-    async def _initialize_token(self) -> None: ...
+    settings: RuntimeSettings
+
     def get_first_frame(self) -> NDArray[np.uint8] | None: ...
-    async def push_audio(self, audio: bytes, sample_rate: int, *, last_chunk: bool) -> None: ...
+    async def push_audio(self, data: bytes, sample_rate: int, *, last_chunk: bool) -> None: ...
     async def flush(self) -> None: ...
     def interrupt(self) -> None: ...
-    def run(self) -> AsyncIterator[_RenderedFrame]: ...
+    def run(self) -> AsyncIterator[RenderedFrame]: ...
     async def stop(self) -> None: ...
     def cleanup(self) -> None: ...
 
@@ -143,7 +143,7 @@ class _RuntimeFactory(Protocol):
         api_secret: str | None,
         token: str | None,
         api_url: str,
-    ) -> _BithumanRuntime: ...
+    ) -> BitHumanRuntime: ...
 
 
 class AvatarSession(BaseAvatarSession):
@@ -157,7 +157,7 @@ class AvatarSession(BaseAvatarSession):
         api_token: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[BitHumanModel] = NOT_GIVEN,
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
-        runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
+        runtime: NotGivenOr[BitHumanRuntime | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
         avatar_id: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -183,7 +183,10 @@ class AvatarSession(BaseAvatarSession):
                 local mode, where the ``.imx`` file determines the model.
             model_path: Path to a bitHuman ``.imx`` model file, for local mode.
                 Defaults to ``BITHUMAN_MODEL_PATH``.
-            runtime: An existing ``AsyncBithuman`` runtime to reuse in local mode.
+            runtime: A caller-owned local runtime prepared for this session. The plugin
+                stops playback on close; the caller manages authentication, preparation
+                before any later session, and final cleanup. Restart support depends on
+                the supplied SDK runtime.
             avatar_image: A portrait for a cloud photo session (Expression 1 only): a
                 PIL image, a local file path, an ``http(s)`` URL or base64-encoded
                 image data.
@@ -238,6 +241,7 @@ class AvatarSession(BaseAvatarSession):
             the matching ``start()`` arguments) to create the avatar's room token.
         """
         super().__init__()
+        self._provided_runtime = runtime if utils.is_given(runtime) else None
         self._api_url = (
             api_url
             or os.getenv("BITHUMAN_API_URL")
@@ -266,7 +270,7 @@ class AvatarSession(BaseAvatarSession):
         self._model = model
 
         # validate mode-specific requirements
-        if self._mode == "local":
+        if self._mode == "local" and self._provided_runtime is None:
             if self._model_path is None:
                 raise BitHumanException(
                     "`model_path` or BITHUMAN_MODEL_PATH env must be set for local mode"
@@ -297,7 +301,7 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime = cast(_BithumanRuntime | None, runtime or None)
+        self._runtime = self._provided_runtime
 
     @property
     def _is_expression_model(self) -> bool:
@@ -330,28 +334,29 @@ class AvatarSession(BaseAvatarSession):
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        await super().start(agent_session, room)
-        if self._mode == "local":
-            await self._start_local(agent_session, room)
-        elif self._mode == "cloud":
-            await self._start_cloud(
-                agent_session,
-                room,
-                livekit_url=livekit_url,
-                livekit_api_key=livekit_api_key,
-                livekit_api_secret=livekit_api_secret,
-            )
-        else:
-            raise BitHumanException(f"Invalid mode: {self._mode}")
+        if self._avatar_runner is not None:
+            raise BitHumanException("the local avatar session is already started")
+        try:
+            await super().start(agent_session, room)
+            if self._mode == "local":
+                await self._start_local(agent_session, room)
+            elif self._mode == "cloud":
+                await self._start_cloud(
+                    agent_session,
+                    room,
+                    livekit_url=livekit_url,
+                    livekit_api_key=livekit_api_key,
+                    livekit_api_secret=livekit_api_secret,
+                )
+            else:
+                raise BitHumanException(f"Invalid mode: {self._mode}")
+        except BaseException:
+            await self.aclose()
+            raise
 
     async def _start_local(self, agent_session: VoiceSession, room: rtc.Room) -> None:
-        if self._runtime:
-            runtime = self._runtime
-            logger.debug("previous transaction id: %s", runtime.transaction_id)
-            runtime._regenerate_transaction_id()
-            logger.debug("new transaction id: %s", runtime.transaction_id)
-            await runtime._initialize_token()
-        else:
+        runtime = self._provided_runtime
+        if runtime is None:
             # BitHuman's native AsyncBithuman export has no complete type stub.
             factory = cast(_RuntimeFactory, import_module("bithuman").AsyncBithuman)
             runtime = await factory.create(
@@ -360,7 +365,7 @@ class AvatarSession(BaseAvatarSession):
                 token=self._api_token,
                 api_url=self._api_url,
             )
-            self._runtime = runtime
+        self._runtime = runtime
 
         video_generator = BithumanGenerator(runtime)
 
@@ -440,7 +445,8 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
@@ -724,20 +730,32 @@ class AvatarSession(BaseAvatarSession):
         return self._http_session
 
     @property
-    def runtime(self) -> AsyncBithuman:
+    def runtime(self) -> BitHumanRuntime:
         if self._runtime is None:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
 
     async def aclose(self) -> None:
-        await super().aclose()
-        if self._mode == "local" and self._runtime is not None:
-            self._runtime.cleanup()
+        runner, self._avatar_runner = self._avatar_runner, None
+        runtime, self._runtime = self._runtime, None
+        try:
+            try:
+                if runner is not None:
+                    await runner.aclose()
+            finally:
+                if self._mode == "local" and runtime is not None:
+                    try:
+                        await runtime.stop()
+                    finally:
+                        if self._provided_runtime is None:
+                            runtime.cleanup()
+        finally:
+            await super().aclose()
 
 
 class BithumanGenerator(VideoGenerator):
-    def __init__(self, runtime: AsyncBithuman):
-        self._runtime = cast(_BithumanRuntime, runtime)
+    def __init__(self, runtime: BitHumanRuntime) -> None:
+        self._runtime = runtime
 
     @property
     def video_resolution(self) -> tuple[int, int]:

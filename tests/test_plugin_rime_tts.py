@@ -2788,3 +2788,46 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     assert _SECRET not in caplog.text
     retry_logs = [record for record in caplog.records if "retrying in" in record.getMessage()]
     assert len(retry_logs) == (1 if expected_retryable else 0)
+
+
+async def test_ws3_rejects_invalid_word_timestamps() -> None:
+    from aiohttp.test_utils import TestServer
+
+    async def websocket(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for message in ws:
+            packet = json.loads(message.data)
+            if packet.get("operation") == "flush":
+                await ws.send_json(
+                    {
+                        "type": "timestamps",
+                        "word_timestamps": {"words": ["hello"], "start": ["later"], "end": [1.0]},
+                    }
+                )
+                await ws.send_json({"type": "done"})
+            elif packet.get("operation") == "eos":
+                await ws.send_json({"type": "done"})
+                break
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/ws3", websocket)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        provider = TTS(
+            api_key="test-key",
+            model="coda",
+            base_url=str(server.make_url("")).rstrip("/"),
+            use_websocket=True,
+            http_session=session,
+            allow_custom_endpoint=True,
+        )
+        try:
+            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                stream.push_text("hello")
+                stream.end_input()
+                with pytest.raises(APIConnectionError) as failure:
+                    _ = [event async for event in stream]
+                assert not failure.value.retryable
+        finally:
+            await provider.aclose()

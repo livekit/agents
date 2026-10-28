@@ -1,21 +1,68 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Set
+from collections.abc import Mapping, Sequence, Set
 from copy import deepcopy
-from typing import Any, ClassVar
+from types import GenericAlias, UnionType
+from typing import Any, ClassVar, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 
+import google.auth
+from google.api_core.client_options import ClientOptions
+from google.api_core.exceptions import GoogleAPICallError
+from google.auth.credentials import Credentials
 from google.genai import types
-from livekit.agents import APIConnectOptions, llm
-from livekit.agents.llm import utils as llm_utils
+from livekit.agents import APIConnectOptions, APIStatusError, llm
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from .log import logger
 from .tools import GeminiTool
+
+
+class Auth(Protocol):
+    """Typed boundary for google-auth's credential resolvers."""
+
+    def default(self, *, scopes: Sequence[str] | None = None) -> tuple[Credentials, str | None]: ...
+
+    def load_credentials_from_file(
+        self, filename: str, *, scopes: Sequence[str] | None = None
+    ) -> tuple[Credentials, str | None]: ...
+
+    def load_credentials_from_dict(
+        self, info: Mapping[str, object], *, scopes: Sequence[str] | None = None
+    ) -> tuple[Credentials, str | None]: ...
+
+
+class APICallError(Protocol):
+    message: str
+    code: int | None
+
+    @property
+    def details(self) -> list[object]: ...
+
+
+def api_status_error(error: GoogleAPICallError) -> APIStatusError:
+    sdk_error = cast(APICallError, error)
+    return APIStatusError(
+        sdk_error.message, status_code=sdk_error.code or -1, body=sdk_error.details
+    )
+
+
+ClientT = TypeVar("ClientT", covariant=True)
+
+
+class ServiceAccountClient(Protocol[ClientT]):
+    def from_service_account_info(
+        self, info: Mapping[str, object], *, client_options: ClientOptions | None = None
+    ) -> ClientT: ...
+
+
+auth = cast(Auth, google.auth)
+ResponseSchema = types.Schema | dict[str, object] | type[object] | GenericAlias | UnionType
+
 
 __all__ = ["create_tools_config"]
 
@@ -118,13 +165,13 @@ def get_tool_results_for_realtime(
     )
 
 
-def to_response_format(response_format: type | dict[str, object]) -> types.SchemaUnion:
-    _, json_schema_type = llm_utils.to_response_format_param(response_format)
-    if isinstance(json_schema_type, TypeAdapter):
-        schema = json_schema_type.json_schema()
+def to_response_format(response_format: ResponseSchema) -> types.Schema | dict[str, object] | None:
+    if isinstance(response_format, types.Schema):
+        return response_format
+    if isinstance(response_format, dict):
+        schema = response_format
     else:
-        schema = json_schema_type.model_json_schema()
-
+        schema = TypeAdapter(response_format).json_schema()
     return _GeminiJsonSchema(schema).simplify()
 
 
@@ -214,7 +261,7 @@ class _GeminiJsonSchema:
         # Handle anyOf - map to any_of
         if any_of := schema.pop("anyOf", None):
             if any_of:
-                mapped_any_of = []
+                mapped_any_of: list[dict[str, Any]] = []
                 has_null = False
                 non_null_schema = None
 

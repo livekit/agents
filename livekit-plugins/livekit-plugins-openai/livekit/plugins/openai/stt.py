@@ -22,12 +22,13 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
 import httpx2 as httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import openai
 from livekit import rtc
@@ -134,13 +135,20 @@ def _transcript_language(languages: list[str]) -> LanguageCode:
     return LanguageCode(languages[0]) if len(languages) == 1 else LanguageCode("")
 
 
+class _DetectedLanguage(BaseModel):
+    code: str | None = None
+
+
+_DETECTED_LANGUAGES = TypeAdapter(list[_DetectedLanguage])
+
+
 @dataclass
 class _STTOptions:
     model: STTModels | str
     languages: list[str]
     detect_language: bool
     turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
-    keywords: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list[str])
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
@@ -449,6 +457,7 @@ class STT(stt.STT):
             pool=self._pool,
             conn_options=conn_options,
             opts=opts,
+            options_factory=lambda: dataclasses.replace(self._opts),
             vad_instance=self._vad,
         )
         self._streams.add(stream)
@@ -502,7 +511,7 @@ class STT(stt.STT):
         if not is_given(language):
             # a stream keeps its own language, which the new model may not take
             for stream in self._streams:
-                _validate_context(resolved_model, stream._opts.languages, user_keywords)
+                stream.validate_model(resolved_model, user_keywords)
 
         # the transport is fixed at construction: VoiceSession wraps a non-streaming STT once
         if is_given(model) and _is_realtime_only(model):
@@ -684,6 +693,7 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
         opts: _STTOptions,
+        options_factory: Callable[[], _STTOptions],
         vad_instance: VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
@@ -691,6 +701,7 @@ class SpeechStream(stt.SpeechStream):
         self._pool = pool
         # this stream's own options, and the STT's to refresh them from
         self._opts = opts
+        self._options_factory = options_factory
         self._stt: STT = stt
         self._language = _transcript_language(opts.languages)
         self._request_id = ""
@@ -702,10 +713,14 @@ class SpeechStream(stt.SpeechStream):
         self._vad = vad_instance
         self._speaking = False
 
+    def validate_model(self, model: str, keywords: list[str]) -> None:
+        """Validate a prospective model against this stream's independent language."""
+        _validate_context(model, self._opts.languages, keywords)
+
     def update_options(self, *, language: NotGivenOr[str | list[str]] = NOT_GIVEN) -> None:
         """Set the language for this stream alone, and take the rest from the STT."""
         # only a named language moves this stream off its own
-        opts = dataclasses.replace(self._stt._opts, languages=self._opts.languages)
+        opts = dataclasses.replace(self._options_factory(), languages=self._opts.languages)
         if is_given(language):
             opts.languages = _as_languages(language)
             _validate_context(opts.model, opts.languages, opts.keywords)
@@ -786,7 +801,7 @@ class SpeechStream(stt.SpeechStream):
                         if vad_stream is not None:
                             vad_stream.push_frame(data)
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self.Flush):
+                    else:
                         frames.extend(audio_bstream.flush())
 
                     for frame in frames:
@@ -901,9 +916,11 @@ class SpeechStream(stt.SpeechStream):
                         item_id = data.get("item_id", "")
                         # what the model detected beats the hint that was sent
                         detected = [
-                            LanguageCode(lang["code"])
-                            for lang in data.get("languages") or []
-                            if lang.get("code")
+                            LanguageCode(lang.code)
+                            for lang in _DETECTED_LANGUAGES.validate_python(
+                                data.get("languages") or []
+                            )
+                            if lang.code
                         ]
 
                         if transcript:

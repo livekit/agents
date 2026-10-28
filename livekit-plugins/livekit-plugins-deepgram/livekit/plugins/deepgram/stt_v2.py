@@ -41,7 +41,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from ._utils import PeriodicCollector, _to_deepgram_url
+from ._utils import PeriodicCollector, to_deepgram_url
 from .log import logger
 from .models import FluxResponse, V2Models
 
@@ -623,7 +623,7 @@ class SpeechStreamv2(stt.SpeechStream):
         try:
             ws = await utils.http_context.ws_connect(
                 self._session,
-                _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
+                to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                 headers={"Authorization": f"Token {self._api_key}"},
                 heartbeat=30.0,
                 conn_options=self._conn_options,
@@ -642,7 +642,9 @@ class SpeechStreamv2(stt.SpeechStream):
             ) from None
 
         ws_headers = {
-            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+            k: v
+            for k, v in utils.http_context.websocket_headers(ws).items()
+            if k.startswith("dg-") or k == "Date"
         }
         logger.debug(
             "Established new Deepgram STT WebSocket connection:",

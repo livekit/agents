@@ -33,23 +33,23 @@ class LiveAvatarException(Exception):
 DEFAULT_API_URL = "https://api.liveavatar.com/v1/sessions"
 
 
-class _SessionToken(BaseModel):
+class SessionToken(BaseModel):
     session_id: str
     session_token: str
 
 
-class _SessionStart(BaseModel):
+class SessionStart(BaseModel):
     ws_url: str
 
 
 _DataT = TypeVar("_DataT")
 
 
-class _SessionResponse(BaseModel, Generic[_DataT]):
+class SessionResponse(BaseModel, Generic[_DataT]):
     data: _DataT
 
 
-class _SessionStop(BaseModel):
+class SessionStop(BaseModel):
     code: int
 
 
@@ -74,7 +74,7 @@ class LiveAvatarAPI:
         self._conn_options = conn_options
         self._session = session
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
+    def http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
@@ -88,7 +88,7 @@ class LiveAvatarAPI:
         avatar_id: str,
         is_sandbox: bool = False,
         video_quality: VideoQuality | None = None,
-    ) -> _SessionResponse[_SessionToken]:
+    ) -> SessionResponse[SessionToken]:
         """Create a new streaming session, return a session id"""
 
         livekit_config: dict[str, JsonValue] = {
@@ -116,13 +116,13 @@ class LiveAvatarAPI:
             endpoint="/token",
             payload=payload,
             headers=self._headers,
-            response_type=_SessionResponse[_SessionToken],
+            response_type=SessionResponse[SessionToken],
         )
         return response_data
 
     async def start_streaming_session(
         self, session_id: str, session_token: str
-    ) -> _SessionResponse[_SessionStart]:
+    ) -> SessionResponse[SessionStart]:
         """Start the streaming session"""
         payload = {"session_id": session_id}
         headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
@@ -130,11 +130,11 @@ class LiveAvatarAPI:
             endpoint="/start",
             payload=payload,
             headers=headers,
-            response_type=_SessionResponse[_SessionStart],
+            response_type=SessionResponse[SessionStart],
         )
         return response_data
 
-    async def stop_streaming_session(self, session_id: str, session_token: str) -> _SessionStop:
+    async def stop_streaming_session(self, session_id: str, session_token: str) -> SessionStop:
         """Stop the streaming session"""
         payload = {
             "session_id": session_id,
@@ -142,7 +142,7 @@ class LiveAvatarAPI:
         }
         headers = {"content-type": "application/json", "Authorization": f"Bearer {session_token}"}
         response_data = await self._post(
-            endpoint="/stop", payload=payload, headers=headers, response_type=_SessionStop
+            endpoint="/stop", payload=payload, headers=headers, response_type=SessionStop
         )
         return response_data
 
@@ -157,7 +157,7 @@ class LiveAvatarAPI:
         url = self._api_url + endpoint
         for i in range(self._conn_options.max_retry + 1):
             try:
-                async with self._ensure_http_session().post(
+                async with self.http_session().post(
                     url=url, headers=headers, json=payload
                 ) as response:
                     if not response.ok:

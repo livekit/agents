@@ -596,6 +596,8 @@ async def cancel_and_wait(*futures: asyncio.Future[Any]) -> None:
         for i, fut in enumerate(futures):
             _, cb = waiters[i]
             fut.remove_done_callback(cb)
+            if fut.done() and not fut.cancelled():
+                fut.exception()
 
 
 def _release_waiter(waiter: asyncio.Future[Any], *_: Any) -> None:

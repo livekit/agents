@@ -21,7 +21,7 @@ from aws_sdk_bedrock_runtime.client import (  # pyright: ignore[reportMissingTyp
 )
 
 # The SDK ships annotated namespace modules without a recognized typing marker.
-from aws_sdk_bedrock_runtime.config import (
+from aws_sdk_bedrock_runtime.config import (  # pyright: ignore[reportMissingTypeStubs]
     AsyncBedrockRuntimeConfig,  # pyright: ignore[reportMissingTypeStubs]
 )
 

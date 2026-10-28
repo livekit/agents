@@ -716,10 +716,11 @@ mod session_bridge {
     fn every_key_of_a_tool_spec_lands_including_the_flag_that_used_to_be_dropped() {
         attach(|py| {
             let specs = parse_specs(py, "").expect("the producers' dict reads");
-            let [crate::ToolSpec { name, description, json_schema, flags }] =
+            let [crate::ToolSpec { name, description, json_schema, flags, provider_tool }] =
                 <[_; 1]>::try_from(specs).unwrap();
             assert_eq!((name.as_str(), description.as_str()), ("lookup", "look something up"));
             assert_eq!(json_schema["type"], "object");
+            assert!(provider_tool.is_none());
             assert!(
                 flags.ignore_on_enter,
                 "the flag was read as the default rather than the value"

@@ -221,7 +221,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            options=replace(self._opts),
+            client=self._client,
+        )
 
     def prewarm(self) -> None:
         async def _prewarm() -> None:
@@ -252,13 +258,22 @@ class ChunkedStream(tts.ChunkedStream):
     `Content-Type` -- not the requested `stream_format` -- decides how the body is parsed.
     """
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        options: _TTSOptions,
+        client: openai.AsyncClient,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = options
+        self._client = client
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        oai_stream = self._tts._client.with_options(
+        oai_stream = self._client.with_options(
             max_retries=0
         ).audio.speech.with_streaming_response.create(
             input=self.input_text,

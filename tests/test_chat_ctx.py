@@ -155,3 +155,16 @@ def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
     ctx.insert(FunctionCallOutput(call_id="c1", output="ok", is_error=False))
 
     assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_removing_framework_instructions_preserves_authored_system_messages() -> None:
+    from livekit.agents.llm.utils import remove_instructions
+
+    authored = ChatMessage(id="system-prompt", role="system", content=["Keep this instruction."])
+    framework = ChatMessage(
+        id="lk.agent_task.instructions", role="system", content=["Framework prompt."]
+    )
+    reply = ChatMessage(id="reply", role="assistant", content=["Hello."])
+    context = ChatContext([framework, authored, framework.model_copy(), reply])
+    remove_instructions(context)
+    assert context.items == [authored, reply]

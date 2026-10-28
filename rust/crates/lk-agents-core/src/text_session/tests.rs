@@ -18,6 +18,7 @@ fn message(id: &str, role: Role, text: &str) -> ChatMessage {
 fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
     let tool = FunctionToolInfo {
         spec: ToolSpec {
+            provider_tool: None,
             name: "book".into(),
             description: "Book a room.".into(),
             json_schema: json!({"type":"object", "properties":{"nights":{"type":"integer"}}}),

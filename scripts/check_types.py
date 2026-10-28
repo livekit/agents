@@ -89,11 +89,15 @@ def main() -> None:
         pkg_args.extend(["-p", pkg])
 
     uv = ["uv", "run", "--group", "typing", *uv_run_args]
+    preparation = subprocess.run(
+        [*uv, "python", "scripts/prepare_sdk_types.py"], cwd=repo_root
+    ).returncode
+    if preparation:
+        sys.exit(preparation)
     mypy = [
         *uv,
         "mypy",
         "--strict",
-        "--untyped-calls-exclude=smithy_aws_core",
         # Analyze for linux regardless of the host OS, matching the CI gate.
         # Host-platform analysis breaks on Windows: the unix branch of
         # cli/readchar.py resolves against the empty win32 termios stub
@@ -106,7 +110,7 @@ def main() -> None:
     ]
     returncode = 0
     if options.checker in ("mypy", "all"):
-        targets = [[*pkg_args, "livekit-plugins/livekit-blockguard/livekit/blockguard"]]
+        targets = [pkg_args, ["livekit-plugins/livekit-blockguard/livekit/blockguard"]]
         # Examples are separate applications and can use the same module names.
         targets.extend(
             [str(path.relative_to(repo_root))]

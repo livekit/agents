@@ -506,6 +506,7 @@ pub struct FakeLocalParticipant {
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
     byte_writes: tokio::sync::watch::Sender<bool>,
+    byte_closes: tokio::sync::watch::Sender<bool>,
     publications_flow: tokio::sync::watch::Sender<bool>,
     /// Everything sent over the data channel, in the order it went out.
     sent: Arc<SentLog>,
@@ -591,6 +592,7 @@ impl FakeLocalParticipant {
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
             byte_writes: tokio::sync::watch::channel(true).0,
+            byte_closes: tokio::sync::watch::channel(true).0,
             publications_flow: tokio::sync::watch::channel(true).0,
             sent: Arc::default(),
         }
@@ -604,6 +606,11 @@ impl FakeLocalParticipant {
     /// Hold (`false`) or release byte stream writes: a write in flight awaits, as on a real link.
     pub fn flow_byte_writes(&self, flowing: bool) {
         self.byte_writes.send_replace(flowing);
+    }
+
+    /// Hold byte stream close acknowledgements while retaining each writer.
+    pub fn flow_byte_closes(&self, flowing: bool) {
+        self.byte_closes.send_replace(flowing);
     }
 
     /// What was sent over the data channel from the `from`-th send on, in order.
@@ -834,6 +841,7 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(Box::new(FakeByteStreamWriter {
             recorded,
             flowing: self.byte_writes.subscribe(),
+            closing: self.byte_closes.subscribe(),
             index,
             sent: self.sent.clone(),
         }))
@@ -869,6 +877,7 @@ struct FakeByteStreamWriter {
     )]
     recorded: Arc<Mutex<RecordedByteStream>>,
     flowing: tokio::sync::watch::Receiver<bool>,
+    closing: tokio::sync::watch::Receiver<bool>,
     index: usize,
     sent: Arc<SentLog>,
 }
@@ -883,6 +892,7 @@ impl crate::ByteStreamWriter for FakeByteStreamWriter {
     }
 
     async fn close(self: Box<Self>) -> Result<()> {
+        let _ = self.closing.clone().wait_for(|flowing| *flowing).await;
         self.recorded.lock().unwrap().closed = true;
         self.sent.push(Sent::StreamClosed(self.index));
         Ok(())

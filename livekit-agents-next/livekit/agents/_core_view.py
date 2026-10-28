@@ -14,7 +14,7 @@ import asyncio
 import dataclasses
 import functools
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from typing import Any, Protocol
+from typing import Any, Never, Protocol
 
 from pydantic import TypeAdapter
 
@@ -51,7 +51,20 @@ def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
         [t for key in pools if key is not None for t in _core.resolve_host_ref(key)],
         req.tool_names,
     )
+    names = {
+        tool.info.name
+        for tool in tools
+        if llm.is_function_tool(tool) or llm.is_raw_function_tool(tool)
+    }
+    for schema in req.function_schemas:
+        if schema["name"] not in names:
+            tools.append(llm.function_tool(raw_schema=schema)(_refuse_native_tool_call))
+            names.add(schema["name"])
     return chat_ctx, tools
+
+
+def _refuse_native_tool_call(*args: object, **kwargs: object) -> Never:
+    raise RuntimeError("this tool is executed by the native agent and cannot be called directly")
 
 
 def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool | Toolset]]) -> Any:
@@ -388,18 +401,28 @@ def _views() -> dict[type, Any]:
 
 
 def tool_specs(tools: Sequence[Tool | Toolset]) -> list[dict[str, Any]]:
-    """The core's ``ToolSpec`` of each function tool; provider tools stay in the host pool."""
-    specs = []
-    for tool in llm.ToolContext(tools).function_tools.values():
-        from .llm.utils import tool_schema
+    """Project function schemas and provider declarations through the core's tool boundary."""
+    from .llm.utils import tool_schema
 
-        name, description, parameters = tool_schema(tool)
+    specs = []
+    for tool in llm.ToolContext(tools).flatten():
+        ignore_on_enter = False
+        if isinstance(tool, ProviderTool):
+            name, description, parameters = tool.id, "", None
+            provider_tool = {"provider": tool.provider, "payload": tool.to_dict()}
+        elif llm.is_function_tool(tool) or llm.is_raw_function_tool(tool):
+            name, description, parameters = tool_schema(tool)
+            ignore_on_enter = ToolFlag.IGNORE_ON_ENTER in tool.info.flags
+            provider_tool = None
+        else:
+            continue
         specs.append(
             {
                 "name": name,
                 "description": description,
                 "json_schema": parameters,
-                "ignore_on_enter": ToolFlag.IGNORE_ON_ENTER in tool.info.flags,
+                "ignore_on_enter": ignore_on_enter,
+                "provider_tool": provider_tool,
             }
         )
     return specs

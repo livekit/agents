@@ -18,7 +18,7 @@ from urllib.parse import quote, urlencode
 
 import aiohttp
 import numpy as np
-import sphn  # type: ignore[import-untyped]
+import sphn
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
@@ -548,7 +548,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             # sphn >=0.2: append_bytes returns pcm directly
             pcm_float = self._opus_reader.append_bytes(opus_payload)
 
-            if pcm_float is None or len(pcm_float) == 0:
+            if len(pcm_float) == 0:
                 return
 
             # Convert float32 to int16 PCM

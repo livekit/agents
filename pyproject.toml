@@ -122,6 +122,7 @@ dev = [
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
 typing = [
+    "mypy-protobuf>=5.1.0",
     "pyright",
     # .pyi stubs, never used at runtime
     "pandas-stubs>=3.0.3.260530",
@@ -212,6 +213,7 @@ markers = [
 
 
 [tool.mypy]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/.type_stubs"
 strict = true
 plugins = ["pydantic.mypy"]
 
@@ -271,6 +273,7 @@ module = "livekit.plugins"
 follow_untyped_imports = true
 
 [tool.pyright]
+stubPath = ".type_stubs"
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 executionEnvironments = [

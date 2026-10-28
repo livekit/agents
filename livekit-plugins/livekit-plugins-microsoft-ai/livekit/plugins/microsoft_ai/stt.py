@@ -23,7 +23,7 @@ import math
 import weakref
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -272,16 +272,11 @@ class SpeechStream(stt.RecognizeStream):
         language: str | None,
         conn_options: APIConnectOptions,
     ) -> None:
-        # Core resets its retry budget after a long attempt. Own a finite, connect-only
-        # budget instead: replaying already-consumed audio could lose or duplicate words.
-        super().__init__(
-            stt=stt, conn_options=replace(conn_options, max_retry=0), sample_rate=SAMPLE_RATE
-        )
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._stt: STT = stt
         self._client = client
         self._max_buffered_audio = max_buffered_audio
         self._vad = vad
-        self._connect_options = conn_options
         self._language_hint = language
         self._language = LanguageCode(language or "")
         self._input_duration = 0.0
@@ -338,23 +333,14 @@ class SpeechStream(stt.RecognizeStream):
         return event
 
     async def _run(self) -> None:
-        for attempt in range(self._connect_options.max_retry + 1):
-            try:
-                if self._input_error is not None:
-                    raise self._input_error
-                await self._attempt()
-                return
-            except APIError as error:
-                if self._input_consumed:
-                    error.retryable = False
-                if not error.retryable or attempt == self._connect_options.max_retry:
-                    raise
-                self._emit_error(error, recoverable=True)
-                logger.warning(
-                    "Microsoft AI STT connection failed; retrying before audio consumption",
-                    extra={"attempt": attempt + 1},
-                )
-                await asyncio.sleep(self._connect_options._interval_for_retry(attempt))
+        try:
+            if self._input_error is not None:
+                raise self._input_error
+            await self._attempt()
+        except APIError as error:
+            if self._input_consumed:
+                error.retryable = False
+            raise
 
     async def _attempt(self) -> None:
         tasks: list[asyncio.Task[None]] = []

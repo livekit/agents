@@ -25,6 +25,16 @@ pub struct ToolSpec {
     /// Explicit JSON, including JSON null; a missing key raises.
     pub json_schema: serde_json::Value,
     pub flags: ToolFlags,
+    /// Provider-owned wire declaration; absent for a client function. `name` keeps its tool ID.
+    pub provider_tool: Option<ProviderToolDeclaration>,
+}
+
+/// Native transport ownership of an external tool declaration. Unknown/custom host tools
+/// have no native provider or payload; the canonical object remains in the host tool pool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderToolDeclaration {
+    pub provider: Option<String>,
+    pub payload: serde_json::Value,
 }
 
 /// A struct, not an enum, so axes don't exclude each other.
@@ -45,6 +55,24 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for ToolSpec {
         const OWNER: &str = "ToolSpecFromPy";
         let obj = &*obj;
         Ok(ToolSpec {
+            provider_tool: item_or(
+                obj,
+                OWNER,
+                "provider_tool",
+                |value| {
+                    if value.is_none() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(ProviderToolDeclaration {
+                            provider: item(value, OWNER, "provider")?,
+                            payload: item_with(value, OWNER, "payload", |payload| {
+                                value_from_py(payload, "ToolSpec.provider_tool.payload")
+                            })?,
+                        }))
+                    }
+                },
+                || None,
+            )?,
             name: item(obj, OWNER, "name")?,
             description: item_or(obj, OWNER, "description", |v| v.extract(), String::new)?,
             json_schema: item_with(obj, OWNER, "json_schema", |v| value_from_py(v, "ToolSpec.json_schema"))?,
@@ -181,6 +209,23 @@ impl ChatRequest {
     #[host(getter)]
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|t| t.name.clone()).collect()
+    }
+
+    /// Canonical declarations of every function offered by this request, including tools
+    /// executed by the core that have no callable object in the host pool.
+    #[host(getter)]
+    pub fn function_schemas(
+        &self,
+    ) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription> {
+        self.tools
+            .iter()
+            .filter(|tool| tool.provider_tool.is_none())
+            .map(|tool| crate::llm::provider_format::tools::RawFunctionDescription {
+                name: tool.name.clone(),
+                description: Some(tool.description.clone()),
+                parameters: tool.json_schema.clone(),
+            })
+            .collect()
     }
 
     /// The key of the host's live `list[Tool]` pool.

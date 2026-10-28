@@ -41,7 +41,7 @@ from livekit.agents import (
 )
 
 from ._utils import (
-    _ErrorResponse,
+    ErrorResponse,
     normalize_base_url,
     normalize_voice,
     raise_ws_error,
@@ -106,17 +106,17 @@ def disconnect_message() -> dict[str, str]:
     return {"type": "disconnect"}
 
 
-class _ControlMessage(_ErrorResponse):
+class _ControlMessage(ErrorResponse):
     type: Literal["connected", "configured", "error", "pong"]
 
 
-class _Cancellation(_ErrorResponse):
+class _Cancellation(ErrorResponse):
     type: Literal["cancellation"]
     characters_used: int = 0
     duration_seconds: float = 0.0
 
 
-class _EndOfUtterance(_ErrorResponse):
+class _EndOfUtterance(ErrorResponse):
     type: Literal["end_of_utterance"]
     characters_used: int
     duration_seconds: float

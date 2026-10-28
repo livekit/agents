@@ -533,11 +533,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             except APIStatusError as exc:
                 # Only JSON per-message errors leave the WebSocket open. Close-code
                 # status errors represent a dead transport and must be evicted.
-                if isinstance(exc.body, dict) and exc.body.get("type") == "error":
-                    reusable = True
-                    deferred_error = exc
-                else:
-                    raise
+                match exc.body:
+                    case {"type": "error"}:
+                        reusable = True
+                        deferred_error = exc
+                    case _:
+                        raise
             finally:
                 if reusable:
                     self._start_keepalive(session, pool)

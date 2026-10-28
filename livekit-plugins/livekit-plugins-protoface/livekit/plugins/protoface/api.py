@@ -178,7 +178,7 @@ class ProtofaceAPI:
                     "protoface api request failed, retrying",
                     extra={"attempt": attempt + 1, "method": method, "path": path},
                 )
-                await asyncio.sleep(self._conn_options._interval_for_retry(attempt))
+                await asyncio.sleep(self._conn_options.interval_for_retry(attempt))
 
         raise APIConnectionError("Failed to call Protoface API after all retries.") from error
 

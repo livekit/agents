@@ -293,6 +293,9 @@ pub fn tool_choice(tc: Option<&lk_agents_abi::ToolChoice>) -> Value {
 
 /// `_convert_tools_to_oai`: the internally-tagged function schema.
 pub fn tool_spec(t: &lk_agents_abi::ToolSpec) -> Value {
+    if let Some(provider_tool) = &t.provider_tool {
+        return provider_tool.payload.clone();
+    }
     json!({
         "type": "function",
         "name": t.name,
@@ -761,6 +764,23 @@ mod tests {
 
     // Catches: appending `/realtime` to xAI's `/v1/realtime`, a global `replace("http", "ws")`, or
     // appending `&model=` when one is pinned.
+    #[test]
+    fn provider_declarations_keep_their_external_wire_payload() {
+        let payload =
+            json!({"type": "file_search", "vector_store_ids": ["store"], "max_num_results": 3});
+        let tool = lk_agents_abi::ToolSpec {
+            name: "xai_file_search".into(),
+            description: String::new(),
+            json_schema: Value::Null,
+            flags: Default::default(),
+            provider_tool: Some(lk_agents_abi::llm::llm::ProviderToolDeclaration {
+                provider: Some("xai".into()),
+                payload: payload.clone(),
+            }),
+        };
+        assert_eq!(tool_spec(&tool), payload);
+    }
+
     #[test]
     fn the_base_url_becomes_a_realtime_websocket_url() {
         for (base, want) in [

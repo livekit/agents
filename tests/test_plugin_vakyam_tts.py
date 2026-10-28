@@ -733,12 +733,12 @@ def test_raise_http_error_does_not_retain_raw_response() -> None:
 
 
 def test_raise_ws_error_does_not_retain_raw_event() -> None:
-    from livekit.plugins.vakyam._utils import _ErrorResponse, raise_ws_error
+    from livekit.plugins.vakyam._utils import ErrorResponse, raise_ws_error
 
     secret = "customer text and bearer secret"
     with pytest.raises(APIStatusError) as exc_info:
         raise_ws_error(
-            _ErrorResponse.model_validate(
+            ErrorResponse.model_validate(
                 {"type": "error", "error": {"code": "internal_error", "message": secret}}
             )
         )

@@ -137,9 +137,9 @@ def _build_inner(
         return cloud_processor, cloud_processor
 
     # KrispLicenseAuthProvider
-    from ._krisp import _KrispLicenseFrameProcessor
+    from ._krisp import KrispLicenseFrameProcessor
 
-    license_processor = _KrispLicenseFrameProcessor(
+    license_processor = KrispLicenseFrameProcessor(
         license_key=provider.license_key,
         model_path=provider.model_path,
         noise_suppression_level=noise_suppression_level,

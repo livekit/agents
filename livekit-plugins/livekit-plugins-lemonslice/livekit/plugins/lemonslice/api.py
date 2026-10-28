@@ -309,7 +309,7 @@ class LemonSliceAPI:
                             logger.exception("failed to call lemonslice api")
 
                         if i < self._conn_options.max_retry:
-                            await asyncio.sleep(self._conn_options._interval_for_retry(i))
+                            await asyncio.sleep(self._conn_options.interval_for_retry(i))
         finally:
             if not self._session:  # if we created the session, we close it
                 await session.close()

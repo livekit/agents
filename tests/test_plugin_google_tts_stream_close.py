@@ -50,3 +50,35 @@ async def test_input_gen_close_does_not_mask_api_error() -> None:
         if consumer is not None:
             consumer.cancel()
         await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_input_generator_failure_reaches_caller() -> None:
+    tts = TTS(credentials_info={"type": "service_account"})
+
+    class FailingInput:
+        async def __aiter__(self):
+            raise RuntimeError("tokenizer failed")
+            yield
+
+    async def fake_streaming_synthesize(input_gen, timeout=None, retry=None):
+        async for _ in input_gen:
+            pass
+
+        async def empty():
+            if False:
+                yield texttospeech.StreamingSynthesizeResponse()
+
+        return empty()
+
+    client = MagicMock()
+    client.streaming_synthesize = fake_streaming_synthesize
+    tts._client = client
+    stream = tts.stream()
+    try:
+        with pytest.raises(RuntimeError, match="tokenizer failed"):
+            await stream._run_stream(
+                FailingInput(), MagicMock(), texttospeech.StreamingSynthesizeConfig()
+            )
+    finally:
+        await stream.aclose()

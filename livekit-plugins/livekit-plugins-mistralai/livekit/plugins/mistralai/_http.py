@@ -1,4 +1,8 @@
+from types import TracebackType
+from typing import Protocol, cast
+
 from livekit.agents import APIConnectOptions, APIError
+from mistralai.client import Mistral
 
 
 def request_timeout_ms(options: APIConnectOptions) -> int:
@@ -17,3 +21,28 @@ def request_timeout_ms(options: APIConnectOptions) -> int:
             retryable=False,
         )
     return int(timeout * 1000)
+
+
+class _ClientLifecycle(Protocol):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+
+async def close_client(client: Mistral) -> None:
+    # The SDK implements these public methods without annotating their parameters.
+    lifecycle = cast(_ClientLifecycle, client)
+    try:
+        await lifecycle.__aexit__(None, None, None)
+    finally:
+        lifecycle.__exit__(None, None, None)

@@ -1261,8 +1261,49 @@ class TestAvatarSession:
             await session.aclose()
 
         assert session._close_done.is_set()
+        assert agent.listener_count("conversation_item_added") == 0
+        assert room.listener_count("disconnected") == 0
+        assert room.listener_count("track_unpublished") == 0
+        assert room.listener_count("participant_disconnected") == 0
         # A second close must not hang waiting on the event.
         await session.aclose()
+
+    async def test_restart_waits_for_a_concurrent_close_before_installing_another_sink(
+        self, api_recorder, instant_join
+    ):
+        room = self._FakeRoom()
+        agent = self._FakeAgentSession()
+        session = self._session()
+        await self._start(session, room, agent)
+        entered, release = asyncio.Event(), asyncio.Event()
+        old_audio = agent.output.audio
+
+        async def close_audio():
+            entered.set()
+            await release.wait()
+            old_audio.closed = True
+
+        old_audio.aclose = close_audio
+        closing = asyncio.create_task(session.aclose())
+        starting = None
+        try:
+            await entered.wait()
+            starting = asyncio.create_task(self._start(session, room, agent))
+            await asyncio.sleep(0)
+            assert len(api_recorder.requests) == 1
+            release.set()
+            await closing
+            await starting
+            assert len(api_recorder.requests) == 2
+            assert agent.output.audio is not old_audio
+            assert agent.output.audio.closed is False
+            assert agent.listener_count("conversation_item_added") == 1
+        finally:
+            release.set()
+            await closing
+            if starting is not None:
+                await starting
+            await session.aclose()
 
     async def test_failed_teardown_blocks_restart(self, api_recorder, instant_join, monkeypatch):
         room = self._FakeRoom()

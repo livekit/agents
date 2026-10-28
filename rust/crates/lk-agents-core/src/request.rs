@@ -114,6 +114,7 @@ mod tests {
     #[test]
     fn ignore_on_enter_tools_are_withheld_only_inside_on_enter() {
         let tool = |name: &str, ignore_on_enter| ToolSpec {
+            provider_tool: None,
             name: name.into(),
             description: String::new(),
             json_schema: json!({"type": "object"}),

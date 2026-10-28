@@ -147,16 +147,16 @@ pub(super) const RECOGNIZE: &str = r#"
     async def aclose(self) -> None:
         """Close the stream immediately."""
         self.input.close()
-        self._event_ch.close()
         await _bindings.cancel_and_wait_bounded(
             self._task, timeout=self._core_attempts.cleanup_timeout
         )
+        self._event_ch.close()
 
     async def __anext__(self) -> {Event}:
         try:
             val = await self._event_ch.__anext__()
         except StopAsyncIteration:
-            if not self._task.cancelled() and (exc := self._task.exception()):
+            if self._task.done() and not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc  # noqa: B904
             raise StopAsyncIteration from None
         return val

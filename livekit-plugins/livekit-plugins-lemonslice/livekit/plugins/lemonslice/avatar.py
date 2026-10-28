@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import replace
 from datetime import timedelta
-from typing import Any
 
 import aiohttp
 from PIL import Image
@@ -138,7 +138,8 @@ class AvatarSession(BaseAvatarSession):
         # frames until the video track shows up, so nothing is lost
         # in the gap. replace_audio_tail keeps the TranscriptSynchronizer
         # / RecorderAudioOutput chain intact across hot swaps.
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
@@ -304,18 +305,20 @@ class AvatarSession(BaseAvatarSession):
 
             self._meeting_relay_stop = None
 
-    def room_options(self, **kwargs: Any) -> room_io.RoomOptions:
+    def room_options(self, options: room_io.RoomOptions | None = None) -> room_io.RoomOptions:
         """Return room I/O options for VoiceSession.start.
 
         When join_meeting() has been called, disables LiveKit room audio input.
         Meeting audio is fed directly into STT instead.
 
         Args:
-            **kwargs: Additional arguments forwarded to RoomOptions.
+            options: Room I/O configuration to apply to the current avatar mode.
 
         Returns:
             RoomOptions appropriate for the current avatar mode.
         """
+        if options is None:
+            options = room_io.RoomOptions()
         if self._meeting_bot_id is not None:
-            return room_io.RoomOptions(audio_input=False, audio_output=False, **kwargs)
-        return room_io.RoomOptions(**kwargs)
+            return replace(options, audio_input=False, audio_output=False)
+        return options

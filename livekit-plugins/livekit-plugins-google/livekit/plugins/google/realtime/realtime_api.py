@@ -8,12 +8,11 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Protocol, cast
 
 from pydantic import Field
 
 import google.auth.credentials
-from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
@@ -30,6 +29,7 @@ from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModel
 
 from ..log import logger
 from ..utils import (
+    auth,
     create_function_response,
     create_tools_config,
     genai_http_options,
@@ -49,6 +49,20 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 )
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
+
+class RealtimeInput(Protocol):
+    """The typed media operations supported by a GenAI live session."""
+
+    async def send_realtime_input(
+        self,
+        *,
+        audio: types.Blob | None = None,
+        video: types.Blob | None = None,
+        text: str | None = None,
+        activity_start: types.ActivityStart | None = None,
+        activity_end: types.ActivityEnd | None = None,
+    ) -> None: ...
 
 
 @dataclass
@@ -216,21 +230,21 @@ class _ResponseGeneration:
     input_transcription: str = ""
     output_text: str = ""
 
-    _created_timestamp: float = field(default_factory=time.time)
+    created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
-    _completed_timestamp: float | None = None
+    completed_timestamp: float | None = None
     """The timestamp when the generation is completed"""
-    _done: bool = False
+    done: bool = False
     """Whether the generation is done (set when the turn is complete)"""
-    _extra_content_warned: bool = False
+    extra_content_warned: bool = False
     """Whether we've warned about audio/text arriving after generation completed"""
 
     def push_text(self, text: str) -> None:
         if self.text_ch.closed:
             # generation_complete already finalized the output; a turn should not emit
             # more text, so drop it (see _handle_server_content)
-            if not self._extra_content_warned:
-                self._extra_content_warned = True
+            if not self.extra_content_warned:
+                self.extra_content_warned = True
                 logger.warning("Gemini sent text after generation completed; dropping it")
             return
 
@@ -375,7 +389,7 @@ class RealtimeModel(llm.RealtimeModel):
 
         if use_vertexai:
             if not gcp_project:
-                _, gcp_project = default_async(  # type: ignore
+                _, gcp_project = auth.default(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
             if not gcp_project or not gcp_location:
@@ -462,7 +476,7 @@ class RealtimeModel(llm.RealtimeModel):
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,
         # so the pipeline can't gatekeep turns yet; keep can_disable_turn_detection=False for now
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(self, options=self._opts)
         self._sessions.add(sess)
         return sess
 
@@ -507,15 +521,16 @@ class RealtimeModel(llm.RealtimeModel):
 
 
 class RealtimeSession(llm.RealtimeSession):
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(self, realtime_model: RealtimeModel, *, options: _RealtimeOptions) -> None:
         super().__init__(realtime_model)
-        self._opts = realtime_model._opts
+        self._opts = options
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
         self._msg_ch = utils.aio.Chan[ClientEvents | _VideoInput]()
         self._pending_video: _VideoInput | None = None
         self._video_encode_warned = False
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_resampler_rate: int | None = None
 
         # 50ms chunks
         self._bstream = audio_utils.AudioByteStream(
@@ -904,7 +919,7 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        turns = []
+        turns: list[types.Content] = []
         if is_given(instructions):
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
         if _needs_reply_placeholder(self._opts.model):
@@ -1152,7 +1167,7 @@ class RealtimeSession(llm.RealtimeSession):
                         raise APIConnectionError(message=error_msg) from e
 
                     self._emit_error(e, recoverable=True)
-                    retry_interval = self._opts.conn_options._interval_for_retry(self._num_retries)
+                    retry_interval = self._opts.conn_options.interval_for_retry(self._num_retries)
                     logger.warning(
                         f"Gemini Realtime API connection failed, retrying in {retry_interval}s",
                         exc_info=e,
@@ -1184,7 +1199,7 @@ class RealtimeSession(llm.RealtimeSession):
                             self._video_encode_warned = True
                             logger.warning("dropping video frame after encoding failure: %s", error)
                         continue
-                    await session.send_realtime_input(
+                    await cast(RealtimeInput, session).send_realtime_input(
                         video=types.Blob(data=encoded, mime_type=f"image/{options.format.lower()}")
                     )
                 elif isinstance(msg, types.LiveClientContent):
@@ -1196,15 +1211,19 @@ class RealtimeSession(llm.RealtimeSession):
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
-                        await session.send_realtime_input(audio=msg.audio)
+                        await cast(RealtimeInput, session).send_realtime_input(audio=msg.audio)
                     elif msg.video:
-                        await session.send_realtime_input(video=msg.video)
+                        await cast(RealtimeInput, session).send_realtime_input(video=msg.video)
                     elif msg.text:
-                        await session.send_realtime_input(text=msg.text)
+                        await cast(RealtimeInput, session).send_realtime_input(text=msg.text)
                     elif msg.activity_start:
-                        await session.send_realtime_input(activity_start=msg.activity_start)
+                        await cast(RealtimeInput, session).send_realtime_input(
+                            activity_start=msg.activity_start
+                        )
                     elif msg.activity_end:
-                        await session.send_realtime_input(activity_end=msg.activity_end)
+                        await cast(RealtimeInput, session).send_realtime_input(
+                            activity_end=msg.activity_end
+                        )
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -1265,7 +1284,7 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
-                    if not self._current_generation or self._current_generation._done:
+                    if not self._current_generation or self._current_generation.done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
                             # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
@@ -1370,7 +1389,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ),
                 language_code=self._opts.language if is_given(self._opts.language) else None,
             ),
-            tools=tools_config,
+            tools=[*tools_config],
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
             session_resumption=types.SessionResumptionConfig(
@@ -1391,7 +1410,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
-        if self._current_generation and not self._current_generation._done:
+        if self._current_generation and not self._current_generation.done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
 
@@ -1403,7 +1422,7 @@ class RealtimeSession(llm.RealtimeSession):
             input_id=utils.shortuuid("GI_"),
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
-            _created_timestamp=time.time(),
+            created_timestamp=time.time(),
         )
         if not self._realtime_model.capabilities.audio_output:
             self._current_generation.audio_ch.close()
@@ -1471,8 +1490,8 @@ class RealtimeSession(llm.RealtimeSession):
                     if current_gen.audio_ch.closed:
                         # generation_complete already closed the audio stream; a turn
                         # should not emit more audio, so drop any late frame
-                        if not current_gen._extra_content_warned:
-                            current_gen._extra_content_warned = True
+                        if not current_gen.extra_content_warned:
+                            current_gen.extra_content_warned = True
                             logger.warning(
                                 "Gemini sent audio after generation completed; dropping it"
                             )
@@ -1505,7 +1524,7 @@ class RealtimeSession(llm.RealtimeSession):
                         item_id=current_gen.input_id,
                         transcript=current_gen.input_transcription,
                         is_final=False,
-                        turn_started_at=current_gen._created_timestamp,
+                        turn_started_at=current_gen.created_timestamp,
                     ),
                 )
 
@@ -1515,7 +1534,7 @@ class RealtimeSession(llm.RealtimeSession):
                 current_gen.push_text(text)
 
         if server_content.generation_complete or server_content.turn_complete:
-            current_gen._completed_timestamp = time.time()
+            current_gen.completed_timestamp = time.time()
 
         # gemini delays turn_complete until it thinks client-side playback finished, so end
         # the output streams on generation_complete instead
@@ -1530,7 +1549,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
-        if not self._current_generation or self._current_generation._done:
+        if not self._current_generation or self._current_generation.done:
             return
 
         # emit input_speech_stopped event after the generation is done
@@ -1547,7 +1566,7 @@ class RealtimeSession(llm.RealtimeSession):
                     item_id=gen.input_id,
                     transcript=gen.input_transcription,
                     is_final=True,
-                    turn_started_at=gen._created_timestamp,
+                    turn_started_at=gen.created_timestamp,
                 ),
             )
 
@@ -1570,7 +1589,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         gen.function_ch.close()
         gen.message_ch.close()
-        gen._done = True
+        gen.done = True
         if lk_google_debug:
             logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
 
@@ -1640,6 +1659,10 @@ class RealtimeSession(llm.RealtimeSession):
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
 
+            if not fnc_call.name:
+                raise APIConnectionError(
+                    "Gemini sent a function call without a name", retryable=False
+                )
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
                     call_id=call_id,
@@ -1666,9 +1689,7 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        duration = (
-            current_gen._completed_timestamp or time.time()
-        ) - current_gen._created_timestamp
+        duration = (current_gen.completed_timestamp or time.time()) - current_gen.created_timestamp
 
         def _token_details_map(
             token_details: list[types.ModalityTokenCount] | None,
@@ -1692,7 +1713,7 @@ class RealtimeSession(llm.RealtimeSession):
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
             request_id=current_gen.response_id,
-            timestamp=current_gen._created_timestamp,
+            timestamp=current_gen.created_timestamp,
             duration=duration,
             # Gemini has no response-start event; generation creation can be triggered
             # by an input transcript or by the first output packet.
@@ -1738,7 +1759,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
+            if frame.sample_rate != self._input_resampler_rate:
                 # input audio changed to a different sample rate
                 self._input_resampler = None
 
@@ -1746,6 +1767,7 @@ class RealtimeSession(llm.RealtimeSession):
             frame.sample_rate != INPUT_AUDIO_SAMPLE_RATE
             or frame.num_channels != INPUT_AUDIO_CHANNELS
         ):
+            self._input_resampler_rate = frame.sample_rate
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
                 output_rate=INPUT_AUDIO_SAMPLE_RATE,
@@ -1763,7 +1785,7 @@ class RealtimeSession(llm.RealtimeSession):
             "error",
             llm.RealtimeModelError(
                 timestamp=time.time(),
-                label=self._realtime_model._label,
+                label=self._realtime_model.label,
                 error=error,
                 recoverable=recoverable,
             ),

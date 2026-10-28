@@ -11,6 +11,61 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
+type DataStreamAudioOutputImpl = <crate::Selected as super::Implementations>::DataStreamAudioOutput;
+
+/// The agent's native audio sink, sending one byte stream per avatar speech segment.
+#[pyclass(frozen, name = "DataStreamAudioOutput", module = "livekit.agents._core")]
+pub struct DataStreamAudioOutput(::std::sync::Arc<DataStreamAudioOutputImpl>);
+
+#[pymethods]
+impl DataStreamAudioOutput {
+    #[new]
+    #[pyo3(signature = (room, *, destination_identity, sample_rate = None, wait_remote_track = None, clear_buffer_timeout = 2.0, wait_playback_start = false))]
+    fn new(room: ::lk_agents_abi::HostRef, destination_identity: ::std::string::String, sample_rate: ::std::option::Option<u32>, wait_remote_track: ::std::option::Option<i32>, clear_buffer_timeout: ::std::option::Option<f64>, wait_playback_start: bool) -> PyResult<DataStreamAudioOutput> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::new(room, destination_identity, sample_rate, wait_remote_track, clear_buffer_timeout, wait_playback_start).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(DataStreamAudioOutput(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn label(&self) -> PyResult<::std::string::String> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::label(&self.0);
+        Ok(out)
+    }
+
+    #[getter]
+    fn sample_rate(&self) -> PyResult<::std::option::Option<u32>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::sample_rate(&self.0);
+        Ok(out)
+    }
+
+    /// Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <DataStreamAudioOutputImpl as ::lk_agents_abi::voice::avatar::DataStreamAudioOutput>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::io::AudioOutput`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::io::AudioOutput>(),
+        read: |obj| {
+            let this = obj.cast::<DataStreamAudioOutput>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::io::AudioOutput> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 
 /// [`::lk_agents_abi::voice::avatar::ClearBufferListener`] over a host `livekit.agents.voice.avatar.DataStreamAudioReceiver`.
 #[derive(Clone)]
@@ -112,7 +167,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
         })
     }
 
-    async fn next_audio(&self) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>, ::lk_agents_abi::errors::ProviderError> {
+    async fn next_audio(&self) -> ::std::result::Result<(u64, bool, ::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>), ::lk_agents_abi::errors::ProviderError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
         let context = &context;
@@ -128,7 +183,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "AvatarAudioReceiver._core_next_audio"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<u64>())?, (item_1.extract::<bool>())?, (item_2.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

@@ -182,7 +182,6 @@
     "amd_constants",
     "amd_is_evaluated_model",
     "amd_resolve_max_endpointing_delay",
-    "api_attempt_connected",
     "api_connect_options_check",
     "api_retry_interval",
     "base_language",

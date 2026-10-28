@@ -64,6 +64,7 @@ pub trait Implementations: 'static {
     type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
     type ProviderAttempts: ::lk_agents_abi::types::provider::ProviderAttempts;
+    type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::worker::ServerEnvironment;
     type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
@@ -121,6 +122,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_class::<types::_core_ProviderAttempts>()?;
+    m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Generator
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import httpx2 as httpx
 import openai
@@ -44,9 +44,12 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+
+from .utils import auth as credential_auth
 
 ApiVersion = Literal["v1", "v1beta1"]
 
@@ -111,7 +114,7 @@ class _AIPlatformOptions:
     max_completion_tokens: NotGivenOr[int]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
-    extra_body: NotGivenOr[dict[str, Any]]
+    extra_body: NotGivenOr[dict[str, object]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
 
@@ -148,7 +151,7 @@ class AIPlatformLLM(llm.LLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         strict_tool_schema: bool = True,
@@ -167,7 +170,7 @@ class AIPlatformLLM(llm.LLM):
             model: Model name passed in the chat completions request body.
             access_token: Optional static OAuth access token. If omitted and
                 ``credentials``/``token_provider`` are not given, falls back to
-                ``google.auth.default(scopes=["…/cloud-platform"])``.
+                ``auth.default(scopes=["…/cloud-platform"])``.
             credentials: ``google.auth.credentials.Credentials`` instance. The
                 auth handler will refresh it on demand.
             token_provider: Callable returning a fresh bearer token. Takes
@@ -205,7 +208,7 @@ class AIPlatformLLM(llm.LLM):
             resolved_token = access_token if is_given(access_token) else None
             if token_provider is None and resolved_credentials is None and resolved_token is None:
                 # Fall back to application default credentials.
-                resolved_credentials, _ = google.auth.default(
+                resolved_credentials, _ = credential_auth.default(
                     scopes=["https://www.googleapis.com/auth/cloud-platform"]
                 )
 
@@ -263,9 +266,9 @@ class AIPlatformLLM(llm.LLM):
         response_format: NotGivenOr[
             completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
         ] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra: dict[str, Any] = {}
+        extra: dict[str, object] = {}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
@@ -290,7 +293,7 @@ class AIPlatformLLM(llm.LLM):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        if is_given(tool_choice):
+        if not isinstance(tool_choice, NotGiven):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if not isinstance(tool_choice, str):
                 oai_tool_choice = {
@@ -298,7 +301,7 @@ class AIPlatformLLM(llm.LLM):
                     "function": {"name": tool_choice["function"]["name"]},
                 }
                 extra["tool_choice"] = oai_tool_choice
-            elif tool_choice in ("auto", "required", "none"):
+            else:
                 extra["tool_choice"] = tool_choice
 
         if is_given(response_format):

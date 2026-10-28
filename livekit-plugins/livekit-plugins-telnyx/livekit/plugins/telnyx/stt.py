@@ -209,7 +209,7 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, rtc.AudioFrame):
                     for frame in audio_bstream.write(data.data.tobytes()):
                         await ws.send_bytes(frame.data.tobytes())
-                elif isinstance(data, self.Flush):
+                else:
                     for frame in audio_bstream.flush():
                         await ws.send_bytes(frame.data.tobytes())
 

@@ -186,6 +186,9 @@ pub struct TextSessionAgent {
     pub agent_tools: BTreeMap<String, LocalAgentTool>,
     /// A callback context for this agent, captured at session entry.
     pub host_context: HostRef,
+    /// Canonical tool pool for this agent, shared across its invocations.
+    #[host(default = None)]
+    pub tools_host: Option<HostRef>,
 }
 
 #[crate::host(record(module = "text_session", extract))]

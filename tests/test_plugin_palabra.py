@@ -46,52 +46,53 @@ async def mock_palabra_ws(monkeypatch):
     send_queue: asyncio.Queue = asyncio.Queue()
     close_event = asyncio.Event()
 
+    connections: dict[str, web.WebSocketResponse] = {}
+    next_generation: asyncio.Queue[tuple[web.WebSocketResponse, str]] = asyncio.Queue()
+
+    async def pusher():
+        pending_target: tuple[web.WebSocketResponse, str] | None = None
+        while True:
+            try:
+                msg = await asyncio.wait_for(send_queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                if close_event.is_set():
+                    for ws in set(connections.values()):
+                        await ws.close()
+                    return
+                continue
+            data = msg.get("data")
+            if msg.get("message_type") == "audio_chunk" and data is not None:
+                generation_id = data.get("generation_id")
+                if generation_id is None:
+                    ws, generation_id = pending_target or await next_generation.get()
+                    pending_target = None
+                    data["generation_id"] = generation_id
+                else:
+                    ws = connections.get(generation_id)
+                    if ws is None or ws.closed:
+                        # A stale generation is delivered on the next live connection.
+                        pending_target = pending_target or await next_generation.get()
+                        ws, _ = pending_target
+                await ws.send_json(msg)
+            else:
+                for ws in set(connections.values()):
+                    if not ws.closed:
+                        await ws.send_json(msg)
+
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        last_gen = {"id": ""}
-
-        async def pusher():
-            while not ws.closed:
-                try:
-                    msg = await asyncio.wait_for(send_queue.get(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    if close_event.is_set():
-                        await ws.close()
-                        return
-                    continue
-                # Like the real server, audio_chunk frames echo the client's generation_id:
-                #   - a frame queued without an id waits for the next text frame
-                #     and takes its id;
-                #   - a frame queued with an explicit id goes out as-is (a stale generation).
-                data = msg.get("data")
-                if (
-                    msg.get("message_type") == "audio_chunk"
-                    and data is not None
-                    and "generation_id" not in data
-                ):
-                    seen = last_gen["id"]
-                    while last_gen["id"] == seen:
-                        await asyncio.sleep(0.005)
-                        if ws.closed or close_event.is_set():
-                            return
-                    data["generation_id"] = last_gen["id"]
-                await ws.send_json(msg)
-
-        pusher_task = asyncio.create_task(pusher())
-        try:
-            async for raw in ws:
-                if raw.type == web.WSMsgType.TEXT:
-                    frame = json.loads(raw.data)
-                    received.append(frame)
-                    if frame.get("type") == "text" and frame.get("generation_id"):
-                        last_gen["id"] = frame["generation_id"]
-                elif raw.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSED, web.WSMsgType.ERROR):
-                    break
-        finally:
-            pusher_task.cancel()
+        async for raw in ws:
+            if raw.type == web.WSMsgType.TEXT:
+                frame = json.loads(raw.data)
+                received.append(frame)
+                if frame.get("type") == "text" and frame.get("generation_id"):
+                    generation_id = frame["generation_id"]
+                    connections[generation_id] = ws
+                    next_generation.put_nowait((ws, generation_id))
         return ws
 
+    pusher_task = asyncio.create_task(pusher())
     app = web.Application()
     app.router.add_get("/v1/text-to-speech/stream", ws_handler)
     runner = web.AppRunner(app)
@@ -109,6 +110,8 @@ async def mock_palabra_ws(monkeypatch):
         "send_queue": send_queue,
         "close_event": close_event,
     }
+    pusher_task.cancel()
+    await asyncio.gather(pusher_task, return_exceptions=True)
     await runner.cleanup()
 
 
@@ -184,7 +187,6 @@ def test_update_options():
     assert tts._opts.language == "ru"
     assert tts._opts.voice_id == "default_high"
     assert tts._opts.speed == 0.7
-    assert tts._opts_dirty is True  # session reconnects on next stream
 
 
 # --- TTS end-to-end stream against the local WS mock ---
@@ -231,11 +233,8 @@ async def test_synthesize_one_shot(mock_palabra_ws):
     await tts.aclose()
 
 
-async def test_session_reused_across_turns(mock_palabra_ws):
-    """Two turns on one TTS reuse the SDK session.
-
-    The Palabra `init` frame is sent once (one WS connection) and both turns produce audio.
-    """
+async def test_consecutive_turns_both_produce_audio(mock_palabra_ws):
+    """Independent SDK sessions keep both consecutive replies audible."""
     ws = mock_palabra_ws
     tts = TTS(api_key="test-key")
 
@@ -250,9 +249,7 @@ async def test_session_reused_across_turns(mock_palabra_ws):
     second = await _turn("Second turn.", b"\x22" * 2000)
 
     assert b"\x11" * 2000 in first
-    assert b"\x22" * 2000 in second  # 2nd turn on the reused session still works
-    init_frames = [m for m in ws["received"] if m.get("type") == "init"]
-    assert len(init_frames) == 1  # init sent once (session reused)
+    assert b"\x22" * 2000 in second
 
     await tts.aclose()
 
@@ -261,13 +258,7 @@ async def test_session_reused_across_turns(mock_palabra_ws):
 
 
 async def test_interruption_flow(mock_palabra_ws):
-    """Interruption end to end: cancel is sent, the session survives, stale audio is dropped.
-
-    - closing the stream mid-generation sends `cancel` frames for its own generations;
-    - aclose() returns quickly — the framework awaits it before the next reply starts;
-    - the next turn synthesizes on the same session (no reconnect);
-    - late chunks of the cancelled generation are filtered, not played.
-    """
+    """Closing an interrupted reply stops provider work and filters stale audio."""
     ws = mock_palabra_ws
     tts = TTS(api_key="test-key")
 
@@ -291,11 +282,10 @@ async def test_interruption_flow(mock_palabra_ws):
         await asyncio.sleep(0.01)
     cancels = [m for m in ws["received"] if m.get("type") == "cancel"]
     assert cancels
-    sent_gens = {m["generation_id"] for m in ws["received"] if m.get("type") == "text"}
-    assert all(m.get("generation_id") in sent_gens for m in cancels)
-    cancelled_gen = cancels[0]["generation_id"]
+    assert all("generation_id" not in m for m in cancels)
+    cancelled_gen = next(m["generation_id"] for m in ws["received"] if m.get("type") == "text")
 
-    # Next turn on the same session; a late chunk of the cancelled generation arrives first.
+    # The next turn must filter late audio from the cancelled generation.
     junk = b"\xde\xad" * 500
     real = b"\x88" * 2000
     ws["send_queue"].put_nowait(_audio_chunk(junk, last_chunk=True, generation_id=cancelled_gen))
@@ -308,17 +298,11 @@ async def test_interruption_flow(mock_palabra_ws):
 
     assert real in audio
     assert junk not in audio  # stale generation was filtered, not played
-    init_frames = [m for m in ws["received"] if m.get("type") == "init"]
-    assert len(init_frames) == 1  # the interrupted session was reused, not replaced
     await tts.aclose()
 
 
 async def test_overlapping_streams_get_their_own_audio(mock_palabra_ws):
-    """Two live streams on one session receive their own audio in crossed order.
-
-    The session reader routes frames by generation_id, so neither stream can
-    consume or drop the other stream's chunks.
-    """
+    """Two live streams receive their own audio even when replies finish in reverse."""
     ws = mock_palabra_ws
     tts = TTS(api_key="test-key")
 

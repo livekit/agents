@@ -9,7 +9,7 @@ Federation setups do with in-memory credentials.
 import pytest
 from google.auth.credentials import AnonymousCredentials
 
-from livekit.agents import APIConnectionError
+from livekit.agents import APIConnectionError, APIConnectOptions
 from livekit.plugins.google import STT, TTS
 
 pytestmark = pytest.mark.unit
@@ -32,21 +32,21 @@ class TestSTTCredentials:
     async def test_client_uses_supplied_credentials(self) -> None:
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds)
-        client = await stt_instance._create_client(timeout=1.0)
+        client = await stt_instance._create_client(conn_options=APIConnectOptions())
         assert client.transport._credentials is creds
 
     async def test_credentials_take_precedence_over_file(self, tmp_path) -> None:
         creds = AnonymousCredentials()
         # the file path is never read when a credentials object is supplied
         stt_instance = STT(credentials=creds, credentials_file=str(tmp_path / "missing.json"))
-        client = await stt_instance._create_client(timeout=1.0)
+        client = await stt_instance._create_client(conn_options=APIConnectOptions())
         assert client.transport._credentials is creds
 
     async def test_recognizer_uses_project_from_credentials(self) -> None:
         # credentials carrying a project must not fall back to ADC
         creds = _ProjectCredentials()
         stt_instance = STT(credentials=creds)
-        client = await stt_instance._create_client(timeout=1.0)
+        client = await stt_instance._create_client(conn_options=APIConnectOptions())
         assert stt_instance._project_id == "test-project-123"
         recognizer = stt_instance._get_recognizer(client)
         assert recognizer == "projects/test-project-123/locations/global/recognizers/_"
@@ -54,7 +54,7 @@ class TestSTTCredentials:
     async def test_recognizer_uses_explicit_project(self) -> None:
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds, project="explicit-project")
-        client = await stt_instance._create_client(timeout=1.0)
+        client = await stt_instance._create_client(conn_options=APIConnectOptions())
 
         assert stt_instance._get_recognizer(client) == (
             "projects/explicit-project/locations/global/recognizers/_"
@@ -67,7 +67,7 @@ class TestSTTCredentials:
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds)
-        client = await stt_instance._create_client(timeout=1.0)
+        client = await stt_instance._create_client(conn_options=APIConnectOptions())
         with pytest.raises(APIConnectionError, match="could not determine the GCP project id"):
             stt_instance._get_recognizer(client)
 

@@ -102,7 +102,8 @@ class _FakeMsg:
 class _FakeWS:
     """Yield stale frames/done first, then the current context's frames/done."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_context_id: bool = True) -> None:
+        self._include_context_id = include_context_id
         self._sent: list[dict] = []
         self._context_id: str | None = None
         self._end_pkt_sent = asyncio.Event()
@@ -129,10 +130,10 @@ class _FakeWS:
             return self._queue.popleft()
 
         # current frames; delay done until end_pkt so the tokenizer is closed
-        ctx = self._context_id or ""
-        self._queue.append(_FakeMsg.text({"context_id": ctx, "data": _b64(b"\x01" * 160)}))
+        context = {"context_id": self._context_id or ""} if self._include_context_id else {}
+        self._queue.append(_FakeMsg.text({**context, "data": _b64(b"\x01" * 160)}))
         await self._end_pkt_sent.wait()
-        self._queue.append(_FakeMsg.text({"context_id": ctx, "done": True}))
+        self._queue.append(_FakeMsg.text({**context, "done": True}))
         return self._queue.popleft()
 
 
@@ -160,13 +161,14 @@ def _b64(data: bytes) -> str:
 
 
 @pytest.mark.asyncio
-async def test_synthesize_skips_stale_frames_from_previous_context():
+@pytest.mark.parametrize("include_context_id", [True, False])
+async def test_synthesize_skips_stale_frames_from_previous_context(include_context_id: bool):
     """Only the current context's audio is played when stale frames are pooled."""
     from livekit.agents import APIConnectOptions
     from livekit.plugins.cartesia import TTS
 
     tts = TTS(api_key=SECRET_API_KEY)
-    tts._pool = _FakePool(_FakeWS())  # type: ignore[assignment]
+    tts._pool = _FakePool(_FakeWS(include_context_id=include_context_id))  # type: ignore[assignment]
 
     stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
     stream.push_text("hello world")

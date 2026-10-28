@@ -6,7 +6,7 @@ import contextvars
 import functools
 import os
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Literal
 
 import aiohttp
@@ -144,7 +144,11 @@ async def request(
         elif isinstance(data, aiohttp.FormData):
             data = data()
         if data is not None:
-            data = _TimedBody(aiohttp.payload.get_payload(data), phases)
+            try:
+                body = aiohttp.payload.get_payload(data)
+            except aiohttp.payload.LookupError:
+                body = aiohttp.FormData(data)()
+            data = _TimedBody(body, phases)
         # aiohttp disables a zero limit; the smallest positive one expires at the first wait.
         read = conn_options.read_timeout
         timeout = aiohttp.ClientTimeout(
@@ -169,6 +173,11 @@ async def ws_connect(
     if isinstance(ws, aiohttp.ClientWebSocketResponse):
         ws._writer = _TimedFrameWriter(ws._writer, conn_options.write_timeout)  # type: ignore[assignment]
     return ws
+
+
+def websocket_headers(ws: aiohttp.ClientWebSocketResponse) -> Mapping[str, str]:
+    """The HTTP upgrade response headers, including provider request identifiers."""
+    return ws._response.headers
 
 
 class _TimedFrameWriter:

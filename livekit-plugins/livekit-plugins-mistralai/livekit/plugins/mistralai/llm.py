@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
+from pydantic import JsonValue, TypeAdapter
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -25,8 +27,10 @@ from livekit.agents.utils import is_given, shortuuid
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, MistralError, SDKError
 from mistralai.client.models import (
+    ChatCompletionStreamRequestMessage,
     CompletionArgs,
     ConversationEvents,
+    DeltaMessage,
     FunctionCallEvent,
     MessageOutputEvent,
     ResponseDoneEvent,
@@ -39,12 +43,13 @@ from mistralai.client.models import (
 )
 from mistralai.client.types import UNSET
 
-from ._http import request_timeout_ms
+from ._http import close_client, request_timeout_ms
 from .log import logger
 from .models import ChatModels
 from .tools import MistralTool
 
 DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
+_CHAT_MESSAGES = TypeAdapter(list[ChatCompletionStreamRequestMessage])
 
 
 class ApiMode(str, Enum):
@@ -146,7 +151,12 @@ class LLM(llm.LLM):
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
         if not client and not mistral_api_key:
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
+        self._owns_client = client is None
         self._client = client or Mistral(api_key=mistral_api_key)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await close_client(self._client)
 
     async def _prewarm_impl(self) -> None:
         await self._client.models.list_async()
@@ -199,7 +209,7 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[Mapping[str, JsonValue]] = NOT_GIVEN,
     ) -> LLMStream:
         extra: dict[str, Any] = {}
         if is_given(extra_kwargs):
@@ -380,7 +390,7 @@ class LLMStream(llm.LLMStream):
 
             async_response = await self._client.chat.stream_async(
                 model=self._model,
-                messages=messages,
+                messages=_CHAT_MESSAGES.validate_python(messages),
                 timeout_ms=request_timeout_ms(self._conn_options),
                 retries=None,
                 **call_kwargs,
@@ -544,7 +554,7 @@ class LLMStream(llm.LLMStream):
 def _parse_completion_delta(
     *,
     chunk_id: str,
-    delta: Any,
+    delta: DeltaMessage,
     finish_reason: str | None,
     pending_fnc_calls: dict[int, _PendingFunctionCall],
 ) -> list[ChatChunk]:
@@ -567,15 +577,17 @@ def _parse_completion_delta(
             )
 
     tool_calls = delta.tool_calls
-    if tool_calls is not UNSET and tool_calls is not None:
+    if isinstance(tool_calls, list):
         for tc in tool_calls:
             if tc.index is not None:
                 call_index = tc.index
             else:
                 call_index = max(pending_fnc_calls.keys(), default=-1) + 1
-            call_id = tc.id if tc.id not in (None, "null") else ""
-            name = tc.function.name if tc.function else ""
-            args = tc.function.arguments if tc.function else ""
+            call_id = tc.id or ""
+            if call_id == "null":
+                call_id = ""
+            name = tc.function.name
+            args = tc.function.arguments
             if isinstance(args, dict):
                 args = json.dumps(args)
 

@@ -18,10 +18,11 @@ import asyncio
 import os
 import ssl
 import weakref
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Any
 
 import aiohttp
+from pydantic import JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -34,7 +35,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from . import qwen3_tts
+from ._qwen3_tts import NUM_CHANNELS, SAMPLE_RATE, Qwen3Backend
 from .models import TTSModels
 
 ssl_context = ssl.create_default_context()
@@ -82,7 +83,7 @@ class TTS(tts.TTS):
         ref_audio: str | None = None,
         ref_text: str | None = None,
         word_timestamps: bool = False,
-        extra_config: dict[str, Any] | None = None,
+        extra_config: Mapping[str, JsonValue] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """
@@ -128,10 +129,10 @@ class TTS(tts.TTS):
                 ``model="qwen3-tts"`` without a ``voice``.
         """
         self._model_name = model
-        self._qwen3: qwen3_tts._Qwen3Backend | None = None
+        self._qwen3: Qwen3Backend | None = None
 
         if model == "qwen3-tts":
-            self._qwen3 = qwen3_tts._Qwen3Backend(
+            self._qwen3 = Qwen3Backend(
                 model_endpoint=model_endpoint,
                 model_id=model_id,
                 chain_id=chain_id,
@@ -153,8 +154,8 @@ class TTS(tts.TTS):
                 capabilities=tts.TTSCapabilities(
                     streaming=True, aligned_transcript=word_timestamps
                 ),
-                sample_rate=qwen3_tts.SAMPLE_RATE,
-                num_channels=qwen3_tts.NUM_CHANNELS,
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
             )
             self._session = http_session
             self._streams = weakref.WeakSet[tts.SynthesizeStream]()
@@ -242,18 +243,31 @@ class TTS(tts.TTS):
             # Qwen3-TTS is streaming-only; the framework helper disables retries
             # on the inner stream and forwards timed transcripts.
             return self._synthesize_with_stream(text, conn_options=conn_options)
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            ensure_session=self._ensure_session,
+            model_endpoint=self._model_endpoint,
+            api_key=self._api_key,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.SynthesizeStream:
         stream: tts.SynthesizeStream
         if self._qwen3 is not None:
-            stream = qwen3_tts.Qwen3SynthesizeStream(
-                tts=self, backend=self._qwen3, conn_options=conn_options
-            )
+            stream = self._qwen3.make_stream(self, conn_options=conn_options)
         else:
-            stream = SynthesizeStream(tts=self, conn_options=conn_options)
+            stream = SynthesizeStream(
+                tts=self,
+                conn_options=conn_options,
+                opts=replace(self._opts),
+                ensure_session=self._ensure_session,
+                model_endpoint=self._model_endpoint,
+                api_key=self._api_key,
+            )
         self._streams.add(stream)
         return stream
 
@@ -272,6 +286,10 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+        model_endpoint: str,
+        api_key: str,
     ) -> None:
         super().__init__(
             tts=tts,
@@ -279,17 +297,19 @@ class ChunkedStream(tts.ChunkedStream):
             conn_options=conn_options,
         )
 
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._ensure_session = ensure_session
+        self._model_endpoint = model_endpoint
+        self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._ensure_session(),
                 "POST",
-                self._tts._model_endpoint,
+                self._model_endpoint,
                 headers={
-                    "Authorization": f"Api-Key {self._tts._api_key}",
+                    "Authorization": f"Api-Key {self._api_key}",
                 },
                 json={
                     "prompt": self._input_text,
@@ -329,10 +349,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         *,
         tts: TTS,
         conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+        model_endpoint: str,
+        api_key: str,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._ensure_session = ensure_session
+        self._model_endpoint = model_endpoint
+        self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -369,9 +395,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with await utils.http_context.ws_connect(
-                self._tts._ensure_session(),
-                self._tts._model_endpoint,
-                headers={"Authorization": f"Api-Key {self._tts._api_key}"},
+                self._ensure_session(),
+                self._model_endpoint,
+                headers={"Authorization": f"Api-Key {self._api_key}"},
                 ssl=ssl_context,
                 conn_options=self._conn_options,
             ) as ws:

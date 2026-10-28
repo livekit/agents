@@ -65,7 +65,7 @@ pub fn validate(agent: &AgentDefinition) -> Result<(), AgentError> {
 }
 
 pub(crate) fn tool<'a>(agent: &'a AgentDefinition, name: &str) -> Option<&'a FunctionToolInfo> {
-    agent.tools.iter().find(|t| t.spec.name == name)
+    agent.tools.iter().find(|t| t.spec.provider_tool.is_none() && t.spec.name == name)
 }
 
 /// The instructions for one request: the static ones, then the rendered dynamic ones.
@@ -81,6 +81,7 @@ pub(crate) fn instructions_with(agent: &AgentDefinition, dynamic: &str) -> Strin
 pub(crate) fn final_result_tool(agent: &AgentDefinition) -> Option<ToolSpec> {
     let OutputSpec::Structured { schema } = &agent.output else { return None };
     Some(ToolSpec {
+        provider_tool: None,
         name: FINAL_RESULT_TOOL.to_owned(),
         description: FINAL_RESULT_DESCRIPTION.to_owned(),
         json_schema: wrapped_schema(schema).unwrap_or_else(|| schema.clone()),

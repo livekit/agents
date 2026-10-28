@@ -65,6 +65,12 @@ class DiffOps:
     ]  # (previous_item_id, id), the items with the same id but different content
 
 
+def remove_instructions(chat_ctx: ChatContext) -> None:
+    """Remove framework instructions, preserving application-authored system messages."""
+    for index in reversed(_core.remove_instructions([item.id for item in chat_ctx.items])):
+        del chat_ctx.items[index]
+
+
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
     """The minimal create/remove/update operations turning ``old_ctx`` into ``new_ctx``."""
     from .._core_view import to_core_items

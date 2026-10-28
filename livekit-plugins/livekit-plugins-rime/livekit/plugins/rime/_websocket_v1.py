@@ -18,16 +18,16 @@ import asyncio
 import base64
 import binascii
 import ipaddress
-import json
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
 import numpy as np
 from google.protobuf import json_format
 from google.protobuf.message import DecodeError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from rime_api import text_to_speech_pb2 as proto
 
 from livekit.agents import (
@@ -55,6 +55,7 @@ BINARY_SUBPROTOCOL = "rime.v1.binary"
 JSON_SUBPROTOCOL = "rime.v1.json"
 PROTOCOL_VERSION = 1
 CANCEL_TIMEOUT = 1.0
+_JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 NUM_CHANNELS = 1
 DEFAULT_AUDIO_FORMAT: RimeAudioFormat = "audio/pcm"
 SUPPORTED_AUDIO_FORMATS: frozenset[str] = frozenset(
@@ -123,8 +124,8 @@ def _decode_audio(audio_format: RimeAudioFormat, data: bytes) -> bytes:
         return data
     # Rime v1 encodes PCMU at the requested sample rate, including 24 kHz.
     # Decode one byte to one PCM sample; the emitter keeps that rate.
-    pcm = _MULAW_TABLE[np.frombuffer(data, dtype=np.uint8)]
-    return pcm.astype("<i2").tobytes()
+    pcm = _MULAW_TABLE[np.ndarray((len(data),), dtype=np.uint8, buffer=data)]
+    return bytes(pcm.astype("<i2").tobytes())
 
 
 def _emitter_mime_type(audio_format: RimeAudioFormat) -> str:
@@ -186,8 +187,8 @@ class _JsonEnvelopeCodec:
                 f"Rime v1 sent unexpected WebSocket frame type {message.type}"
             )
         try:
-            envelope = json.loads(message.data)
-        except (json.JSONDecodeError, TypeError):
+            envelope = _JSON_OBJECT.validate_json(message.data)
+        except (ValidationError, TypeError):
             raise _ContaminatedConnection("Rime v1 sent invalid JSON") from None
         _validate_json_envelope(envelope)
 
@@ -202,10 +203,7 @@ class _JsonEnvelopeCodec:
 _JSON_RESPONSE_PAYLOADS = ("ready", "started", "audio", "done", "cancelled", "error")
 
 
-def _validate_json_envelope(envelope: Any) -> None:
-    if not isinstance(envelope, dict):
-        raise _ContaminatedConnection("Rime v1 envelope must be an object")
-
+def _validate_json_envelope(envelope: dict[str, JsonValue]) -> None:
     payloads = [name for name in _JSON_RESPONSE_PAYLOADS if name in envelope]
     if len(payloads) != 1:
         raise _ContaminatedConnection("Rime v1 envelope must contain exactly one payload")

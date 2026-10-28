@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import os
 import platform
-from typing import Any
 
 import httpx2 as httpx
 import openai
 from openai.types import ReasoningEffort
+from openai.types.chat import completion_create_params
 
 from livekit.agents import __version__ as livekit_version, llm
-from livekit.agents.llm import ChatContext, ToolChoice
+from livekit.agents.llm import ChatContext, ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ImageContent
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -32,7 +32,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.plugins.openai.llm import LLM as OpenAILLM
+from livekit.plugins.openai.llm import LLM as OpenAILLM, LLMStream
 
 from .models import SarvamLLMModels
 
@@ -127,7 +127,7 @@ def _get_api_key(key: NotGivenOr[str]) -> str:
     return sarvam_api_key
 
 
-def _filter_extra_body(extra_body: dict[str, Any]) -> dict[str, Any]:
+def _filter_extra_body(extra_body: dict[str, object]) -> dict[str, object]:
     return {k: v for k, v in extra_body.items() if k in _ALLOWED_EXTRA_BODY_PARAMS}
 
 
@@ -176,7 +176,7 @@ class LLM(OpenAILLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
-        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -199,7 +199,7 @@ class LLM(OpenAILLM):
         merged_headers["User-Agent"] = USER_AGENT
 
         # ---- Build extra_body with Sarvam-specific fields ----
-        merged_body: dict[str, Any] = {}
+        merged_body: dict[str, object] = {}
         if is_given(extra_body):
             merged_body.update(extra_body)
         if is_given(max_tokens):
@@ -297,9 +297,11 @@ class LLM(OpenAILLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[Any] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> Any:
+        response_format: NotGivenOr[
+            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
+    ) -> LLMStream:
         """Build a chat-completion stream with Sarvam-specific param stripping.
 
         * Strips ``stream_options``, ``max_completion_tokens``, ``service_tier``
@@ -339,7 +341,7 @@ class LLM(OpenAILLM):
             chat_ctx = chat_ctx.copy(exclude_function_call=True)
 
         # --- Strip unsupported fields from caller-provided extra_kwargs ---
-        merged_extra: dict[str, Any] = {}
+        merged_extra: dict[str, object] = {}
         if is_given(extra_kwargs):
             merged_extra.update(extra_kwargs)
 

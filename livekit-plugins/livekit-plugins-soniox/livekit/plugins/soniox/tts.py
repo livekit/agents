@@ -404,6 +404,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         input_t = asyncio.create_task(_input_task(), name="soniox-tts-stream-input")
 
         active: _ActiveStream | None = None
+        failure: APIError | None = None
         next_task: asyncio.Future[tokenize.TokenData] | None = None
         sent_iter = sent_stream.__aiter__()
 
@@ -424,14 +425,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
 
                 if active is not None and active.waiter.done():
-                    await self._settle_stream(active)
+                    failure = await self._settle_stream(active, output_emitter) or failure
                     active = None
                     continue
 
                 if not next_task.done():
                     # LLM stalled: finalize before the server times the stream out
                     if active is not None:
-                        await self._finalize_stream(active, output_emitter, request_id)
+                        failure = await self._finalize_stream(active, output_emitter) or failure
                         active = None
                     continue
 
@@ -449,7 +450,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 # rotate to a new stream before the fixed 2-minute stream lifespan
                 if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
-                    await self._finalize_stream(active, output_emitter, request_id)
+                    failure = await self._finalize_stream(active, output_emitter) or failure
                     active = None
 
                 if active is None:
@@ -458,8 +459,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 active.connection.send_text(active.stream_id, ev.token, text_end=False)
 
             if active is not None and not self._cancelled.is_set():
-                await self._finalize_stream(active, output_emitter, request_id)
+                failure = await self._finalize_stream(active, output_emitter) or failure
                 active = None
+            if failure is not None:
+                raise failure
         finally:
             if next_task is not None:
                 await utils.aio.gracefully_cancel(next_task)
@@ -498,19 +501,26 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
     async def _finalize_stream(
-        self, active: _ActiveStream, output_emitter: tts.AudioEmitter, request_id: str
-    ) -> None:
+        self, active: _ActiveStream, output_emitter: tts.AudioEmitter
+    ) -> APIError | None:
         """End the provider stream and wait for its terminal event."""
         active.connection.send_text(active.stream_id, "", text_end=True)
-        await self._settle_stream(active)
+        return await self._settle_stream(active, output_emitter)
 
-    async def _settle_stream(self, active: _ActiveStream) -> None:
-        # The generated stream owns retries for the complete synthesis. Retrying just a
-        # provider batch would bypass its delivered-audio and total-deadline decisions.
+    async def _settle_stream(
+        self, active: _ActiveStream, output_emitter: tts.AudioEmitter
+    ) -> APIError | None:
         try:
             await active.waiter
+        except APIError as error:
+            if not error.retryable or output_emitter.pushed_duration() == 0:
+                raise
+            # Soniox has no audio/text offsets: submitted text cannot safely be replayed.
+            # Keep the failure while later, unsent sentences get a fresh provider stream.
+            return error
         finally:
             active.connection.unregister_stream(active.stream_id)
+        return None
 
 
 @dataclass
@@ -737,7 +747,7 @@ class _Connection:
                     if msg.text_end:
                         payload["text_end"] = True
                     await self._ws.send_str(json.dumps(payload))
-                elif isinstance(msg, _CancelStream):
+                else:
                     await self._ws.send_str(
                         json.dumps({"stream_id": msg.stream_id, "cancel": True})
                     )
@@ -863,7 +873,7 @@ class _Connection:
         try:
             while not self._closed and self._ws is not None and not self._ws.closed:
                 await asyncio.sleep(KEEPALIVE_INTERVAL)
-                if self._ws is not None and not self._ws.closed:
+                if not self._ws.closed:
                     await self._ws.send_str(KEEPALIVE_MESSAGE)
         except Exception as e:
             logger.warning(f"Soniox TTS keepalive error: {e}")

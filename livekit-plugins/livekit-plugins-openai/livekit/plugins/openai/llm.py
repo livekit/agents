@@ -33,6 +33,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -53,7 +54,7 @@ from .models import (
     TelnyxChatModels,
     TogetherChatModels,
     XAIChatModels,
-    _supports_reasoning_effort,
+    supports_reasoning_effort,
 )
 from .utils import AsyncAzureADTokenProvider, http_timeout
 
@@ -123,7 +124,7 @@ class LLM(llm.LLM):
         """
         super().__init__()
 
-        if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
+        if not is_given(reasoning_effort) and supports_reasoning_effort(model):
             if model in [
                 "gpt-5.1",
                 "gpt-5.2",
@@ -966,7 +967,7 @@ class LLM(llm.LLM):
         ] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra = {}
+        extra: dict[str, Any] = {}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
@@ -1018,8 +1019,10 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        if is_given(tool_choice):
+        tool_choice = (
+            tool_choice if not isinstance(tool_choice, NotGiven) else self._opts.tool_choice
+        )
+        if not isinstance(tool_choice, NotGiven):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if not isinstance(tool_choice, str):
                 oai_tool_choice = {

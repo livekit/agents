@@ -123,6 +123,7 @@ pub struct TaskSet {
 
 #[derive(Default)]
 struct TaskEntries {
+    closed: bool,
     next: u64,
     tasks: BTreeMap<u64, (String, Option<AbortHandle>)>,
 }
@@ -146,9 +147,23 @@ impl TaskSet {
         spawner: &dyn Spawner,
         name: &str,
         fut: impl Future<Output = ()> + Send + 'static,
-    ) {
+    ) -> AbortHandle {
+        self.try_spawn(spawner, name, fut).expect("task admission is closed")
+    }
+
+    /// Admit a task unless its owner has permanently closed this set.
+    #[track_caller]
+    pub fn try_spawn(
+        self: &Arc<Self>,
+        spawner: &dyn Spawner,
+        name: &str,
+        fut: impl Future<Output = ()> + Send + 'static,
+    ) -> Option<AbortHandle> {
         let id = {
             let mut g = self.inner.lock().expect("task table");
+            if g.closed {
+                return None;
+            }
             g.next += 1;
             let id = g.next;
             g.tasks.insert(id, (name.to_owned(), None));
@@ -159,9 +174,17 @@ impl TaskSet {
             let _leave = leave;
             fut.await;
         });
-        if let Some(entry) = self.inner.lock().expect("task table").tasks.get_mut(&id) {
-            entry.1 = Some(handle);
+        let closed = {
+            let mut g = self.inner.lock().expect("task table");
+            if let Some(entry) = g.tasks.get_mut(&id) {
+                entry.1 = Some(handle.clone());
+            }
+            g.closed
+        };
+        if closed {
+            handle.abort();
         }
+        Some(handle)
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -194,26 +217,31 @@ impl TaskSet {
         }
     }
 
+    /// Permanently refuse new work and abort admitted tasks without holding the table lock.
+    pub fn close(&self) {
+        self.inner.lock().expect("task table").closed = true;
+        self.abort_all();
+    }
+
     /// Abort every task without waiting: an owner going away.
     pub fn abort_all(&self) {
-        for (_, handle) in self.inner.lock().expect("task table").tasks.values() {
-            if let Some(h) = handle {
-                h.abort();
-            }
+        let handles: Vec<_> = self
+            .inner
+            .lock()
+            .expect("task table")
+            .tasks
+            .values()
+            .filter_map(|(_, handle)| handle.clone())
+            .collect();
+        for handle in handles {
+            handle.abort();
         }
     }
 
     /// `cancel_and_wait(*tasks)`; returns the names aborted.
     pub async fn cancel_and_wait(&self, clock: &dyn Clock) -> Vec<String> {
-        let names = {
-            let g = self.inner.lock().expect("task table");
-            for (_, handle) in g.tasks.values() {
-                if let Some(h) = handle {
-                    h.abort();
-                }
-            }
-            g.tasks.values().map(|(n, _)| n.clone()).collect()
-        };
+        let names = self.names();
+        self.abort_all();
         self.wait_empty(clock, None).await;
         names
     }
@@ -226,7 +254,6 @@ impl TaskSet {
         self.cancel_and_wait(clock).await
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -339,5 +366,14 @@ mod tests {
         }
         assert!(cancelled.load(Ordering::SeqCst), "abort() did not stop the task it was handed");
         assert!(!finished.load(Ordering::SeqCst), "the task ran past the abort point");
+    }
+    #[tokio::test]
+    async fn closing_task_admission_refuses_future_work_and_settles_admitted_work() {
+        let tasks = Arc::new(TaskSet::default());
+        let spawner = TokioSpawner::current();
+        tasks.spawn(&spawner, "pending", std::future::pending());
+        tasks.close();
+        assert!(tasks.try_spawn(&spawner, "late", async {}).is_none());
+        assert!(tasks.wait_empty(&crate::RealClock::new(), None).await);
     }
 }

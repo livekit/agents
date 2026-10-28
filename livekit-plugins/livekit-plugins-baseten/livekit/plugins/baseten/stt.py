@@ -42,7 +42,8 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from . import qwen3_stt
+from ._qwen3_stt import Qwen3Backend
+from ._stt_response import decode_transcript
 from .log import logger
 from .models import STTModels
 
@@ -54,7 +55,9 @@ bytes_per_frame = {
     "pcm_mulaw": 1,
 }
 
-ssl_context = ssl._create_unverified_context()
+ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 
 @dataclass
@@ -63,7 +66,7 @@ class STTOptions:
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
     language: LanguageCode = LanguageCode("en")
-    language_options: list[LanguageCode] = field(default_factory=list)
+    language_options: list[LanguageCode] = field(default_factory=list[LanguageCode])
 
     # Streaming params – controls how transcripts are delivered
     enable_partial_transcripts: bool = True
@@ -165,10 +168,10 @@ class STT(stt.STT):
             http_session: Optional :class:`aiohttp.ClientSession` to reuse.
         """
         self._model_name = model
-        self._qwen3: qwen3_stt._Qwen3Backend | None = None
+        self._qwen3: Qwen3Backend | None = None
 
         if model == "qwen3-asr":
-            self._qwen3 = qwen3_stt._Qwen3Backend(
+            self._qwen3 = Qwen3Backend(
                 model_endpoint=model_endpoint,
                 model_id=model_id,
                 chain_id=chain_id,
@@ -438,6 +441,7 @@ class SpeechStream(stt.SpeechStream):
         closing_ws = False
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 512
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -459,8 +463,10 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
+                closing_ws = True
+                await ws.send_str(self._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
+                if self._session.closed:
                     return
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
@@ -491,108 +497,92 @@ class SpeechStream(stt.SpeechStream):
                     logger.error("Unexpected Baseten message type: %s", msg.type)
                     continue
 
-                try:
-                    data = json.loads(msg.data)
+                data = decode_transcript(msg.data)
 
-                    # Skip non-transcription messages (e.g. error, status)
-                    msg_type = data.get("type")
-                    if msg_type and msg_type not in ("transcription",):
-                        logger.debug("Ignoring message type: %s", msg_type)
-                        continue
+                # Skip non-transcription messages (e.g. error, status)
+                msg_type = data.type
+                if msg_type and msg_type not in ("transcription",):
+                    logger.debug("Ignoring message type: %s", msg_type)
+                    continue
 
-                    is_final = data.get("is_final", True)
-                    segments = data.get("segments", [])
+                is_final = data.is_final is not False
+                segments = data.segments or []
 
-                    # Build transcript text: prefer top-level "transcript" if present,
-                    # otherwise concatenate segment texts (Baseten standard format).
-                    text = (
-                        data.get("transcript")
-                        or " ".join(seg.get("text", "") for seg in segments).strip()
-                    )
+                # Build transcript text: prefer top-level "transcript" if present,
+                # otherwise concatenate segment texts (Baseten standard format).
+                text = data.transcript or " ".join(seg.text for seg in segments).strip()
 
-                    confidence = data.get("confidence", 0.0)
+                confidence = data.confidence
 
-                    # Build timed words – prefer word-level timestamps when available,
-                    # fall back to segment-level timing.
-                    timed_words: list[TimedString] = []
-                    for segment in segments:
-                        word_timestamps = segment.get("word_timestamps", [])
-                        if word_timestamps:
-                            for w in word_timestamps:
-                                timed_words.append(
-                                    TimedString(
-                                        text=w.get("word", ""),
-                                        start_time=(
-                                            w.get("start_time", 0.0) + self.start_time_offset
-                                        ),
-                                        end_time=(w.get("end_time", 0.0) + self.start_time_offset),
-                                        start_time_offset=self.start_time_offset,
-                                    )
-                                )
-                        else:
+                # Build timed words – prefer word-level timestamps when available,
+                # fall back to segment-level timing.
+                timed_words: list[TimedString] = []
+                for segment in segments:
+                    word_timestamps = segment.word_timestamps or []
+                    if word_timestamps:
+                        for w in word_timestamps:
                             timed_words.append(
                                 TimedString(
-                                    text=segment.get("text", ""),
-                                    start_time=(
-                                        segment.get("start_time", 0.0) + self.start_time_offset
-                                    ),
-                                    end_time=(
-                                        segment.get("end_time", 0.0) + self.start_time_offset
-                                    ),
+                                    text=w.word,
+                                    start_time=(w.start_time + self.start_time_offset),
+                                    end_time=(w.end_time + self.start_time_offset),
                                     start_time_offset=self.start_time_offset,
                                 )
                             )
-
-                    start_time = (
-                        segments[0].get("start_time", 0.0) if segments else 0.0
-                    ) + self.start_time_offset
-                    end_time = (
-                        segments[-1].get("end_time", 0.0) if segments else 0.0
-                    ) + self.start_time_offset
-
-                    if not is_final:
-                        if text:
-                            event = stt.SpeechEvent(
-                                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                                alternatives=[
-                                    stt.SpeechData(
-                                        language=LanguageCode(""),
-                                        text=text,
-                                        confidence=confidence,
-                                        start_time=start_time,
-                                        end_time=end_time,
-                                        words=timed_words,
-                                    )
-                                ],
+                    else:
+                        timed_words.append(
+                            TimedString(
+                                text=segment.text,
+                                start_time=(segment.start_time + self.start_time_offset),
+                                end_time=(segment.end_time + self.start_time_offset),
+                                start_time_offset=self.start_time_offset,
                             )
-                            self.send(event)
+                        )
 
-                    elif is_final:
-                        language = LanguageCode(data.get("language_code", self._opts.language))
+                start_time = (segments[0].start_time if segments else 0.0) + self.start_time_offset
+                end_time = (segments[-1].end_time if segments else 0.0) + self.start_time_offset
 
-                        if text:
-                            event = stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                alternatives=[
-                                    stt.SpeechData(
-                                        language=language,
-                                        text=text,
-                                        confidence=confidence,
-                                        start_time=start_time,
-                                        end_time=end_time,
-                                        words=timed_words,
-                                    )
-                                ],
-                            )
-                            self._final_events.append(event)
-                            self.send(event)
+                if not is_final:
+                    if text:
+                        event = stt.SpeechEvent(
+                            type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                            alternatives=[
+                                stt.SpeechData(
+                                    language=LanguageCode(""),
+                                    text=text,
+                                    confidence=confidence,
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    words=timed_words,
+                                )
+                            ],
+                        )
+                        self.send(event)
 
-                except Exception:
-                    logger.exception("Failed to process message from Baseten")
+                elif is_final:
+                    language = LanguageCode(data.language_code or self._opts.language)
+
+                    if text:
+                        event = stt.SpeechEvent(
+                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[
+                                stt.SpeechData(
+                                    language=language,
+                                    text=text,
+                                    confidence=confidence,
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                    words=timed_words,
+                                )
+                            ],
+                        )
+                        self._final_events.append(event)
+                        self.send(event)
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         while True:
+            closing_ws = False
             try:
                 ws = await self._connect_ws()
                 tasks = [
@@ -600,10 +590,11 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(recv_task(ws)),
                 ]
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                group = asyncio.gather(*tasks)
 
                 try:
                     done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
+                        (group, wait_reconnect_task),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for task in done:
@@ -615,7 +606,7 @@ class SpeechStream(stt.SpeechStream):
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task, group)
             finally:
                 if ws is not None:
                     await ws.close()

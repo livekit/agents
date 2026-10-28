@@ -52,7 +52,7 @@ from azure.ai.voicelive.models import (
 from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, _core, llm, utils
+from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -348,7 +348,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # manual turn-taking is unsupported (can_disable_turn_detection=False)
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(self, options=replace(self._opts))
         self._sessions.add(sess)
         return sess
 
@@ -374,11 +374,11 @@ class RealtimeSession(
     - azure_client_event_sent: Raw client events sent to Azure
     """
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(self, realtime_model: RealtimeModel, *, options: _RealtimeOptions) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
         # per-session copy, so update_options only affects this session
-        self._opts = replace(realtime_model._opts)
+        self._opts = options
         self._tools = llm.ToolContext.empty()
         self._instructions: str | None = None
 
@@ -418,6 +418,7 @@ class RealtimeSession(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_resampler_rate: int | None = None
         self._video_warned = False
 
         self._main_atask = asyncio.create_task(
@@ -477,7 +478,7 @@ class RealtimeSession(
                         return
 
                     self._emit_error(e, recoverable=True)
-                    retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
+                    retry_interval = self._opts.conn_options.interval_for_retry(num_retries)
                     logger.warning(
                         f"Azure Voice Live connection failed, retrying in {retry_interval}s",
                         exc_info=e,
@@ -1168,11 +1169,10 @@ class RealtimeSession(
         pending = generation.function_calls.pop(event.item_id, None)
         call_id = event.call_id or (pending.call_id if pending else "")
         name = event.name or (pending.name if pending else "")
-        arguments = (
-            event.arguments
-            if event.arguments is not None
-            else (pending.arguments if pending else "")
-        )
+        # The SDK decodes nullable wire fields without validating its str annotation.
+        arguments = cast(str | None, event.arguments)
+        if arguments is None:
+            arguments = pending.arguments if pending else ""
         if not call_id or not name:
             logger.warning(
                 "ignoring an Azure Voice Live function call without a name or call id",
@@ -1377,13 +1377,14 @@ class RealtimeSession(
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Resample audio to target sample rate and channel count if needed."""
         if self._input_resampler:
-            if frame.sample_rate != self._input_resampler._input_rate:
+            if frame.sample_rate != self._input_resampler_rate:
                 # input audio changed to a different sample rate
                 self._input_resampler = None
 
         if self._input_resampler is None and (
             frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
         ):
+            self._input_resampler_rate = frame.sample_rate
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate,
                 output_rate=SAMPLE_RATE,
@@ -1501,9 +1502,7 @@ class RealtimeSession(
                 exclude_handoff=True,
                 exclude_config_update=True,
             )
-            # The core selects framework instruction items; app-authored system turns remain.
-            for index in reversed(_core.remove_instructions([item.id for item in chat_ctx.items])):
-                del chat_ctx.items[index]
+            llm.utils.remove_instructions(chat_ctx)
 
             remote_ctx = self._remote_chat_ctx.to_chat_ctx()
             known_ids = {item.id for item in remote_ctx.items}

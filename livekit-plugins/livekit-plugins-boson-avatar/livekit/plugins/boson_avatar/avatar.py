@@ -223,7 +223,7 @@ class AvatarSession(BaseAvatarSession):
                     # still buffering speech until the Avatar is ready.
                     wait_remote_track=rtc.TrackKind.KIND_AUDIO,
                 )
-                agent_session.output.replace_audio_tail(audio_output)
+                self._attach_audio_output(agent_session, audio_output)
             except BaseException:
                 # Move all startup cleanup into an independent task. It owns both
                 # the provider result and DELETE, so repeated caller cancellation

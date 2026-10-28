@@ -6,7 +6,7 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
@@ -362,7 +362,12 @@ class GPTLiveModel(llm.DuplexModel):
         return llm.FixedGate(_SILENCE_RMS, min_silence_duration=_MIN_SILENCE_DURATION)
 
     def session(self) -> GPTVoiceSession:
-        return GPTVoiceSession(self)
+        return GPTVoiceSession(
+            self,
+            options=replace(self._opts, responses=self._opts.responses.copy()),
+            provider_label=self._provider_label,
+            session_factory=self._ensure_http_session,
+        )
 
     async def aclose(self) -> None:
         if self._http_session_owned and self._http_session:
@@ -385,16 +390,26 @@ class GPTVoiceSession(
     events arrive at the estimated context-injection end; they do not mean speech has finished.
     """
 
-    def __init__(self, duplex_model: GPTLiveModel) -> None:
+    def __init__(
+        self,
+        duplex_model: GPTLiveModel,
+        *,
+        options: _LiveOptions,
+        provider_label: str,
+        session_factory: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(duplex_model)
         self._live_model = duplex_model
-        self._opts = replace(duplex_model._opts, responses=duplex_model._opts.responses.copy())
+        self._opts = options
+        self._provider_label = provider_label
+        self._session_factory = session_factory
         self._tools = llm.ToolContext.empty()
         # the agent's instructions, set by _update_session before session.start and immutable after
         self._instructions: str | None = None
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_resampler_rate: int | None = None
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
@@ -531,15 +546,14 @@ class GPTVoiceSession(
                     elif self._num_retries == max_retries:
                         self._emit_error(e, recoverable=False)
                         raise APIConnectionError(
-                            f"{self._live_model._provider_label} connection failed after "
+                            f"{self._provider_label} connection failed after "
                             f"{self._num_retries} attempts",
                         ) from e
                     else:
                         self._emit_error(e, recoverable=True)
-                        interval = self._opts.conn_options._interval_for_retry(self._num_retries)
+                        interval = self._opts.conn_options.interval_for_retry(self._num_retries)
                         logger.warning(
-                            f"{self._live_model._provider_label} connection failed, "
-                            f"retrying in {interval}s",
+                            f"{self._provider_label} connection failed, retrying in {interval}s",
                             exc_info=e,
                         )
                         await asyncio.sleep(interval)
@@ -591,14 +605,12 @@ class GPTVoiceSession(
         t0 = time.perf_counter()
         try:
             ws = await utils.http_context.ws_connect(
-                self._live_model._ensure_http_session(), url, conn_options=options, headers=headers
+                self._session_factory(), url, conn_options=options, headers=headers
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
         except (aiohttp.ClientError, asyncio.TimeoutError):
-            raise APIConnectionError(
-                f"{self._live_model._provider_label} connection error"
-            ) from None
+            raise APIConnectionError(f"{self._provider_label} connection error") from None
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
@@ -660,7 +672,7 @@ class GPTVoiceSession(
                     if closing or self._session_closed_fut.done():
                         return
                     raise APIConnectionError(
-                        f"{self._live_model._provider_label} connection closed unexpectedly"
+                        f"{self._provider_label} connection closed unexpectedly"
                     )
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1054,11 +1066,12 @@ class GPTVoiceSession(
             if speech.quiet_ms >= _MIN_SILENCE_MS:
                 self._end_speech("user")
 
-        if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
+        if self._input_resampler and frame.sample_rate != self._input_resampler_rate:
             self._input_resampler = None
         if self._input_resampler is None and (
             frame.sample_rate != SAMPLE_RATE or frame.num_channels != NUM_CHANNELS
         ):
+            self._input_resampler_rate = frame.sample_rate
             self._input_resampler = rtc.AudioResampler(
                 input_rate=frame.sample_rate, output_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
             )
@@ -1255,9 +1268,9 @@ def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:
 def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
     oai_tools: list[dict[str, Any]] = []
     for tool in tools:
-        if isinstance(tool, llm.FunctionTool):
+        if llm.is_function_tool(tool):
             oai_tools.append(llm.utils.build_legacy_openai_schema(tool, internally_tagged=True))
-        elif isinstance(tool, llm.RawFunctionTool):
+        elif llm.is_raw_function_tool(tool):
             schema = dict(tool.info.raw_schema)
             schema.pop("meta", None)
             schema["type"] = "function"

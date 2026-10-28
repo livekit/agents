@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Annotated, Generic, Literal, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter, field_validator
 
 # Sarvam TTS specific models and speakers
 SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3", "bulbul:v4-flash"]
@@ -477,7 +477,7 @@ class ProviderMessage(BaseModel, Generic[DataT]):
     data: DataT | None = None
     metadata: RequestMetadata | None = None
     error: object | None = None
-    code: object | None = None
+    code: str | int | None = None
 
 
 def message_request_id(message: ProviderMessage[RequestMetadata]) -> str | None:
@@ -518,7 +518,7 @@ class EventData(RequestMetadata):
     event_type: str | None = None
     event: str | None = None
     error: object | None = None
-    code: object | None = None
+    code: str | int | None = None
     message: object = "Unknown error"
 
 
@@ -527,7 +527,7 @@ class AudioData(RequestMetadata):
 
 
 class ErrorData(RequestMetadata):
-    code: object | None = None
+    code: str | int | None = None
     message: object = "Unknown error"
     error: object | None = None
 
@@ -592,26 +592,46 @@ TTS_MESSAGE: TypeAdapter[TTSMessage] = TypeAdapter(
 
 
 class RealtimeMessage(ProviderMessage[RequestMetadata]):
-    """Common realtime STT identity and payload fields.
-
-    Transcript/timing fields remain opaque until their existing tolerant checks;
-    server identity and the configuration object have a fixed wire schema.
-    """
+    """Validated realtime STT events, with provider extensions retained as extras."""
 
     event: str | None = None
     config: dict[str, object] | None = None
-    applied: object = None
-    utterance_idx: object = None
-    text: object = None
+    applied: list[str] | None = None
+    utterance_idx: int | None = None
+    text: str | None = None
     language: str | None = None
-    language_confidence: object = None
-    confidence: object = None
-    audio_duration_s: object = None
-    start_s: object = None
-    end_s: object = None
-    is_fatal: object = False
-    message: object = None
-    status_code: object = -1
+    language_confidence: float | None = None
+    confidence: float | None = None
+    audio_duration_s: float | None = None
+    start_s: float | None = None
+    end_s: float | None = None
+    is_fatal: bool | None = False
+    message: str | None = None
+    status_code: int | None = -1
+
+    @field_validator("utterance_idx", "status_code", mode="before")
+    @classmethod
+    def optional_integer(cls, value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @field_validator(
+        "confidence", "language_confidence", "audio_duration_s", "start_s", "end_s", mode="before"
+    )
+    @classmethod
+    def optional_number(cls, value: object) -> float | None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return None
+
+    @field_validator("applied", mode="before")
+    @classmethod
+    def optional_applied(cls, value: object) -> list[str] | None:
+        if not isinstance(value, list):
+            return None
+        entries = cast(list[object], value)
+        if any(not isinstance(entry, str) for entry in entries):
+            return None
+        return cast(list[str], entries)
 
 
 class TTSBatchResponse(BaseModel):

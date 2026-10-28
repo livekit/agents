@@ -335,7 +335,7 @@ async def test_responses_acquisition_preserves_shared_prewarm(
 
 async def test_responses_llm_prewarms_http_client() -> None:
     client = MagicMock()
-    client._base_url = httpx.URL("https://api.openai.com/v1")
+    client.base_url = httpx.URL("https://api.openai.com/v1")
     client.models.list = list_models = AsyncMock()
     llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
 
@@ -399,16 +399,18 @@ def test_incomplete_ws_event_parses_provider_reason(reason: str) -> None:
 class _ReplayResponsesWS:
     """Hermetic WebSocket LLM transport that ends after the supplied frames."""
 
-    _base_url = "https://api.openai.com/v1"
+    base_url = "https://api.openai.com/v1"
 
     def __init__(self, frames: list[dict]) -> None:
         self._frames = frames
         self.attempts = 0
+        self.requests: list[dict] = []
 
     def generate_response(
         self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ):  # noqa: ANN201
         self.attempts += 1
+        self.requests.append(payload)
 
         async def _replay():  # noqa: ANN202
             for frame in self._frames:
@@ -491,8 +493,19 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
             else request_counter.await_count
         )
         assert attempts == 1
-        assert llm_model._prev_resp_id == ""
-        assert llm_model._prev_chat_ctx is None
+        followup = chat_ctx.copy()
+        followup.add_message(role="user", content="follow up")
+        with pytest.raises(APIStatusError):
+            async with llm_model.chat(
+                chat_ctx=followup, conn_options=APIConnectOptions(max_retry=0)
+            ) as stream:
+                _ = [chunk async for chunk in stream]
+        request = (
+            request_counter.requests[-1]
+            if isinstance(request_counter, _ReplayResponsesWS)
+            else request_counter.await_args.kwargs
+        )
+        assert "previous_response_id" not in request
     finally:
         await llm_model.aclose()
 
@@ -501,11 +514,12 @@ class _StallingResponsesWS:
     """Replays raw response frames, then dies the way a socket going quiet does."""
 
     # read by LLM.provider
-    _base_url = "https://api.openai.com/v1"
+    base_url = "https://api.openai.com/v1"
 
     def __init__(self, frames: list[dict]) -> None:
         self._frames = frames
         self.attempts = 0
+        self.requests: list[dict] = []
 
     def generate_response(
         self, payload: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -555,3 +569,101 @@ async def test_response_created_alone_stays_retryable() -> None:
 async def test_generated_text_is_not_retried() -> None:
     """Text already delivered must not be regenerated."""
     assert await _attempts_until_stall([_RESPONSE_CREATED, _TEXT_DELTA], max_retry=2) == 1
+
+
+class _CachingResponsesWS:
+    base_url = "https://api.openai.com/v1"
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+        self.release: asyncio.Event | None = None
+        self.concurrent_started = asyncio.Event()
+
+    async def generate_response(self, payload: dict, *, conn_options: APIConnectOptions):
+        self.requests.append(payload)
+        response = {**_RESPONSE_CREATED["response"], "id": f"resp_{len(self.requests)}"}
+        yield {**_RESPONSE_CREATED, "response": response}
+        if self.release is not None:
+            if len(self.requests) >= 3:
+                self.concurrent_started.set()
+            await self.release.wait()
+        yield _TEXT_DELTA
+        yield {"type": "response.completed", "sequence_number": 2, "response": response}
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def _consume_response(provider: ResponsesLLM, context: agents_llm.ChatContext) -> None:
+    async with provider.chat(
+        chat_ctx=context, conn_options=APIConnectOptions(max_retry=0)
+    ) as stream:
+        assert [chunk async for chunk in stream]
+
+
+async def test_completed_response_reuses_only_appended_input() -> None:
+    provider = ResponsesLLM(api_key="test-key")
+    transport = _CachingResponsesWS()
+    provider._ws = transport
+    first = agents_llm.ChatContext.empty()
+    first.add_message(role="user", content="first")
+    second = first.copy()
+    second.add_message(role="user", content="second")
+    try:
+        await _consume_response(provider, first)
+        await _consume_response(provider, second)
+        assert "previous_response_id" not in transport.requests[0]
+        assert transport.requests[1]["previous_response_id"] == "resp_1"
+        assert len(transport.requests[1]["input"]) == 1
+        assert transport.requests[1]["input"][0]["content"] == "second"
+    finally:
+        await provider.aclose()
+
+
+async def test_parallel_responses_discard_shared_reuse_context() -> None:
+    provider = ResponsesLLM(api_key="test-key")
+    transport = _CachingResponsesWS()
+    provider._ws = transport
+    context = agents_llm.ChatContext.empty()
+    context.add_message(role="user", content="seed")
+    pending: asyncio.Future | None = None
+    try:
+        await _consume_response(provider, context)
+        transport.release = asyncio.Event()
+        pending = asyncio.gather(
+            _consume_response(provider, context), _consume_response(provider, context)
+        )
+        await asyncio.wait_for(transport.concurrent_started.wait(), timeout=1)
+        transport.release.set()
+        await asyncio.wait_for(pending, timeout=1)
+        await _consume_response(provider, context)
+        assert "previous_response_id" not in transport.requests[-1]
+        assert len(transport.requests[-1]["input"]) == 1
+    finally:
+        if transport.release is not None:
+            transport.release.set()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
+        await provider.aclose()
+
+
+async def test_verbosity_keeps_json_schema_wire_aliases() -> None:
+    provider = ResponsesLLM(api_key="test-key", verbosity="low")
+    transport = _CachingResponsesWS()
+    provider._ws = transport
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    try:
+        async with provider.chat(
+            chat_ctx=agents_llm.ChatContext.empty(),
+            conn_options=APIConnectOptions(max_retry=0),
+            extra_kwargs={
+                "text": {"format": {"type": "json_schema", "name": "Answer", "schema": schema}}
+            },
+        ) as stream:
+            _ = [chunk async for chunk in stream]
+        sent_text = transport.requests[0]["text"]
+        assert sent_text["verbosity"] == "low"
+        assert sent_text["format"]["schema"] == schema
+        assert "schema_" not in sent_text["format"]
+    finally:
+        await provider.aclose()

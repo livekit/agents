@@ -128,7 +128,7 @@ struct Receiver {
     log: Log,
     stamps: Stamps,
     /// The segment being received, and whether any of its audio was.
-    segment: Mutex<(u32, bool)>,
+    segment: Mutex<(u32, bool, u64)>,
     closed: Mutex<bool>,
 }
 
@@ -137,7 +137,7 @@ impl Receiver {
     fn next_segment(&self) {
         let mut segment = self.segment.lock().unwrap();
         if segment.1 {
-            *segment = (segment.0 + 1, false);
+            *segment = (segment.0 + 1, false, segment.2);
         }
     }
 }
@@ -148,13 +148,14 @@ impl AvatarAudioReceiver for Receiver {
         Ok(())
     }
 
-    async fn next_audio(&self) -> Result<Option<AvatarFrame>, ProviderError> {
+    async fn next_audio(&self) -> Result<(u64, bool, Option<AvatarFrame>), ProviderError> {
         match self.rx.recv().await {
             Ok(Received::Audio(frame)) => {
-                let segment = {
+                let (segment, starts_segment, epoch) = {
                     let mut segment = self.segment.lock().unwrap();
+                    let observation = (segment.0, !segment.1, segment.2);
                     segment.1 = true;
-                    segment.0
+                    observation
                 };
                 let from = record(&self.log, &self.stamps, AvatarStep::Received { segment });
                 let entry = Entry::Received {
@@ -163,19 +164,23 @@ impl AvatarAudioReceiver for Receiver {
                     samples: frame.samples_per_channel,
                     rate: frame.sample_rate,
                 };
-                Ok(Some(AvatarFrame::Audio(self.frames.audio(
-                    entry,
-                    frame.samples_per_channel,
-                    frame.sample_rate,
-                ))))
+                Ok((
+                    epoch,
+                    starts_segment,
+                    Some(AvatarFrame::Audio(self.frames.audio(
+                        entry,
+                        frame.samples_per_channel,
+                        frame.sample_rate,
+                    ))),
+                ))
             }
             Ok(Received::SegmentEnd) => {
                 record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
                 self.next_segment();
-                Ok(Some(AvatarFrame::SegmentEnd))
+                Ok((self.segment.lock().unwrap().2, false, Some(AvatarFrame::SegmentEnd)))
             }
             Ok(Received::Video(_)) => Err(ProviderError::Local(ApiError::new("video from the receiver"))),
-            Err(ReceiverEnd::Closed) => Ok(None),
+            Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None)),
             Err(e) => Err(ProviderError::Local(ApiError::new(format!("{e:?}")))),
         }
     }
@@ -516,7 +521,12 @@ impl FakeAvatarWorker {
                 if let Some(w) = worker.get().and_then(Weak::upgrade) {
                     record(&w.log, &w.stamps, AvatarStep::Clear);
                     w.receiver.next_segment();
-                    w.runner.clear_buffer();
+                    let epoch = {
+                        let mut segment = w.receiver.segment.lock().unwrap();
+                        segment.2 += 1;
+                        segment.2
+                    };
+                    w.runner.clear_buffer(epoch);
                 }
             })
         };
@@ -567,17 +577,8 @@ impl FakeAvatarWorker {
             true,
             clock,
             spawner.clone(),
-            // Any ready event, but a clear never ahead of a frame the receiver handed over before
-            // it: the receiver drops the cut stream from the clear on, so that order cannot be.
-            move |ready: &std::collections::VecDeque<Event>| {
-                let audio = ready.iter().position(|e| matches!(e, Event::Audio(_)));
-                let open: Vec<usize> = (0..ready.len())
-                    .filter(|&i| {
-                        !matches!(ready[i], Event::ClearBuffer) || audio.is_none_or(|a| a > i)
-                    })
-                    .collect();
-                open[order.usize(..open.len())]
-            },
+            // The production boundary tags observations, so clears may overtake ready audio.
+            move |ready: &std::collections::VecDeque<Event>| order.usize(..ready.len()),
         ));
         let me = Arc::new(FakeAvatarWorker {
             room,

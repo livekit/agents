@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any
+
+from pydantic import JsonValue
 
 from livekit.agents import ProviderTool
 
@@ -10,8 +11,10 @@ from livekit.agents import ProviderTool
 class AnthropicTool(ProviderTool):
     """Base class for Anthropic server-side provider tools."""
 
+    provider = "anthropic"
+
     @abstractmethod
-    def to_dict(self) -> dict[str, Any]: ...
+    def to_dict(self) -> dict[str, JsonValue]: ...
 
     @property
     def beta_flag(self) -> str | None:
@@ -38,7 +41,7 @@ class ComputerUse(AnthropicTool):
     def beta_flag(self) -> str | None:
         return _TOOL_VERSION_BETA_FLAGS.get(self.tool_version)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, JsonValue]:
         return {
             "type": self.tool_version,
             "name": "computer",

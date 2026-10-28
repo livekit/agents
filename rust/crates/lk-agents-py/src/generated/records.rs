@@ -796,6 +796,7 @@ pub mod agent_run {
                 delegated: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "delegated", |v| v.extract::<bool>())?,
                 conn_options: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "conn_options", |v| v.extract::<::lk_agents_abi::ApiConnectOptions>().map_err(::std::convert::Into::<PyErr>::into))?,
                 host_context: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "host_context", |v| v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into))?,
+                tools_host: ::lk_agents_abi::python::attr_with(obj, "RunRequest", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             })
     }
 
@@ -2410,6 +2411,7 @@ pub mod text_session {
                 output_type_explicit: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "output_type_explicit", |v| v.extract::<bool>())?,
                 agent_tools: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "agent_tools", |v| v.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| { let (key, item) = (&key, &item); Ok((key.extract::<::std::string::String>()?, crate::generated::records::text_session::local_agent_tool_from_py(item)?)) }).collect::<PyResult<::std::collections::BTreeMap<_, _>>>())?,
                 host_context: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "host_context", |v| v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into))?,
+                tools_host: ::lk_agents_abi::python::attr_with(obj, "TextSessionAgent", "tools_host", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             })
     }
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import riva.client
 from riva.client.proto.riva_audio_pb2 import AudioEncoding
+from riva.client.proto.riva_tts_pb2 import RivaSynthesisConfigRequest
 
 from livekit.agents import (
     APIConnectionError,
@@ -68,7 +69,7 @@ class TTS(tts.TTS):
             language_code=language_code,
             word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
         )
-        self._tts_service = None
+        self._tts_service: riva.client.SpeechSynthesisService | None = None
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:
@@ -83,9 +84,7 @@ class TTS(tts.TTS):
 
     def list_voices(self) -> dict[str, dict[str, list[str]]]:
         service = self._ensure_session()
-        config_response = service.stub.GetRivaSynthesisConfig(
-            riva.client.proto.riva_tts_pb2.RivaSynthesisConfigRequest()
-        )
+        config_response = service.stub.GetRivaSynthesisConfig(RivaSynthesisConfigRequest())
         tts_models: dict[str, dict[str, list[str]]] = {}
         for model_config in config_response.model_config:
             language_code = model_config.parameters.get("language_code", "unknown")

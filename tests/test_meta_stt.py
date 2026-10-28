@@ -458,7 +458,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     websocket = _PacingWebSocket(clock)
     stream = object.__new__(meta.SpeechStream)
     event_sink = _EventSink()
-    stream._input_ch = cast(Any, input_items())
+    stream.input = cast(Any, input_items())
     stream._audio_consumed = False
     stream._end_stream_sent = False
     stream._session_id = "session-1"
@@ -986,8 +986,7 @@ async def test_aclose_cancels_blocked_transport_tasks_and_closes_socket() -> Non
 
     await asyncio.wait_for(stream.aclose(), timeout=1.0)
 
-    assert stream._task.done()
-    assert stream._metrics_task.done()
+    assert stream.closed
     assert websocket.closed is True
     await provider.aclose()
 

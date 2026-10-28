@@ -24,6 +24,7 @@ pub mod fallback;
 pub mod media_workers;
 pub mod recording;
 pub mod avatar;
+pub mod avatar_output;
 pub mod host;
 pub mod a2a;
 pub mod a2a_auth;

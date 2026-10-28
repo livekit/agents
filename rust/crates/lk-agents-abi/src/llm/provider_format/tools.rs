@@ -161,6 +161,7 @@ pub struct ToolChoiceFunction {
     path = "livekit.agents.llm.tool_context",
     name = "RawFunctionDescription"
 )]
+#[binding(emit)]
 pub struct RawFunctionDescription {
     #[python(ty = "str")]
     pub name: String,

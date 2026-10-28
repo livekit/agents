@@ -73,6 +73,7 @@ impl AgentRunner for Runner {
             cleanup_timeout: CLEANUP_TIMEOUT,
         };
         let ports = Ports {
+            tools_host: request.tools_host,
             llm: self.llm.clone(),
             host: self.host.clone(),
             clock: self.clock.clone(),

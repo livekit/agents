@@ -20,7 +20,7 @@ from .log import logger
 DEFAULT_API_URL = "https://api.keyframelabs.com"
 
 
-class _SessionResponse(BaseModel):
+class SessionResponse(BaseModel):
     reservation_id: str | None = None
 
 
@@ -64,10 +64,10 @@ class KeyframeAPI:
         livekit_url: str,
         livekit_token: str,
         source_participant_identity: str,
-    ) -> _SessionResponse:
+    ) -> SessionResponse:
         """Create a plugin session via POST /v1/sessions/plugins/livekit.
 
-        Returns dict with reservation_id and avatar_participant_identity.
+        Returns the reservation identity accepted by the provider.
         """
         payload: dict[str, JsonValue] = {
             "room_name": room_name,
@@ -88,7 +88,7 @@ class KeyframeAPI:
 
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
-    ) -> _SessionResponse:
+    ) -> SessionResponse:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
@@ -110,7 +110,7 @@ class KeyframeAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return _SessionResponse.model_validate(await response.json())
+                            return SessionResponse.model_validate(await response.json())
                     except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Keyframe returned an invalid response", retryable=False
@@ -128,7 +128,7 @@ class KeyframeAPI:
                             logger.exception("Failed to call Keyframe API")
 
                         if i < self._conn_options.max_retry:
-                            await asyncio.sleep(self._conn_options._interval_for_retry(i))
+                            await asyncio.sleep(self._conn_options.interval_for_retry(i))
         finally:
             if not self._session:
                 await session.close()

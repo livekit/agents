@@ -10,7 +10,7 @@ def create_riva_auth(
     server: str,
     use_ssl: bool = True,
 ) -> riva.client.Auth:
-    metadata_args = []
+    metadata_args: list[list[str]] = []
 
     if is_given(api_key) and api_key:
         metadata_args.append(["authorization", f"Bearer {api_key}"])

@@ -411,7 +411,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         chunks_stream = self._sentence_tokenizer.stream()
                         self._segments_ch.send_nowait(chunks_stream)
                     chunks_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if chunks_stream:
                         chunks_stream.end_input()
                     chunks_stream = None

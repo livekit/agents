@@ -215,7 +215,7 @@ class SpeechStream(stt.SpeechStream):
                 audio_bytes = data.data.tobytes()
                 if audio_bytes:
                     self._audio_queue.put(audio_bytes)
-            elif isinstance(data, self.Flush):
+            else:
                 break
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:

@@ -161,7 +161,8 @@ class AvatarSession(BaseAvatarSession):
         await super().start(agent_session, room)
         # The audio tail goes to the avatar worker at the gateway's rate: in the canonical flow
         # avatar.start() runs before session.start(), so no audio has flowed yet.
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self.avatar_identity,

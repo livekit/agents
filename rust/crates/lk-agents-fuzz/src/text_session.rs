@@ -145,6 +145,7 @@ pub fn check(trace: &Trace) -> Vec<Finding> {
 fn config(setup: &Setup) -> TextSessionConfig {
     let tool = FunctionToolInfo {
         spec: ToolSpec {
+            provider_tool: None,
             name: TOOL.into(),
             description: "Book a room.".into(),
             json_schema: json!({"type":"object", "properties":{"nights":{"type":"integer"}}}),

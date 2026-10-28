@@ -128,7 +128,8 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("Starting Realtime Avatar Session")
         await self._start_session(livekit_url, livekit_token)
 
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
+            agent_session,
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,

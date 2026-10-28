@@ -8,11 +8,18 @@ from livekit.agents.voice import VoiceSession
 from livekit.agents.voice.avatar import AvatarSession
 
 
-def default_events(speech: stt.STT, voice: tts.TTS, model: llm.LLM, avatar: AvatarSession) -> None:
+def default_events(
+    speech: stt.STT,
+    voice: tts.TTS,
+    model: llm.LLM,
+    avatar: AvatarSession,
+    duplex: llm.DuplexSession,
+) -> None:
     assert_type(speech, stt.STT[Never])
     assert_type(voice, tts.TTS[Never])
     assert_type(model, llm.LLM[Never])
     assert_type(avatar, AvatarSession[Never])
+    assert_type(duplex, llm.DuplexSession[Never])
 
 
 def callback_signatures(session: VoiceSession[None], provider: stt.STT) -> None:

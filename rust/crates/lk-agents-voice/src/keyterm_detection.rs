@@ -74,6 +74,7 @@ pub(super) struct KeytermSlot {
 /// The `record_keyterms` spec (`keyterm_detection.STTContextOptions`): three string lists, forced.
 fn record_keyterms_spec() -> lk_agents_abi::ToolSpec {
     lk_agents_abi::ToolSpec {
+        provider_tool: None,
         name: RECORD_KEYTERMS_TOOL.to_owned(),
         description: "Update the STT keyterms based on the latest transcript.\n\n\
             Args:\n    pending: Distinctive terms seen but not yet trusted — tracked, not applied.\n    \

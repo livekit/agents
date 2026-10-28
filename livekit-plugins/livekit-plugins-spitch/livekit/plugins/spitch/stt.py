@@ -100,7 +100,6 @@ class STT(stt.STT):
                                 end_time=float(segment.end) if segment.end else 0.0,
                             )
                             for segment in resp.segments
-                            if segment is not None
                         ]
                         if resp.segments
                         else None,

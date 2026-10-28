@@ -20,9 +20,10 @@ pub trait AvatarAudioReceiver: Send + Sync {
     /// Begin iterating (`__aiter__`).
     #[host(await, name = "_core_open_audio")]
     async fn open_audio(&self) -> Result<(), ProviderError>;
-    /// The next frame or segment end; `None` once the receiver is exhausted.
+    /// One observation: receiver clear epoch, whether this first frame opened a segment,
+    /// and the frame (None at EOF). The receiver stamps it before crossing the async boundary.
     #[host(await, name = "_core_next_audio")]
-    async fn next_audio(&self) -> Result<Option<AvatarFrame>, ProviderError>;
+    async fn next_audio(&self) -> Result<(u64, bool, Option<AvatarFrame>), ProviderError>;
     #[host(await, name = "_core_notify_playback_started")]
     async fn notify_playback_started(&self) -> Result<(), ProviderError>;
     #[host(await, name = "_core_notify_playback_finished")]
@@ -66,4 +67,27 @@ pub trait AvatarMedia: Send + Sync {
     async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError>;
     #[host(await, name = "_core_aclose")]
     async fn aclose(&self) -> Result<(), ProviderError>;
+}
+
+/// The agent's native audio sink, sending one byte stream per avatar speech segment.
+#[crate::host(class(name = "DataStreamAudioOutput", native = crate::voice::io::AudioOutput))]
+pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new(
+        room: crate::HostRef,
+        #[host(kw)] destination_identity: String,
+        #[host(default = None)] sample_rate: Option<u32>,
+        #[host(default = None)] wait_remote_track: Option<i32>,
+        #[host(default = 2.0)] clear_buffer_timeout: Option<f64>,
+        #[host(default = false)] wait_playback_start: bool,
+    ) -> Result<Self, ProviderError>;
+
+    #[host(getter)]
+    fn label(&self) -> String;
+    #[host(getter)]
+    fn sample_rate(&self) -> Option<u32>;
+
+    /// Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes.
+    #[host(await)]
+    async fn aclose(&self);
 }

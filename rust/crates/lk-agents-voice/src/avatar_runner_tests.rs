@@ -55,11 +55,11 @@ fn a_lazy_runner_publishes_on_the_first_frame_once_the_room_connects() {
 #[test]
 fn a_segment_reports_started_once_and_finished_with_what_played() {
     let mut core = running();
-    core.handle(
-        Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))),
-        Ts::ZERO,
+    core.handle(audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
+    assert_eq!(
+        ops(&core.handle(audio(2, 0.04), Ts::ZERO)),
+        vec![IoOp::Push(MediaFrame::Audio(pcm(2, 0.04)))]
     );
-    assert_eq!(ops(&core.handle(audio(2, 0.04), Ts::ZERO)), vec![IoOp::Push(MediaFrame::Audio(pcm(2, 0.04)))]);
     assert_eq!(
         ops(&core.handle(Event::Pushed(Ok(())), Ts::ZERO)),
         vec![IoOp::ReportStarted, IoOp::NextFrame]
@@ -67,10 +67,8 @@ fn a_segment_reports_started_once_and_finished_with_what_played() {
     core.handle(audio(3, 0.04), Ts::ZERO);
     assert_eq!(ops(&core.handle(Event::Pushed(Ok(())), Ts::ZERO)), vec![IoOp::NextFrame]);
     let end = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
-    assert_eq!(
-        ops(&end),
-        vec![IoOp::ReportFinished { position: 0.08, interrupted: false }, IoOp::NextFrame]
-    );
+    assert_eq!(ops(&end), vec![IoOp::ReportFinished { position: 0.08, interrupted: false }]);
+    core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
     let again = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
     assert_eq!(ops(&again), vec![IoOp::NextFrame], "nothing was playing");
 }
@@ -80,24 +78,22 @@ fn a_segment_reports_started_once_and_finished_with_what_played() {
 #[test]
 fn a_clear_reports_the_cut_segment_after_the_generator_cleared() {
     let mut core = running();
-    core.handle(
-        Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))),
-        Ts::ZERO,
-    );
+    core.handle(audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
     core.handle(audio(2, 0.04), Ts::ZERO);
     core.handle(Event::Pushed(Ok(())), Ts::ZERO);
     core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
-    let clear = core.handle(Event::ClearBuffer, Ts::ZERO);
+    let clear = core.handle(Event::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
     assert_eq!(ops(&clear), vec![IoOp::ClearGenerator { clear: 0 }]);
     core.handle(audio(3, 0.04), Ts::ZERO);
     core.handle(Event::Pushed(Ok(())), Ts::ZERO);
     let cleared = core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
     assert_eq!(ops(&cleared), vec![IoOp::ReportFinished { position: 0.08, interrupted: true }]);
+    core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
     // the segment's end, once cleared, is not reported again
     let end = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
     assert_eq!(ops(&end), vec![IoOp::NextFrame]);
     // a clear with nothing playing reports nothing
-    core.handle(Event::ClearBuffer, Ts::ZERO);
+    core.handle(Event::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
     assert!(
         ops(&core.handle(Event::GeneratorCleared { clear: 1, result: Ok(()) }, Ts::ZERO))
             .is_empty()
@@ -110,15 +106,19 @@ fn a_clear_reports_the_cut_segment_after_the_generator_cleared() {
 #[test]
 fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
     let mut core = running();
-    core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
-    core.handle(Event::ClearBuffer, Ts::ZERO);
+    core.handle(audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
+    core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+    core.handle(Event::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
     // the receiver hands over the cut stream's end: it goes no further
-    let stale = core.handle(Event::Audio(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    let stale = core.handle(audio_input(&core, Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
     assert_eq!(ops(&stale), vec![IoOp::NextAudio]);
     // the next segment's audio and its own end go through
-    let next = core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(2, 0.1))))), Ts::ZERO);
-    assert_eq!(ops(&next), vec![IoOp::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1))))]);
-    let end = core.handle(Event::Audio(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    let next = core.handle(audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(2, 0.1))))), Ts::ZERO);
+    assert!(ops(&next).is_empty());
+    core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+    let delivered = core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
+    assert_eq!(ops(&delivered), vec![IoOp::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1))))]);
+    let end = core.handle(audio_input(&core, Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
     assert_eq!(ops(&end), vec![IoOp::PushAudio(None)]);
 }
 
@@ -128,7 +128,8 @@ fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
 #[test]
 fn back_to_back_segments_are_each_reported_finished() {
     let mut core = running();
-    let read = |core: &mut RunnerCore, item| core.handle(Event::Audio(Ok(Some(item))), Ts::ZERO);
+    let read =
+        |core: &mut RunnerCore, item| core.handle(audio_input(&core, Ok(Some(item))), Ts::ZERO);
     read(&mut core, AvatarFrame::Audio(pcm(1, 0.1)));
     read(&mut core, AvatarFrame::SegmentEnd);
     read(&mut core, AvatarFrame::Audio(pcm(2, 0.1)));
@@ -136,9 +137,12 @@ fn back_to_back_segments_are_each_reported_finished() {
     for _ in 0..2 {
         let end = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
         assert!(
-            ops(&end).iter().any(|op| matches!(op, IoOp::ReportFinished { interrupted: false, .. })),
+            ops(&end)
+                .iter()
+                .any(|op| matches!(op, IoOp::ReportFinished { interrupted: false, .. })),
             "{end:?}"
         );
+        core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
     }
 }
 
@@ -151,7 +155,7 @@ fn wait_for_complete_is_gather() {
     let mut core = running();
     assert!(core.handle(Event::WaitForComplete { call: 2 }, Ts::ZERO).is_empty());
     assert!(
-        core.handle(Event::Audio(Ok(None)), Ts::ZERO)
+        core.handle(audio_input(&core, Ok(None)), Ts::ZERO)
             .iter()
             .all(|e| !matches!(e, Effect::Answer { .. }))
     );
@@ -190,10 +194,144 @@ fn close_goes_receiver_then_loops_then_media() {
 #[test]
 fn a_clear_waits_for_the_audio_on_its_way_into_the_generator() {
     let mut core = running();
-    let push = core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
+    let push = core.handle(audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
     assert_eq!(ops(&push), vec![IoOp::PushAudio(Some(MediaFrame::Audio(pcm(1, 0.1))))]);
-    let clear = core.handle(Event::ClearBuffer, Ts::ZERO);
+    let clear = core.handle(Event::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
     assert!(ops(&clear).is_empty(), "cleared with the cut audio still on its way: {clear:?}");
     let pushed = core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
     assert_eq!(ops(&pushed), vec![IoOp::ClearGenerator { clear: 0 }, IoOp::NextAudio]);
+}
+
+#[test]
+fn a_clear_reports_each_segment_that_the_runner_actually_read() {
+    for count in 0..=2 {
+        let mut core = running();
+        for segment in 0..count {
+            core.handle(
+                audio_input(&core, Ok(Some(AvatarFrame::Audio(pcm(segment, 0.1))))),
+                Ts::ZERO,
+            );
+            core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+            core.handle(audio_input(&core, Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+            core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+        }
+        // Actual output audio contributes its known position to only the oldest report.
+        if count > 0 {
+            core.handle(audio(9, 0.04), Ts::ZERO);
+            core.handle(Event::Pushed(Ok(())), Ts::ZERO);
+        }
+        core.handle(Event::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
+        let effects = core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+        let expected: Vec<_> = (0..count)
+            .map(|index| IoOp::ReportFinished {
+                position: if index == 0 { 0.04 } else { 0.0 },
+                interrupted: true,
+            })
+            .collect();
+        let mut reports = ops(&effects);
+        while core.reporting {
+            reports.extend(ops(
+                &core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO)
+            ));
+        }
+        assert_eq!(reports, expected, "read {count} segments");
+    }
+}
+
+fn audio_input(core: &RunnerCore, frame: Result<Option<AvatarFrame>, ProviderError>) -> Event {
+    Event::Audio(frame.map(|frame| (core.clear_epoch, false, frame)))
+}
+
+#[test]
+fn stale_first_audio_is_reported_once_before_or_after_the_generator_clear_result() {
+    for generator_answered in [false, true] {
+        let mut core = running();
+        core.handle(Event::ClearBuffer { epoch: 1 }, Ts::ZERO);
+        if generator_answered {
+            core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+        }
+        let stale = core
+            .handle(Event::Audio(Ok((0, true, Some(AvatarFrame::Audio(pcm(1, 0.1)))))), Ts::ZERO);
+        let report = IoOp::ReportFinished { position: 0.0, interrupted: true };
+        if generator_answered {
+            assert_eq!(ops(&stale), [report.clone(), IoOp::NextAudio]);
+        } else {
+            assert_eq!(ops(&stale), [IoOp::NextAudio]);
+            let failed = core.handle(
+                Event::GeneratorCleared {
+                    clear: 0,
+                    result: Err(lk_agents_abi::errors::ApiError::new("clear failed").into()),
+                },
+                Ts::ZERO,
+            );
+            assert_eq!(ops(&failed), [report]);
+        }
+        assert_eq!(
+            ops(&core.handle(Event::Audio(Ok((0, false, Some(AvatarFrame::SegmentEnd)))), Ts::ZERO)),
+            [IoOp::NextAudio]
+        );
+        core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
+        core.handle(Event::Audio(Ok((1, true, Some(AvatarFrame::Audio(pcm(2, 0.1)))))), Ts::ZERO);
+        core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+        assert_eq!(
+            ops(&core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO)),
+            [IoOp::ReportFinished { position: 0.0, interrupted: false }]
+        );
+    }
+}
+
+#[test]
+fn delayed_clear_and_report_delivery_hold_new_audio_until_old_debt_is_delivered() {
+    let mut core = running();
+    core.handle(Event::Audio(Ok((0, true, Some(AvatarFrame::Audio(pcm(1, 0.1)))))), Ts::ZERO);
+    core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+    core.handle(Event::ClearBuffer { epoch: 1 }, Ts::ZERO);
+    let new_audio =
+        core.handle(Event::Audio(Ok((1, true, Some(AvatarFrame::Audio(pcm(2, 0.1)))))), Ts::ZERO);
+    assert!(ops(&new_audio).is_empty(), "new audio crossed the pending generator clear");
+    let stale_end = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    assert!(ops(&stale_end).is_empty(), "the output loop must not outrun clear/report delivery");
+    let cut = core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+    assert_eq!(ops(&cut), [IoOp::ReportFinished { position: 0.0, interrupted: true }]);
+    assert!(core.held_audio.is_some(), "a queued report is not a delivered acknowledgement");
+    let delivered = core.handle(Event::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
+    assert!(ops(&delivered).contains(&IoOp::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1))))));
+    core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+    core.handle(Event::Audio(Ok((1, false, Some(AvatarFrame::SegmentEnd)))), Ts::ZERO);
+    let finished = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    assert_eq!(ops(&finished), [IoOp::ReportFinished { position: 0.0, interrupted: false }]);
+}
+
+#[test]
+fn failed_finish_delivery_keeps_the_barrier_and_close_releases_its_pending_frames() {
+    let mut core = running();
+    for segment in 0..2 {
+        core.handle(
+            Event::Audio(Ok((0, true, Some(AvatarFrame::Audio(pcm(segment, 0.1)))))),
+            Ts::ZERO,
+        );
+        core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+        core.handle(Event::Audio(Ok((0, false, Some(AvatarFrame::SegmentEnd)))), Ts::ZERO);
+        core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+    }
+    core.handle(Event::ClearBuffer { epoch: 1 }, Ts::ZERO);
+    core.handle(Event::Audio(Ok((1, true, Some(AvatarFrame::Audio(pcm(3, 0.1)))))), Ts::ZERO);
+    core.handle(Event::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+    assert_eq!(core.reports.len(), 1);
+    core.handle(Event::WaitForComplete { call: 42 }, Ts::ZERO);
+    let error: ProviderError =
+        lk_agents_abi::errors::ApiError::new("finish delivery failed").into();
+    let failed =
+        core.handle(Event::Reported { finished: true, result: Err(error.clone()) }, Ts::ZERO);
+    assert!(ops(&failed).is_empty(), "a failed delivery must not advance reports or audio");
+    assert!(failed.contains(&Effect::Answer { call: 42, result: Err(RunnerError::Failed(error)) }));
+    assert!(core.held_audio.is_some());
+    assert_eq!(core.reports.len(), 1);
+    core.handle(Event::Close { call: 43 }, Ts::ZERO);
+    assert_eq!(core.handle(Event::ReceiverClosed(Ok(())), Ts::ZERO), [Effect::CancelIo]);
+    core.handle(Event::IoCancelled, Ts::ZERO);
+    assert!(core.held_audio.is_none());
+    assert!(core.reports.is_empty());
+    assert!(!core.reporting);
+    assert!(!core.frame_pull_paused);
 }

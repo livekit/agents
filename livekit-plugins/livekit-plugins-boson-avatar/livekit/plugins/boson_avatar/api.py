@@ -313,7 +313,7 @@ class BosonAvatarAPI:
                         "lk.pii.path": path,
                     },
                 )
-                retry_delay = self._conn_options._interval_for_retry(attempt)
+                retry_delay = self._conn_options.interval_for_retry(attempt)
                 if retry_after is not None:
                     retry_delay = max(retry_delay, retry_after)
                 await asyncio.sleep(retry_delay)

@@ -1315,8 +1315,9 @@ async def test_options_and_tools_reach_the_session(voice_live: _FakeVoiceLive) -
         assert updates[3] == {"tools": []}
 
 
+@pytest.mark.parametrize("complete_arguments", [True, False])
 async def test_function_call_arguments_stay_out_of_logs(
-    voice_live: _FakeVoiceLive, caplog: pytest.LogCaptureFixture
+    voice_live: _FakeVoiceLive, caplog: pytest.LogCaptureFixture, complete_arguments: bool
 ) -> None:
     arguments = '{"query": "my password is hunter-two"}'
 
@@ -1349,7 +1350,7 @@ async def test_function_call_arguments_stay_out_of_logs(
             output_index=0,
             call_id="call_1",
             name="lookup",
-            arguments=arguments,
+            arguments=arguments if complete_arguments else None,
         )
         await _done(conn, response_id)
 

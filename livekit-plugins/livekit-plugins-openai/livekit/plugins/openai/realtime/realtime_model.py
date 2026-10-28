@@ -1,14 +1,11 @@
-"""Direct-provider OpenAI Realtime API.
+"""OpenAI options over the shared native realtime protocol."""
 
-The protocol engine lives in :mod:`livekit.agents.llm._realtime` so hosted
-and direct-provider clients share one implementation.
-"""
-
-from typing import Any
-
-from livekit.agents.llm import _realtime as _impl
-from livekit.agents.llm._realtime import *  # noqa: F403
-
-
-def __getattr__(name: str) -> Any:
-    return getattr(_impl, name)
+from livekit.agents.llm._realtime import (
+    DEFAULT_VOICE as DEFAULT_VOICE,
+    NUM_CHANNELS as NUM_CHANNELS,
+    OPENAI_BASE_URL as OPENAI_BASE_URL,
+    SAMPLE_RATE as SAMPLE_RATE,
+    RealtimeModel as RealtimeModel,
+    RealtimeModels as RealtimeModels,
+    RealtimeSession as RealtimeSession,
+)

@@ -5,9 +5,11 @@ import os
 import time
 from collections.abc import Iterable
 from types import TracebackType
-from typing import TypedDict
+from typing import cast
 
 import aiohttp
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from livekit.agents import APIConnectOptions
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -51,17 +53,21 @@ class _Token(TypedDict):
     expire_at: float
 
 
-def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
+_TOKEN = TypeAdapter(_Token)
+
+
+def _format_keywords(keywords: Iterable[object]) -> str:
     formatted: list[str] = []
-    keyword_list: list[str | tuple[str, float]] = list(keywords)
+    keyword_list = list(keywords)
     if len(keyword_list) > 100:
         raise ValueError("RTZR keyword boosting supports up to 100 keywords")
 
     for item in keyword_list:
         if isinstance(item, tuple):
-            if len(item) != 2:
+            pair = cast(tuple[object, ...], item)
+            if len(pair) != 2:
                 raise ValueError("RTZR keyword boosting tuples must be (keyword, boost)")
-            word, boost = item
+            word, boost = pair
             if not isinstance(word, str):
                 raise ValueError("RTZR keyword boosting keywords must be strings")
             if not isinstance(boost, (int, float)):
@@ -181,14 +187,10 @@ class RTZROpenAPIClient:
                 data={"client_id": self.client_id, "client_secret": self.client_secret},
             ) as resp:
                 resp.raise_for_status()
-                data = await resp.json()
-                if not isinstance(data, dict):
-                    raise RTZRStatusError("Invalid token response payload")
-                access_token = data.get("access_token")
-                expire_at = data.get("expire_at")
-                if not isinstance(access_token, str) or not isinstance(expire_at, (int, float)):
-                    raise RTZRStatusError("Invalid token response payload")
-                self._token = {"access_token": access_token, "expire_at": float(expire_at)}
+                try:
+                    self._token = _TOKEN.validate_python(await resp.json(), strict=True)
+                except ValidationError:
+                    raise RTZRStatusError("Invalid token response payload") from None
                 logger.debug("Successfully refreshed RTZR access token")
         except aiohttp.ClientResponseError as e:
             logger.error("RTZR authentication failed: %s %s", e.status, e.message)

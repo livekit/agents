@@ -421,7 +421,7 @@ impl RealtimeMachine {
         }
         if let ChatItem::FunctionCall(call) = item {
             if self.dialect.ignore_unknown_function_calls
-                && !self.tools.iter().any(|t| t.name == call.name)
+                && !self.tools.iter().any(|t| t.provider_tool.is_none() && t.name == call.name)
             {
                 return Step::default();
             }

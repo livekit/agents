@@ -30,6 +30,7 @@ pub(super) const LLM: ResourceId = ResourceId(7);
 pub(super) fn tool(name: &str, description: &str, schema: Value) -> FunctionToolInfo {
     FunctionToolInfo {
         spec: ToolSpec {
+            provider_tool: None,
             name: name.into(),
             description: description.into(),
             json_schema: schema,

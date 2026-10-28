@@ -193,6 +193,8 @@ class TextSessionAgent:
     agent_tools: dict[str, LocalAgentTool]
     host_context: object
     """A callback context for this agent, captured at session entry."""
+    tools_host: object | None = None
+    """Canonical tool pool for this agent, shared across its invocations."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

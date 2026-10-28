@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiohttp
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -41,6 +42,22 @@ from .log import logger
 NUM_CHANNELS = 1
 
 _Pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse]
+
+
+class WordTimestamps(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    words: list[str] = Field(default_factory=list[str])
+    start: list[float] = Field(default_factory=list[float])
+    end: list[float] = Field(default_factory=list[float])
+
+
+class Response(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: str
+    data: str = ""
+    word_timestamps: WordTimestamps | None = None
 
 
 @dataclass(frozen=True)
@@ -119,11 +136,11 @@ class LegacyWebSocketAdapter:
         stream = _LegacyWebSocketSynthesizeStream(
             tts_instance=tts_instance,
             pool=pool,
+            pool_manager=self._pools,
             options=options,
             conn_options=conn_options,
             sentence_tokenizer=self._sentence_tokenizer,
         )
-        self._pools.track_stream(pool, stream._task)
         return stream
 
     def prewarm(self) -> None:
@@ -148,6 +165,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         *,
         tts_instance: tts.TTS,
         pool: _Pool,
+        pool_manager: PoolManager[aiohttp.ClientWebSocketResponse],
         options: LegacySynthesisOptions,
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
@@ -158,6 +176,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         self._pool = pool
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
+        pool_manager.track_stream(pool, self._task)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -221,16 +240,20 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 if message.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Rime ws message type %s", message.type)
                     continue
-                data = json.loads(message.data)
-                message_type = data.get("type")
+                try:
+                    data = Response.model_validate_json(message.data)
+                except ValidationError:
+                    raise APIConnectionError(
+                        "Rime WebSocket sent an invalid response", retryable=False
+                    ) from None
+                message_type = data.type
                 if message_type == "chunk":
-                    output_emitter.push(base64.b64decode(data["data"]))
-                elif message_type == "timestamps":
-                    word_timestamps = data.get("word_timestamps") or {}
-                    words = word_timestamps.get("words") or []
-                    starts = word_timestamps.get("start") or []
-                    ends = word_timestamps.get("end") or []
-                    for word, start, end in zip(words, starts, ends, strict=False):
+                    output_emitter.push(base64.b64decode(data.data))
+                elif message_type == "timestamps" and data.word_timestamps is not None:
+                    timestamps = data.word_timestamps
+                    for word, start, end in zip(
+                        timestamps.words, timestamps.start, timestamps.end, strict=False
+                    ):
                         output_emitter.push_timed_transcript(
                             TimedString(text=word + " ", start_time=start, end_time=end)
                         )

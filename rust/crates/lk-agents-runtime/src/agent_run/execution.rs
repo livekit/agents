@@ -132,6 +132,7 @@ impl Execution {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
                 let req = ChatRequest {
+                    tools_host: self.ports.tools_host.clone(),
                     chat_ctx,
                     tools,
                     conn_options: self.ports.conn_options,
