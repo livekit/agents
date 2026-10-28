@@ -126,9 +126,6 @@ struct Record {
     targets: Vec<Target>,
     binding_tag: Option<Tag>,
     python_tag: Option<Tag>,
-    /// `#[binding(read_tag = "kind")]`: the key an extract target reads its tag under, when the
-    /// dict it reads keys the kind differently from the one it emits.
-    read_key: Option<String>,
     fields_only: bool,
     /// `#[binding(model_dump)]`, and the host class's `tag_after`.
     model_dump: bool,
@@ -200,7 +197,7 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     let py = Metas::named(&input.attrs, "python")?;
     b.only(
         &format!("#[binding] on {ident}"),
-        &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "read_tag", "model_dump", "untagged"],
+        &["emit", "extract", "class", "new", "from_items", "fields_only", "from", "tag", "tag_value", "tag_const", "default", "skip_if_none", "model_dump", "untagged"],
     )?;
     let inherit = RecordDefaults::of(&input.attrs)?;
     let from = b.path("from")?;
@@ -260,7 +257,6 @@ fn read(input: &syn::DeriveInput) -> syn::Result<Record> {
     Ok(Record {
         binding_tag: tag_of(&b, &ident)?,
         python_tag: tag_of(&py, &ident)?,
-        read_key: b.text("read_tag")?.map(str::to_owned),
         fields_only: b.flag("fields_only"),
         model_dump: b.flag("model_dump"),
         tag_after: py.text("tag_after")?.map(str::to_owned),
@@ -568,7 +564,7 @@ fn tags(r: &Record) -> TokenStream {
     if let Some(t) = r.target(Kind::Extract) {
         let tag = if t.from_items { r.dict_tag() } else { r.object_tag() };
         if let Some(tag) = tag {
-            let (key, value, items) = (r.read_key.as_ref().unwrap_or(&tag.key), tag.value(ident), t.from_items);
+            let (key, value, items) = (&tag.key, tag.value(ident), t.from_items);
             out.extend(quote! {
                 impl ::lk_agents_abi::python::HostReadTag for #ident {
                     const KEY: &'static str = #key;
