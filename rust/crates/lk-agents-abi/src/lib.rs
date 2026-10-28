@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 //! The provider seam and the data vocabulary every other crate is written against. Native providers
 //! and host plugins implement the same traits. Nothing here performs I/O, spawns or blocks.
 //!

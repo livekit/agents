@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 extern crate self as lk_agents_voice;
 
 pub mod background_audio;

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 //! Agent worker control plane. [`Worker::new`] takes [`WorkerOptions`] and a [`WorkerHost`] and
 //! returns the worker and a [`WorkerHandle`] without starting anything; omitted options fall back
 //! to the environment (an explicit empty string disables that).

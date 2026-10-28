@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 //! The `Native*` inference-gateway clients, detectors and fallback adapters. The socket appears
 //! only in [`transport`] and [`native`]; every other module is pure over bytes, JSON and state.
 

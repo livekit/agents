@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 //! `lk-agents-storage`: the thread storage client of Agents 2.0. Python never sees SQL.
 //!
 //! * [`conn`]: one authenticated WebSocket per open thread database.

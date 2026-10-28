@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
+)]
+
 //! `lk-agents-a2a`: the A2A text door's turn engine. [`Turn::run`] takes one incoming message
 //! through its channel's [`Policy`], runs the host's handler in an open run, and writes the
 //! message's task row: `submitted`, `working`, then its end state.
