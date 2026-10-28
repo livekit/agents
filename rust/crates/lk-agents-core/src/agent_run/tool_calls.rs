@@ -13,7 +13,8 @@ use serde_json::{Map, Value};
 
 use super::result::{CallId, StreamEvent, ToolResultStatus};
 use super::Effect;
-use crate::agent::{Agent, FINAL_RESULT_TOOL, OutputSpec, ReadBack, WRAPPED_RESULT_KEY};
+use crate::agent::{self, FINAL_RESULT_TOOL, WRAPPED_RESULT_KEY};
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec, ReadBack};
 use crate::approval;
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
 use crate::tool_outcome;
@@ -102,7 +103,7 @@ impl ToolCalls {
     /// call is returned as a candidate for the parent's output acceptance.
     pub(super) fn begin(
         calls: Vec<(CallId, FunctionCall)>,
-        agent: &Agent,
+        agent: &AgentDefinition,
         fx: &mut Vec<Effect>,
     ) -> (ToolCalls, Vec<FinalCandidate>) {
         let mut this = ToolCalls { calls: Vec::with_capacity(calls.len()) };
@@ -127,7 +128,7 @@ impl ToolCalls {
         id: CallId,
         prepared: ResourceId,
         identity: ArgumentIdentity,
-        agent: &Agent,
+        agent: &AgentDefinition,
         history: &[ChatItem],
         fx: &mut Vec<Effect>,
     ) -> bool {
@@ -142,7 +143,7 @@ impl ToolCalls {
         &mut self,
         id: CallId,
         error: String,
-        agent: &Agent,
+        agent: &AgentDefinition,
         history: &[ChatItem],
         fx: &mut Vec<Effect>,
     ) {
@@ -158,7 +159,7 @@ impl ToolCalls {
         &mut self,
         id: CallId,
         answer: Result<ReadBackAnswer, String>,
-        agent: &Agent,
+        agent: &AgentDefinition,
         history: &[ChatItem],
         fx: &mut Vec<Effect>,
     ) {
@@ -263,7 +264,7 @@ impl ToolCalls {
 
     /// Decides every prepared call whose earlier calls of the same tool are decided, in model
     /// order: approval binds the validated identity, and a grant is consumed by the first repeat.
-    fn admit(&mut self, agent: &Agent, history: &[ChatItem], fx: &mut Vec<Effect>) {
+    fn admit(&mut self, agent: &AgentDefinition, history: &[ChatItem], fx: &mut Vec<Effect>) {
         for index in 0..self.calls.len() {
             if !matches!(self.calls[index].phase, Phase::Admitting { .. }) {
                 continue;
@@ -285,8 +286,8 @@ impl ToolCalls {
         }
     }
 
-    fn decide(&mut self, index: usize, agent: &Agent, history: &[ChatItem], fx: &mut Vec<Effect>) {
-        let Some(tool) = agent.tool(&self.calls[index].item.name) else { return };
+    fn decide(&mut self, index: usize, agent: &AgentDefinition, history: &[ChatItem], fx: &mut Vec<Effect>) {
+        let Some(tool) = agent::tool(agent, &self.calls[index].item.name) else { return };
         let Phase::Admitting { prepared, ref identity, confirmed } = self.calls[index].phase else {
             return;
         };
@@ -363,13 +364,13 @@ impl ToolCalls {
 
 /// Parses a call's arguments and asks the host to prepare them; an unknown tool or arguments
 /// that are not a JSON object settle at once as feedback.
-fn start(id: CallId, item: &FunctionCall, agent: &Agent, fx: &mut Vec<Effect>) -> Phase {
+fn start(id: CallId, item: &FunctionCall, agent: &AgentDefinition, fx: &mut Vec<Effect>) -> Phase {
     let failed = |text: String, fx: &mut Vec<Effect>| {
         let outcome = ToolOutcome::ToolError(text);
         fx.push(result_event(item, &outcome));
         Phase::Settled(Settled { outcome, retry: true })
     };
-    let Some(tool) = agent.tool(&item.name) else {
+    let Some(tool) = agent::tool(agent, &item.name) else {
         return failed(format!("unknown tool `{}`", item.name), fx);
     };
     let parsed = match tool_arguments::parse(&item.arguments) {
@@ -422,9 +423,9 @@ fn truthy(value: &Value) -> bool {
 }
 
 /// A `final_result` call's value: its arguments, unwrapped when the schema was wrapped.
-fn final_value(agent: &Agent, raw: &str) -> Result<Value, String> {
+fn final_value(agent: &AgentDefinition, raw: &str) -> Result<Value, String> {
     let arguments = tool_arguments::parse(raw)?.arguments;
-    if !agent.output_wrapped() {
+    if !agent::output_wrapped(agent) {
         return Ok(Value::Object(arguments));
     }
     let mut arguments = arguments;

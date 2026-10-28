@@ -14,5 +14,5 @@ pub mod approval;
 pub mod request;
 pub mod tool_outcome;
 
-pub use agent::{Agent, AgentError, FunctionToolInfo, OutputSpec, ReadBack, Retries};
+pub use agent::AgentError;
 pub use agent_run::{AgentRun, Effect, Event, RunInput};

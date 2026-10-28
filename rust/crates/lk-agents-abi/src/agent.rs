@@ -6,7 +6,8 @@
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use crate::FunctionCall;
+use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
+use crate::{FunctionCall, ToolSpec};
 use crate::errors::HostError;
 use crate::llm::tool_executor::{Approval, ToolReport};
 use crate::utils::host_ref::HostRef;
@@ -121,4 +122,64 @@ pub trait AgentHost: Send + Sync {
     /// Cancels the callback in flight for `invocation` (its tool call, when it has one). Its
     /// awaited call still settles, with the cancellation as its outcome.
     fn cancel(&self, invocation: &Invocation);
+}
+
+/// The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
+/// and none mutates. Host callables (tool bodies, validators, instruction functions, output
+/// functions, read-backs) stay in the host; the definition says which of them exist.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentDefinition {
+    pub name: String,
+    /// The static instructions.
+    pub instructions: String,
+    /// `@agent.instructions` functions are registered: the host renders them before each request.
+    pub dynamic_instructions: bool,
+    pub tools: Vec<FunctionToolInfo>,
+    pub output: OutputSpec,
+    pub retries: Retries,
+}
+
+/// `FunctionToolInfo`: one tool as the model and the gate see it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionToolInfo {
+    pub spec: ToolSpec,
+    /// Declared by a raw JSON schema (`raw_schema=`, MCP): no signature to validate against.
+    pub raw_schema: bool,
+    /// `needs_approval=`: the body runs only on an answered read-back.
+    pub needs_approval: Option<ReadBack>,
+    pub on_duplicate: DuplicateMode,
+    pub duplicate_scope: DuplicateScope,
+}
+
+/// How a `needs_approval` tool asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadBack {
+    /// "Please confirm: <first sentence> (<arguments>). Yes or no?"
+    Default,
+    /// The application's read-back function, run by the host on the prepared arguments.
+    Function,
+}
+
+/// The final output contract (`output_type`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputSpec {
+    /// `str`: the model's text is the output. `validated` when output validators are registered.
+    Text { validated: bool },
+    /// Any other type, or an output function: the parameters' JSON schema. The host validates
+    /// every candidate (type, validators, output function).
+    Structured { schema: Value },
+}
+
+/// How many consecutive retries the model gets before the run fails: per tool for argument
+/// errors and `ModelRetry`, and for the final output. pydantic-ai's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retries {
+    pub tool: u32,
+    pub output: u32,
+}
+
+impl Default for Retries {
+    fn default() -> Self {
+        Retries { tool: 1, output: 1 }
+    }
 }

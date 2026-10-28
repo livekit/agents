@@ -22,7 +22,7 @@ use lk_agents_abi::{
 use serde_json::{Map, Value, json};
 
 use super::*;
-use crate::agent::{Agent, FunctionToolInfo, OutputSpec, Retries};
+use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 
 pub(super) const LLM: ResourceId = ResourceId(7);
 
@@ -49,19 +49,18 @@ pub(super) fn string_tool(name: &str, parameter: &str) -> FunctionToolInfo {
     )
 }
 
-pub(super) fn agent(tools: Vec<FunctionToolInfo>, output: OutputSpec) -> Agent {
-    Agent {
+pub(super) fn agent(tools: Vec<FunctionToolInfo>, output: OutputSpec) -> AgentDefinition {
+    AgentDefinition {
         name: "scheduler".into(),
         instructions: "Book appointments.".into(),
         dynamic_instructions: false,
-        llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
         tools,
         output,
         retries: Retries::default(),
     }
 }
 
-pub(super) fn text_agent(tools: Vec<FunctionToolInfo>) -> Agent {
+pub(super) fn text_agent(tools: Vec<FunctionToolInfo>) -> AgentDefinition {
     agent(tools, OutputSpec::Text { validated: false })
 }
 
@@ -80,7 +79,7 @@ pub(super) struct Driver {
 }
 
 impl Driver {
-    pub(super) fn new(agent: Agent, message: &str, history: Vec<ChatItem>) -> Driver {
+    pub(super) fn new(agent: AgentDefinition, message: &str, history: Vec<ChatItem>) -> Driver {
         Driver::with_input(
             agent,
             RunInput {
@@ -89,14 +88,15 @@ impl Driver {
                 history,
                 answer_tool: None,
                 delegated: false,
-            mode: crate::tool_outcome::Mode::Text,
+                mode: crate::tool_outcome::Mode::Text,
+                llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
                 wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
                 cleanup_timeout: Duration::from_secs(5),
             },
         )
     }
 
-    pub(super) fn with_input(agent: Agent, input: RunInput) -> Driver {
+    pub(super) fn with_input(agent: AgentDefinition, input: RunInput) -> Driver {
         let mut driver = Driver {
             run: AgentRun::new(agent, input).unwrap(),
             now: Ts::ZERO,

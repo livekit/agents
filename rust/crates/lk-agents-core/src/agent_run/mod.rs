@@ -27,7 +27,8 @@ use lk_agents_abi::{
 };
 use serde_json::{Map, Value};
 
-use crate::agent::{Agent, AgentError, OutputSpec, first_string_parameter};
+use crate::agent::{self, AgentError, first_string_parameter};
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_outcome;
@@ -58,6 +59,8 @@ pub struct RunInput {
     pub delegated: bool,
     /// The coordinator reading the outcome table.
     pub mode: tool_outcome::Mode,
+    /// The agent's model as the runtime resolved it; an invocation without one cannot run a step.
+    pub llm: Option<lk_agents_abi::resources::LlmRef>,
     /// Maps supplied instants to wall stamps on recorded items.
     pub wall: WallAnchor,
     /// How long cancelled work may take to settle before it is reported incomplete.
@@ -207,7 +210,7 @@ pub(crate) struct Ask {
 }
 
 pub struct AgentRun {
-    agent: Agent,
+    agent: AgentDefinition,
     input: RunInput,
     /// The supplied history with this invocation's items.
     history: Vec<ChatItem>,
@@ -278,8 +281,8 @@ impl Owed {
 }
 
 impl AgentRun {
-    pub fn new(agent: Agent, input: RunInput) -> Result<AgentRun, AgentError> {
-        agent.validate()?;
+    pub fn new(agent: AgentDefinition, input: RunInput) -> Result<AgentRun, AgentError> {
+        agent::validate(&agent)?;
         Ok(AgentRun {
             agent,
             history: Vec::new(),
@@ -414,7 +417,7 @@ impl AgentRun {
         if !matches!(self.phase, Phase::Idle) {
             return;
         }
-        let Some(_) = &self.agent.llm else {
+        let Some(_) = &self.input.llm else {
             return self.finish(Err(RunError::NoModel), fx);
         };
         self.history = std::mem::take(&mut self.input.history);
@@ -431,7 +434,7 @@ impl AgentRun {
         self.history.push(ChatItem::Message(self.input.message.clone()));
         // The answer is that tool's: it takes it as its first string parameter, no model turn.
         let handed = self.input.answer_tool.clone().and_then(|name| {
-            let parameter = first_string_parameter(&self.agent.tool(&name)?.spec)?.to_owned();
+            let parameter = first_string_parameter(&agent::tool(&self.agent, &name)?.spec)?.to_owned();
             Some((name, parameter))
         });
         match handed {
@@ -471,16 +474,16 @@ impl AgentRun {
         now: Ts,
         fx: &mut Vec<Effect>,
     ) {
-        let Some(llm) = self.agent.llm.as_ref().map(|l| l.id) else {
+        let Some(llm) = self.input.llm.as_ref().map(|l| l.id) else {
             return self.finish(Err(RunError::NoModel), fx);
         };
-        let instructions = self.agent.instructions_with(dynamic.as_deref().unwrap_or_default());
+        let instructions = agent::instructions_with(&self.agent, dynamic.as_deref().unwrap_or_default());
         let mut tools: Vec<ToolSpec> = Vec::new();
         let mut phrase = None;
         match &purpose {
             Purpose::Turn => {
                 tools.extend(self.agent.tools.iter().map(|t| t.spec.clone()));
-                tools.extend(self.agent.final_result_tool());
+                tools.extend(agent::final_result_tool(&self.agent));
             }
             Purpose::Phrase(ask) => phrase = Some(format!("{ASK_IN_OWN_WORDS}{}", ask.question)),
         }

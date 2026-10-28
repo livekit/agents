@@ -21,7 +21,7 @@ use lk_agents_abi::{
 };
 use lk_agents_core::agent_run::{RunOutcome, StreamEvent};
 use lk_agents_core::tool_outcome::Mode;
-use lk_agents_core::{FunctionToolInfo, OutputSpec, Retries};
+use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 
@@ -252,11 +252,10 @@ fn setup(
     let closed = Arc::new(AtomicUsize::new(0));
     let llm = Arc::new(ScriptedLlm { replies: Mutex::new(replies.into()), closed: closed.clone() });
     let host = FakeHost::new(body, registry.clone());
-    let agent = Agent {
+    let agent = AgentDefinition {
         name: "scheduler".into(),
         instructions: "Book.".into(),
         dynamic_instructions: false,
-        llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("scripted") }),
         tools: vec![tool("find_slot")],
         output,
         retries: Retries::default(),
@@ -268,6 +267,7 @@ fn setup(
         answer_tool: None,
         delegated: false,
         mode: Mode::Text,
+        llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("scripted") }),
         wall: WallAnchor { wall: 0.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(5),
     };

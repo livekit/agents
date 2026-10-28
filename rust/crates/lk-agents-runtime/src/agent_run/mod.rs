@@ -17,7 +17,8 @@ use lk_agents_core::agent_run::{
     CallId, Effect, Event, Output, OutputVerdict, RenderId, RequestId, RunError, RunResult,
     StreamEvent, ValidationId,
 };
-use lk_agents_core::{Agent, AgentError, AgentRun, RunInput, approval};
+use lk_agents_abi::agent::AgentDefinition;
+use lk_agents_core::{AgentError, AgentRun, RunInput, approval};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::host::HostInvoker;
@@ -76,7 +77,7 @@ impl Drop for AgentRunHandle {
 /// Starts one invocation on `runtime`; its updates arrive on the receiver.
 pub fn start(
     runtime: &tokio::runtime::Handle,
-    agent: Agent,
+    agent: AgentDefinition,
     input: RunInput,
     ports: Ports,
     updates: usize,

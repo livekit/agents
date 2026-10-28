@@ -3,7 +3,7 @@
 use lk_agents_abi::llm::tool_executor::Approval;
 
 use super::*;
-use crate::agent::ReadBack;
+use lk_agents_abi::agent::ReadBack;
 use crate::approval;
 
 fn cancel_tool() -> FunctionToolInfo {
