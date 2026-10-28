@@ -91,7 +91,12 @@ pub(super) async fn perform_tts_inference(
                         error: Box::new(error),
                     });
                     let at = on.time.now().saturating_add(wait);
-                    on.trace(GenerationStep::RetryArmed { speech, leg: ProviderKind::Tts, attempt, at });
+                    on.trace(GenerationStep::RetryArmed {
+                        speech,
+                        leg: ProviderKind::Tts,
+                        attempt,
+                        at,
+                    });
                 }));
                 let aligned = aligned.as_deref_mut();
                 let tts_data = TtsGenerationData::new(tts, shared, segment);

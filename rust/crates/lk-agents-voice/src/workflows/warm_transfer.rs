@@ -16,14 +16,14 @@ use crate::workflows::instructions::{InstructionsArg, TemplateValue, WorkflowIns
 use crate::workflows::prompts::warm_transfer as p;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::voice::workflows::{
-    IoEnableState, SipParticipantRequest, TwilioDial,
-};
+use lk_agents_abi::voice::workflows::{IoEnableState, SipParticipantRequest, TwilioDial};
 use lk_agents_abi::{ChatContext, HostRef, Maybe};
 use lk_agents_rtc::{DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_voice::generation::Instructions;
 use serde_json::{Value, json};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -173,10 +173,15 @@ pub trait TransferHost: Send + Sync {
     /// Disconnect from the human agent's room.
     async fn disconnect_human(&self) -> Result<(), HostError>;
     /// `api.sip.create_sip_participant(request)`.
-    async fn create_sip_participant(&self, request: SipParticipantRequest) -> Result<(), HostError>;
+    async fn create_sip_participant(&self, request: SipParticipantRequest)
+    -> Result<(), HostError>;
     /// `api.connector.connect_twilio_call(...)`, outbound into `room_name` as `identity`: the
     /// stream URL Twilio connects to.
-    async fn connect_twilio_call(&self, room_name: String, identity: String) -> Result<String, HostError>;
+    async fn connect_twilio_call(
+        &self,
+        room_name: String,
+        identity: String,
+    ) -> Result<String, HostError>;
     /// A form `POST`, no redirect followed: the status and the body.
     async fn http_post(
         &self,
@@ -248,7 +253,9 @@ fn conversation_of(items: Vec<(String, String)>) -> ChatContext {
 fn transfer_tools() -> Vec<Value> {
     let tool = |name: &str, description: &str, reason: Option<&str>| {
         let (properties, required) = match reason {
-            Some(d) => (json!({ "reason": { "type": "string", "description": d } }), json!(["reason"])),
+            Some(d) => {
+                (json!({ "reason": { "type": "string", "description": d } }), json!(["reason"]))
+            }
             None => (json!({}), json!([])),
         };
         json!({
@@ -271,22 +278,30 @@ fn transfer_tools() -> Vec<Value> {
 
 /// The briefing instructions: the template over the persona, the extra section and the caller
 /// conversation, unless fixed instructions were given.
-fn briefing(instructions: Option<InstructionsArg>, conversation: Option<Vec<(String, String)>>) -> Instructions {
+fn briefing(
+    instructions: Option<InstructionsArg>,
+    conversation: Option<Vec<(String, String)>>,
+) -> Instructions {
     let history = conversation.map(conversation_of).as_ref().map(format_conversation_history);
     let sections = [("_conversation_history", TemplateValue::plain(history.unwrap_or_default()))];
     match instructions {
         Some(InstructionsArg::Fixed(i)) => i,
-        Some(InstructionsArg::Workflow(w)) => WorkflowInstructions::from(w)
-            .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
-            .instructions,
-        None => WorkflowInstructions::default()
-            .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
-            .instructions,
+        Some(InstructionsArg::Workflow(w)) => {
+            WorkflowInstructions::from(w)
+                .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
+                .instructions
+        }
+        None => {
+            WorkflowInstructions::default()
+                .resolve(p::INSTRUCTIONS_TEMPLATE, p::PERSONA, &sections)
+                .instructions
+        }
     }
 }
 
 #[lk_agents_abi::host(object(name = "WarmTransfer", cell = "arc"))]
 impl HostWarmTransfer {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// An explicit `sip_trunk_id=None` means no trunk whatever the environment says; an absent
     /// one is the environment's trunk, unless a SIP connection is given. `twilio` dials through
     /// the Twilio connector instead of SIP. `instructions` is fixed instructions, or a
@@ -322,7 +337,9 @@ impl HostWarmTransfer {
                 Origination::Twilio(t)
             }
             None => {
-                let sip_call_to = sip_call_to.filter(|s| !s.is_empty()).ok_or(WarmTransferRefused::NoSipCallTo)?;
+                let sip_call_to = sip_call_to
+                    .filter(|s| !s.is_empty())
+                    .ok_or(WarmTransferRefused::NoSipCallTo)?;
                 let sip_trunk_id = match sip_trunk_id {
                     Maybe::Given(id) => id,
                     Maybe::NotGiven if has_sip_connection => None,
@@ -377,7 +394,11 @@ impl HostWarmTransfer {
     ) -> Result<String, TransferFailed> {
         {
             let mut running = self.lock();
-            *running = Running { host: Some(host.clone()), caller: Some(caller.clone()), ..Running::default() };
+            *running = Running {
+                host: Some(host.clone()),
+                caller: Some(caller.clone()),
+                ..Running::default()
+            };
         }
         let _restore = Restore(self.clone());
         let hold = host.start_hold().await?;
@@ -411,7 +432,11 @@ impl HostWarmTransfer {
     /// the human agent into the caller's room and settles the transfer, `decline_transfer` and
     /// `voicemail_detected` settle it as failed.
     #[host(method)]
-    pub async fn call_tool(self: &Arc<Self>, name: String, arguments: Value) -> Result<(), TransferFailed> {
+    pub async fn call_tool(
+        self: &Arc<Self>,
+        name: String,
+        arguments: Value,
+    ) -> Result<(), TransferFailed> {
         match name.as_str() {
             p::CONNECT_TOOL => self.connect().await,
             p::DECLINE_TOOL => {
@@ -491,11 +516,17 @@ impl HostWarmTransfer {
         self.done.notify_waiters();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// The human agent's room connected and watched, their session started, and the call
     /// placed; returns once they answered.
-    async fn dial(self: &Arc<Self>, host: &Arc<dyn TransferHost>, caller: &Arc<dyn RtcRoom>) -> Result<(), DialError> {
+    async fn dial(
+        self: &Arc<Self>,
+        host: &Arc<dyn TransferHost>,
+        caller: &Arc<dyn RtcRoom>,
+    ) -> Result<(), DialError> {
         let room_name = human_agent_room_name(&caller.name());
-        let room = host.connect_human(room_name.clone(), caller.local().identity().to_string()).await?;
+        let room =
+            host.connect_human(room_name.clone(), caller.local().identity().to_string()).await?;
         let events = room.events();
         let this = self.clone();
         {
@@ -571,13 +602,19 @@ impl HostWarmTransfer {
         };
         let caller_room = caller.name();
         log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
-        host.move_participant(human_agent_room_name(&caller_room), HUMAN_AGENT_IDENTITY.to_owned(), caller_room)
-            .await?;
+        host.move_participant(
+            human_agent_room_name(&caller_room),
+            HUMAN_AGENT_IDENTITY.to_owned(),
+            caller_room,
+        )
+        .await?;
         self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
         let mut events = caller.events();
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
-                let RoomEvent::ParticipantDisconnected { participant, .. } = event else { continue };
+                let RoomEvent::ParticipantDisconnected { participant, .. } = event else {
+                    continue;
+                };
                 if matches!(
                     participant.kind(),
                     ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard
@@ -701,13 +738,15 @@ impl CancelOnDrop {
         let Some(Call::Creating(task)) = &mut self.call else {
             unreachable!("a creation is pending")
         };
-        let result = task.await.unwrap_or_else(|err| Err(DialError::Host(HostError::new(err.to_string()))));
+        let result =
+            task.await.unwrap_or_else(|err| Err(DialError::Host(HostError::new(err.to_string()))));
         self.call = result.as_ref().ok().map(|sid| Call::Created(sid.clone()));
         result
     }
 }
 
 impl Drop for CancelOnDrop {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn drop(&mut self) {
         let (host, dial) = (self.host.clone(), self.dial.clone());
         match self.call.take() {
@@ -738,8 +777,12 @@ async fn twilio_originate(
     room: &Arc<dyn RtcRoom>,
     ringing_timeout: Option<Duration>,
 ) -> Result<(), DialError> {
-    let connect_url = host.connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned()).await?;
-    let twiml = format!("<Response><Connect><Stream url={}/></Connect></Response>", quoteattr(&connect_url));
+    let connect_url =
+        host.connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned()).await?;
+    let twiml = format!(
+        "<Response><Connect><Stream url={}/></Connect></Response>",
+        quoteattr(&connect_url)
+    );
     let token = dial.call_token.clone().filter(|t| !t.is_empty());
     let from = match &token {
         Some(_) => dial.original_caller_number.clone().unwrap_or_default(),
@@ -748,8 +791,11 @@ async fn twilio_originate(
     let create = |from: String, token: Option<String>| {
         tokio::spawn(twilio_create_call(host.clone(), dial.clone(), from, twiml.clone(), token))
     };
-    let mut guard =
-        CancelOnDrop { host: host.clone(), dial: dial.clone(), call: Some(Call::Creating(create(from, token.clone()))) };
+    let mut guard = CancelOnDrop {
+        host: host.clone(),
+        dial: dial.clone(),
+        call: Some(Call::Creating(create(from, token.clone()))),
+    };
     let mut created = guard.created().await;
     if let Err(DialError::Twilio { status: 400, code: Some(21210 | 21212) }) = &created
         && token.is_some()
@@ -767,7 +813,9 @@ async fn twilio_originate(
         false,
     );
     match ringing_timeout {
-        Some(limit) => tokio::time::timeout(limit, answered).await.map_err(|_| DialError::NoAnswer)??,
+        Some(limit) => {
+            tokio::time::timeout(limit, answered).await.map_err(|_| DialError::NoAnswer)??
+        }
         None => answered.await?,
     };
     guard.call = None;
@@ -808,7 +856,11 @@ fn quoteattr(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn sip(sip_call_to: Option<&str>, has_sip_connection: bool, env_trunk: Option<&str>) -> Result<HostWarmTransfer, WarmTransferRefused> {
+    fn sip(
+        sip_call_to: Option<&str>,
+        has_sip_connection: bool,
+        env_trunk: Option<&str>,
+    ) -> Result<HostWarmTransfer, WarmTransferRefused> {
         HostWarmTransfer::new(
             sip_call_to.map(str::to_owned),
             Maybe::NotGiven,
@@ -832,7 +884,9 @@ mod tests {
         let t = sip(Some("+15550100"), true, Some("env")).unwrap();
         assert!(matches!(t.origination, Origination::Sip { sip_trunk_id: None, .. }));
         let t = sip(Some("+15550100"), false, Some("env")).unwrap();
-        assert!(matches!(t.origination, Origination::Sip { sip_trunk_id: Some(ref id), .. } if id == "env"));
+        assert!(
+            matches!(t.origination, Origination::Sip { sip_trunk_id: Some(ref id), .. } if id == "env")
+        );
         assert_eq!(sip(Some("+15550100"), false, None).err(), Some(WarmTransferRefused::NoTrunk));
         assert_eq!(sip(None, false, Some("env")).err(), Some(WarmTransferRefused::NoSipCallTo));
     }
@@ -840,7 +894,10 @@ mod tests {
     // Catches: the briefing losing the caller conversation or the persona.
     #[test]
     fn the_briefing_carries_the_conversation() {
-        let i = briefing(None, Some(vec![("user".into(), "my order is late".into()), ("system".into(), "x".into())]));
+        let i = briefing(
+            None,
+            Some(vec![("user".into(), "my order is late".into()), ("system".into(), "x".into())]),
+        );
         assert!(i.common.contains("Caller: my order is late\n"), "{}", i.common);
         assert!(i.common.contains("# Identity"));
         assert!(!i.common.contains("x\n## End"));
@@ -858,9 +915,13 @@ mod tests {
     #[test]
     fn the_io_gate_restores_what_was_there() {
         let mut gate = IoGate::default();
-        let before = IoEnableState { audio_input: true, audio_output: false, transcription_output: true };
+        let before =
+            IoEnableState { audio_input: true, audio_output: false, transcription_output: true };
         let off = gate.desired(false, before);
-        assert_eq!(off, IoEnableState { audio_input: false, audio_output: false, transcription_output: false });
+        assert_eq!(
+            off,
+            IoEnableState { audio_input: false, audio_output: false, transcription_output: false }
+        );
         assert_eq!(gate.desired(true, off), before);
     }
 }

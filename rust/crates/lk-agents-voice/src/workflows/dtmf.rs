@@ -121,7 +121,10 @@ impl DtmfResult {
 
     #[host(method(name = "__repr__"))]
     pub fn host_repr(&self) -> String {
-        format!("GetDtmfResult(user_input={})", lk_agents_abi::evals::transcript::py_repr(&self.0.user_input))
+        format!(
+            "GetDtmfResult(user_input={})",
+            lk_agents_abi::evals::transcript::py_repr(&self.0.user_input)
+        )
     }
 
     /// `GetDtmfResult.from_dtmf_inputs(events)`: the digits pressed, formatted. An unknown event
@@ -580,7 +583,8 @@ pub async fn receive_dtmf(
             break;
         }
         digits.push(
-            DtmfEvent::parse(&digit).ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&digit)))?,
+            DtmfEvent::parse(&digit)
+                .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&digit)))?,
         );
         if digits.len() == num_digits {
             break;

@@ -5,15 +5,14 @@ use crate::audio_recognition::TurnDetectionMode;
 use crate::events::DiagnosticEvent;
 use crate::turn::{
     EndpointingOptions, InterruptionOptions, PreemptiveGenerationOptions, TurnHandlingOptions,
-    UserTurnLimitOptions, count, endpointing_options, nullable, secs,
-    turn_handling_layer,
+    UserTurnLimitOptions, count, endpointing_options, nullable, secs, turn_handling_layer,
 };
 use lk_agents_abi::Maybe;
 use lk_agents_abi::Vocabulary;
 pub use lk_agents_abi::voice::session_options::{
-    Expressive, DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides,
-    HostValue, InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions,
-    RecordingOverrides, RecordingRequest, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
+    DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive, HostValue,
+    InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, RecordingOverrides,
+    RecordingRequest, ResolvedEndpointing, ResolvedInterruption, ResolvedPreemptiveGeneration,
     ResolvedSessionOptions, ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet,
     TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
 };
@@ -149,9 +148,7 @@ option_group!(TimerOptions {
 pub const fn defaults(legs: &LegSet) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
         Some(DetectorKind::Streaming) => (Duration::from_millis(300), Duration::from_millis(2500)),
-        None => {
-            (Duration::from_millis(500), Duration::from_millis(3000))
-        }
+        None => (Duration::from_millis(500), Duration::from_millis(3000)),
     };
     let detection = TurnDetection::Auto;
     AgentSessionOptions {
@@ -400,9 +397,7 @@ pub fn resolved_session_options(
             min_words: min_words.resolved(),
             resume_false_interruption: resume_false_interruption.resolved(),
             false_interruption_timeout: false_interruption_timeout.resolved().map(secs),
-            backchannel_boundary: backchannel_boundary
-                .resolved()
-                .map(|(s, e)| (secs(s), secs(e))),
+            backchannel_boundary: backchannel_boundary.resolved().map(|(s, e)| (secs(s), secs(e))),
         },
         preemptive_generation: ResolvedPreemptiveGeneration {
             enabled: preemptive_enabled.resolved(),

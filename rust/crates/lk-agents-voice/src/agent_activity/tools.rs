@@ -12,8 +12,8 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle,
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::{ReplySource, TurnInstructions};
 use crate::tool_executor::{
-    Batch, Delivery, FillerRun, Pending, Reply, Running, ToolEnd, ToolExecution,
-    ToolOutcome, answer, default_reply_instructions, emit_ended, pair_for,
+    Batch, Delivery, FillerRun, Pending, Reply, Running, ToolEnd, ToolExecution, ToolOutcome,
+    answer, default_reply_instructions, emit_ended, pair_for,
 };
 use crate::trace::{FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep};
 use lk_agents_abi::{ChatItem, FunctionCall, Ts};
@@ -606,7 +606,10 @@ impl Driver {
         let realtime = self.realtime_says();
         // The reference's `say` raises with no voice to speak the text (no TTS, no realtime model
         // that says) while audio plays, which ends the filler.
-        if text.is_some() && self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime
+        if text.is_some()
+            && self.session.tts.is_none()
+            && self.session.outputs.plays_audio()
+            && !realtime
         {
             out.machine().emit(SessionEvent::Diagnostic(
                 DiagnosticEvent::error(FILLER_STOPPED)

@@ -33,16 +33,10 @@ impl HookKind {
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookCall {
     /// Nothing waits on it.
-    OnEnter {
-        id: HookId,
-        agent: String,
-    },
+    OnEnter { id: HookId, agent: String },
     /// **Before** scheduling pauses, so a goodbye can still be spoken. The drain waits for it,
     /// bounded.
-    OnExit {
-        id: HookId,
-        agent: String,
-    },
+    OnExit { id: HookId, agent: String },
     /// The decided turn parks until answered. `chat_ctx` is a copy of `agent`'s own context
     /// (`Agent.chat_ctx`) for the hook to edit for this reply.
     OnUserTurnCompleted {
@@ -253,12 +247,10 @@ impl SessionEvent {
                     item: (**item).clone(),
                 })
             }
-            SessionEvent::RunRefused { cause, host } => {
-                HostWire::RunRefused(w::RunRefusedWire {
-                    run: host.clone(),
-                    cause: cause.as_str().to_owned(),
-                })
-            }
+            SessionEvent::RunRefused { cause, host } => HostWire::RunRefused(w::RunRefusedWire {
+                run: host.clone(),
+                cause: cause.as_str().to_owned(),
+            }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech } => {
                 let (final_output, error) = match outcome {

@@ -627,8 +627,7 @@ impl Driver {
         // the record (the cut settles within the interruption watchdog). One created while a
         // speech plays is requested now, on the record as it stands, as the reference's reply
         // task copies the context at creation: the playing speech's item may be seconds away.
-        let after =
-            self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
+        let after = self.current_handle().filter(|h| !h.done() && h.interrupted()).map(|h| h.id());
         let replan = match (after, &spec.source) {
             (Some(after), ReplySource::Llm) => {
                 Some(crate::generation::Replan { after, spec: plan })

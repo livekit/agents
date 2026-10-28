@@ -9,7 +9,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{
     AudioFrame, ChatRequest, LanguageCode, Llm, LlmStream, SpeechEvent, StreamSource, Stt,
-    SttCapabilities, SttSink, SttSource, Tts, TtsCapabilities, TtsSink, TtsSource, Ts,
+    SttCapabilities, SttSink, SttSource, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use std::sync::Arc;
 
@@ -114,7 +114,10 @@ impl<T: Send> StreamSource<T> for Final<T> {
 }
 
 fn duplex<I, T: Send + 'static>(
-    opened: Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn StreamSource<T>>), ProviderError>,
+    opened: Result<
+        (Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn StreamSource<T>>),
+        ProviderError,
+    >,
 ) -> Result<(Box<dyn lk_agents_abi::StreamSink<I>>, Box<dyn StreamSource<T>>), ProviderError> {
     let (sink, source) = opened.map_err(final_error)?;
     Ok((sink, Box::new(Final(source))))

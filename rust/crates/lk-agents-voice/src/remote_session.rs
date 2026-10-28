@@ -500,7 +500,8 @@ impl SessionHost {
                 let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
                 let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
                 // `session._started_at or time.time()`
-                let started_at = started_at.filter(|t| *t != 0.0).unwrap_or_else(lk_agents_abi::unix_now);
+                let started_at =
+                    started_at.filter(|t| *t != 0.0).unwrap_or_else(lk_agents_abi::unix_now);
                 (
                     None,
                     Response::GetSessionState(proto::session_response::GetSessionStateResponse {
@@ -700,7 +701,6 @@ impl FrameDecoder {
         self.buf.drain(..total);
         Ok(Some(body))
     }
-
 }
 
 pub mod proto {

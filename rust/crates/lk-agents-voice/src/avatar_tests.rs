@@ -71,7 +71,10 @@ async fn a_segment_is_one_byte_stream_to_the_avatar_once_it_has_joined() {
         })
     };
     settle().await;
-    assert!(f.room.local_participant().byte_streams().is_empty(), "nothing before the avatar joins");
+    assert!(
+        f.room.local_participant().byte_streams().is_empty(),
+        "nothing before the avatar joins"
+    );
     f.room.add_participant("avatar", ParticipantKind::Agent);
     capture.await.unwrap();
     f.out.flush();
@@ -87,12 +90,17 @@ async fn a_segment_is_one_byte_stream_to_the_avatar_once_it_has_joined() {
     assert!(s.opts.name.starts_with("AUDIO_"));
     assert_eq!(s.chunks.len(), 2);
     assert!(s.closed, "flush closes the segment's stream");
-    assert_eq!(*f.events.0.lock().unwrap(), ["started"], "no lk.playback_started: the first frame stands for it");
+    assert_eq!(
+        *f.events.0.lock().unwrap(),
+        ["started"],
+        "no lk.playback_started: the first frame stands for it"
+    );
 }
 
 // Catches: a capture dropped mid-write (the playout declines a push on interruption) taking the
 // segment's writer with it: the host stream stays open, and the flush finds no writer, so the
 // avatar never sees the segment end.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_capture_dropped_mid_write_leaves_the_segment_to_its_flush() {
     let f = fixture("r_drop", None, false);
@@ -125,7 +133,11 @@ async fn the_avatars_playback_finished_rpc_ends_the_segment_and_a_stranger_is_re
     f.out.flush();
     let local = f.room.local_participant();
     assert_eq!(local.invoke_rpc(RPC_PLAYBACK_FINISHED, "mallory", "{}").as_deref(), Some("reject"));
-    let reply = local.invoke_rpc(RPC_PLAYBACK_FINISHED, "avatar", r#"{"playback_position": 0.01, "interrupted": false}"#);
+    let reply = local.invoke_rpc(
+        RPC_PLAYBACK_FINISHED,
+        "avatar",
+        r#"{"playback_position": 0.01, "interrupted": false}"#,
+    );
     assert_eq!(reply.as_deref(), Some("ok"));
     assert_eq!(*f.events.0.lock().unwrap(), ["started", "finished 0.01 false"]);
 }
@@ -141,7 +153,10 @@ async fn an_unanswered_clear_buffer_finishes_the_segment_after_its_timeout() {
     f.out.clear_buffer();
     settle().await;
     let calls = f.room.local_participant().rpc_calls();
-    assert_eq!(calls, vec![(ParticipantIdentity("avatar".into()), RPC_CLEAR_BUFFER.to_owned(), String::new())]);
+    assert_eq!(
+        calls,
+        vec![(ParticipantIdentity("avatar".into()), RPC_CLEAR_BUFFER.to_owned(), String::new())]
+    );
     assert_eq!(*f.events.0.lock().unwrap(), ["started"]);
     f.clock.advance(Duration::from_secs(2));
     settle().await;
@@ -165,12 +180,16 @@ async fn wait_remote_track_holds_audio_until_the_avatar_publishes_video() {
     avatar.publish_track("TR_cam", TrackSource::Camera);
     capture.await.unwrap();
     assert!(f.events.0.lock().unwrap().is_empty(), "the avatar reports lk.playback_started itself");
-    assert_eq!(f.room.local_participant().invoke_rpc(RPC_PLAYBACK_STARTED, "avatar", "").as_deref(), Some("ok"));
+    assert_eq!(
+        f.room.local_participant().invoke_rpc(RPC_PLAYBACK_STARTED, "avatar", "").as_deref(),
+        Some("ok")
+    );
     assert_eq!(*f.events.0.lock().unwrap(), ["started"]);
 }
 
 // ------------------------------------------------------------------------- the avatar's side
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn audio_info(id: &str) -> lk_agents_rtc::StreamInfo {
     lk_agents_rtc::StreamInfo {
         id: id.to_owned(),
@@ -243,7 +262,9 @@ async fn take(rx: &DataStreamAudioReceiver, n: usize) -> Vec<Received> {
 async fn a_segment_comes_out_in_frame_size_frames_then_its_end() {
     let f = receiver("rx1").await;
     // 250 ms at 10 kHz mono: two 100 ms frames and a 50 ms tail
-    f.room.send_byte_stream("agent-1", audio_info("S1"), [vec![0u8; 3000], vec![0u8; 2000]]).unwrap();
+    f.room
+        .send_byte_stream("agent-1", audio_info("S1"), [vec![0u8; 3000], vec![0u8; 2000]])
+        .unwrap();
     let items = take(&f.rx, 4).await;
     assert_eq!(kinds(&items), ["frame 1000", "frame 1000", "frame 500", "end"]);
 }
@@ -290,7 +311,10 @@ async fn playback_reports_go_to_the_agent_and_a_failing_one_ends_the_receiver() 
     f.rx.notify_playback_finished(1.5, true);
     settle().await;
     let calls = f.room.local_participant().rpc_calls();
-    assert_eq!(calls[0], (ParticipantIdentity("agent-1".into()), RPC_PLAYBACK_STARTED.to_owned(), String::new()));
+    assert_eq!(
+        calls[0],
+        (ParticipantIdentity("agent-1".into()), RPC_PLAYBACK_STARTED.to_owned(), String::new())
+    );
     assert_eq!(calls[1].1, RPC_PLAYBACK_FINISHED);
     let payload: serde_json::Value = serde_json::from_str(&calls[1].2).unwrap();
     assert_eq!(payload["playback_position"], 1.5);
