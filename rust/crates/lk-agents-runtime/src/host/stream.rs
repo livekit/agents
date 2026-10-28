@@ -151,7 +151,8 @@ impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
         let clock = self.clock.clone();
         let pending = self.pending.take();
         let has_aclose = Python::attach(|py| self.iterator.bind(py).hasattr("aclose"));
-        let teardown = async move {
+        let mut failed = false;
+        let teardown = async {
             if let Some(mut pull) = pending {
                 pull.cancel();
                 let _ = pull.settled().await;
@@ -165,9 +166,11 @@ impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
             };
             if let Err(e) = closed {
                 log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
+                failed = true;
             }
         };
-        Closed::bounded(&*clock, deadline, teardown).await
+        let closed = Closed::bounded(&*clock, deadline, teardown).await;
+        if failed { closed.and(Closed::Failed) } else { closed }
     }
 }
 
@@ -323,6 +326,17 @@ async def cancelled():
     yield 1
     raise asyncio.CancelledError()
 
+class Unclosable:
+    def __aiter__(self):
+        return self
+    async def __anext__(self):
+        return 'x'
+    async def aclose(self):
+        raise RuntimeError('cannot close')
+
+def unclosable():
+    return Unclosable()
+
 class Duplex:
     def __init__(self):
         self.got = []
@@ -464,5 +478,15 @@ class Duplex:
         let mut stream = open(&g, &context, "cancelled");
         assert_eq!(stream.next().await.unwrap().as_deref(), Some("1"));
         assert!(stream.next().await.is_err());
+    }
+
+    // Catches: a host stream whose `aclose()` raised reported as closed cleanly (B-10).
+    #[tokio::test]
+    async fn a_failed_aclose_is_a_failed_close() {
+        Python::initialize();
+        let (g, context) = Python::attach(setup);
+        let mut stream = open(&g, &context, "unclosable");
+        assert_eq!(stream.next().await.unwrap().as_deref(), Some("x"));
+        assert_eq!(Box::new(stream).close(deadline()).await, Closed::Failed);
     }
 }

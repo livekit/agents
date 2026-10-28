@@ -188,7 +188,7 @@ impl Tts for StreamAdapter {
             lowering,
             pending: VecDeque::new(),
             current: None,
-            inner_timed_out: false,
+            inner_closed: Closed::Clean,
             input_done: false,
             duration: 0.0,
             pending_transcript: Vec::new(),
@@ -274,7 +274,7 @@ struct AdapterSource {
     pending: VecDeque<String>,
     current: Option<TtsSource>,
     /// Folded into `close`.
-    inner_timed_out: bool,
+    inner_closed: Closed,
     input_done: bool,
     /// The `start_time` stamped on each sentence's `TimedString`.
     duration: f64,
@@ -336,10 +336,7 @@ impl AdapterSource {
     async fn close_current(&mut self) {
         if let Some(done) = self.current.take() {
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-            match done.close(deadline).await {
-                Closed::Clean => {}
-                Closed::TimedOut => self.inner_timed_out = true,
-            }
+            self.inner_closed = self.inner_closed.and(done.close(deadline).await);
         }
     }
 
@@ -567,19 +564,14 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
         }))
     }
 
-    /// `TimedOut` if any inner stream did not ack.
+    /// The worst inner close: `TimedOut` if any did not ack, else `Failed` if any teardown failed.
     async fn close(mut self: Box<Self>, deadline: Ts) -> Closed {
         let current = match self.current.take() {
             Some(cur) => cur.close(deadline).await,
             None => Closed::Clean,
         };
         self.rx.close();
-        match (self.inner_timed_out, current) {
-            (false, Closed::Clean) => Closed::Clean,
-            (true, Closed::Clean) | (false, Closed::TimedOut) | (true, Closed::TimedOut) => {
-                Closed::TimedOut
-            }
-        }
+        self.inner_closed.and(current)
     }
 }
 

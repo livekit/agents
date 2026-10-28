@@ -79,11 +79,23 @@ pub const HOST_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Closed {
     Clean,
+    /// The teardown ran and failed (a host `aclose()` raised); the failure is logged where it
+    /// happened. Never reported as `Clean`.
+    Failed,
     /// Abandoned at the deadline; a host generator is still running.
     TimedOut,
 }
 
 impl Closed {
+    /// Two teardowns as one: the worse outcome, a timeout over a failure over a clean close.
+    pub fn and(self, other: Closed) -> Closed {
+        match (self, other) {
+            (Closed::TimedOut, _) | (_, Closed::TimedOut) => Closed::TimedOut,
+            (Closed::Failed, _) | (_, Closed::Failed) => Closed::Failed,
+            (Closed::Clean, Closed::Clean) => Closed::Clean,
+        }
+    }
+
     /// On timeout the future is dropped, leaking one host task rather than hanging the pump. A past
     /// deadline still gives it one poll.
     pub async fn bounded<F: Future<Output = ()>>(clock: &dyn Clock, deadline: Ts, teardown: F) -> Closed {
