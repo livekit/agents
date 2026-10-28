@@ -22,6 +22,13 @@ scenarios:
       typing or a keyboard. Replies are one or two short spoken sentences.
     tags:
       feature: reschedule
+    userdata:
+      expected:
+        patient: Taylor Smith
+        born: "1988-03-14"
+        new_patient: false
+        booked: false
+        moved: morning
 
   - id: SCN_HvBf5sWfckDt
     label: New patient books a first visit
@@ -43,6 +50,13 @@ scenarios:
       the calendar didn't return.
     tags:
       feature: new-patient
+    userdata:
+      expected:
+        patient: Casey Morgan
+        born: "1995-06-01"
+        new_patient: true
+        booked: afternoon
+        moved: false
 
   - id: SCN_5hTDSQUoFHzR
     label: First-time caller isn't told they're being pulled up
@@ -66,6 +80,13 @@ scenarios:
       confirms it with the same day and time it offered.
     tags:
       feature: new-patient
+    userdata:
+      expected:
+        patient: Sam Rivera
+        born: "1990-08-17"
+        new_patient: true
+        booked: morning
+        moved: false
 
   - id: SCN_WhQ6yVjG6RAe
     label: Birthday finds the chart behind a misheard name
@@ -85,6 +106,13 @@ scenarios:
       new patient.
     tags:
       feature: lookup
+    userdata:
+      expected:
+        patient: Jordan Lee
+        born: "1992-07-08"
+        new_patient: false
+        booked: false
+        moved: false
 
   - id: SCN_UPjB5WkXqZCg
     label: Caller gives their full birthday once and isn't asked again
@@ -101,6 +129,13 @@ scenarios:
       back to confirm it, then tells Morgan about the upcoming blood pressure check.
     tags:
       feature: lookup
+    userdata:
+      expected:
+        patient: Morgan Brooks
+        born: "1979-11-02"
+        new_patient: false
+        booked: false
+        moved: false
 
   - id: SCN_3T8UNutjcGeY
     label: Caller asks Riley to say their name back
@@ -118,3 +153,10 @@ scenarios:
       deflecting. Registers Priya only after Priya confirms the spelling.
     tags:
       feature: new-patient
+    userdata:
+      expected:
+        patient: Priya Raghunathan
+        born: "1987-04-23"
+        new_patient: true
+        booked: false
+        moved: false
