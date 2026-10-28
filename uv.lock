@@ -121,7 +121,7 @@ docs = [
 ]
 lint = [{ name = "ruff" }]
 typing = [
-    { name = "boto3-stubs", extras = ["bedrock-runtime", "polly"], specifier = ">=1.43.120" },
+    { name = "boto3-stubs", specifier = ">=1.43.120" },
     { name = "pandas-stubs", specifier = ">=3.0.3.260530" },
     { name = "pyright" },
     { name = "scipy-stubs", specifier = ">=1.17.1.5" },
@@ -720,14 +720,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/f5/fbcbcbd2c35e01b7d767eeeb2b217197ef8222898fda4539523a889ce7f8/boto3_stubs-1.43.120.tar.gz", hash = "sha256:fb027abc83be797d6fd6b564aa67df12b133ed7b43cadd20fca7d0d418308c48", size = 105518, upload-time = "2026-10-27T22:16:49.877Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/21/23638a35dc154ac6a39a276dcfb0fa4e703f0056c7408e84098752c47645/boto3_stubs-1.43.120-py3-none-any.whl", hash = "sha256:f97ac35cbaf3f338ae6e1f201d30ee765761288ea10641e76ad2795fb3cc318c", size = 72011, upload-time = "2026-10-27T22:16:41.638Z" },
-]
-
-[package.optional-dependencies]
-bedrock-runtime = [
-    { name = "mypy-boto3-bedrock-runtime" },
-]
-polly = [
-    { name = "mypy-boto3-polly" },
 ]
 
 [[package]]
@@ -2741,14 +2733,10 @@ name = "livekit-plugins-clova"
 source = { editable = "livekit-plugins/livekit-plugins-clova" }
 dependencies = [
     { name = "livekit-agents-next" },
-    { name = "pydub" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "livekit-agents-next", editable = "livekit-agents-next" },
-    { name = "pydub", specifier = "~=0.25.1" },
-]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-deepgram"
@@ -4045,30 +4033,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mypy-boto3-bedrock-runtime"
-version = "1.43.62"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/26/78/542f5804cf0f9e3c1ccbf30917eaa3b4b6002b91965de02d065d7441fc93/mypy_boto3_bedrock_runtime-1.43.62.tar.gz", hash = "sha256:beb70b08ef72cdfd5036bcd3270f2fbac0a2ce5e40f70dfc1d87c4f139d4d7ff", size = 31492, upload-time = "2026-07-31T19:54:15.291Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/b2/e3bff20acd290b909f1c28856d6d8d7984f7f7d5bda299d5957f64e97bb3/mypy_boto3_bedrock_runtime-1.43.62-py3-none-any.whl", hash = "sha256:603d9df54da5029fc0d0e3c09b6db33733af53182bee030c0c7af99e88ed3b39", size = 37865, upload-time = "2026-07-31T19:54:13.959Z" },
-]
-
-[[package]]
-name = "mypy-boto3-polly"
-version = "1.43.117"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/42/4fc603def0db2292a1ec4de9717e740e1ce100b24db40095715a3d1051f6/mypy_boto3_polly-1.43.117.tar.gz", hash = "sha256:cb116bb03c4bfa26d14c26bd4615b839e1c3129589c6a602f5394b136aac79d4", size = 19922, upload-time = "2026-10-21T22:28:05.432Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/68/2648bed48295ca9ce37096eaabc33f5f7c4e15f3a1e145ebb71cbc25afcc/mypy_boto3_polly-1.43.117-py3-none-any.whl", hash = "sha256:1e8391add46ce1f22718d637edf98e01bd2e6e76c07aa14d451b92f6d68c24c8", size = 27255, upload-time = "2026-10-21T22:28:02.369Z" },
-]
-
-[[package]]
 name = "mypy-extensions"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5160,15 +5124,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5c/b5/8f48e906c3e0205276e8bd8cb7512217a87b2685304d64be27cad5b3019f/pydantic_settings-2.14.2.tar.gz", hash = "sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f", size = 237700, upload-time = "2026-06-19T13:44:56.324Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/c1/6e422f34e569cf8e18df68d1939c81c099d2b61e4f7d9621c8a77560799c/pydantic_settings-2.14.2-py3-none-any.whl", hash = "sha256:a20c97b37910b6550d5ea50fbcc2d4187defe58cd57070b73863d069419c9440", size = 61715, upload-time = "2026-06-19T13:44:55.02Z" },
-]
-
-[[package]]
-name = "pydub"
-version = "0.25.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fe/9a/e6bca0eed82db26562c73b5076539a4a08d3cffd19c3cc5913a3e61145fd/pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f", size = 38326, upload-time = "2021-03-10T02:09:54.659Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/53/d78dc063216e62fc55f6b2eebb447f6a4b0a59f55c8406376f76bf959b08/pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6", size = 32327, upload-time = "2021-03-10T02:09:53.503Z" },
 ]
 
 [[package]]
