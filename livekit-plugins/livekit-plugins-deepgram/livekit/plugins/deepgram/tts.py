@@ -259,7 +259,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             http_params: dict = {
                 "encoding": self._opts.encoding,
@@ -272,14 +271,16 @@ class ChunkedStream(tts.ChunkedStream):
                 http_params["bit_rate"] = self._opts.bit_rate
             if self._opts.speed is not None:
                 http_params["speed"] = self._opts.speed
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={
                     "Authorization": f"Token {self._opts.api_key}",
                     "Content-Type": "application/json",
                 },
                 json={"text": self._input_text},
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 
@@ -310,12 +311,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     _CLOSE_MSG: str = json.dumps({"type": "Close"})
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        if conn_options.write_timeout is not None or conn_options.total_timeout is not None:
-            raise APIError(
-                "deepgram streaming requires write_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)

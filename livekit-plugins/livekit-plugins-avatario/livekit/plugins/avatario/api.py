@@ -14,7 +14,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .log import logger
 
@@ -113,38 +113,40 @@ class AvatarioAPI:
         if self._session is None:
             raise RuntimeError("Session not initialized. Use 'async with AvatarioAPI(...)'.")
         last_exc: Exception | None = None
-        request_timeout = client_timeout(self._conn_options)
-        for i in range(self._conn_options.max_retry):
-            try:
-                async with self._session.post(
-                    f"{DEFAULT_API_URL}/start-session",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": self._api_key,
-                    },
-                    json=payload,
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Server returned an error",
-                            status_code=response.status,
-                            body=text,
-                        )
-                    data = await response.json()
-                    return cast(dict[str, Any], data)
-            except APIStatusError as e:
-                last_exc = e
-                if not e.retryable:
-                    raise
-                logger.warning("Avatario API returned error", extra={"error": str(e)})
-            except Exception as e:
-                last_exc = e
-                logger.exception("failed to call Avatario API")
+        async with self._conn_options.total_deadline():
+            for i in range(self._conn_options.max_retry):
+                try:
+                    async with http_context.request(
+                        self._session,
+                        "POST",
+                        f"{DEFAULT_API_URL}/start-session",
+                        headers={
+                            "Content-Type": "application/json",
+                            "x-api-key": self._api_key,
+                        },
+                        json=payload,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Server returned an error",
+                                status_code=response.status,
+                                body=text,
+                            )
+                        data = await response.json()
+                        return cast(dict[str, Any], data)
+                except APIStatusError as e:
+                    last_exc = e
+                    if not e.retryable:
+                        raise
+                    logger.warning("Avatario API returned error", extra={"error": str(e)})
+                except Exception as e:
+                    last_exc = e
+                    logger.exception("failed to call Avatario API")
 
-            if i < self._conn_options.max_retry - 1:
-                await asyncio.sleep(self._conn_options.retry_interval)
+                if i < self._conn_options.max_retry - 1:
+                    await asyncio.sleep(self._conn_options.retry_interval)
 
         if isinstance(last_exc, APIStatusError):
             raise last_exc

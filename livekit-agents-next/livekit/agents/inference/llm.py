@@ -10,7 +10,7 @@ from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolPara
 from openai.types.shared.reasoning_effort import ReasoningEffort
 
 from .. import _bindings, _core, llm
-from .._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated.inference_llm import (
     ChatCompletionOptions,
     DeepSeekModels,
@@ -270,11 +270,6 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         options = self._conn_options
-        if options.total_timeout is not None:
-            raise APIError(
-                "OpenAI-compatible SDK cannot enforce total_timeout across framework attempts",
-                retryable=False,
-            )
         timeout = httpx.Timeout(
             connect=options.connect_timeout,
             read=options.read_timeout,

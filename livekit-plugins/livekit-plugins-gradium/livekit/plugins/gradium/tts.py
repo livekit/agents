@@ -26,7 +26,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -39,19 +38,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
-
-
-def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
-    if (
-        conn_options.pool_timeout is not None
-        or conn_options.write_timeout is not None
-        or conn_options.total_timeout is not None
-    ):
-        raise APIError(
-            "gradium streaming requires pool_timeout=None, write_timeout=None, total_timeout=None; "
-            "these timeout phases are not observable by this adapter",
-            retryable=False,
-        )
 
 
 @dataclass
@@ -194,7 +180,6 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
-        _check_stream_timeouts(conn_options)
         super().__init__(
             tts=tts,
             input_text=input_text,
@@ -280,13 +265,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Stream-based text-to-speech synthesis using Gradium WebSocket API."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        _check_stream_timeouts(conn_options)
-        if conn_options.read_timeout is not None:
-            raise APIError(
-                "gradium streaming cannot distinguish response waits from input pauses; "
-                "set read_timeout=None",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)

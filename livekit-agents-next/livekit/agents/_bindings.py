@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Awaitable, Callable
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from pydantic import BaseModel
 
 from . import _core
-from ._exceptions import APIConnectionError, APIError, APIStatusError
+from ._exceptions import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from .log import logger
 
 if TYPE_CHECKING:
@@ -79,8 +80,24 @@ class Attempts:
         produced: Callable[[], bool] = lambda: False,
         again: Callable[[], None] = lambda: None,
     ) -> _T:
-        """``attempt`` until it succeeds; ``produced``: the failed attempt delivered output,
-        ``again``: called before each retry."""
+        """``attempt`` until it succeeds or ``conn.total_timeout`` expires; ``produced``: the
+        failed attempt delivered output, ``again``: called before each retry."""
+        # the core owns the total deadline of the attempts it retries
+        deadline = contextlib.nullcontext() if self.core else self.conn.total_deadline()
+        try:
+            async with deadline:
+                return await self._attempts(attempt, produced, again)
+        except APITimeoutError as e:
+            if e.phase == "total":
+                self.emit_error(e, False)
+            raise
+
+    async def _attempts(
+        self,
+        attempt: Callable[[], Awaitable[_T]],
+        produced: Callable[[], bool],
+        again: Callable[[], None],
+    ) -> _T:
         while True:
             try:
                 return await attempt()

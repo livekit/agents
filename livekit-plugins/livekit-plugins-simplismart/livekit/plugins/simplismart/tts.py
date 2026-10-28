@@ -164,7 +164,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         if self._opts.qwen_options is not None:
             qwen_opts = self._opts.qwen_options
             payload: dict = {
@@ -198,11 +197,13 @@ class ChunkedStream(tts.ChunkedStream):
         logger.debug("TTS request to %s (model: %s)", self._tts._base_url, self._opts.model)
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 self._tts._base_url,
                 json=payload,
                 headers=headers,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 if resp.status != 200:
                     error_text = await resp.text()

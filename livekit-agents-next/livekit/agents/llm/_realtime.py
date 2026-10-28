@@ -11,7 +11,6 @@ import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
-from .._exceptions import APIError
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from . import realtime as llm_realtime
 from .tool_context import ToolChoice
@@ -45,17 +44,15 @@ _PLUGIN_LABEL = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
 
 def _native_connect_timeout(options: APIConnectOptions) -> float:
-    """Project the connect-only interface of the native websocket adapter."""
-    for field, value in (
-        ("write_timeout", options.write_timeout),
-        ("read_timeout", options.read_timeout),
-        ("total_timeout", options.total_timeout),
-    ):
-        if value is not None:
-            raise APIError(f"Native websocket cannot enforce conn_options.{field}", retryable=False)
-    if options.connect_timeout is None:
-        raise APIError("Native websocket cannot disable connect_timeout", retryable=False)
-    return options.connect_timeout
+    """The connect limit of the native websocket bridge, which takes only that phase.
+
+    It has no pool, and sends, response waits and the session's total are not yet passed to it.
+    """
+    # the bridge's deadline saturates, so the largest duration it accepts is no limit
+    return _NO_LIMIT if options.connect_timeout is None else options.connect_timeout
+
+
+_NO_LIMIT = float(2**63)
 
 
 # sessions run in the core; the name stays for the plugins that subclass it

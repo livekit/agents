@@ -23,7 +23,6 @@ from aiobotocore.session import AioSession  # type: ignore
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APITimeoutError,
     LanguageCode,
     tts,
@@ -154,15 +153,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.pool_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "AWS botocore cannot enforce pool_timeout, write_timeout or total_timeout",
-                retryable=False,
-            )
         try:
             config = AioConfig(
                 connect_timeout=self._conn_options.connect_timeout,

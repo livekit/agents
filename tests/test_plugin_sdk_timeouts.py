@@ -59,18 +59,17 @@ async def test_injected_sdk_client_sends_one_attempt_and_keeps_its_policy(provid
 
 
 def test_mistral_rejects_an_inexpressible_phase_policy() -> None:
-    with pytest.raises(APIError, match="equal finite") as error:
+    with pytest.raises(APIError, match="must be equal") as error:
         request_timeout_ms(APIConnectOptions(connect_timeout=0.1, read_timeout=5))
     assert not error.value.retryable
 
 
-def test_genai_rejects_phases_without_mutating_application_options() -> None:
+def test_genai_takes_one_attempt_without_mutating_application_options() -> None:
     from google.genai import types
 
     original = types.HttpOptions(timeout=123, retry_options=types.HttpRetryOptions(attempts=9))
-    with pytest.raises(APIError, match="separate timeout phases") as error:
-        genai_http_options(APIConnectOptions(), original)
-    assert not error.value.retryable
+    options = genai_http_options(APIConnectOptions(), original)
+    assert options.retry_options is not None and options.retry_options.attempts == 1
     assert original.timeout == 123
     assert original.retry_options is not None and original.retry_options.attempts == 9
 

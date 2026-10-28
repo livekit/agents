@@ -791,14 +791,10 @@ class TTS(tts.TTS):
 
 
 def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
-    if (
-        conn_options.write_timeout is not None
-        or conn_options.total_timeout is not None
-        or conn_options.read_timeout == 0
-    ):
+    if conn_options.read_timeout == 0:
+        # aiohttp reads a zero receive timeout as no limit
         raise APIError(
-            "SLNG streaming requires write_timeout=None, total_timeout=None and "
-            "read_timeout > 0 or None",
+            "SLNG streaming cannot enforce read_timeout=0",
             retryable=False,
         )
 

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx2 as httpx
 
-from livekit.agents import APIConnectOptions, APIError
+from livekit.agents import APIConnectOptions
 
 AsyncAzureADTokenProvider = Callable[[], str | Awaitable[str]]
 
@@ -20,10 +20,6 @@ __all__ = ["get_base_url", "AsyncAzureADTokenProvider"]
 
 
 def http_timeout(options: APIConnectOptions) -> httpx.Timeout:
-    if options.total_timeout is not None:
-        raise APIError(
-            "OpenAI SDK cannot enforce total_timeout across framework attempts", retryable=False
-        )
     return httpx.Timeout(
         connect=options.connect_timeout,
         read=options.read_timeout,

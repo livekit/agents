@@ -35,7 +35,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .errors import BosonAvatarException
 from .log import logger
@@ -250,71 +250,71 @@ class BosonAvatarAPI:
             **(headers or {}),
         }
         url = f"{self._api_url}{path}"
+        async with self._conn_options.total_deadline():
+            for attempt in range(self._conn_options.max_retry + 1):
+                retry_after: float | None = None
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        method,
+                        url,
+                        json=json,
+                        headers=request_headers,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        payload = await _read_payload(response)
+                        if response.status in success_statuses:
+                            if payload is None and allow_empty and response.status == 204:
+                                return response.status, {}
+                            if not isinstance(payload, dict):
+                                raise APIStatusError(
+                                    "Boson Avatar API returned a non-object JSON response",
+                                    status_code=response.status,
+                                    body=payload,
+                                    retryable=False,
+                                )
+                            return response.status, payload
 
-        request_timeout = client_timeout(self._conn_options)
-        for attempt in range(self._conn_options.max_retry + 1):
-            retry_after: float | None = None
-            try:
-                async with self._ensure_http_session().request(
-                    method,
-                    url,
-                    json=json,
-                    headers=request_headers,
-                    timeout=request_timeout,
-                ) as response:
-                    payload = await _read_payload(response)
-                    if response.status in success_statuses:
-                        if payload is None and allow_empty and response.status == 204:
-                            return response.status, {}
-                        if not isinstance(payload, dict):
-                            raise APIStatusError(
-                                "Boson Avatar API returned a non-object JSON response",
-                                status_code=response.status,
-                                body=payload,
-                                retryable=False,
-                            )
-                        return response.status, payload
+                        request_id = response.headers.get("x-request-id")
+                        retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                        if isinstance(payload, dict):
+                            error_body = payload.get("error")
+                            if isinstance(error_body, dict):
+                                request_id = (
+                                    str(error_body.get("request_id") or request_id or "") or None
+                                )
+                        raise APIStatusError(
+                            "Boson Avatar API returned an error",
+                            status_code=response.status,
+                            request_id=request_id,
+                            body=payload,
+                            retryable=not 200 <= response.status < 400,
+                        )
+                except asyncio.TimeoutError:
+                    error_type = "timeout"
+                except aiohttp.ClientError:
+                    error_type = "client_error"
+                except APIStatusError as exc:
+                    if not exc.retryable:
+                        raise
+                    error_type = type(exc).__name__
 
-                    request_id = response.headers.get("x-request-id")
-                    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
-                    if isinstance(payload, dict):
-                        error_body = payload.get("error")
-                        if isinstance(error_body, dict):
-                            request_id = (
-                                str(error_body.get("request_id") or request_id or "") or None
-                            )
-                    raise APIStatusError(
-                        "Boson Avatar API returned an error",
-                        status_code=response.status,
-                        request_id=request_id,
-                        body=payload,
-                        retryable=not 200 <= response.status < 400,
-                    )
-            except asyncio.TimeoutError:
-                error_type = "timeout"
-            except aiohttp.ClientError:
-                error_type = "client_error"
-            except APIStatusError as exc:
-                if not exc.retryable:
-                    raise
-                error_type = type(exc).__name__
+                if attempt == self._conn_options.max_retry:
+                    break
 
-            if attempt == self._conn_options.max_retry:
-                break
-
-            logger.warning(
-                "boson avatar api request failed, retrying",
-                extra={
-                    "attempt": attempt + 1,
-                    "error_type": error_type,
-                    "method": method,
-                    "lk.pii.path": path,
-                },
-            )
-            retry_delay = self._conn_options._interval_for_retry(attempt)
-            if retry_after is not None:
-                retry_delay = max(retry_delay, retry_after)
-            await asyncio.sleep(retry_delay)
+                logger.warning(
+                    "boson avatar api request failed, retrying",
+                    extra={
+                        "attempt": attempt + 1,
+                        "error_type": error_type,
+                        "method": method,
+                        "lk.pii.path": path,
+                    },
+                )
+                retry_delay = self._conn_options._interval_for_retry(attempt)
+                if retry_after is not None:
+                    retry_delay = max(retry_delay, retry_after)
+                await asyncio.sleep(retry_delay)
 
         # Provider exceptions and status bodies can contain request payloads or
         # credentials. Expose a stable SDK error without retaining that context.

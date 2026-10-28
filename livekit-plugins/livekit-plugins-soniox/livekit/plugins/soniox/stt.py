@@ -335,17 +335,6 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-            or self._conn_options.pool_timeout is not None
-        ):
-            raise APIError(
-                "soniox streaming does not support write_timeout, total_timeout, "
-                "read_timeout, pool_timeout; set them to None",
-                retryable=False,
-            )
         while True:
             try:
                 ws = await self._connect_ws()

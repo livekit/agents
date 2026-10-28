@@ -18,7 +18,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .log import logger
 from .meeting.room import JoinMeetingResult
@@ -225,60 +225,62 @@ class LemonSliceAPI:
         """
         session = self._session or aiohttp.ClientSession()
         try:
-            request_timeout = client_timeout(self._conn_options)
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    headers = {"X-API-Key": self._api_key}
-                    request_kwargs: dict[str, Any]
-                    if image_bytes is not None:
-                        form = aiohttp.FormData()
-                        form.add_field(
-                            "payload", json.dumps(payload), content_type="application/json"
-                        )
-                        # Upload the image using multipart
-                        form.add_field(
-                            "image",
-                            image_bytes,
-                            filename="image.png",
-                            content_type="image/png",
-                        )
-                        request_kwargs = {"data": form}
-                    else:
-                        headers["Content-Type"] = "application/json"
-                        request_kwargs = {"json": payload}
-
-                    async with session.post(
-                        url or self._api_url,
-                        headers=headers,
-                        timeout=request_timeout,
-                        **request_kwargs,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                "LemonSlice Server returned an error",
-                                status_code=response.status,
-                                body=text,
+            async with self._conn_options.total_deadline():
+                for i in range(self._conn_options.max_retry + 1):
+                    try:
+                        headers = {"X-API-Key": self._api_key}
+                        request_kwargs: dict[str, Any]
+                        if image_bytes is not None:
+                            form = aiohttp.FormData()
+                            form.add_field(
+                                "payload", json.dumps(payload), content_type="application/json"
                             )
-                        return await response.json()  # type: ignore
-                except Exception as e:
-                    if isinstance(e, APIStatusError):
-                        logger.error(
-                            "LemonSlice API returned an error",
-                            extra={
-                                "status_code": e.status_code,
-                                "body": e.body,
-                            },
-                        )
-                        if not e.retryable:
-                            raise e
-                    elif isinstance(e, APIConnectionError):
-                        logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
-                    else:
-                        logger.exception("failed to call lemonslice api")
+                            # Upload the image using multipart
+                            form.add_field(
+                                "image",
+                                image_bytes,
+                                filename="image.png",
+                                content_type="image/png",
+                            )
+                            request_kwargs = {"data": form}
+                        else:
+                            headers["Content-Type"] = "application/json"
+                            request_kwargs = {"json": payload}
 
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options._interval_for_retry(i))
+                        async with http_context.request(
+                            session,
+                            "POST",
+                            url or self._api_url,
+                            headers=headers,
+                            conn_options=self._conn_options,
+                            **request_kwargs,
+                        ) as response:
+                            if not response.ok:
+                                text = await response.text()
+                                raise APIStatusError(
+                                    "LemonSlice Server returned an error",
+                                    status_code=response.status,
+                                    body=text,
+                                )
+                            return await response.json()  # type: ignore
+                    except Exception as e:
+                        if isinstance(e, APIStatusError):
+                            logger.error(
+                                "LemonSlice API returned an error",
+                                extra={
+                                    "status_code": e.status_code,
+                                    "body": e.body,
+                                },
+                            )
+                            if not e.retryable:
+                                raise e
+                        elif isinstance(e, APIConnectionError):
+                            logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
+                        else:
+                            logger.exception("failed to call lemonslice api")
+
+                        if i < self._conn_options.max_retry:
+                            await asyncio.sleep(self._conn_options._interval_for_retry(i))
         finally:
             if not self._session:  # if we created the session, we close it
                 await session.close()

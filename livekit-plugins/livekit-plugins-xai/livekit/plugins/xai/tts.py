@@ -27,7 +27,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -268,16 +267,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "xai streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,

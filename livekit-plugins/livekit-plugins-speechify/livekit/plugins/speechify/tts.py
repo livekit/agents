@@ -391,12 +391,11 @@ async def _synthesize_text(
         or conn_options.pool_timeout != timeout
         or conn_options.read_timeout != timeout
         or conn_options.write_timeout != timeout
-        or conn_options.total_timeout is not None
         or not float(timeout).is_integer()
     ):
         raise APIError(
-            "Speechify SDK requires equal finite pool/connect/write/read timeouts in whole "
-            "seconds and cannot enforce total_timeout across framework attempts",
+            "Speechify SDK applies one finite limit, in whole seconds, to every phase: "
+            "pool/connect/write/read timeouts must be equal",
             retryable=False,
         )
     request_options: RequestOptions = {"timeout_in_seconds": int(timeout), "max_retries": 0}

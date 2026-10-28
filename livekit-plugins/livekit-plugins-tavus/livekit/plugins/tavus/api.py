@@ -13,7 +13,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .log import logger
 
@@ -184,47 +184,51 @@ class TavusAPI:
                 persists after all retries
             APIConnectionError: If the request fails after all retries
         """
-        request_timeout = client_timeout(self._conn_options)
-        for attempt in range(self._conn_options.max_retry + 1):
-            try:
-                async with self._session.post(
-                    f"{self._api_url}/{endpoint}",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": self._api_key,
-                    },
-                    json=payload,
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Server returned an error", status_code=response.status, body=text
-                        )
-                    try:
-                        return await response.json()  # type: ignore
-                    except ValueError as e:
-                        # Tavus already accepted the POST; retrying could create a duplicate.
+        async with self._conn_options.total_deadline():
+            for attempt in range(self._conn_options.max_retry + 1):
+                try:
+                    async with http_context.request(
+                        self._session,
+                        "POST",
+                        f"{self._api_url}/{endpoint}",
+                        headers={
+                            "Content-Type": "application/json",
+                            "x-api-key": self._api_key,
+                        },
+                        json=payload,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Server returned an error", status_code=response.status, body=text
+                            )
+                        try:
+                            return await response.json()  # type: ignore
+                        except ValueError as e:
+                            # Tavus already accepted the POST; retrying could create a duplicate.
+                            raise APIConnectionError(
+                                "Tavus returned an invalid response", retryable=False
+                            ) from e
+                except APIStatusError as e:
+                    # A 4xx such as a bad API key will fail the same way every time.
+                    if not e.retryable:
+                        raise
+                    logger.warning(
+                        "failed to call tavus api",
+                        extra={"attempt": attempt + 1, "status_code": e.status_code},
+                    )
+                    if attempt >= self._conn_options.max_retry:
+                        raise
+                    await asyncio.sleep(self._conn_options.retry_interval)
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    logger.warning(
+                        "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
+                    )
+                    if attempt >= self._conn_options.max_retry:
                         raise APIConnectionError(
-                            "Tavus returned an invalid response", retryable=False
+                            "Failed to call Tavus API after all retries"
                         ) from e
-            except APIStatusError as e:
-                # A 4xx such as a bad API key will fail the same way every time.
-                if not e.retryable:
-                    raise
-                logger.warning(
-                    "failed to call tavus api",
-                    extra={"attempt": attempt + 1, "status_code": e.status_code},
-                )
-                if attempt >= self._conn_options.max_retry:
-                    raise
-                await asyncio.sleep(self._conn_options.retry_interval)
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(
-                    "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
-                )
-                if attempt >= self._conn_options.max_retry:
-                    raise APIConnectionError("Failed to call Tavus API after all retries") from e
-                await asyncio.sleep(self._conn_options.retry_interval)
+                    await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to call Tavus API after all retries")

@@ -389,17 +389,6 @@ class TTS(tts.TTS):
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        if (
-            conn_options.pool_timeout is not None
-            or conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "minimax streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -585,7 +574,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         if not self._input_text.strip():
             return
 
@@ -601,13 +589,15 @@ class ChunkedStream(tts.ChunkedStream):
             }
         )
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 url,
                 headers={
                     "Authorization": f"Bearer {self._opts.api_key}",
                 },
                 json=msg,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:

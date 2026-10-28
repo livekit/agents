@@ -439,15 +439,6 @@ class STT(stt.STT):
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if (
-            conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "Realtime transcription cannot enforce write/read inactivity or total_timeout",
-                retryable=False,
-            )
         opts = dataclasses.replace(self._opts)
         if is_given(language):
             opts.languages = _as_languages(language)

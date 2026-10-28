@@ -58,7 +58,6 @@ from livekit.agents.voice.io import TimedString
 
 from .log import logger
 from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
-from .utils import cloud_rpc_timeout
 
 LgType = SpeechLanguages | str
 LanguagesInput = LgType | list[LgType]
@@ -467,7 +466,6 @@ class STT(stt.STT):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        cloud_rpc_timeout(conn_options)
         frame = rtc.combine_audio_frames(buffer)
 
         config = self._build_recognition_config(
@@ -499,7 +497,6 @@ class STT(stt.STT):
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        cloud_rpc_timeout(conn_options)
         config = self._sanitize_options(language=language)
         stream = SpeechStream(
             stt=self,

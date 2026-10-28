@@ -174,12 +174,6 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        if conn_options.total_timeout is not None:
-            raise APIError(
-                "rime streaming requires total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         self._sample_rate = tts_instance.sample_rate
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options

@@ -38,7 +38,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -627,7 +626,6 @@ class STT(stt.STT):
             APIStatusError: On API errors (non-200 status)
             APITimeoutError: On API timeout
         """
-        http_timeout = utils.http_context.client_timeout(conn_options)
         opts_language, opts_model, opts_mode = self._resolve_opts(
             language=language,
             model=model,
@@ -656,11 +654,13 @@ class STT(stt.STT):
 
         try:
             base_url, _ = _get_urls_for_model(opts_model)
-            async with self._ensure_session().post(
+            async with utils.http_context.request(
+                self._ensure_session(),
+                "POST",
                 url=base_url,
                 data=form_data,
                 headers=headers,
-                timeout=http_timeout,
+                conn_options=conn_options,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -1174,15 +1174,6 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Main streaming loop with WebSocket connection."""
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "sarvam streaming does not support read_timeout, write_timeout, total_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None

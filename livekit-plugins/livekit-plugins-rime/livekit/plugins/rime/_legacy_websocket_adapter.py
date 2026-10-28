@@ -153,12 +153,6 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        if conn_options.write_timeout is not None or conn_options.total_timeout is not None:
-            raise APIError(
-                "rime streaming requires write_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(
             tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
         )

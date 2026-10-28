@@ -424,7 +424,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         voice_settings = (
             _strip_nones(dataclasses.asdict(self._opts.voice_settings))
             if is_given(self._opts.voice_settings)
@@ -441,11 +440,13 @@ class ChunkedStream(tts.ChunkedStream):
             json_body = _build_synthesize_body(self._opts, self._input_text, voice_settings)
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 url,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
                 json=json_body,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 
@@ -486,16 +487,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        if (
-            conn_options.pool_timeout is not None
-            or conn_options.write_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "elevenlabs streaming requires pool_timeout=None, write_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)

@@ -224,16 +224,6 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = opts
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "Palabra STT does not support read_timeout, write_timeout or total_timeout; "
-                "set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         input_closed = asyncio.Event()
         utterances: dict[str, _Utterance] = {}

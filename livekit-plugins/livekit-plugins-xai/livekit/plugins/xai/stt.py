@@ -29,7 +29,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -145,7 +144,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        http_timeout = utils.http_context.client_timeout(conn_options)
         lang = language if is_given(language) else self._opts.language
         form = aiohttp.FormData()
         form.add_field(
@@ -158,14 +156,16 @@ class STT(stt.STT):
         form.add_field("format", "true")
 
         try:
-            async with self._ensure_session().post(
+            async with utils.http_context.request(
+                self._ensure_session(),
+                "POST",
                 url=XAI_REST_URL,
                 data=form,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/json",
                 },
-                timeout=http_timeout,
+                conn_options=conn_options,
             ) as res:
                 return _prerecorded_transcription_to_speech_event(
                     await res.json(), enable_diarization=self._opts.enable_diarization
@@ -327,16 +327,6 @@ class SpeechStream(stt.RecognizeStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "xai streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         closing_ws = False
 
         @utils.log_exceptions(logger=logger)

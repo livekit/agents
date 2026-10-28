@@ -17,7 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -122,36 +122,37 @@ class AvatarSession(BaseAvatarSession):
 
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
+        async with self._conn_options.total_deadline():
+            for i in range(self._conn_options.max_retry):
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        "POST",
+                        f"{self._api_url}/v1/session",
+                        headers={
+                            "x-api-key": self._api_key,
+                        },
+                        json={
+                            "avatar_id": self._avatar_id,
+                            "livekit_url": livekit_url,
+                            "livekit_token": livekit_token,
+                        },
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Server returned an error", status_code=response.status, body=text
+                            )
+                        return
 
-        request_timeout = client_timeout(self._conn_options)
-        for i in range(self._conn_options.max_retry):
-            try:
-                async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/session",
-                    headers={
-                        "x-api-key": self._api_key,
-                    },
-                    json={
-                        "avatar_id": self._avatar_id,
-                        "livekit_url": livekit_url,
-                        "livekit_token": livekit_token,
-                    },
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Server returned an error", status_code=response.status, body=text
-                        )
-                    return
+                except Exception as e:
+                    if isinstance(e, APIConnectionError):
+                        logger.warning("failed to call bey presence api", extra={"error": str(e)})
+                    else:
+                        logger.exception("failed to call bey presence api")
 
-            except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning("failed to call bey presence api", extra={"error": str(e)})
-                else:
-                    logger.exception("failed to call bey presence api")
-
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                    if i < self._conn_options.max_retry - 1:
+                        await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bey Avatar Session after all retries")

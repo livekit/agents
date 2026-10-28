@@ -1181,7 +1181,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             audio_config: dict[str, Any] = {
                 "audioEncoding": self._opts.encoding,
@@ -1208,7 +1207,9 @@ class ChunkedStream(tts.ChunkedStream):
             body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
             x_request_id = str(uuid.uuid4())
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
                 headers={
                     "Authorization": self._tts._authorization,
@@ -1216,7 +1217,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "X-Request-Id": x_request_id,
                 },
                 json=body_params,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
@@ -1273,16 +1274,6 @@ class ChunkedStream(tts.ChunkedStream):
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        if (
-            conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "inworld streaming requires write_timeout=None, read_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)

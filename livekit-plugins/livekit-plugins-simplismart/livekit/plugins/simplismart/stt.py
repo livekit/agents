@@ -33,7 +33,6 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -209,7 +208,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        http_timeout = utils.http_context.client_timeout(conn_options)
         resolved_language: str | None = language if is_given(language) else self._opts.language
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -221,14 +219,16 @@ class STT(stt.STT):
         payload["model"] = self._model
 
         try:
-            async with self._ensure_session().post(
+            async with utils.http_context.request(
+                self._ensure_session(),
+                "POST",
                 self._base_url,
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=http_timeout,
+                conn_options=conn_options,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -347,16 +347,6 @@ class SpeechStream(stt.SpeechStream):
         self.ws_url = stt._base_url
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "simplismart streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:

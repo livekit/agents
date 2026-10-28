@@ -412,15 +412,6 @@ class SpeechStream(stt.RecognizeStream):
         self._pending_usage_seconds = 0.0
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "meta streaming does not support read_timeout, write_timeout, total_timeout; set them to None",
-                retryable=False,
-            )
         self._end_stream_sent = False
         self._last_audio_processed_ms = 0.0
         ws: aiohttp.ClientWebSocketResponse | None = None

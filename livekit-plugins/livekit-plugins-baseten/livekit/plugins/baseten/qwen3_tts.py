@@ -42,7 +42,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tts as tts_module,
@@ -442,18 +441,6 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         self._opts = replace(backend._opts)
 
     async def _run(self, output_emitter: tts_module.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-            or self._conn_options.pool_timeout is not None
-            or self._conn_options.connect_timeout is not None
-        ):
-            raise APIError(
-                "baseten streaming does not support write_timeout, total_timeout, "
-                "read_timeout, pool_timeout, connect_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,

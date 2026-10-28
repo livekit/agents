@@ -109,7 +109,6 @@ class STT(stt.STT):
         language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        http_timeout = utils.http_context.client_timeout(conn_options)
         try:
             url = self.url_builder()
             lang = self._language
@@ -136,11 +135,13 @@ class STT(stt.STT):
             form_data.add_field("params", payload)
             form_data.add_field("media", io_buffer, filename="audio.wav", content_type="audio/wav")
             start = time.time()
-            async with self._ensure_session().post(
+            async with utils.http_context.request(
+                self._ensure_session(),
+                "POST",
                 url,
                 data=form_data,
                 headers=headers,
-                timeout=http_timeout,
+                conn_options=conn_options,
             ) as response:
                 response_data = await response.json()
                 end = time.time()

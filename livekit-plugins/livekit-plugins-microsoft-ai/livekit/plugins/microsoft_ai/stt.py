@@ -243,12 +243,6 @@ class SpeechStream(stt.RecognizeStream):
     def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
         # Core resets its retry budget after a long attempt. Own a finite, connect-only
         # budget instead: replaying already-consumed audio could lose or duplicate words.
-        if conn_options.pool_timeout is not None or conn_options.total_timeout is not None:
-            raise APIError(
-                "microsoft_ai streaming requires pool_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(
             stt=stt, conn_options=replace(conn_options, max_retry=0), sample_rate=SAMPLE_RATE
         )

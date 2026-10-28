@@ -32,7 +32,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -247,7 +246,6 @@ class STT(stt.STT):
         language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        http_timeout = utils.http_context.client_timeout(conn_options)
         config = self._sanitize_options(language=language)
 
         recognize_config = {
@@ -271,7 +269,9 @@ class STT(stt.STT):
             recognize_config["language"] = config.language
 
         try:
-            async with self._ensure_session().post(
+            async with utils.http_context.request(
+                self._ensure_session(),
+                "POST",
                 url=_to_deepgram_url(recognize_config, self._opts.endpoint_url, websocket=False),
                 data=rtc.combine_audio_frames(buffer).to_wav_bytes(),
                 headers={
@@ -279,7 +279,7 @@ class STT(stt.STT):
                     "Accept": "application/json",
                     "Content-Type": "audio/wav",
                 },
-                timeout=http_timeout,
+                conn_options=conn_options,
             ) as res:
                 return prerecorded_transcription_to_speech_event(
                     config.language,
@@ -468,17 +468,6 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
-        if (
-            conn_options.pool_timeout is not None
-            or conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "deepgram streaming requires pool_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         if opts.detect_language or opts.language is None:
             raise ValueError(
                 "language detection is not supported in streaming mode, "

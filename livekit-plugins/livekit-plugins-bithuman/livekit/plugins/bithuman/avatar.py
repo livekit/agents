@@ -27,7 +27,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
@@ -647,31 +647,35 @@ class AvatarSession(BaseAvatarSession):
         Raises:
             APIConnectionError: If all retry attempts fail
         """
-        request_timeout = client_timeout(self._conn_options)
-        for i in range(self._conn_options.max_retry):
-            try:
-                async with self._ensure_http_session().post(
-                    self._api_url,
-                    headers=headers,
-                    json=json_data,
-                    data=form_data,
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Server returned an error", status_code=response.status, body=text
+        async with self._conn_options.total_deadline():
+            for i in range(self._conn_options.max_retry):
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        "POST",
+                        self._api_url,
+                        headers=headers,
+                        json=json_data,
+                        data=form_data,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Server returned an error", status_code=response.status, body=text
+                            )
+                        return
+
+                except Exception as e:
+                    if isinstance(e, APIConnectionError):
+                        logger.warning(
+                            "failed to call bithuman avatar api", extra={"error": str(e)}
                         )
-                    return
+                    else:
+                        logger.exception("failed to call bithuman avatar api")
 
-            except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning("failed to call bithuman avatar api", extra={"error": str(e)})
-                else:
-                    logger.exception("failed to call bithuman avatar api")
-
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                    if i < self._conn_options.max_retry - 1:
+                        await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")
 

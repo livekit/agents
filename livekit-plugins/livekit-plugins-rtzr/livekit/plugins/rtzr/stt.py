@@ -27,7 +27,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -203,16 +202,6 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "rtzr streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
         self._idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
 

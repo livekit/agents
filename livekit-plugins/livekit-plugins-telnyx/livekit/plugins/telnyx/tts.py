@@ -16,7 +16,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -96,16 +95,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "telnyx streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         self._segments_ch = utils.aio.Chan[str]()
         request_id = utils.shortuuid()
         output_emitter.initialize(

@@ -11,7 +11,6 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -66,10 +65,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        if conn_options.total_timeout is not None:
-            raise APIError(
-                "Spitch SDK cannot enforce total_timeout across framework attempts", retryable=False
-            )
         try:
             config = self._sanitize_options(language=language or None)
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()

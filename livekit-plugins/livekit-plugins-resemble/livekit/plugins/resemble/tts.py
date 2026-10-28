@@ -185,7 +185,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             payload: dict[str, object] = {
                 "voice_uuid": self._opts.voice_uuid,
@@ -196,7 +195,9 @@ class ChunkedStream(tts.ChunkedStream):
             if self._opts.model is not None:
                 payload["model"] = self._opts.model
 
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 RESEMBLE_REST_API_URL,
                 headers={
                     "Authorization": f"Bearer {self._tts._api_key}",
@@ -204,7 +205,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Accept": "application/json",
                 },
                 json=payload,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
                 response_json = await resp.json()
@@ -254,16 +255,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "resemble streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(

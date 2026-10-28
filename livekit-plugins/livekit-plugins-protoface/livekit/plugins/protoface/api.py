@@ -16,7 +16,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .errors import ProtofaceException
 from .log import logger
@@ -131,52 +131,52 @@ class ProtofaceAPI:
         }
         url = f"{self._api_url}{path}"
         error: Exception | None = None
+        async with self._conn_options.total_deadline():
+            for attempt in range(self._conn_options.max_retry + 1):
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        method,
+                        url,
+                        json=json,
+                        headers=request_headers,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        payload = await _read_payload(response)
+                        if response.ok:
+                            if not isinstance(payload, dict):
+                                raise APIStatusError(
+                                    "Protoface API returned a non-object JSON response",
+                                    status_code=response.status,
+                                    body=payload,
+                                    retryable=False,
+                                )
+                            return payload
 
-        request_timeout = client_timeout(self._conn_options)
-        for attempt in range(self._conn_options.max_retry + 1):
-            try:
-                async with self._ensure_http_session().request(
-                    method,
-                    url,
-                    json=json,
-                    headers=request_headers,
-                    timeout=request_timeout,
-                ) as response:
-                    payload = await _read_payload(response)
-                    if response.ok:
-                        if not isinstance(payload, dict):
-                            raise APIStatusError(
-                                "Protoface API returned a non-object JSON response",
-                                status_code=response.status,
-                                body=payload,
-                                retryable=False,
-                            )
-                        return payload
+                        raise APIStatusError(
+                            "Protoface API returned an error",
+                            status_code=response.status,
+                            body=payload,
+                        )
+                except asyncio.TimeoutError as exc:
+                    error = APITimeoutError()
+                    error.__cause__ = exc
+                except aiohttp.ClientError as exc:
+                    error = APIConnectionError()
+                    error.__cause__ = exc
+                except APIStatusError as exc:
+                    if not exc.retryable:
+                        raise
+                    error = exc
 
-                    raise APIStatusError(
-                        "Protoface API returned an error",
-                        status_code=response.status,
-                        body=payload,
-                    )
-            except asyncio.TimeoutError as exc:
-                error = APITimeoutError()
-                error.__cause__ = exc
-            except aiohttp.ClientError as exc:
-                error = APIConnectionError()
-                error.__cause__ = exc
-            except APIStatusError as exc:
-                if not exc.retryable:
-                    raise
-                error = exc
+                if attempt == self._conn_options.max_retry:
+                    break
 
-            if attempt == self._conn_options.max_retry:
-                break
-
-            logger.warning(
-                "protoface api request failed, retrying",
-                extra={"attempt": attempt + 1, "method": method, "path": path},
-            )
-            await asyncio.sleep(self._conn_options._interval_for_retry(attempt))
+                logger.warning(
+                    "protoface api request failed, retrying",
+                    extra={"attempt": attempt + 1, "method": method, "path": path},
+                )
+                await asyncio.sleep(self._conn_options._interval_for_retry(attempt))
 
         raise APIConnectionError("Failed to call Protoface API after all retries.") from error
 

@@ -27,7 +27,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -252,11 +251,12 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         request_id = utils.shortuuid()
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 self._opts.get_http_url("/v1/speech/stream"),
                 headers={API_AUTH_HEADER: self._opts.api_key},
                 json={
@@ -270,7 +270,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "format": self._opts.encoding,
                     "sample_rate": self._opts.sample_rate,
                 },
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 
@@ -302,16 +302,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "murf streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,

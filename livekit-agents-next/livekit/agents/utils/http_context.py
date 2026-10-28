@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import functools
 import os
 import ssl
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Literal
 
 import aiohttp
+import aiohttp.payload
 import certifi
+from aiohttp.abc import AbstractStreamWriter
+from yarl import URL
 
-from .._exceptions import APIError
+from .._exceptions import APITimeoutError
 from ..log import logger
 from ..types import APIConnectOptions
 
@@ -18,34 +23,149 @@ _ClientFactory = Callable[[], aiohttp.ClientSession]
 _ContextVar = contextvars.ContextVar[_ClientFactory | None]("agent_http_session")
 
 
-def client_timeout(options: APIConnectOptions) -> aiohttp.ClientTimeout:
-    """Translate request limits that aiohttp can enforce without changing their scope."""
-    # aiohttp's `connect` includes pool acquisition; `sock_connect` excludes DNS.
-    # Neither represents our independent pool/connect phases, and there is no write timer.
-    for field, value in (
-        ("pool_timeout", options.pool_timeout),
-        ("connect_timeout", options.connect_timeout),
-        ("write_timeout", options.write_timeout),
-    ):
-        if value is not None:
-            raise APIError(f"aiohttp cannot enforce conn_options.{field}", retryable=False)
-    if options.total_timeout is not None and options.max_retry:
-        raise APIError(
-            "aiohttp cannot preserve conn_options.total_timeout across retries", retryable=False
+_Phase = Literal["pool", "connect", "write", "read"]
+
+
+class _Phases:
+    """One request's deadline, armed with the limit of the phase it is waiting in."""
+
+    def __init__(
+        self, options: APIConnectOptions, deadline: asyncio.Timeout, after_connect: _Phase | None
+    ) -> None:
+        self._options = options
+        self._deadline = deadline
+        self.after_connect = after_connect
+        self.armed: _Phase | None = None
+
+    def arm(self, phase: _Phase | None) -> None:
+        self.armed = phase
+        limit = None if phase is None else getattr(self._options, f"{phase}_timeout")
+        self._deadline.reschedule(
+            None if limit is None else asyncio.get_running_loop().time() + limit
         )
-    # aiohttp interprets zero as disabled and rounds long deadlines by default.
-    for field, value in (
-        ("read_timeout", options.read_timeout),
-        ("total_timeout", options.total_timeout),
-    ):
-        if value == 0:
-            raise APIError(f"aiohttp cannot enforce a zero conn_options.{field}", retryable=False)
-    return aiohttp.ClientTimeout(
-        sock_connect=options.connect_timeout,
-        sock_read=options.read_timeout,
-        total=options.total_timeout,
-        ceil_threshold=float("inf"),
-    )
+
+
+_current_phases = contextvars.ContextVar[_Phases | None]("http_request_phases", default=None)
+
+
+def _on(phase: _Phase | None | Literal["connected"]) -> Callable[..., Awaitable[None]]:
+    async def arm(*_: object) -> None:
+        if (phases := _current_phases.get()) is not None:
+            phases.arm(phases.after_connect if phase == "connected" else phase)
+
+    return arm
+
+
+# aiohttp reports the pool wait and the connection setup (DNS, TCP, TLS) as separate events.
+_PHASE_TRACE = aiohttp.TraceConfig()
+_PHASE_TRACE.on_connection_queued_start.append(_on("pool"))
+_PHASE_TRACE.on_connection_queued_end.append(_on("connected"))
+_PHASE_TRACE.on_connection_create_start.append(_on("connect"))
+_PHASE_TRACE.on_connection_create_end.append(_on("connected"))
+_PHASE_TRACE.on_connection_reuseconn.append(_on("connected"))
+_PHASE_TRACE.freeze()
+
+
+class _WriteProgress:
+    """A body writer whose every chunk waiting for the transport runs under the write limit."""
+
+    def __init__(self, writer: AbstractStreamWriter, phases: _Phases) -> None:
+        self._writer = writer
+        self._phases = phases
+
+    async def write(self, chunk: Any) -> None:
+        self._phases.arm("write")
+        try:
+            await self._writer.write(chunk)
+        finally:
+            self._phases.arm(None)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._writer, name)
+
+
+class _TimedBody(aiohttp.payload.Payload):
+    def __init__(self, body: aiohttp.payload.Payload, phases: _Phases) -> None:
+        super().__init__(body, headers=body.headers)
+        self._size = body.size
+        self._phases = phases
+
+    def decode(self, encoding: str = "utf-8", errors: str = "strict") -> str:
+        return self._value.decode(encoding, errors)  # type: ignore[no-any-return]
+
+    async def write(self, writer: AbstractStreamWriter) -> None:
+        await self._value.write(_WriteProgress(writer, self._phases))
+
+    async def write_with_length(
+        self, writer: AbstractStreamWriter, content_length: int | None
+    ) -> None:
+        await self._value.write_with_length(_WriteProgress(writer, self._phases), content_length)
+
+
+@contextlib.asynccontextmanager
+async def _phase_limits(
+    session: aiohttp.ClientSession, options: APIConnectOptions, after_connect: _Phase | None
+) -> AsyncIterator[_Phases]:
+    if _PHASE_TRACE not in session.trace_configs:
+        session.trace_configs.append(_PHASE_TRACE)
+    try:
+        async with asyncio.timeout(None) as deadline:
+            phases = _Phases(options, deadline, after_connect)
+            token = _current_phases.set(phases)
+            try:
+                yield phases
+            finally:
+                _current_phases.reset(token)
+    except TimeoutError as e:
+        if not deadline.expired() or phases.armed is None:
+            raise
+        raise APITimeoutError(f"{phases.armed} timed out", phase=phases.armed) from e
+
+
+@contextlib.asynccontextmanager
+async def request(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str | URL,
+    *,
+    conn_options: APIConnectOptions,
+    data: Any = None,
+    json: Any = None,
+    **kwargs: Any,
+) -> AsyncIterator[aiohttp.ClientResponse]:
+    """``session.request`` under the pool, connect, write and read limits of ``conn_options``.
+
+    The total limit belongs to the operation's retry owner. A limit that expires raises
+    ``APITimeoutError`` naming its phase; aiohttp's read limit raises its ``TimeoutError``.
+    """
+    async with _phase_limits(session, conn_options, after_connect=None) as phases:
+        if json is not None:
+            data = aiohttp.payload.JsonPayload(json, dumps=session.json_serialize)
+        elif isinstance(data, aiohttp.FormData):
+            data = data()
+        if data is not None:
+            data = _TimedBody(aiohttp.payload.get_payload(data), phases)
+        # aiohttp disables a zero limit; the smallest positive one expires at the first wait.
+        read = conn_options.read_timeout
+        timeout = aiohttp.ClientTimeout(
+            sock_read=5e-324 if read == 0 else read, ceil_threshold=float("inf")
+        )
+        async with session.request(method, url, data=data, timeout=timeout, **kwargs) as response:
+            yield response
+
+
+async def ws_connect(
+    session: aiohttp.ClientSession,
+    url: str | URL,
+    *,
+    conn_options: APIConnectOptions,
+    **kwargs: Any,
+) -> aiohttp.ClientWebSocketResponse:
+    """``session.ws_connect`` under the pool and connect limits, then the read limit while the
+    handshake response is expected. Messages on the open socket are the caller's protocol."""
+    async with _phase_limits(session, conn_options, after_connect="read"):
+        ws: aiohttp.ClientWebSocketResponse = await session.ws_connect(url, **kwargs)
+    return ws
 
 
 def _has_system_trust_store() -> bool:
@@ -124,7 +244,9 @@ def _new_session_ctx() -> _ClientFactory:
                 keepalive_timeout=120,  # the default is only 15s
                 ssl=_create_ssl_context(),
             )
-            g_session = aiohttp.ClientSession(proxy=http_proxy, connector=connector)
+            g_session = aiohttp.ClientSession(
+                proxy=http_proxy, connector=connector, trace_configs=[_PHASE_TRACE]
+            )
         return g_session
 
     _ContextVar.set(_new_session)

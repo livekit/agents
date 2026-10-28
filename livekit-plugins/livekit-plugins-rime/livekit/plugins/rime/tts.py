@@ -625,7 +625,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload: dict[str, object] = {
             "speaker": self._opts.speaker,
             "text": self._input_text,
@@ -640,7 +639,9 @@ class ChunkedStream(tts.ChunkedStream):
                 payload["reduceLatency"] = mist_opts.reduce_latency
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 self._base_url,
                 headers={
                     "accept": format,
@@ -648,7 +649,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 

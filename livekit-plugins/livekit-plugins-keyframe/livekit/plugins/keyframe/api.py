@@ -11,7 +11,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .log import logger
 
@@ -83,37 +83,39 @@ class KeyframeAPI:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
-            request_timeout = client_timeout(self._conn_options)
-            for i in range(self._conn_options.max_retry + 1):
-                try:
-                    async with session.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        timeout=request_timeout,
-                    ) as response:
-                        if not response.ok:
-                            text = await response.text()
-                            raise APIStatusError(
-                                f"Keyframe API error for {url}: {response.status}",
-                                status_code=response.status,
-                                body=text,
-                            )
-                        return await response.json()  # type: ignore
-                except Exception as e:
-                    if isinstance(e, APIStatusError) and not e.retryable:
-                        raise APIConnectionError(
-                            f"Failed to call Keyframe API at {url} with non-retryable error",
-                            retryable=False,
-                        ) from e
+            async with self._conn_options.total_deadline():
+                for i in range(self._conn_options.max_retry + 1):
+                    try:
+                        async with http_context.request(
+                            session,
+                            "POST",
+                            url,
+                            headers=headers,
+                            json=payload,
+                            conn_options=self._conn_options,
+                        ) as response:
+                            if not response.ok:
+                                text = await response.text()
+                                raise APIStatusError(
+                                    f"Keyframe API error for {url}: {response.status}",
+                                    status_code=response.status,
+                                    body=text,
+                                )
+                            return await response.json()  # type: ignore
+                    except Exception as e:
+                        if isinstance(e, APIStatusError) and not e.retryable:
+                            raise APIConnectionError(
+                                f"Failed to call Keyframe API at {url} with non-retryable error",
+                                retryable=False,
+                            ) from e
 
-                    if isinstance(e, APIConnectionError):
-                        logger.warning("Failed to call Keyframe API", extra={"error": str(e)})
-                    else:
-                        logger.exception("Failed to call Keyframe API")
+                        if isinstance(e, APIConnectionError):
+                            logger.warning("Failed to call Keyframe API", extra={"error": str(e)})
+                        else:
+                            logger.exception("Failed to call Keyframe API")
 
-                    if i < self._conn_options.max_retry:
-                        await asyncio.sleep(self._conn_options._interval_for_retry(i))
+                        if i < self._conn_options.max_retry:
+                            await asyncio.sleep(self._conn_options._interval_for_retry(i))
         finally:
             if not self._session:
                 await session.close()

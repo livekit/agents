@@ -20,7 +20,7 @@ import json
 import aiohttp
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, utils
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .errors import ErrorType, SynthesiaError
 from .log import logger
@@ -103,40 +103,45 @@ class SynthesiaAPI:
             "livekitUrl": request.livekit_url,
             "livekitToken": request.lk_token,
         }
-        timeout = client_timeout(conn_options)
 
         last_status: int | None = None
         last_body: object = None
         last_exc: Exception | None = None
 
-        for attempt in range(conn_options.max_retry + 1):
-            status: int | None = None
-            try:
-                async with self._http().post(
-                    url, headers=headers, json=payload, timeout=timeout
-                ) as resp:
-                    status = resp.status
-                    body = await _read_json(resp)
-                    if resp.ok:
-                        return self._parse_success(body)
-                    if status < 500:
-                        raise self._mapped_error(resp, body)
-                    last_status, last_body, last_exc = status, body, None
+        async with conn_options.total_deadline():
+            for attempt in range(conn_options.max_retry + 1):
+                status: int | None = None
+                try:
+                    async with http_context.request(
+                        self._http(),
+                        "POST",
+                        url,
+                        headers=headers,
+                        json=payload,
+                        conn_options=conn_options,
+                    ) as resp:
+                        status = resp.status
+                        body = await _read_json(resp)
+                        if resp.ok:
+                            return self._parse_success(body)
+                        if status < 500:
+                            raise self._mapped_error(resp, body)
+                        last_status, last_body, last_exc = status, body, None
+                        logger.debug(
+                            "synthesia session request failed, retrying",
+                            extra={"status": status},
+                        )
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    # A 5xx whose body fails to arrive is still a 5xx, not a transport failure.
+                    last_status = status if status is not None and status >= 500 else None
+                    last_body, last_exc = None, e
                     logger.debug(
-                        "synthesia session request failed, retrying",
-                        extra={"status": status},
+                        "synthesia session request errored, retrying",
+                        extra={"error": type(e).__name__},
                     )
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                # A 5xx whose body fails to arrive is still a 5xx, not a transport failure.
-                last_status = status if status is not None and status >= 500 else None
-                last_body, last_exc = None, e
-                logger.debug(
-                    "synthesia session request errored, retrying",
-                    extra={"error": type(e).__name__},
-                )
 
-            if attempt < conn_options.max_retry:
-                await asyncio.sleep(conn_options.retry_interval)
+                if attempt < conn_options.max_retry:
+                    await asyncio.sleep(conn_options.retry_interval)
 
         raise SynthesiaError(
             _exhausted_message(conn_options.max_retry + 1, last_status, last_body),

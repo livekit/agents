@@ -13,7 +13,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 
 from .errors import DIDException
 from .log import logger
@@ -60,17 +60,18 @@ class DIDAPI:
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._api_url}/{endpoint}"
         num_attempts = self._conn_options.max_retry + 1
-        request_timeout = client_timeout(self._conn_options)
         for attempt in range(num_attempts):
             try:
-                async with self._session.post(
+                async with http_context.request(
+                    self._session,
+                    "POST",
                     url,
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Basic {self._api_key}",
                     },
                     json=payload,
-                    timeout=request_timeout,
+                    conn_options=self._conn_options,
                 ) as response:
                     if not response.ok:
                         text = await response.text()

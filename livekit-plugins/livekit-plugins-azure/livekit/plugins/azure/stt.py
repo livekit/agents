@@ -17,6 +17,7 @@ import contextlib
 import os
 import time
 import weakref
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,7 +27,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     LanguageCode,
     stt,
     utils,
@@ -185,10 +185,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        raise APIError(
-            "Azure Speech SDK cannot disable its internal retries for framework-managed requests",
-            retryable=False,
-        )
+        config = deepcopy(self._config)
+        if is_given(language):
+            config.language = [LanguageCode(language)]
+        stream = SpeechStream(stt=self, opts=config, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def update_options(
         self,
@@ -254,16 +256,6 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "azure streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         while True:
             self._session_stopped_event.clear()
             self._cancellation_error = None

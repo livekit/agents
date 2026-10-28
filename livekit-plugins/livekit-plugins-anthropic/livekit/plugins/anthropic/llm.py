@@ -22,7 +22,7 @@ from typing import Any, Literal, cast
 import httpx2 as httpx
 
 import anthropic
-from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm
+from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -160,11 +160,6 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        if conn_options.total_timeout is not None:
-            raise APIError(
-                "Anthropic SDK cannot enforce total_timeout across framework attempts",
-                retryable=False,
-            )
         client = self._client.with_options(
             max_retries=0,
             timeout=httpx.Timeout(

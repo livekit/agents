@@ -217,7 +217,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         data = {
             "text": self._input_text,
             "voice": self._opts.voice,
@@ -230,14 +229,16 @@ class ChunkedStream(tts.ChunkedStream):
         }
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 LMNT_BASE_URL,
                 headers={
                     "Content-Type": "application/json",
                     "X-API-Key": self._opts.api_key,
                 },
                 json=data,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
                 output_emitter.initialize(

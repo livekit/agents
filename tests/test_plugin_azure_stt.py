@@ -88,20 +88,3 @@ def test_azure_canceled_without_error_is_ignored():
 
     assert not stream._session_stopped_event.is_set()
     assert stream._cancellation_error is None
-
-
-@pytest.mark.parametrize("max_retry", [0, 3])
-def test_uncontrolled_sdk_retries_are_refused_before_creating_a_stream(
-    monkeypatch: pytest.MonkeyPatch, max_retry: int
-) -> None:
-    from livekit.agents import APIConnectOptions, APIError
-
-    provider = azure_stt.STT(speech_key="test", speech_region="test")
-
-    def create_stream(**kwargs: object) -> None:
-        pytest.fail("an unsupported SDK policy must not create a stream")
-
-    monkeypatch.setattr(azure_stt, "SpeechStream", create_stream)
-    with pytest.raises(APIError, match="internal retries") as error:
-        provider.stream(conn_options=APIConnectOptions(max_retry=max_retry))
-    assert not error.value.retryable

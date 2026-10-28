@@ -240,7 +240,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         utterance: Utterance = {
             "text": self._input_text,
         }
@@ -267,11 +266,13 @@ class ChunkedStream(tts.ChunkedStream):
             payload["context"] = {"utterances": self._opts.context}
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 self._opts.http_url(STREAM_PATH),
                 headers={**DEFAULT_HEADERS, API_AUTH_HEADER: self._opts.api_key},
                 json=payload,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:

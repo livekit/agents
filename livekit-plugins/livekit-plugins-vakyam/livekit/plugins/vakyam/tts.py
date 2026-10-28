@@ -32,7 +32,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -330,7 +329,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         request_id = utils.shortuuid()
         payload = speech_payload(
             text=self._input_text,
@@ -347,11 +345,13 @@ class ChunkedStream(tts.ChunkedStream):
             "User-Agent": f"LiveKit-Agents-Vakyam/{__version__}",
         }
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 http_stream_url(self._opts.base_url),
                 json=payload,
                 headers=headers,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -396,14 +396,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "vakyam streaming does not support write_timeout, total_timeout; set them to None",
-                retryable=False,
-            )
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(

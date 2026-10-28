@@ -357,17 +357,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         mid-synthesis; the next sentence starts a fresh stream. Only complete
         sentences are ever sent, so every rotation lands on a natural boundary.
         """
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-            or self._conn_options.pool_timeout is not None
-        ):
-            raise APIError(
-                "soniox streaming does not support write_timeout, total_timeout, "
-                "read_timeout, pool_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
 
         output_emitter.initialize(

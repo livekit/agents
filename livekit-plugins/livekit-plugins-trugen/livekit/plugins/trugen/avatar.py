@@ -17,7 +17,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -140,43 +140,45 @@ class AvatarSession(BaseAvatarSession):
         assert self._api_key is not None
         api_key = self._api_key
         assert isinstance(api_key, str)
-        request_timeout = client_timeout(self._conn_options)
-        for i in range(self._conn_options.max_retry + 1):
-            try:
-                async with self._ensure_http_session().post(
-                    f"{_BASE_API_URL}/v1/sessions",
-                    headers={
-                        "x-api-key": api_key,
-                    },
-                    json={
-                        "avatar_id": self._avatar_id,
-                        "livekit_url": livekit_url,
-                        "livekit_token": livekit_token,
-                    },
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Server returned an error", status_code=response.status, body=text
+        async with self._conn_options.total_deadline():
+            for i in range(self._conn_options.max_retry + 1):
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        "POST",
+                        f"{_BASE_API_URL}/v1/sessions",
+                        headers={
+                            "x-api-key": api_key,
+                        },
+                        json={
+                            "avatar_id": self._avatar_id,
+                            "livekit_url": livekit_url,
+                            "livekit_token": livekit_token,
+                        },
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Server returned an error", status_code=response.status, body=text
+                            )
+                        return
+
+                except Exception as e:
+                    if isinstance(e, APIStatusError):
+                        logger.warning(
+                            "API Error; Unable to trigger TruGen.AI API backend.",
+                            extra={"status_code": e.status_code, "body": e.body},
                         )
-                    return
+                        if not e.retryable:
+                            raise
+                    else:
+                        logger.warning(
+                            "API Error; Unable to trigger TruGen.AI API backend.",
+                            extra={"error": str(e)},
+                        )
 
-            except Exception as e:
-                if isinstance(e, APIStatusError):
-                    logger.warning(
-                        "API Error; Unable to trigger TruGen.AI API backend.",
-                        extra={"status_code": e.status_code, "body": e.body},
-                    )
-                    if not e.retryable:
-                        raise
-                else:
-                    logger.warning(
-                        "API Error; Unable to trigger TruGen.AI API backend.",
-                        extra={"error": str(e)},
-                    )
-
-                if i < self._conn_options.max_retry:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                    if i < self._conn_options.max_retry:
+                        await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Max retries exhausted; Unable to start TruGen.AI Avatar Session.")

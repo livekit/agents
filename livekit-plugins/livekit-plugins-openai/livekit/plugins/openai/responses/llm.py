@@ -115,16 +115,6 @@ class _ResponsesWebsocket:
     async def generate_response(
         self, msg: dict, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> AsyncGenerator[dict, None]:
-        if (
-            conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "Responses WebSocket cannot enforce write/read inactivity or total_timeout",
-                retryable=False,
-            )
-
         def _default(o: object) -> object:
             if isinstance(o, openai.BaseModel):
                 # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
@@ -151,7 +141,13 @@ class _ResponsesWebsocket:
         completed = False
         try:
             while True:
-                raw_msg = await ws.receive()
+                try:
+                    async with asyncio.timeout(conn_options.read_timeout):
+                        raw_msg = await ws.receive()
+                except TimeoutError as e:
+                    raise APITimeoutError(
+                        "OpenAI Responses WebSocket read timed out", phase="read"
+                    ) from e
                 if raw_msg.type == aiohttp.WSMsgType.ERROR:
                     exc = raw_msg.data
                     status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
@@ -199,8 +195,14 @@ class _ResponsesWebsocket:
             )
             reused = self._pool.last_connection_reused
             try:
-                await ws.send_str(data)
+                async with asyncio.timeout(conn_options.write_timeout):
+                    await ws.send_str(data)
                 return ws
+            except TimeoutError as e:
+                self._pool.remove(ws)
+                raise APITimeoutError(
+                    "OpenAI Responses WebSocket write timed out", phase="write"
+                ) from e
             except Exception as e:
                 self._pool.remove(ws)  # discard the failed socket
                 last_exc = e

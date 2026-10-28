@@ -259,13 +259,14 @@ class ChunkedStream(tts.ChunkedStream):
         self._closed = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
-            async with self._tts._client.session().post(
+            async with utils.http_context.request(
+                self._tts._client.session(),
+                "POST",
                 self._tts._client.url,
                 headers=self._tts._client.headers,
                 data=_ssml(self.input_text, self._tts._opts),
-                timeout=http_timeout,
+                conn_options=self._conn_options,
                 allow_redirects=False,
             ) as response:
                 if response.status != 200:

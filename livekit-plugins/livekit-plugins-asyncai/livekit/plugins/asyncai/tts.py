@@ -243,14 +243,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout == 0
-        ):
+        if self._conn_options.read_timeout == 0:
+            # aiohttp reads a zero receive timeout as no limit
             raise APIError(
-                "asyncai streaming requires write_timeout=None, total_timeout=None and "
-                "read_timeout > 0 or None",
+                "asyncai streaming cannot enforce read_timeout=0",
                 retryable=False,
             )
         request_id = utils.shortuuid()

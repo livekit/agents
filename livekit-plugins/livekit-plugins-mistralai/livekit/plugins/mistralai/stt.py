@@ -12,7 +12,6 @@ from livekit.agents import (
     VAD,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -259,15 +258,6 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        if (
-            conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "Realtime transcription cannot enforce write/read inactivity or total_timeout",
-                retryable=False,
-            )
         stream = SpeechStream(
             stt=self,
             pool=self._pool,

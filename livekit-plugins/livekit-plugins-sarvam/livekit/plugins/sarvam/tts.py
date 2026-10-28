@@ -824,7 +824,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload: dict[str, object] = {
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
@@ -845,11 +844,13 @@ class ChunkedStream(tts.ChunkedStream):
         }
         mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 url=self._opts.base_url,
                 json=payload,
                 headers=headers,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -905,14 +906,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout == 0
-        ):
+        if self._conn_options.read_timeout == 0:
+            # aiohttp reads a zero receive timeout as no limit
             raise APIError(
-                "sarvam streaming requires write_timeout=None, total_timeout=None and "
-                "read_timeout > 0 or None",
+                "sarvam streaming cannot enforce read_timeout=0",
                 retryable=False,
             )
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()

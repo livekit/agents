@@ -10,7 +10,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -76,10 +75,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = opts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if self._conn_options.total_timeout is not None:
-            raise APIError(
-                "Spitch SDK cannot enforce total_timeout across framework attempts", retryable=False
-            )
         spitch_stream = self._client.with_options(
             max_retries=0
         ).speech.with_streaming_response.generate(

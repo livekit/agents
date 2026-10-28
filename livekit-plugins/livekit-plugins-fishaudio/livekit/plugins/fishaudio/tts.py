@@ -12,7 +12,6 @@ import msgpack
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -435,11 +434,12 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         payload = _build_tts_request(self._opts, text=self._input_text)
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 self._opts.get_http_url("/v1/tts"),
                 headers={
                     "Authorization": f"Bearer {self._opts.api_key}",
@@ -447,7 +447,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "model": self._opts.model,
                 },
                 data=msgpack.packb(payload, use_bin_type=True),
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 
@@ -477,16 +477,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS via the Fish Audio /v1/tts/live WebSocket endpoint."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
-        if (
-            conn_options.write_timeout is not None
-            or conn_options.read_timeout is not None
-            or conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "fishaudio streaming requires write_timeout=None, read_timeout=None, total_timeout=None; "
-                "these timeout phases are not observable by this adapter",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)

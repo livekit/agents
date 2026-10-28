@@ -245,7 +245,6 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         json_data = {
             "transcript": self._input_text,
             "voice": {
@@ -263,7 +262,9 @@ class ChunkedStream(tts.ChunkedStream):
         http_url = f"{self._opts.base_url}{self._opts.model}/tts/bytes"
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 http_url,
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
@@ -271,7 +272,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/json",
                 },
                 json=json_data,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 resp.raise_for_status()
 
@@ -309,16 +310,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         await super().aclose()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "respeecher streaming does not support read_timeout, write_timeout, total_timeout; "
-                "set them to None",
-                retryable=False,
-            )
         context_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=context_id,

@@ -44,7 +44,6 @@ from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import GeminiTTSModels, Gender, SpeechLanguages
-from .utils import cloud_rpc_timeout
 
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
@@ -316,7 +315,6 @@ class ChunkedStream(tts.ChunkedStream):
         return ssml
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        cloud_rpc_timeout(self._conn_options)
         try:
             if self._opts.use_markup:
                 tts_input = texttospeech.SynthesisInput(
@@ -370,7 +368,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        cloud_rpc_timeout(self._conn_options)
         segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         encoding = self._opts.encoding
         if encoding not in (texttospeech.AudioEncoding.OGG_OPUS, texttospeech.AudioEncoding.PCM):

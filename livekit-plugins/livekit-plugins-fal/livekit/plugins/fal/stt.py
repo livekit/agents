@@ -10,7 +10,6 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -71,11 +70,6 @@ class WizperSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        if conn_options.total_timeout is not None:
-            raise APIError(
-                "Fal HTTP adapter cannot enforce total_timeout across framework attempts",
-                retryable=False,
-            )
         try:
             if is_given(language):
                 self._opts.language = LanguageCode(language)

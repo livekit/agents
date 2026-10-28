@@ -301,7 +301,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         body: dict[str, Any] = {
             "text": self._input_text,
             "voice": self._opts.voice_id,
@@ -311,14 +310,16 @@ class ChunkedStream(tts.ChunkedStream):
             body["controls"] = controls
 
         try:
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 f"{self._opts.base_url}/tts",
                 headers={
                     "authorization": self._tts._api_key,
                     "content-type": "application/json",
                 },
                 json=body,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 if resp.status != 200:
                     raise APIStatusError(
@@ -367,14 +368,10 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # One stream is one segment, which is one Bland turn: the socket carries a
         # single turn at a time and the framework opens a stream per segment.
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout == 0
-        ):
+        if self._conn_options.read_timeout == 0:
+            # aiohttp reads a zero receive timeout as no limit
             raise APIError(
-                "bland streaming requires write_timeout=None, total_timeout=None and "
-                "read_timeout > 0 or None",
+                "bland streaming cannot enforce read_timeout=0",
                 retryable=False,
             )
         context_id = utils.shortuuid()

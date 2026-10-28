@@ -19,8 +19,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.utils import is_given
-from livekit.agents.utils.http_context import client_timeout
+from livekit.agents.utils import http_context, is_given
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -162,46 +161,47 @@ class AvatarSession(BaseAvatarSession):
 
         if is_given(self._max_duration):
             body["maxDuration"] = self._max_duration
+        async with self._conn_options.total_deadline():
+            for attempt in range(self._conn_options.max_retry):
+                try:
+                    async with http_context.request(
+                        self._ensure_http_session(),
+                        "POST",
+                        f"{self._api_url}/v1/realtime_sessions",
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "X-Runway-Version": API_VERSION,
+                        },
+                        json=body,
+                        conn_options=self._conn_options,
+                    ) as response:
+                        if not response.ok:
+                            text = await response.text()
+                            raise APIStatusError(
+                                "Runway API returned an error",
+                                status_code=response.status,
+                                body=text,
+                            )
+                        payload = await response.json()
+                        session_id = payload.get("id") if isinstance(payload, dict) else None
+                        if isinstance(session_id, str):
+                            self._realtime_session_id = session_id
+                        return
 
-        request_timeout = client_timeout(self._conn_options)
-        for attempt in range(self._conn_options.max_retry):
-            try:
-                async with self._ensure_http_session().post(
-                    f"{self._api_url}/v1/realtime_sessions",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "X-Runway-Version": API_VERSION,
-                    },
-                    json=body,
-                    timeout=request_timeout,
-                ) as response:
-                    if not response.ok:
-                        text = await response.text()
-                        raise APIStatusError(
-                            "Runway API returned an error",
-                            status_code=response.status,
-                            body=text,
+                except Exception as error:
+                    if isinstance(error, APIStatusError) and not error.retryable:
+                        raise
+
+                    if isinstance(error, APIConnectionError):
+                        logger.warning(
+                            "failed to call Runway avatar API",
+                            extra={"error": str(error)},
                         )
-                    payload = await response.json()
-                    session_id = payload.get("id") if isinstance(payload, dict) else None
-                    if isinstance(session_id, str):
-                        self._realtime_session_id = session_id
-                    return
+                    else:
+                        logger.exception("failed to call Runway avatar API")
 
-            except Exception as error:
-                if isinstance(error, APIStatusError) and not error.retryable:
-                    raise
-
-                if isinstance(error, APIConnectionError):
-                    logger.warning(
-                        "failed to call Runway avatar API",
-                        extra={"error": str(error)},
-                    )
-                else:
-                    logger.exception("failed to call Runway avatar API")
-
-                if attempt < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                    if attempt < self._conn_options.max_retry - 1:
+                        await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
 
@@ -248,16 +248,16 @@ class AvatarSession(BaseAvatarSession):
         if session_id is None:
             logger.warning("could not cancel Runway realtime session; no session id available")
             return
-
-        request_timeout = client_timeout(self._conn_options)
         try:
-            async with self._ensure_http_session().delete(
+            async with http_context.request(
+                self._ensure_http_session(),
+                "DELETE",
                 f"{self._api_url}/v1/realtime_sessions/{session_id}",
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "X-Runway-Version": API_VERSION,
                 },
-                timeout=request_timeout,
+                conn_options=self._conn_options,
             ) as response:
                 if response.ok:
                     logger.debug(

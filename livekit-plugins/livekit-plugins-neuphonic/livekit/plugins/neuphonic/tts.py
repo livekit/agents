@@ -259,14 +259,15 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             if self._opts.api_key:
                 headers = {API_AUTH_HEADER: self._opts.api_key}
             else:
                 headers = None
 
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code.language}",
                 headers=headers,
                 json={
@@ -277,7 +278,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
                 },
-                timeout=http_timeout,
+                conn_options=self._conn_options,
                 # large read_bufsize to avoid `ValueError: Chunk too big`
                 read_bufsize=10 * 1024 * 1024,
             ) as resp:
@@ -346,16 +347,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-            or self._conn_options.read_timeout is not None
-        ):
-            raise APIError(
-                "neuphonic streaming does not support write_timeout, total_timeout, "
-                "read_timeout; set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,

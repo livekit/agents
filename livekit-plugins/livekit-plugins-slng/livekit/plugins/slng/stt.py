@@ -31,7 +31,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     stt,
     utils,
@@ -559,15 +558,6 @@ class SpeechStream(stt.SpeechStream):
         return max(1, round(self._opts.sample_rate * buffer_size_seconds))
 
     async def _run(self) -> None:
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "slng streaming does not support read_timeout, write_timeout, total_timeout; set them to None",
-                retryable=False,
-            )
         max_buffer_seconds = 600
         max_buffer_bytes = int(max_buffer_seconds * self._opts.sample_rate * 2)
 

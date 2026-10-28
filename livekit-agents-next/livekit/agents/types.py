@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypeVar
 
@@ -128,6 +131,25 @@ class APIConnectOptions:
             self.read_timeout,
             self.total_timeout,
         )
+
+    @contextlib.asynccontextmanager
+    async def total_deadline(self) -> AsyncIterator[None]:
+        """Bound an operation, retries included, by ``total_timeout``.
+
+        Raises:
+            APITimeoutError: with ``phase="total"`` once the limit expires.
+        """
+        from ._exceptions import APITimeoutError
+
+        try:
+            async with asyncio.timeout(self.total_timeout) as deadline:
+                yield
+        except TimeoutError as e:
+            if not deadline.expired():
+                raise
+            raise APITimeoutError(
+                "Operation exceeded total_timeout", retryable=False, phase="total"
+            ) from e
 
     def _interval_for_retry(self, num_retries: int) -> float:
         """

@@ -27,7 +27,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -277,7 +276,6 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             data = _to_smallest_options(self._opts)
             data["text"] = self._input_text
@@ -288,11 +286,13 @@ class ChunkedStream(tts.ChunkedStream):
                 "X-Source": "livekit",
                 "X-LiveKit-Version": __version__,
             }
-            async with self._tts._ensure_session().post(
+            async with utils.http_context.request(
+                self._tts._ensure_session(),
+                "POST",
                 f"{self._opts.base_url}/tts",
                 headers=headers,
                 json=data,
-                timeout=http_timeout,
+                conn_options=self._conn_options,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -337,16 +337,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        if (
-            self._conn_options.read_timeout is not None
-            or self._conn_options.write_timeout is not None
-            or self._conn_options.total_timeout is not None
-        ):
-            raise APIError(
-                "smallestai streaming does not support read_timeout, write_timeout, total_timeout; "
-                "set them to None",
-                retryable=False,
-            )
         request_id = utils.shortuuid()
         output_emitter.initialize(
             request_id=request_id,
