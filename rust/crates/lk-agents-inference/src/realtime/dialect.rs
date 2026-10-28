@@ -96,7 +96,6 @@ pub struct CapabilityOverrides {
 pub type Promotion = (&'static [&'static str], &'static str);
 
 #[derive(Debug, Clone)]
-#[lk_agents_abi::host(string)]
 pub struct Dialect {
     /// `self._provider_label`. Appears in every error message the session emits.
     pub provider_label: &'static str,
