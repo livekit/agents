@@ -16,8 +16,6 @@ pub fn tool_choice_to_json(choice: &ToolChoice) -> Value {
     }
 }
 
-/// `ToolContext.parse_function_tools("openai", strict=True)`; the gateway always uses strict.
-
 #[derive(Debug, Clone, Default)]
 pub struct ChatArgs {
     /// Merged first, so the lowest precedence.
@@ -153,8 +151,6 @@ mod tests {
             assert_eq!(extra["tool_choice"], raw, "not normalised, not dropped");
         }
     }
-
-    // Catches: a tool schema reaching the gateway un-strict, or a bad schema failing silently.
 
     // Catches: R2b on `if not self._tools`.
     #[test]

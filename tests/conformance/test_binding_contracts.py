@@ -65,7 +65,7 @@ def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> N
             with pytest.raises(TypeError, match=case["error"]):
                 _core.recording_enabled(RecordingOptions(audio=value))
         else:
-            assert RecordingOptions(audio=value).audio is case["expected"]
+            assert _core.recording_enabled(RecordingOptions(audio=value)) is case["expected"]
     else:
         error_type = TypeError if isinstance(value, bool) else OverflowError
         with pytest.raises(error_type, match=case["error"]):

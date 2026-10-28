@@ -166,7 +166,6 @@ mod tests {
         assert_eq!(header(&request, "X-LiveKit-Inference-Provider"), Some("openai"));
     }
 
-    // Catches: a tool schema reaching the gateway un-strict, or a bad schema failing silently.
     #[test]
     fn gateway_chat_completions_ignores_all_server_side_provider_declarations() {
         for family in [None, Some("openai"), Some("xai"), Some("gemini"), Some("mistral")] {
@@ -184,6 +183,7 @@ mod tests {
         }
     }
 
+    // Catches: a tool schema reaching the gateway un-strict, or a bad schema failing silently.
     #[test]
     fn tool_schemas_are_built_in_the_strict_openai_form() {
         let tool = lk_agents_abi::ToolSpec {
