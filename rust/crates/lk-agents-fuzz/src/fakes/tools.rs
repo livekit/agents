@@ -22,11 +22,14 @@ pub struct FakeTools {
     registry: Arc<Registry>,
     /// The bodies that answered `Detached` and run on, by call id: what a cancel ends.
     detached: Mutex<BTreeMap<String, Slot>>,
+    /// The calls the driver cancelled: their task is cancelled, so a body still running cannot
+    /// detach afterwards (seed 5818).
+    cancelled: Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl FakeTools {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeTools { registry, detached: Mutex::default() })
+        Arc::new(FakeTools { registry, detached: Mutex::default(), cancelled: Mutex::default() })
     }
 }
 
@@ -102,6 +105,7 @@ impl HostToolRunner for FakeTools {
     }
 
     fn cancel(&self, call_id: &str) {
+        self.cancelled.lock().unwrap().insert(call_id.to_owned());
         if let Some(slot) = self.detached.lock().unwrap().remove(call_id) {
             self.registry.mark_closed(slot);
         }
@@ -120,6 +124,11 @@ impl FakeTools {
         match receiver.await {
             Ok(Body::Answer(answer)) => {
                 if let ToolOutcome::Update { .. } = answer {
+                    // The task was cancelled first: the cancellation, not the detach, ends it.
+                    if self.cancelled.lock().unwrap().contains(&call.call_id) {
+                        self.registry.mark_closed(slot);
+                        return ToolOutcome::Cancelled;
+                    }
                     self.detached.lock().unwrap().insert(call.call_id.clone(), slot);
                 }
                 answer
