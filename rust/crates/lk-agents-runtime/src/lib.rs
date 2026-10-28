@@ -23,6 +23,7 @@ pub mod images;
 pub mod avatar;
 pub mod host;
 pub mod a2a;
+pub mod a2a_client;
 pub mod http;
 pub mod llm;
 pub mod process;

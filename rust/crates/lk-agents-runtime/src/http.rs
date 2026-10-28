@@ -89,6 +89,26 @@ impl GatewayHttp {
         }
     }
 
+    /// Fetches a protocol discovery document through the same connection pool as exchanges.
+    pub(crate) async fn get(
+        &self,
+        url: String,
+        headers: Vec<(String, String)>,
+    ) -> Result<reqwest::Response, AttemptFailure> {
+        let mut request = self.client.get(url);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| AttemptFailure::Connection(error_chain(&error)))?;
+        if !response.status().is_success() {
+            return Err(rejected(response).await);
+        }
+        Ok(response)
+    }
+
     /// Sends `request`, reporting through `sent` how far it got; the response once its status is
     /// a success.
     pub(crate) async fn send<E>(
