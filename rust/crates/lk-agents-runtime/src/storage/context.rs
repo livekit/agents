@@ -2,7 +2,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::storage::context::{
     ContextActivation as HostContextActivation, ContextField, ContextScope, ContextScopeWrite,
     ContextValues,
@@ -120,7 +119,6 @@ impl ContextActivation {
     }
 }
 
-#[async_trait]
 impl HostContextActivation for ContextActivation {
     fn new(
         scopes: Vec<ContextScope>,

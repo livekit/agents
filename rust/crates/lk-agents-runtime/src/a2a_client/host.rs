@@ -19,7 +19,6 @@ fn client_error(error: ClientError) -> AgentClientError {
     }
 }
 
-#[async_trait::async_trait]
 impl port::AgentClient for AgentClient {
     type Reply = Reply;
 
@@ -130,7 +129,6 @@ impl port::AgentClient for AgentClient {
     }
 }
 
-#[async_trait::async_trait]
 impl port::Reply for Reply {
     fn task_id(&self) -> String {
         self.task_id.clone()

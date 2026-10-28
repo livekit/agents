@@ -65,7 +65,6 @@ impl InterruptionSource for FakeInterruptionSource {
     }
 }
 
-#[async_trait::async_trait]
 impl InterruptionPort for FakeInterruption {
     fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>> {
         let slot = *self.slot.get().expect("registered at construction");
@@ -88,8 +87,8 @@ impl InterruptionPort for FakeInterruption {
         }
     }
 
-    async fn next_event(&self) -> LegEvent<OverlapVerdict> {
-        self.pending.lock().await.recv().await.unwrap_or(LegEvent::Closed)
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, LegEvent<OverlapVerdict>> {
+        Box::pin(async move { self.pending.lock().await.recv().await.unwrap_or(LegEvent::Closed) })
     }
 }
 

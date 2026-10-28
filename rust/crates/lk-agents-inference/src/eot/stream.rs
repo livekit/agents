@@ -479,7 +479,6 @@ impl EotStream {
     }
 }
 
-#[async_trait::async_trait]
 impl lk_agents_abi::EotDetector for EotStream {
     fn id(&self) -> ProviderId {
         ProviderId { model: self.model().into(), ..self.id.clone() }
@@ -501,15 +500,19 @@ impl lk_agents_abi::EotDetector for EotStream {
         Some(self.lock().session.thresholds())
     }
 
-    async fn predict(
+    fn predict(
         &self,
         _timeout: Option<std::time::Duration>,
-    ) -> Result<EotPrediction, ProviderError> {
-        self.predict().await.map_err(|_| ApiError::new("turn detector stream closed").into())
+    ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
+        Box::pin(async move {
+            self.predict().await.map_err(|_| ApiError::new("turn detector stream closed").into())
+        })
     }
 
-    async fn aclose(&self) {
-        EotStream::aclose(self);
-        self.wait_closed().await;
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            EotStream::aclose(self);
+            self.wait_closed().await;
+        })
     }
 }

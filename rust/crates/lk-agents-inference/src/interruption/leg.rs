@@ -40,7 +40,6 @@ impl lk_agents_abi::turn::interruption::InterruptionSource for AdaptiveInterrupt
     }
 }
 
-#[async_trait::async_trait]
 impl InterruptionPort for InterruptionLeg {
     fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>> {
         Arc::new(InterruptionAudioSink(self.input.clone()))
@@ -65,31 +64,34 @@ impl InterruptionPort for InterruptionLeg {
 
     /// Verdicts and failures on one leg: a detector error reaches the loop as
     /// `LegEvent::Error { recoverable }` and is journalled (I-24).
-    async fn next_event(&self) -> LegEvent<OverlapVerdict> {
-        let mut stream = self.stream.lock().await;
-        loop {
-            return match stream.recv_event().await {
-                Some(StreamEvent::Overlap(ev)) => {
-                    LegEvent::Verdict { req: None, verdict: verdict(&ev, self.anchor) }
-                }
-                Some(StreamEvent::CorrelatedOverlap { request, event }) => {
-                    LegEvent::Verdict { req: Some(request), verdict: verdict(&event, self.anchor) }
-                }
-                Some(StreamEvent::CorrelatedError { request, error }) => LegEvent::Error {
-                    req: Some(request),
-                    recoverable: error.recoverable,
-                    err: lk_agents_abi::errors::ProviderError::Local(error.error),
-                },
-                Some(StreamEvent::Error(e)) => LegEvent::Error {
-                    req: None,
-                    recoverable: e.recoverable,
-                    err: lk_agents_abi::errors::ProviderError::Local(e.error),
-                },
-                // The loop pushes no span (see `sentinel`), so none comes back.
-                Some(StreamEvent::SpanUpdate { .. }) => continue,
-                None => LegEvent::Closed,
-            };
-        }
+    fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, LegEvent<OverlapVerdict>> {
+        Box::pin(async move {
+            let mut stream = self.stream.lock().await;
+            loop {
+                return match stream.recv_event().await {
+                    Some(StreamEvent::Overlap(ev)) => {
+                        LegEvent::Verdict { req: None, verdict: verdict(&ev, self.anchor) }
+                    }
+                    Some(StreamEvent::CorrelatedOverlap { request, event }) => LegEvent::Verdict {
+                        req: Some(request),
+                        verdict: verdict(&event, self.anchor),
+                    },
+                    Some(StreamEvent::CorrelatedError { request, error }) => LegEvent::Error {
+                        req: Some(request),
+                        recoverable: error.recoverable,
+                        err: lk_agents_abi::errors::ProviderError::Local(error.error),
+                    },
+                    Some(StreamEvent::Error(e)) => LegEvent::Error {
+                        req: None,
+                        recoverable: e.recoverable,
+                        err: lk_agents_abi::errors::ProviderError::Local(e.error),
+                    },
+                    // The loop pushes no span (see `sentinel`), so none comes back.
+                    Some(StreamEvent::SpanUpdate { .. }) => continue,
+                    None => LegEvent::Closed,
+                };
+            }
+        })
     }
 }
 

@@ -31,7 +31,6 @@ pub struct SessionReportUploader {
     client: reqwest::Client,
 }
 
-#[async_trait::async_trait]
 impl SessionReportUpload for SessionReportUploader {
     fn new(api_key: String, api_secret: String) -> Result<Self, UploadError> {
         let create = move || {
@@ -316,7 +315,6 @@ struct TranscriptState {
     finished: bool,
 }
 
-#[async_trait::async_trait]
 impl PreparedTranscript for TranscriptBuilder {
     fn new() -> Result<Self, UploadError> {
         let permit = super::work::try_admit_upload(

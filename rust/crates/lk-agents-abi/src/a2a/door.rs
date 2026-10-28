@@ -44,7 +44,6 @@ pub fn door_error_to_py(error: DoorError) -> pyo3::PyErr {
 }
 
 #[crate::host(class(name = "_core_A2ADoor"))]
-#[async_trait::async_trait]
 pub trait A2ADoor: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_A2AResponse"))]
     type Response: Send + Sync + 'static;
@@ -68,7 +67,6 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
 }
 
 #[crate::host(class(name = "_core_A2AResponse"))]
-#[async_trait::async_trait]
 pub trait A2AResponse: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn streaming(&self) -> bool;

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use livekit_protocol::agent::agent_task::{GetTasksRequest, Task};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, GetItemsRequest, Item, ListRequest, ListResponse, Thread as ThreadRecord,
@@ -203,7 +202,6 @@ async fn local_tasks(
     }
 }
 
-#[async_trait]
 impl HostStorageClass for HostStorage {
     type Thread = Thread;
     type Streams = Arc<QueuedStreams>;

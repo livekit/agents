@@ -9,7 +9,9 @@ pub enum AvatarError {
     #[error("invalid avatar model string: {0} (expected 'provider' or 'provider/<id>')")]
     #[host(kind = "ValueError")]
     InvalidModel(String),
-    #[error("pass either a catalog id in the model string ('{0}/<avatar_id>') or image_url, not both")]
+    #[error(
+        "pass either a catalog id in the model string ('{0}/<avatar_id>') or image_url, not both"
+    )]
     #[host(kind = "ValueError")]
     CatalogIdAndImage(String),
     #[error("livekit_url must be set by argument or the LIVEKIT_URL environment variable")]
@@ -36,7 +38,6 @@ impl From<ApiError> for AvatarError {
 /// One avatar provisioned through LiveKit Inference: at most one provider session per instance,
 /// created under one operation identity, held until `aclose()` terminates it.
 #[crate::host(class(name = "InferenceAvatar"))]
-#[async_trait::async_trait]
 pub trait InferenceAvatar: Send + Sync + Sized + 'static {
     /// `model` is `"provider"` or `"provider/<avatar_id>"`. The identity defaults to
     /// `"<provider>-inference-avatar"`, the name to the identity. Starts nothing.

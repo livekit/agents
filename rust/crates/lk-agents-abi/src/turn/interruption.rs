@@ -28,7 +28,6 @@ pub struct OverlapVerdict {
     pub reported: Option<Arc<crate::voice::events::OverlappingSpeechEvent>>,
 }
 
-#[async_trait::async_trait]
 pub trait InterruptionPort: Send + Sync {
     /// Installed once and pushed to per frame.
     fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>>;
@@ -45,11 +44,10 @@ pub trait InterruptionPort: Send + Sync {
 
     /// One per overlap, not per frame. `Closed` ends the pump; the session carries on with VAD-only
     /// interruption.
-    async fn next_event(&self) -> LegEvent<OverlapVerdict>;
+    fn next_event(&self) -> crate::BoxFuture<'_, LegEvent<OverlapVerdict>>;
 }
 
 /// `signal(Some(req), OverlapStarted)` is `signal_overlap`; every other sentinel opens no request.
-#[async_trait::async_trait]
 impl DetectorLeg for dyn InterruptionPort {
     type Signal = InterruptionSignal;
     type Verdict = OverlapVerdict;
@@ -65,8 +63,8 @@ impl DetectorLeg for dyn InterruptionPort {
         }
     }
 
-    async fn next(&self) -> LegEvent<Self::Verdict> {
-        self.next_event().await
+    fn next(&self) -> crate::BoxFuture<'_, LegEvent<Self::Verdict>> {
+        self.next_event()
     }
 }
 

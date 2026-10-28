@@ -9,7 +9,6 @@ use lk_agents_worker::endpoint_budget::EndpointBudget;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use a2a::{JsonRpcId, error_code};
-use async_trait::async_trait;
 use lk_agents_a2a::auth::{allows, allows_first_message};
 use lk_agents_a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_abi::a2a::auth::{AuthError, AuthOperation, AuthPrincipal};
@@ -80,7 +79,6 @@ impl Door {
     }
 }
 
-#[async_trait]
 impl A2ADoor for Door {
     type Response = Response;
 
@@ -210,7 +208,6 @@ pub struct Response {
     cancel: CancellationToken,
 }
 
-#[async_trait]
 impl A2AResponse for Response {
     fn streaming(&self) -> bool {
         self.streaming

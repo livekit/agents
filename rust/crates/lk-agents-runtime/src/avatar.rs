@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
@@ -154,7 +153,6 @@ impl Drop for CancelOnDrop<'_> {
     }
 }
 
-#[async_trait]
 impl InferenceAvatar for GatewayAvatar {
     fn new(
         model: String,

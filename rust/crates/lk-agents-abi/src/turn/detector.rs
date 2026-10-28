@@ -22,7 +22,6 @@ pub enum LegEvent<V> {
 
 /// The driver runs one pump per leg onto the session's input queue, so no leg is polled inside the
 /// loop's `select!` and none has to be cancel-safe.
-#[async_trait::async_trait]
 pub trait DetectorLeg: Send + Sync {
     type Signal: Send;
     type Verdict: Send;
@@ -34,13 +33,12 @@ pub trait DetectorLeg: Send + Sync {
     fn signal(&self, req: Option<ReqId>, signal: Self::Signal);
 
     /// Pumped by one task per leg; `Closed` ends that task.
-    async fn next(&self) -> LegEvent<Self::Verdict>;
+    fn next(&self) -> crate::BoxFuture<'_, LegEvent<Self::Verdict>>;
 }
 
 /// A host `turn_detection` object is this trait through `_core_view.TurnDetector`, which speaks
 /// the detector's `stream()` behind the `_core_*` surface.
 #[crate::host(proxy(host = "livekit.agents._core_view.TurnDetector"))]
-#[async_trait::async_trait]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.
     #[host(read_once, name = "_core_id")]
@@ -65,7 +63,10 @@ pub trait EotDetector: Send + Sync + 'static {
     /// The countdown already bounds `timeout` itself, so ignoring it cannot hang a turn. An `Err`
     /// is not a turn failure: the countdown proceeds as if no detector were configured.
     #[host(await, name = "_core_predict")]
-    async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError>;
+    fn predict(
+        &self,
+        timeout: Option<Duration>,
+    ) -> crate::BoxFuture<'_, Result<EotPrediction, ProviderError>>;
 
     /// What a prediction is judged against (`unlikely_threshold(language)`,
     /// `backchannel_threshold(language)`, `supports_language(language)`), as it is now: the user's
@@ -79,7 +80,9 @@ pub trait EotDetector: Send + Sync + 'static {
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
     #[host(await, name = "_core_aclose")]
-    async fn aclose(&self) {}
+    fn aclose(&self) -> crate::BoxFuture<'_, ()> {
+        Box::pin(async move {})
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +125,6 @@ impl<D: EotDetector + ?Sized> std::ops::Deref for EotLeg<D> {
     }
 }
 
-#[async_trait::async_trait]
 impl<D: EotDetector + ?Sized> DetectorLeg for EotLeg<D> {
     type Signal = EotRequest;
     type Verdict = EotPrediction;
@@ -148,11 +150,13 @@ impl<D: EotDetector + ?Sized> DetectorLeg for EotLeg<D> {
         in_flight.push(task);
     }
 
-    async fn next(&self) -> LegEvent<EotPrediction> {
-        match self.rx.lock().await.recv().await {
-            Some(ev) => ev,
-            None => LegEvent::Closed,
-        }
+    fn next(&self) -> crate::BoxFuture<'_, LegEvent<EotPrediction>> {
+        Box::pin(async move {
+            match self.rx.lock().await.recv().await {
+                Some(ev) => ev,
+                None => LegEvent::Closed,
+            }
+        })
     }
 }
 

@@ -189,7 +189,6 @@ pub enum AgentClientError {
 }
 
 #[crate::host(class(name = "Reply"))]
-#[async_trait::async_trait]
 pub trait Reply: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn task_id(&self) -> String;
@@ -202,7 +201,6 @@ pub trait Reply: Send + Sync + Sized + 'static {
 }
 
 #[crate::host(class(name = "AgentClient"))]
-#[async_trait::async_trait]
 pub trait AgentClient: Send + Sync + Sized + 'static {
     #[host(class(name = "Reply"))]
     type Reply;

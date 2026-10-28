@@ -35,7 +35,6 @@ impl FakeEot {
     }
 }
 
-#[async_trait::async_trait]
 impl EotDetector for FakeEot {
     fn push_audio(&self, frame: AudioFrame) {
         self.registry.record_forwarded(self.slot, tags_of(&frame));
@@ -53,19 +52,24 @@ impl EotDetector for FakeEot {
         ))
     }
 
-    async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError> {
-        let (sender, receiver) = oneshot::channel();
-        let slot =
-            self.registry.register(Kind::Prediction, Detail::None, Control::Prediction(sender));
-        let waited = tokio::time::timeout(timeout.unwrap_or(UNBOUNDED_WAIT), receiver).await;
-        self.registry.mark_closed(slot);
-        match waited {
-            Ok(Ok(answer)) => answer,
-            // The case never answered, or the driver moved on: a prediction that did not arrive.
-            _ => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
-                "end-of-turn prediction did not arrive",
-            ))),
-        }
+    fn predict(
+        &self,
+        timeout: Option<Duration>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            let slot =
+                self.registry.register(Kind::Prediction, Detail::None, Control::Prediction(sender));
+            let waited = tokio::time::timeout(timeout.unwrap_or(UNBOUNDED_WAIT), receiver).await;
+            self.registry.mark_closed(slot);
+            match waited {
+                Ok(Ok(answer)) => answer,
+                // The case never answered, or the driver moved on: a prediction that did not arrive.
+                _ => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                    "end-of-turn prediction did not arrive",
+                ))),
+            }
+        })
     }
 }
 

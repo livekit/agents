@@ -409,7 +409,6 @@ impl Default for EventBudget {
 
 pub struct SdkWorker;
 
-#[async_trait::async_trait]
 impl TelemetryWorker for SdkWorker {
     fn new() -> Self {
         Self

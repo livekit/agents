@@ -50,7 +50,6 @@ impl EotDetectorProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::EotDetector>(|obj| EotDetectorProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
     fn id(&self) -> ::lk_agents_abi::ProviderId {
         ::std::clone::Clone::clone(&self.id)
@@ -86,10 +85,11 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         });
     }
 
-    async fn predict(&self, timeout: ::std::option::Option<::std::time::Duration>) -> ::std::result::Result<::lk_agents_abi::EotPrediction, ::lk_agents_abi::errors::ProviderError> {
+    fn predict(&self, timeout: ::std::option::Option<::std::time::Duration>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::EotPrediction, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let timeout_arg = timeout;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(timeout_arg.map(|d| d.as_secs_f64()), py)?];
@@ -106,11 +106,13 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             let out = (crate::generated::records::turn_events::eot_prediction_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn aclose(&self) {
+    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -118,5 +120,6 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             }).await {
             ::lk_agents_abi::python::log::warn!("EotDetector._core_aclose failed: {e}");
         }
+        })
     }
 }

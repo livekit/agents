@@ -21,7 +21,6 @@ pub struct TelemetryWorkObservation {
 
 /// Process-owned SDK work. Constructing another handle shares the same queue and worker ceiling.
 #[crate::host(class(name = "_core_TelemetryWorker"))]
-#[async_trait::async_trait]
 pub trait TelemetryWorker: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new() -> Self;

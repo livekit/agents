@@ -119,7 +119,6 @@ pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[crate::host(class(name = "Storage"))]
-#[async_trait::async_trait]
 pub trait Storage: Send + Sync + Sized + 'static {
     /// An open thread: the shared engine's handle, bound to a holder.
     #[host(handle(class = "Thread"))]

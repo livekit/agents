@@ -21,7 +21,6 @@ pub struct UploadError(pub String);
 
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[crate::host(class(name = "_core_SessionReportUpload"))]
-#[async_trait::async_trait]
 pub trait SessionReportUpload: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(api_key: String, api_secret: String) -> Result<Self, UploadError>;
@@ -62,7 +61,6 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
 /// append it from admitted SDK work; no whole-history extraction crosses a binding call.
 #[crate::host(class(name = "_core_PreparedTranscript"))]
-#[async_trait::async_trait]
 pub trait PreparedTranscript: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new() -> Result<Self, UploadError>;

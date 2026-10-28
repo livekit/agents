@@ -54,7 +54,6 @@ pub struct ContextValues {
 
 /// Activation state and revision/schema decisions. Application type validation stays in the host.
 #[crate::host(class(name = "_core_ContextActivation"))]
-#[async_trait::async_trait]
 pub trait ContextActivation: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
