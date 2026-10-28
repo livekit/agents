@@ -7,6 +7,7 @@
 //! - [`token`]: framework credentials signed with LiveKit's token crate.
 //! - [`http`]: the gateway's HTTPS exchange, reporting transport observations.
 //! - [`llm`]: the gateway LLM, executing the LLM request core's effects.
+//! - [`avatar`]: the gateway avatar, executing the avatar session core's effects.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
@@ -14,6 +15,7 @@
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
 pub mod agent_run;
+pub mod avatar;
 pub mod host;
 pub mod a2a;
 pub mod http;

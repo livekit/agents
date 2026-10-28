@@ -1,7 +1,8 @@
 //! The inference gateway's typing vocabulary (`inference/{stt,tts,llm,avatar,vad}.py`). No Rust
 //! reads it yet. The reference's comments stay `//`. The server-side fallback entries are in
-//! [`fallback`].
+//! [`fallback`]; the gateway avatar's declaration in [`avatar_session`].
 
+pub mod avatar_session;
 pub mod fallback;
 
 use serde_json::Value;

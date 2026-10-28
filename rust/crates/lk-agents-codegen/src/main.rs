@@ -102,7 +102,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs",
     "rust/crates/lk-agents-voice/src/workflows/prompts.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
-    "rust/crates/lk-agents-inference/src/avatar.rs",
     "rust/crates/lk-agents-inference/src/llm/models.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.

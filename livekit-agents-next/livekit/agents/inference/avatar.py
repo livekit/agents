@@ -92,7 +92,7 @@ class AvatarSession(BaseAvatarSession):
             api_key: Gateway API key (see the class docstring for resolution).
             api_secret: Gateway API secret (see the class docstring).
             http_session: Unused; the core owns the connection.
-            conn_options: Retry/timeout options for the create call.
+            conn_options: Retry and phase limits of the create and terminate requests.
         """
         super().__init__()
         creds = Credentials.resolve(base_url, api_key, api_secret)
@@ -100,13 +100,11 @@ class AvatarSession(BaseAvatarSession):
             model,
             avatar_identity=avatar_participant_identity or None,
             avatar_name=avatar_participant_name or None,
-            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
+            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else None,
             base_url=creds.base_url,
             api_key=creds.api_key,
             api_secret=creds.api_secret,
-            timeout=conn_options.timeout,
-            max_retry=conn_options.max_retry,
-            retry_interval=conn_options.retry_interval,
+            conn_options=conn_options,
         )
 
     @property
@@ -137,11 +135,9 @@ class AvatarSession(BaseAvatarSession):
         """Create the avatar through the gateway and stream the agent's audio to it.
 
         ``livekit_url`` (else ``LIVEKIT_URL``) is the URL the provider dials with the token the
-        gateway mints. Usable inside an agent job or standalone with a connected room.
+        gateway mints. Usable inside an agent job or standalone with a connected room. A second
+        call while one runs, or after one succeeded, raises ``RuntimeError``.
         """
-        self._native.check_unstarted()
-        await super().start(agent_session, room)
-
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
             agent_identity = job_ctx.local_participant_identity
@@ -162,6 +158,7 @@ class AvatarSession(BaseAvatarSession):
             agent_identity=agent_identity,
             headers=list(get_inference_headers().items()),
         )
+        await super().start(agent_session, room)
         # The audio tail goes to the avatar worker at the gateway's rate: in the canonical flow
         # avatar.start() runs before session.start(), so no audio has flowed yet.
         agent_session.output.replace_audio_tail(
@@ -176,8 +173,9 @@ class AvatarSession(BaseAvatarSession):
         )
 
     async def aclose(self) -> None:
-        """Terminate the provider session (best effort, so it stops billing now), then leave."""
+        """Terminate the provider session so it stops billing now, then leave. A failed
+        terminate is logged and retried by the next ``aclose()``."""
         try:
-            await self._native.terminate(list(get_inference_headers().items()))
+            await self._native.aclose(list(get_inference_headers().items()))
         finally:
             await super().aclose()

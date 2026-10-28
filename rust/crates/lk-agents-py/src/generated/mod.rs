@@ -8,11 +8,13 @@
 use pyo3::prelude::*;
 
 pub mod agent;
+pub mod inference;
 pub mod llm;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
+    type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
@@ -22,6 +24,7 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
+    m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;

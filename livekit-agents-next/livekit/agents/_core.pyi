@@ -18,6 +18,7 @@ from typing import Any, Protocol
 from ._generated._core_agent import *  # noqa: F401, F403
 from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem
+from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
 from ._generated.storage import DatabaseInfo, EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow

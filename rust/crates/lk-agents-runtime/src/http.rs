@@ -1,6 +1,6 @@
-//! The gateway's HTTPS exchange for one LLM request attempt: sends the request, reports what the
-//! transport observed (connection, request handed over, response bytes, decoded events, end or
-//! failure) and decides nothing. The request core owns every deadline and retry.
+//! The gateway's HTTPS exchanges: each attempt sends its request and reports what the transport
+//! observed (connection, request handed over, response bytes, decoded answer, end or failure) and
+//! decides nothing. The request's core owns every deadline and retry.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -8,7 +8,8 @@ use std::task::{Context, Poll};
 
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_inference::llm::lifecycle::{AttemptFailure, LlmRequestEvent};
+use lk_agents_inference::attempts::AttemptFailure;
+use lk_agents_inference::llm::lifecycle::LlmRequestEvent;
 use lk_agents_inference::llm::parse::WireChunk;
 use lk_agents_inference::transport::HttpRequest;
 use tokio::sync::{Notify, mpsc};
@@ -17,24 +18,36 @@ use crate::sse::SseDecoder;
 
 /// A transport observation and the instant it was made.
 #[derive(Debug)]
-pub(crate) struct Stamped {
+pub(crate) struct Stamped<E> {
     pub at: Ts,
-    pub event: LlmRequestEvent,
+    pub event: E,
 }
 
-/// Where an attempt's observations go: the request's bounded queue, so an attempt reads the
+/// Where an attempt's observations go: its request's bounded queue, so an attempt reads the
 /// response no faster than the request consumes it.
-#[derive(Clone)]
-pub(crate) struct Reporter {
-    pub tx: mpsc::Sender<Stamped>,
+pub(crate) struct Reporter<E> {
+    pub tx: mpsc::Sender<Stamped<E>>,
     pub clock: Arc<dyn Clock>,
 }
 
-impl Reporter {
-    async fn report(&self, event: LlmRequestEvent) {
+impl<E> Clone for Reporter<E> {
+    fn clone(&self) -> Self {
+        Reporter { tx: self.tx.clone(), clock: self.clock.clone() }
+    }
+}
+
+impl<E> Reporter<E> {
+    pub(crate) async fn report(&self, event: E) {
         // A closed queue is a request that stopped listening; nothing is owed to it.
         let _ = self.tx.send(Stamped { at: self.clock.now(), event }).await;
     }
+}
+
+/// How far the transport took the request before its response.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Sent {
+    Connected,
+    RequestWritten,
 }
 
 /// The response's text when the gateway rejects the request is read up to this many bytes.
@@ -75,7 +88,14 @@ impl GatewayHttp {
         }
     }
 
-    pub(crate) async fn exchange(&self, request: HttpRequest, attempt: u32, reporter: Reporter) {
+    /// Sends `request`, reporting through `sent` how far it got; the response once its status is
+    /// a success.
+    pub(crate) async fn send<E>(
+        &self,
+        request: HttpRequest,
+        reporter: &Reporter<E>,
+        sent: impl Fn(Sent) -> E,
+    ) -> Result<reqwest::Response, AttemptFailure> {
         let progress = Arc::new(BodyProgress::default());
         let body = ReportingBody { bytes: Some(request.body.into()), progress: progress.clone() };
         let mut builder = self.client.post(request.url).body(reqwest::Body::wrap_stream(body));
@@ -88,13 +108,25 @@ impl GatewayHttp {
             tokio::select! {
                 biased;
                 response = &mut send => break response,
-                () = progress.changed.notified() => progress.report(attempt, &mut reported, &reporter).await,
+                () = progress.changed.notified() => progress.report(&mut reported, reporter, &sent).await,
             }
         };
-        progress.report(attempt, &mut reported, &reporter).await;
-        let failure = match response {
-            Err(err) => Some(AttemptFailure::Connection(error_chain(&err))),
-            Ok(response) if !response.status().is_success() => Some(rejected(response).await),
+        progress.report(&mut reported, reporter, &sent).await;
+        match response {
+            Err(err) => Err(AttemptFailure::Connection(error_chain(&err))),
+            Ok(response) if !response.status().is_success() => Err(rejected(response).await),
+            Ok(response) => Ok(response),
+        }
+    }
+
+    /// One LLM request attempt: the completion's event stream decoded into chunk events.
+    pub(crate) async fn exchange(&self, request: HttpRequest, attempt: u32, reporter: Reporter<LlmRequestEvent>) {
+        let sent = |sent| match sent {
+            Sent::Connected => LlmRequestEvent::Connected { attempt },
+            Sent::RequestWritten => LlmRequestEvent::RequestWritten { attempt },
+        };
+        let failure = match self.send(request, &reporter, sent).await {
+            Err(failure) => Some(failure),
             Ok(response) => read_events(response, attempt, &reporter).await,
         };
         if let Some(failure) = failure {
@@ -103,8 +135,22 @@ impl GatewayHttp {
     }
 }
 
+/// A JSON answer's body, read to its end; one larger than `limit` bytes is malformed.
+pub(crate) async fn read_body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, AttemptFailure> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| AttemptFailure::Connection(error_chain(&err)))?;
+        if body.len() + chunk.len() > limit {
+            return Err(AttemptFailure::Malformed(format!("the answer exceeds {limit} bytes")));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// Decodes the event stream into chunk events; `None` once the response ended cleanly.
-async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Reporter) -> Option<AttemptFailure> {
+async fn read_events(response: reqwest::Response, attempt: u32, reporter: &Reporter<LlmRequestEvent>) -> Option<AttemptFailure> {
     let mut decoder = SseDecoder::new();
     let mut bytes = response.bytes_stream();
     let mut events = Vec::new();
@@ -153,7 +199,7 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
         log::warn!(
             target: "livekit.agents",
             request_id = request_id.as_deref().unwrap_or(""), quota = quota.join(" ").as_str();
-            "LLM request rate limited by inference gateway"
+            "request rate limited by inference gateway"
         );
     }
     let mut body = Vec::new();
@@ -206,13 +252,13 @@ impl BodyProgress {
         self.changed.notify_one();
     }
 
-    async fn report(&self, attempt: u32, reported: &mut u8, reporter: &Reporter) {
+    async fn report<E>(&self, reported: &mut u8, reporter: &Reporter<E>, sent: &impl Fn(Sent) -> E) {
         let stage = self.stage.load(Ordering::SeqCst);
         if *reported < CONNECTED && stage >= CONNECTED {
-            reporter.report(LlmRequestEvent::Connected { attempt }).await;
+            reporter.report(sent(Sent::Connected)).await;
         }
         if *reported < WRITTEN && stage >= WRITTEN {
-            reporter.report(LlmRequestEvent::RequestWritten { attempt }).await;
+            reporter.report(sent(Sent::RequestWritten)).await;
         }
         *reported = (*reported).max(stage);
     }

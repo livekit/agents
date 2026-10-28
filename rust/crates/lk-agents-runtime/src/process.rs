@@ -1,8 +1,10 @@
 //! The process-wide Tokio runtime, started on first use and never at import: `fork()` copies only
 //! the calling thread, so a runtime inherited across a fork has no workers. The runtime remembers
-//! the process that started it and refuses to serve another.
+//! the process that started it and refuses to serve another. The host's clock is read here too.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use lk_agents_abi::Clock;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProcessError {
@@ -47,4 +49,15 @@ pub fn reinit() {
     if slot.as_ref().is_some_and(|started| started.pid != std::process::id()) {
         std::mem::forget(slot.take());
     }
+}
+
+/// The host loop's clock (virtual in a virtual-time test), else the real one.
+#[cfg(feature = "python")]
+pub fn host_clock() -> Arc<dyn Clock> {
+    <Arc<dyn Clock> as lk_agents_abi::python::Ambient>::ambient()
+}
+
+#[cfg(not(feature = "python"))]
+pub fn host_clock() -> Arc<dyn Clock> {
+    Arc::new(lk_agents_abi::RealClock::new())
 }

@@ -146,7 +146,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             inference_class,
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
-        Ok(GatewayLlm::new(opts, http, runtime, host_clock()))
+        Ok(GatewayLlm::new(opts, http, runtime, crate::process::host_clock()))
     }
 
     fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Llm>>) -> Self {
@@ -195,17 +195,6 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         let policy = RequestPolicy::from_options(&conn_options);
         GatewayLlm::chat(self, &ChatContext::new(items), &tools, args, policy, identification.as_ref())
     }
-}
-
-/// The host loop's clock (virtual in a virtual-time test), else the real one.
-#[cfg(feature = "python")]
-fn host_clock() -> Arc<dyn Clock> {
-    <Arc<dyn Clock> as lk_agents_abi::python::Ambient>::ambient()
-}
-
-#[cfg(not(feature = "python"))]
-fn host_clock() -> Arc<dyn Clock> {
-    Arc::new(lk_agents_abi::RealClock::new())
 }
 
 #[async_trait]
@@ -273,8 +262,8 @@ pub struct LlmChunks {
     start: Option<Start>,
     /// The accepted request; `None` until the first pull.
     core: Option<LlmRequest>,
-    rx: mpsc::Receiver<Stamped>,
-    reporter: Reporter,
+    rx: mpsc::Receiver<Stamped<LlmRequestEvent>>,
+    reporter: Reporter<LlmRequestEvent>,
     exchange: Arc<Exchange>,
     runtime: tokio::runtime::Handle,
     attempts: BTreeMap<u32, OwnedTask>,
