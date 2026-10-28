@@ -92,7 +92,8 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-abi": set(),
             "lk-agents-core": {"lk-agents-abi"},
             "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
-            "lk-agents-inference": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", "lk-agents-net"},
+            # inference -> core (chat formatting, schemas, JSON repair) is pending owner approval.
+            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"} | {"lk-agents-core"},
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-a2a": {"lk-agents-abi"},

@@ -166,7 +166,8 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
     )
     .await
     .expect_err("an unreachable gateway must fail the stream");
-    assert_eq!(err.message, "failed to detect interruption after 2 attempts");
+    // The count includes the first attempt (7dc5c87d6): two retries are three attempts.
+    assert_eq!(err.message, "failed to detect interruption after 3 attempts");
 
     let mut recoverable = 0;
     let mut fatal = 0;

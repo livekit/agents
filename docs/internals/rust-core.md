@@ -60,7 +60,8 @@ lk-agents-py -> lk-agents-runtime, lk-agents-abi
 lk-agents-runtime -> sans-I/O crates, async I/O crates
 lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
-lk-agents-inference -> lk-agents-core, lk-agents-media
+lk-agents-inference -> lk-agents-media
+lk-agents-inference -> lk-agents-core   (pending owner approval)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 lk-agents-fuzz -> sans-I/O crates + lk-agents-abi
@@ -70,7 +71,7 @@ The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
 `lk-agents-media`. `lk-agents-media` is a synchronous data-plane core with no
 async runtime, so voice and inference compose it like `lk-agents-core`; inference
 also uses `lk-agents-core`'s chat formatting, strict tool schemas and JSON repair
-for the request bodies it sends.
+for the request bodies it sends (that edge is pending owner approval).
 `lk-agents-core` has no dependency on `lk-agents-storage`: its A2A decisions
 emit storage effects over request/result records and error types declared in
 ABI, and the runtime's A2A door executes them by calling storage.
@@ -952,7 +953,7 @@ closures must contain no runtime, executor, async transport or host SDK: no
 tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
-edges `voice -> core`, `voice -> media`, `inference -> core`, `inference -> media`, `py -> abi`,
+edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` (pending owner approval), `py -> abi`,
 async I/O crates `-> net` and `fuzz -> sans-I/O crates + abi` described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
