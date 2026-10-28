@@ -5,7 +5,10 @@
 //! what reached the channel and picks what runs next, so an interleaving the channel would only
 //! produce under load is one a seed can choose. Each source keeps its own order: a reordering no
 //! single sender could produce is never delivered. A due wake goes before anything pending, as
-//! the production loop's biased `select!` takes it first.
+//! the production loop's biased `select!` takes it first. The microphone's frames are a source of
+//! their own: the frames that reached the run since its last step are one batch, delivered as one
+//! step in their order, racing the events under POS and ahead of them in arrival order (the
+//! production loop takes frames before its queue).
 //!
 //! The scheduler knows the sources and nothing of what a step reads or writes: BasicPOS draws
 //! every pending step a priority and runs the highest, with no footprints and no race-based
@@ -18,7 +21,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
-use lk_agents_abi::{BoxFuture, resources::ResourceId};
+use lk_agents_abi::{AudioFrame, BoxFuture, resources::ResourceId};
 use lk_agents_voice::agent_session::{Event, Input};
 
 /// How the next step is chosen, drawn per seed and carried by the case.
@@ -74,6 +77,8 @@ pub enum Next {
     /// The decision core's timer, due.
     Wake,
     Event(Event),
+    /// The microphone's frames that arrived since the last step, in order.
+    Frames(Vec<AudioFrame>),
     /// One turn for the driver's ready tasks.
     Tasks,
     /// One turn for one bridged task.
@@ -112,7 +117,12 @@ struct Queued {
     source: Source,
     arrival: u64,
     priority: Priority,
-    event: Event,
+    item: Item,
+}
+
+enum Item {
+    Event(Event),
+    Frames(Vec<AudioFrame>),
 }
 
 /// Who sent an event: one host origin, one recognition stream, one detector leg, one kind of
@@ -125,6 +135,8 @@ enum Source {
     Leg(&'static str),
     Kind(Discriminant<Input>),
     Event(Discriminant<Event>),
+    /// The microphone's frames channel.
+    Frames,
 }
 
 impl Source {
@@ -167,7 +179,22 @@ impl Queue {
         self.arrivals += 1;
         let priority = self.draw();
         let source = Source::of(&event);
-        self.pending.push(Queued { source, arrival, priority, event });
+        self.pending.push(Queued { source, arrival, priority, item: Item::Event(event) });
+    }
+
+    /// A microphone frame: it joins the pending batch, or starts one.
+    pub fn push_frame(&mut self, frame: AudioFrame) {
+        if let Some(Queued { item: Item::Frames(batch), .. }) =
+            self.pending.iter_mut().find(|q| q.source == Source::Frames)
+        {
+            batch.push(frame);
+            return;
+        }
+        let arrival = self.arrivals;
+        self.arrivals += 1;
+        let priority = self.draw();
+        let item = Item::Frames(vec![frame]);
+        self.pending.push(Queued { source: Source::Frames, arrival, priority, item });
     }
 
     /// The next step: the wake when `wake_due`, else an event, a bridged task's turn (`ready`,
@@ -194,7 +221,7 @@ impl Queue {
             Policy::Arrival => heads
                 .iter()
                 .copied()
-                .min_by_key(|&i| self.pending[i].arrival)
+                .min_by_key(|&i| (self.pending[i].source != Source::Frames, self.pending[i].arrival))
                 .map(Pick::Event)
                 .or(tasks_ready.then_some(Pick::Pool)),
             Policy::BasicPos | Policy::TaskBridge => {
@@ -230,7 +257,10 @@ impl Queue {
             Pick::Event(i) => {
                 let queued = self.pending.remove(i);
                 self.fold(1, queued.arrival);
-                Some(Next::Event(queued.event))
+                Some(match queued.item {
+                    Item::Event(event) => Next::Event(event),
+                    Item::Frames(frames) => Next::Frames(frames),
+                })
             }
             Pick::Task(id) => {
                 // Its next step is a new event: a new priority, as a goroutine's in gosim.
@@ -248,10 +278,17 @@ impl Queue {
         }
     }
 
-    /// Everything still pending, in arrival order.
-    pub fn drain(&mut self) -> Vec<Event> {
+    /// Everything still pending, in arrival order: the frames, and the events.
+    pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<Event>) {
         self.pending.sort_by_key(|q| q.arrival);
-        self.pending.drain(..).map(|q| q.event).collect()
+        let (mut frames, mut events) = (Vec::new(), Vec::new());
+        for queued in self.pending.drain(..) {
+            match queued.item {
+                Item::Event(event) => events.push(event),
+                Item::Frames(batch) => frames.extend(batch),
+            }
+        }
+        (frames, events)
     }
 
     /// The dispatch order so far, folded into one number: what replaying a seed must reproduce.
@@ -475,6 +512,11 @@ mod tests {
                 ..
             }))) => names[0].clone(),
             Next::Wake => "wake".into(),
+            Next::Frames(frames) => {
+                let ids: Vec<String> =
+                    frames.iter().map(|f| format!("f{}", f.samples_per_channel)).collect();
+                ids.join("+")
+            }
             Next::Tasks => "pool".into(),
             Next::Task(id) => format!("task{id}"),
             Next::Event(_) => unreachable!("only the program's events are queued"),
@@ -593,6 +635,43 @@ mod tests {
                 taken.push(next);
             }
         }
+    }
+
+    /// A microphone frame, told apart by its sample count.
+    fn frame(n: u32) -> AudioFrame {
+        AudioFrame { data: Arc::from(vec![0u8; 2 * n as usize]), sample_rate: 48_000, num_channels: 1, samples_per_channel: n }
+    }
+
+    /// The frames that arrive between two steps are one step, in their order; a frame after it
+    /// is the next batch, never ahead of it. Under POS the batch races the events; in arrival
+    /// order it goes first, as the production loop takes frames before its queue.
+    #[test]
+    fn frames_are_scheduled_batches_in_order() {
+        let mut positions = BTreeSet::new();
+        for policy in Policy::ALL {
+            for seed in 0..256 {
+                let mut queue = Queue::new(seed, policy);
+                queue.push(event(Origin::Host, "a1"));
+                queue.push_frame(frame(1));
+                queue.push(event(tool("b"), "b1"));
+                queue.push_frame(frame(2));
+                let mut order = Vec::new();
+                while order.len() < 3 {
+                    order.push(name(&queue.next(false, false, &[]).unwrap()));
+                }
+                queue.push_frame(frame(3));
+                order.push(name(&queue.next(false, false, &[]).unwrap()));
+                assert!(order.contains(&"f1+f2".to_owned()), "{policy:?} seed {seed}: {order:?}");
+                assert_eq!(order[3], "f3", "{policy:?} seed {seed}: a later frame went first");
+                let at = order.iter().position(|o| o == "f1+f2").unwrap();
+                if policy == Policy::Arrival {
+                    assert_eq!(at, 0, "seed {seed}: arrival order put events before frames");
+                } else {
+                    positions.insert(at);
+                }
+            }
+        }
+        assert_eq!(positions, BTreeSet::from([0, 1, 2]), "POS never raced frames with events");
     }
 
     /// Both orders of two bridged tasks are reached: the bridge samples the order of tasks too.

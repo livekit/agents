@@ -1175,6 +1175,7 @@ impl Run {
             }
             let now = self.time.now();
             instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
+            self.busiest_instant = self.busiest_instant.max(instant.1);
             let counted = (instant.1 >= NO_PROGRESS_STEPS).then(|| {
                 format!(
                     "{NO_PROGRESS_STEPS} steps of the session at {} ms without virtual time moving",
@@ -1204,19 +1205,19 @@ impl Run {
             while let Ok(event) = runtime.queue.try_recv() {
                 self.queue.push(event);
             }
-            // Frames are not scheduled: each reaches the data plane as it arrives.
-            if !runtime.frames.is_empty() {
-                let now = self.time.read();
-                self.step(|runtime| {
-                    while let Ok(frame) = runtime.frames.try_recv() {
-                        runtime.on_frame(frame, now);
-                    }
-                });
-                continue;
+            while let Ok(frame) = runtime.frames.try_recv() {
+                self.queue.push_frame(frame);
             }
             if runtime.driver.stopped() {
-                let undelivered = self.queue.drain();
-                self.step(|runtime| runtime.finish(undelivered));
+                // The data plane still hears what reached it, then the core's queue is finished.
+                let (frames, undelivered) = self.queue.drain();
+                let now = self.time.read();
+                self.step(|runtime| {
+                    for frame in frames {
+                        runtime.on_frame(frame, now);
+                    }
+                    runtime.finish(undelivered)
+                });
                 self.drop_runtime();
                 continue;
             }
@@ -1233,6 +1234,15 @@ impl Run {
                 Some(Next::Event(event)) => {
                     let now = self.time.read();
                     self.step(|runtime| runtime.handle(event, now));
+                    continue;
+                }
+                Some(Next::Frames(frames)) => {
+                    let now = self.time.read();
+                    self.step(|runtime| {
+                        for frame in frames {
+                            runtime.on_frame(frame, now);
+                        }
+                    });
                     continue;
                 }
                 Some(Next::Tasks) => {
@@ -1268,10 +1278,7 @@ impl Run {
                 value = &mut done => return Some(value),
                 () = woken => {}
                 () = self.time.wait_until_opt(next) => {}
-                Some(frame) = runtime.frames.recv() => {
-                    let now = self.time.read();
-                    self.step(|runtime| runtime.on_frame(frame, now));
-                }
+                Some(frame) = runtime.frames.recv() => self.queue.push_frame(frame),
                 event = runtime.queue.recv() => match event {
                     Some(event) => self.queue.push(event),
                     None => return None,

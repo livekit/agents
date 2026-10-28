@@ -328,6 +328,7 @@ impl Run {
             segments: BTreeMap::new(),
             steps,
             livelock,
+            busiest_instant: 0,
             pending: BTreeMap::new(),
             task_awaits: BTreeMap::new(),
             streams: BTreeMap::new(),

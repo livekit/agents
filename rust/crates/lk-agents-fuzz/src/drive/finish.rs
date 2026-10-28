@@ -373,6 +373,8 @@ pub struct Outcome {
     /// `(input, phase)`: which inputs landed in which phase of the conversation, read off the
     /// journal as it stood when each input was applied. COVERAGE.md's operation x phase table.
     pub cells: BTreeSet<(&'static str, &'static str)>,
+    /// The most steps of the run's loop at one virtual instant.
+    pub busiest_instant: u32,
 }
 
 impl Outcome {
@@ -514,6 +516,7 @@ fn record_outcome(run: &Run, outcome: &mut Outcome) {
     outcome.edges = names.windows(2).map(|w| (w[0].clone(), w[1].clone())).collect();
     outcome.opened = opened_by_input(&run.record);
     outcome.cells = cells_by_input(&run.record);
+    outcome.busiest_instant = run.busiest_instant;
 }
 
 /// The phases of a conversation, in COVERAGE.md's column order.

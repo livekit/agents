@@ -231,8 +231,12 @@ fn campaign(window: &Window) {
     let mut declared: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let mut observed: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let started = std::time::Instant::now();
+    // The busiest virtual instant, in steps of the run's loop, and where: NO_PROGRESS_STEPS's
+    // derivation.
+    let mut busiest = (0u32, 0u64);
 
     for (seed, outcome, took) in run_all(window) {
+        busiest = busiest.max((outcome.busiest_instant, seed));
         let band_of = ((search::randomness(seed).log10() + 4.0) as usize).min(BANDS - 1);
         bands[band_of].absorb(&outcome, took);
         policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
@@ -309,7 +313,8 @@ fn campaign(window: &Window) {
     println!();
     println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal");
     // A call where the agent was never heard reaches nothing that happens while it speaks.
-    println!("{heard} of {seeds} runs where the person heard the agent\n");
+    println!("{heard} of {seeds} runs where the person heard the agent");
+    println!("busiest instant: {} steps of the run's loop (seed {})\n", busiest.0, busiest.1);
 
     // Per family, because the two ways to miss a variant have different fixes: a family at zero
     // is a leg no setup built, and a family part-reached is a search that has not got there yet.

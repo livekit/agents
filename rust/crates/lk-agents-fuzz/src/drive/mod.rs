@@ -509,10 +509,11 @@ fn watchdog(schedule: u64) -> std::sync::mpsc::Sender<()> {
 }
 
 /// Steps one virtual instant may hold, in the journal or in the run's own loop, before the run
-/// counts as a livelock. The busiest instant measured (1024-seed survey and soak, 2026-10-25) took
-/// 503 journal steps and 127 turns of the loop: twenty times that is a session feeding itself,
-/// and waiting longer only spends real time before the same verdict.
-const NO_PROGRESS_STEPS: u32 = 10_000;
+/// counts as a livelock. Derived from the busiest instant measured with the microphone's frames
+/// scheduled as steps (2026-10-28, `Outcome::busiest_instant`): 3,330 loop steps on the 1,024-seed
+/// survey, 6,262 on the next 32,768 seeds (seed 30341). Twenty times the busiest is a session
+/// feeding itself, and waiting longer only spends real time before the same verdict.
+const NO_PROGRESS_STEPS: u32 = 20 * 6_262;
 
 /// The run's spawner: every task of the run goes through it, so nothing bypasses the harness.
 /// The product's tasks are retained as real Tokio joins, so a task the driver detached cannot
@@ -667,4 +668,7 @@ pub struct Run {
     legs: start::Legs,
     pub setup: Setup,
     pub record: Recording,
+    /// The most steps the run took at one virtual instant: what `NO_PROGRESS_STEPS` is derived
+    /// from.
+    pub busiest_instant: u32,
 }

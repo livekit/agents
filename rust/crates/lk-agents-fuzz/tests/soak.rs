@@ -77,6 +77,7 @@ fn nothing_grows_with_the_conversation() {
             ..sample_setup(&mut fastrand::Rng::with_seed(seed))
         };
         let outcome = explore_at(setup, seed, budget, Dials::conversation());
+        println!("seed {seed}: busiest instant {} steps of the run's loop", outcome.busiest_instant);
         for failure in &outcome.failures {
             if !failure.known() {
                 problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
