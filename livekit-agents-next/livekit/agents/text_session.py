@@ -117,7 +117,8 @@ class TextSession(Generic[Context_T, Output_T]):
                         else utils.shortuuid("session_"),
                         execution_id=state.execution_id
                         if state is not None
-                        else utils.shortuuid("execution_"),
+                        else (hooks.task_id if hooks is not None else None)
+                        or utils.shortuuid("execution_"),
                         root_scope=root_scope,
                         contexts={root_scope: context},
                         message=to_core_item(incoming),
