@@ -83,7 +83,11 @@ class _LLMOptions:
 
 
 class LLM(llm.LLM):
-    """Responses API LLM routed through the LiveKit inference gateway."""
+    """Responses API LLM routed through the LiveKit inference gateway.
+
+    With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
+    ``inference_class`` and the other upgrade headers are fixed per connection.
+    """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
 
@@ -193,10 +197,10 @@ class LLM(llm.LLM):
         if oai_tool_choice is not None and tools:
             extra["tool_choice"] = oai_tool_choice
 
-        effective_inference_class = (
-            inference_class if is_given(inference_class) else self._opts.inference_class
-        )
         if self._client is not None:
+            effective_inference_class = (
+                inference_class if is_given(inference_class) else self._opts.inference_class
+            )
             headers = {
                 **extra.get("extra_headers", {}),
                 **get_inference_headers(inference_class=effective_inference_class),
@@ -207,6 +211,15 @@ class LLM(llm.LLM):
             self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         else:
             extra.pop("extra_headers", None)
+            if is_given(inference_class) and inference_class != self._opts.inference_class:
+                logger.warning(
+                    "inference_class cannot change per request over WebSocket; "
+                    "using the LLM's value",
+                    extra={
+                        "requested": inference_class,
+                        "configured": self._opts.inference_class,
+                    },
+                )
 
         return _GatewayResponsesLLMStream(
             self,

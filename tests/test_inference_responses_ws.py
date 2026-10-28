@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import aiohttp
@@ -198,6 +199,23 @@ async def test_ws_dial_sends_inference_class_header() -> None:
     await _transport(llm_model)._create_ws(1.0)
 
     assert session.dials[0].headers["X-LiveKit-Inference-Priority"] == "priority"
+
+
+async def test_ws_per_call_inference_class_warns(caplog: pytest.LogCaptureFixture) -> None:
+    llm_model = _make_llm()
+    session = _dial_session(llm_model)
+
+    with caplog.at_level(logging.WARNING):
+        stream = llm_model.chat(chat_ctx=_ctx(), inference_class="priority")
+    await stream.aclose()
+    await _transport(llm_model)._create_ws(1.0)
+
+    records = [r for r in caplog.records if "cannot change per request" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].requested == "priority"  # type: ignore[attr-defined]
+    assert records[0].configured is None  # type: ignore[attr-defined]
+    assert "X-LiveKit-Inference-Priority" not in session.dials[0].headers
+    await llm_model.aclose()
 
 
 async def test_gateway_error_raises_api_status_error() -> None:
