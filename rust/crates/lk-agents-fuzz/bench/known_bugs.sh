@@ -16,6 +16,8 @@
 # comparison a change to `drive/` or `fakes/` records (`--rev` the commit before it, then the
 # change, compared).
 #
+# The checked-in baseline is `bench/baseline.tsv` (K-5): `--compare` against it.
+#
 # `VOICE_SEEDS` (16384) campaign seeds, `VOICE_SETUPS` (1024) conversations on a failing setup and
 # `VOICE_SCHEDULES` (512) schedules of a failing case, per policy. Results are keyed by the tree's
 # identity (the commit, a hash of the diff and untracked files) and that configuration, under
@@ -259,7 +261,7 @@ if [ -n "$compare" ]; then
     echo
     echo "matched-seed comparison against $compare:"
     if ! awk -F'\t' '
-        FNR == 1 { next }
+        FNR == 1 || /^#/ { next }
         NR == FNR { before[$1, $2, $3, $4] = $5; next }
         ($1, $2, $3, $4) in before {
             matched++
