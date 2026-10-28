@@ -7,7 +7,9 @@
 # new. Against de73fa684, 11 of 72 cells fell, every one a 1-2 hit cell or a program the new
 # search chose differently (host_interrupt_races_end's program went from schedule 836 to 20,
 # 122 -> 51 BasicPos). Retired (ad91dc15d), the code they reintroduce no longer exists:
-# approval_race, gate_before_hook. final_ends_pause is not detected by any policy: see its patch.
+# approval_race, gate_before_hook; and final_ends_pause: with its fix reverted its own regression
+# (final_ends_pause.rs) passes at b07b998f6, the pause now ended on the other paths, so no campaign
+# can find it.
 bug	contract	level	policy	hits	tries
 amd_tap_at_close	provider_streams_closed	seeds	Arrival	0	16384
 amd_tap_at_close	provider_streams_closed	seeds	BasicPos	0	16384
