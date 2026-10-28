@@ -55,7 +55,7 @@ def _assert_audio_is(audio: bytes, expected: bytes) -> None:
 
 async def _collect(tts, text: str = "hello world", **conn: Any) -> tuple[bytes, list[int]]:
     """Drain a synthesis into its concatenated audio bytes and per-frame sample rates."""
-    options = APIConnectOptions(max_retry=0, timeout=5, **conn)
+    options = APIConnectOptions(max_retry=0, **conn)
     stream = tts.synthesize(text, conn_options=options)
     audio, rates = bytearray(), []
     try:
@@ -530,7 +530,7 @@ async def _stream_turn(tts, tokens: list[str], **conn: Any) -> bytes:
 
     One stream is one segment is one turn, so several turns means several streams.
     """
-    options = APIConnectOptions(max_retry=0, timeout=5, **conn)
+    options = APIConnectOptions(max_retry=0, **conn)
     stream = tts.stream(conn_options=options)
     for text in tokens:
         stream.push_text(text)
@@ -676,7 +676,7 @@ async def test_abandoned_stream_cancels_turn_and_reuses_connection():
     async with _WSServer() as srv:
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
         stream.push_text("hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
         first_context = srv.of_type("speak")[0]["context_id"]
@@ -695,7 +695,9 @@ async def test_unacknowledged_cancel_closes_connection_within_turn_timeout():
     async with _WSServer(acknowledge_cancel=False) as srv:
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.05, read_timeout=0.05)
+        )
         stream.push_text("hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
         await stream.aclose()
@@ -953,7 +955,9 @@ async def test_failed_cancel_stays_a_cancellation():
         tts._session = srv.session
         # Retries enabled, unlike the sibling test above — that is what makes a
         # swallowed cancellation observable.
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=3, timeout=0.05))
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=3, connect_timeout=0.05, read_timeout=0.05)
+        )
         stream.push_text("hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
 
@@ -980,7 +984,7 @@ async def test_barge_in_does_not_wait_out_the_connect_budget():
         tts = TTS(api_key="k", base_url=srv.base_url)
         tts._session = srv.session
         # A generous connect budget, which is what the bound used to be taken from.
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=30))
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0))
         stream.push_text("hello")
         await asyncio.wait_for(srv.speak_received.wait(), timeout=1)
 

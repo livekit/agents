@@ -133,7 +133,7 @@ pub use utils::bound_clock::BoundClock;
 pub use utils::lock;
 pub use utils::byte_stream::{AudioByteStream, Frame};
 pub use utils::clock::{
-    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, simulated_epoch, timeout,
+    Clock, Elapsed, RealClock, SimClock, Ts, VirtualClock, WallAnchor, before, simulated_epoch, timeout,
     unix_now, unix_secs,
 };
 pub use utils::duplex::{WebSocketSink, WebSocketStream};

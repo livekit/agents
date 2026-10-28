@@ -1,7 +1,18 @@
 //! The host-given option bags every gateway client takes: `extra_kwargs` (a JSON object passed to
 //! the provider as-is) and a server-side `fallback` chain.
 
-use serde_json::{Map, Value};
+use lk_agents_abi::ApiConnectOptions;
+use serde_json::{Map, Value, json};
+
+/// The session-create `connection` block: the gateway retries its provider connection `retries`
+/// times, each try bounded by `timeout` (our `connect_timeout`; absent, the gateway's default).
+pub fn connection(conn_options: &ApiConnectOptions) -> Value {
+    let mut block = json!({"retries": conn_options.max_retry});
+    if let Some(timeout) = conn_options.connect_timeout {
+        block["timeout"] = json!(timeout);
+    }
+    block
+}
 
 /// A provider's `extra_kwargs`: the JSON object merged into its request unchanged. On the host it
 /// is a `dict`; anything else is refused rather than dropped.

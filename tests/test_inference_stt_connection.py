@@ -98,7 +98,9 @@ async def test_input_end_preserves_delayed_final_after_session_finalized() -> No
 
     async with _gateway(handler) as (base_url, session):
         stt = _make_stt(base_url, session)
-        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)
+        )
         try:
             stream.end_input()
             transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
@@ -134,7 +136,9 @@ async def test_socket_close_after_input_end_is_accepted(close_code: int) -> None
         errors: list[Exception] = []
         stt.on("error", lambda event: errors.append(event.error))
         stream = stt.stream(
-            conn_options=APIConnectOptions(max_retry=3, retry_interval=0.001, timeout=1.0)
+            conn_options=APIConnectOptions(
+                max_retry=3, retry_interval=0.001, connect_timeout=1.0, read_timeout=1.0
+            )
         )
         try:
             stream.end_input()
@@ -169,7 +173,7 @@ async def test_session_closed_after_input_end_finishes_without_another_close() -
 
     async with _gateway(handler) as (base_url, session):
         stream = _make_stt(base_url, session).stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)
         )
         try:
             stream.end_input()
@@ -214,7 +218,9 @@ async def test_close_before_input_end_reconnects(close_session: bool) -> None:
         errors: list[Exception] = []
         stt.on("error", lambda event: errors.append(event.error))
         stream = stt.stream(
-            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+            conn_options=APIConnectOptions(
+                max_retry=1, retry_interval=0.001, connect_timeout=1.0, read_timeout=1.0
+            )
         )
         try:
             await asyncio.wait_for(second_connection.wait(), timeout=1.0)
@@ -253,7 +259,9 @@ async def test_stream_close_sends_session_close_and_closes_socket(end_input: boo
 
     async with _gateway(handler) as (base_url, session):
         stt = _make_stt(base_url, session)
-        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)
+        )
         try:
             await asyncio.wait_for(session_created.wait(), timeout=1.0)
             if end_input:
@@ -425,7 +433,9 @@ async def test_error_before_input_end_reconnects(error_code: int) -> None:
         errors: list[Exception] = []
         stt.on("error", lambda event: errors.append(event.error))
         stream = stt.stream(
-            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+            conn_options=APIConnectOptions(
+                max_retry=1, retry_interval=0.001, connect_timeout=1.0, read_timeout=1.0
+            )
         )
         try:
             await asyncio.wait_for(second_connection.wait(), timeout=1.0)
@@ -473,7 +483,9 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
         errors: list[Exception] = []
         stt.on("error", lambda event: errors.append(event.error))
         stream = stt.stream(
-            conn_options=APIConnectOptions(max_retry=3, retry_interval=0.001, timeout=1.0)
+            conn_options=APIConnectOptions(
+                max_retry=3, retry_interval=0.001, connect_timeout=1.0, read_timeout=1.0
+            )
         )
         try:
             stream.end_input()

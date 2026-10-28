@@ -182,7 +182,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         client = BosonAvatarAPI(
             api_key="boson-key",
             api_url="https://avatar.example/v1/",
-            conn_options=APIConnectOptions(max_retry=0, timeout=7),
+            conn_options=APIConnectOptions(max_retry=0),
             session=session,  # type: ignore[arg-type]
         )
 

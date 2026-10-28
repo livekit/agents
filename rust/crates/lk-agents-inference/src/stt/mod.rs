@@ -57,8 +57,8 @@ pub struct SttOptions {
     pub api_secret: String,
     pub extra_kwargs: serde_json::Map<String, serde_json::Value>,
     pub fallback: Vec<FallbackModel>,
-    /// Not an `Option`: `__init__` substitutes `DEFAULT_API_CONNECT_OPTIONS`; its `timeout` also
-    /// bounds the handshake and the session acknowledgement.
+    /// Not an `Option`: `__init__` substitutes `DEFAULT_API_CONNECT_OPTIONS`. `connect_timeout`
+    /// bounds the handshake, `read_timeout` the session acknowledgement.
     pub conn_options: ApiConnectOptions,
 }
 
@@ -586,6 +586,7 @@ impl SttSinkHandle {
         })
     }
 }
+
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
 #[lk_agents_abi::host(stream(name = "InferenceSttStream", doc = "One live recognition session.", sink = crate::stt::SttSinkHandle,
     input = AudioFrame, input_py = "rtc.AudioFrame",
@@ -669,10 +670,9 @@ struct Pump {
 
 impl Pump {
     /// `RecognizeStream._main_task`: each failed attempt reconnects, under `conn_options`, with the
-    /// audio pushed meanwhile still queued. An attempt that outlived the connect timeout had
+    /// audio pushed meanwhile still queued. An attempt that outlived the connect limit had
     /// connected, so the budget restarts.
     async fn run(mut self) {
-        let timeout = Duration::from_secs_f64(self.opts.conn_options.timeout.max(0.0));
         let mut retries = 0u32;
         let mut last_start = self.clock.now();
         loop {
@@ -682,8 +682,9 @@ impl Pump {
             let started = self.clock.now();
             self.offset += started.saturating_duration_since(last_start).as_secs_f64();
             last_start = started;
-            let Err(err) = self.attempt(timeout).await else { return };
-            if self.clock.now().saturating_duration_since(started) > timeout {
+            let Err(err) = self.attempt().await else { return };
+            let lasted = self.clock.now().saturating_duration_since(started);
+            if self.opts.conn_options.attempt_connected(lasted.as_secs_f64()) {
                 retries = 0;
             }
             let decision = decide(
@@ -717,8 +718,9 @@ impl Pump {
             }
         }
     }
+
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
-    async fn attempt(&mut self, timeout: Duration) -> Result<(), ApiError> {
+    async fn attempt(&mut self) -> Result<(), ApiError> {
         let headers = gateway_headers(
             self.identification
                 .as_ref()
@@ -771,7 +773,7 @@ impl Pump {
             &url,
             headers.into_vec(),
             &*self.clock,
-            timeout,
+            &self.opts.conn_options,
             WHAT,
             &self.create_frame,
         )
@@ -805,7 +807,7 @@ impl Pump {
                 deferred: self.deferred.clone(),
                 update_tx: self.update_tx.clone(),
                 clock: self.clock.clone(),
-                first_message_timeout: timeout,
+                ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
                 offset: self.offset,
             },
         );
@@ -840,6 +842,7 @@ impl Pump {
             if machine.lock().unwrap().replay_safe() { error } else { error.with_retryable(false) }
         })
     }
+
     async fn send_loop(
         sender: Arc<dyn WsSender>,
         audio_rx: &mut mpsc::Receiver<SinkCmd>,
@@ -972,25 +975,25 @@ impl Pump {
         // Completion may already be observed while its transcript is blocked on delivery.
         std::future::pending().await
     }
+
     async fn recv_loop(
         receiver: &mut dyn crate::transport::WsReceiver,
         machine: Arc<Mutex<SttProtocol>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {
-        let RecvCtx { event_tx, deferred, update_tx, clock, first_message_timeout, offset } = ctx;
-        // Only the first read (the `session.create` ack) is bounded; later silence is the user's.
+        let RecvCtx { event_tx, deferred, update_tx, clock, ack_deadline, offset } = ctx;
+        // Only the first read (the `session.create` ack) is a response the session waits for;
+        // later silence is the user's.
         let mut awaiting_first = true;
         let mut produced_output = false;
-        let first_deadline = clock.now().saturating_add(first_message_timeout);
         loop {
             let recv = receiver.recv();
-            let received = if awaiting_first {
-                within(&*clock, first_deadline.saturating_duration_since(clock.now()), recv).await
-            } else {
-                recv.await
-            };
+            let received = if awaiting_first { within(&*clock, ack_deadline, recv).await } else { recv.await };
             let msg = match received {
                 Ok(msg) => msg,
+                Err(TransportError::Timeout) if awaiting_first => {
+                    return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Read));
+                }
                 Err(err) => {
                     let error = connect_error(WHAT, err);
                     return Err(if produced_output { error.with_retryable(false) } else { error });
@@ -1097,7 +1100,8 @@ struct RecvCtx {
     deferred: Arc<DeferredExtra>,
     update_tx: mpsc::Sender<serde_json::Value>,
     clock: Arc<dyn Clock>,
-    first_message_timeout: Duration,
+    /// `read_timeout` from the session-create frame: the acknowledgement is a response.
+    ack_deadline: Option<lk_agents_abi::Ts>,
     offset: f64,
 }
 

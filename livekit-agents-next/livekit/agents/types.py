@@ -98,9 +98,6 @@ class APIConnectOptions:
     retry_interval: float = 2.0
     """Seconds between retries (the first retry waits 0.1 s)."""
 
-    timeout: float = 10.0
-    """Single limit, in seconds, of providers that do not read the phase limits yet."""
-
     pool_timeout: float | None = 10.0
     """Wait for transport capacity or a pooled connection."""
 
@@ -124,7 +121,6 @@ class APIConnectOptions:
         _core.api_connect_options_check(
             self.max_retry,
             self.retry_interval,
-            self.timeout,
             self.pool_timeout,
             self.connect_timeout,
             self.write_timeout,

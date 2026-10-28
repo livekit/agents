@@ -53,7 +53,7 @@ impl Pump {
                             &self.url,
                             self.headers.clone(),
                             self.clock.as_ref(),
-                            self.timeout,
+                            &self.opts.conn_options,
                             WHAT,
                             &self.create_frame,
                         )

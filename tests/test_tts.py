@@ -339,7 +339,7 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
     try:
         await asyncio.wait_for(
             _do_synthesis(
-                tts_v, TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=3, timeout=5)
+                tts_v, TEST_AUDIO_SYNTHESIZE, conn_options=APIConnectOptions(max_retry=3)
             ),
             timeout=30,
         )
@@ -374,7 +374,7 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
                     _do_synthesis(
                         tts_v,
                         TEST_AUDIO_SYNTHESIZE,
-                        conn_options=APIConnectOptions(max_retry=0, timeout=2.5),
+                        conn_options=APIConnectOptions(max_retry=0),
                     ),
                     timeout=10,
                 )
@@ -395,7 +395,9 @@ async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
             await _do_synthesis(
                 tts_v,
                 TEST_AUDIO_SYNTHESIZE,
-                conn_options=APIConnectOptions(max_retry=3, timeout=0.5, retry_interval=0.0),
+                conn_options=APIConnectOptions(
+                    max_retry=3, connect_timeout=0.5, read_timeout=0.5, retry_interval=0.0
+                ),
             )
 
         end_time = time.time()
@@ -418,13 +420,17 @@ async def test_tts_synthesize_error_propagation():
     try:
         with pytest.raises(APIError, match="no audio frames"):
             await _do_synthesis(
-                tts, "fake_text", conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+                tts,
+                "fake_text",
+                conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5),
             )
 
         tts.update_options(fake_exception=RuntimeError("test error"))
         with pytest.raises(RuntimeError, match="test error"):
             await _do_synthesis(
-                tts, "fake_text", conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+                tts,
+                "fake_text",
+                conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5),
             )
     finally:
         await tts.aclose()
@@ -441,7 +447,8 @@ async def test_tts_synthesize_retry_after_partial_audio():
     metrics_collected_events = EventCollector(tts_v, "metrics_collected")
     try:
         stream = tts_v.synthesize(
-            "fake_text", conn_options=APIConnectOptions(max_retry=3, timeout=0.5)
+            "fake_text",
+            conn_options=APIConnectOptions(max_retry=3, connect_timeout=0.5, read_timeout=0.5),
         )
         audio_events = [ev async for ev in stream]
 
@@ -673,7 +680,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
             _do_stream(
                 tts_v,
                 [TEST_AUDIO_SYNTHESIZE],
-                conn_options=APIConnectOptions(max_retry=3, timeout=5),
+                conn_options=APIConnectOptions(max_retry=3),
             ),
             timeout=30,
         )
@@ -702,7 +709,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
         #     _do_stream(
         #         tts_v,
         #         [TEST_AUDIO_SYNTHESIZE, TEST_AUDIO_SYNTHESIZE_MULTI_TOKENS],
-        #         conn_options=APIConnectOptions(max_retry=3, timeout=5),
+        #         conn_options=APIConnectOptions(max_retry=3),
         #     ),
         #     timeout=30,
         # )
@@ -733,7 +740,7 @@ async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
             _do_stream(
                 tts_v,
                 [],
-                conn_options=APIConnectOptions(max_retry=3, timeout=5),
+                conn_options=APIConnectOptions(max_retry=3),
             ),
             timeout=30,
         )
@@ -763,7 +770,7 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
                     _do_stream(
                         tts_v,
                         [TEST_AUDIO_SYNTHESIZE],
-                        conn_options=APIConnectOptions(max_retry=0, timeout=2.5),
+                        conn_options=APIConnectOptions(max_retry=0),
                     ),
                     timeout=10,
                 )
@@ -784,7 +791,9 @@ async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
             await _do_stream(
                 tts_v,
                 [TEST_AUDIO_SYNTHESIZE],
-                conn_options=APIConnectOptions(max_retry=3, timeout=0.5, retry_interval=0.0),
+                conn_options=APIConnectOptions(
+                    max_retry=3, connect_timeout=0.5, read_timeout=0.5, retry_interval=0.0
+                ),
             )
 
         end_time = time.time()

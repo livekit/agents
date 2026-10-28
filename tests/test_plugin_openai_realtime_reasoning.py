@@ -10,7 +10,7 @@ from livekit.plugins.openai.realtime.realtime_model import RealtimeModel
 
 pytestmark = pytest.mark.plugin("openai")
 
-_NO_RETRY = APIConnectOptions(max_retry=0, timeout=0.1)
+_NO_RETRY = APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
 
 
 def _session_update_payload(model: RealtimeModel) -> dict[str, Any]:

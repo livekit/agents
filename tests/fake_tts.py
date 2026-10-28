@@ -146,8 +146,9 @@ class FakeChunkedStream(ChunkedStream):
         )
 
         if self._tts._fake_timeout is not None:
-            if self._tts._fake_timeout > self._conn_options.timeout:
-                await asyncio.sleep(self._conn_options.timeout)
+            read_timeout = self._conn_options.read_timeout
+            if read_timeout is not None and self._tts._fake_timeout > read_timeout:
+                await asyncio.sleep(read_timeout)
                 raise APIConnectionError("timeout")
 
             await asyncio.sleep(self._tts._fake_timeout)
@@ -206,8 +207,9 @@ class FakeSynthesizeStream(SynthesizeStream):
         assert isinstance(self._tts, FakeTTS)
 
         if self._tts._fake_timeout is not None:
-            if self._tts._fake_timeout > self._conn_options.timeout:
-                await asyncio.sleep(self._conn_options.timeout)
+            read_timeout = self._conn_options.read_timeout
+            if read_timeout is not None and self._tts._fake_timeout > read_timeout:
+                await asyncio.sleep(read_timeout)
                 raise APIConnectionError("timeout")
 
             await asyncio.sleep(self._tts._fake_timeout)

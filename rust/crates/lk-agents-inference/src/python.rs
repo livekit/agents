@@ -7,13 +7,6 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-/// The per-request connect options of a native client. `max_retry` only reaches the gateway's
-/// session setup (`retries`, which the gateway runs server-side); the host's base classes own the
-/// client retry loop.
-pub(crate) fn conn_options(timeout: f64, max_retry: u32) -> lk_agents_abi::ApiConnectOptions {
-    lk_agents_abi::ApiConnectOptions { timeout, max_retry, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS }
-}
-
 pub(crate) fn json_from_py(value: Option<&Bound<'_, PyAny>>) -> PyResult<Value> {
     match value {
         None => Ok(Value::Null),

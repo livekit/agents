@@ -26,8 +26,8 @@ pub fn bound_views<T: ?Sized>(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
     pub max_retry_per_backend: u32,
-    /// Replaces `conn_options.timeout`. `None` keeps the caller's, as TTS does
-    /// (`tts/fallback_adapter.py:193`).
+    /// Bounds each attempt as its `total_timeout` (within the caller's); `None` keeps the
+    /// caller's, as TTS does (`tts/fallback_adapter.py:193`).
     pub attempt_timeout: Option<f64>,
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,
@@ -83,15 +83,14 @@ pub fn caller_default() -> ApiConnectOptions {
 }
 
 /// What a child sees on a real attempt: `dataclasses.replace(conn_options, max_retry=…,
-/// timeout=…, retry_interval=…)`, unconditionally (the N x M guard). The attempt timeout bounds
-/// the whole attempt: the legacy single limit and the attempt's total.
+/// retry_interval=…)`, unconditionally (the N x M guard), the attempt timeout bounding the whole
+/// attempt as its total.
 pub fn conn_options_for_attempt(
     caller: &ApiConnectOptions,
     policy: &ChainPolicy,
 ) -> ApiConnectOptions {
     ApiConnectOptions {
         max_retry: 0,
-        timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
         total_timeout: match (policy.attempt_timeout, caller.total_timeout) {
             (Some(attempt), Some(total)) => Some(attempt.min(total)),
             (attempt, total) => attempt.or(total),
@@ -109,7 +108,6 @@ pub fn conn_options_for_recovery(
 ) -> ApiConnectOptions {
     ApiConnectOptions {
         max_retry: 0,
-        timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
         total_timeout: match (policy.attempt_timeout, caller.total_timeout) {
             (Some(attempt), Some(total)) => Some(attempt.min(total)),
             (attempt, total) => attempt.or(total),
@@ -144,7 +142,6 @@ mod tests {
     // Catches: `caller_default` carrying the workspace `max_retry=3`.
     #[test]
     fn the_adapters_own_default_conn_options_do_not_retry() {
-        assert_eq!(caller_default().max_retry, 0);
-        assert_eq!(caller_default().timeout, ApiConnectOptions::default().timeout);
+        assert_eq!(caller_default(), ApiConnectOptions { max_retry: 0, ..ApiConnectOptions::default() });
     }
 }

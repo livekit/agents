@@ -478,13 +478,13 @@ def otel_turn_records(report: Any | None = None) -> list[tuple[str, str, Any, di
 def api_connect_options_check(
     max_retry: int,
     retry_interval: float,
-    timeout: float,
     pool_timeout: float | None = None,
     connect_timeout: float | None = None,
     write_timeout: float | None = None,
     read_timeout: float | None = None,
     total_timeout: float | None = None,
 ) -> None: ...
+def api_attempt_connected(connect_timeout: float | None, lasted_seconds: float) -> bool: ...
 def api_retry_interval(retry_interval: float, num_retries: int) -> float: ...
 def instructions_message_id() -> str: ...
 def remove_instructions(item_ids: list[str]) -> list[int]: ...
@@ -555,12 +555,7 @@ async def wait_for_track_publication(
 ) -> tuple[str | None, str]: ...
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
 def video_queue_frames() -> int: ...
-async def tts_adapter_stream(
-    provider: Any,
-    maximum: int,
-    interval: float,
-    timeout: float,
-) -> FallbackTtsStream: ...
+async def tts_adapter_stream(provider: Any, conn_options: Any) -> FallbackTtsStream: ...
 def provider_retry(
     kind: str,
     maximum: int,
@@ -1770,14 +1765,7 @@ class SttStreamAdapter:
 class RetryingStt:
     """`_core.RetryingStt`: what a host STT bound to `conn_options` is to the core."""
 
-    def __init__(
-        self,
-        stt: Any,
-        *,
-        max_retry: int,
-        retry_interval: float,
-        timeout: float,
-    ) -> None: ...
+    def __init__(self, stt: Any, conn_options: Any) -> None: ...
 
 
 class LlmMetricState:

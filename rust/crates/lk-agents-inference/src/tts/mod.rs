@@ -188,10 +188,7 @@ pub struct TtsClientConfig {
     pub extra_kwargs: Option<crate::extra::ExtraKwargs>,
     #[host(kwarg(default = None))]
     pub fallback: Option<crate::extra::Fallbacks<FallbackModel>>,
-    #[host(kwarg(default = 10.0))]
-    pub timeout: f64,
-    #[host(kwarg(default = 3))]
-    pub max_retry: u32,
+    pub conn_options: ApiConnectOptions,
 }
 
 impl NativeTts {
@@ -244,12 +241,12 @@ impl NativeTts {
         let (ws, clock, connections) =
             (self.ws.clone(), self.clock.clone() as Arc<dyn Clock>, self.connections.clone());
         let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
-        let timeout = Duration::from_secs_f64(opts.conn_options.timeout.max(0.0));
         let create_frame = wire::session_create(&opts);
         let headers = headers.into_vec();
         let configuration = connection_configuration(&create_frame, &headers);
         self.spawner.spawn_unboxed(async move {
-            let opened = open_ws(ws.as_ref(), &url, headers, &*clock, timeout, WHAT, &create_frame);
+            let opened =
+                open_ws(ws.as_ref(), &url, headers, &*clock, &opts.conn_options, WHAT, &create_frame);
             if let Ok((sender, receiver)) = opened.await {
                 let mut connections = connections.lock().unwrap();
                 let id = connections.opened(pool_secs(&*clock));
@@ -393,7 +390,6 @@ impl NativeTts {
             ws: self.ws.clone(),
             url: format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model),
             headers: headers.into_vec(),
-            timeout: Duration::from_secs_f64(opts.conn_options.timeout.max(0.0)),
             clock: clock.clone(),
             accepted_at,
             stopped,
@@ -673,7 +669,6 @@ struct Pump {
     ws: Arc<dyn WsTransport>,
     url: String,
     headers: Vec<(String, String)>,
-    timeout: Duration,
     clock: Arc<dyn Clock>,
     accepted_at: Ts,
     stopped: watch::Receiver<bool>,

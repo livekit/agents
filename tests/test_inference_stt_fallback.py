@@ -238,11 +238,11 @@ class TestSTTConstructorFallbackAndConnectOptions:
         assert stt._opts.conn_options == DEFAULT_API_CONNECT_OPTIONS
 
     def test_connect_options_custom_timeout(self):
-        """Custom connect_options with timeout is stored."""
-        custom_opts = APIConnectOptions(timeout=30.0)
+        """Custom connect_options with a read timeout is stored."""
+        custom_opts = APIConnectOptions(read_timeout=30.0)
         stt = _make_stt(conn_options=custom_opts)
         assert stt._opts.conn_options == custom_opts
-        assert stt._opts.conn_options.timeout == 30.0
+        assert stt._opts.conn_options.read_timeout == 30.0
 
     def test_connect_options_custom_max_retry(self):
         """Custom conn_options with max_retry is stored."""
@@ -253,10 +253,10 @@ class TestSTTConstructorFallbackAndConnectOptions:
 
     def test_connect_options_full_custom(self):
         """Fully custom connect_options is stored correctly."""
-        custom_opts = APIConnectOptions(timeout=60.0, max_retry=10, retry_interval=2.0)
+        custom_opts = APIConnectOptions(read_timeout=60.0, max_retry=10, retry_interval=2.0)
         stt = _make_stt(conn_options=custom_opts)
         assert stt._opts.conn_options == custom_opts
-        assert stt._opts.conn_options.timeout == 60.0
+        assert stt._opts.conn_options.read_timeout == 60.0
         assert stt._opts.conn_options.max_retry == 10
         assert stt._opts.conn_options.retry_interval == 2.0
 

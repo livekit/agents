@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics, RealClock};
 use prost::Message as _;
 use tokio::sync::mpsc;
@@ -215,17 +215,17 @@ impl CloudTransport {
 
         let url = eot_url(&self.opts.base_url);
         let connect = self.connector.connect(&url, &headers);
-        let timeout = Duration::from_secs_f64(self.opts.conn_options.timeout.max(0.0));
+        let deadline = self.opts.conn_options.connect_deadline(self.clock.now());
         // On the session clock, not tokio's: the bound a virtual clock can fire and a test can see.
-        let (mut sink, stream) = match lk_agents_abi::timeout(&*self.clock, timeout, connect).await
+        let (mut sink, stream) = match lk_agents_abi::before(&*self.clock, deadline, connect).await
         {
             // Every arm is `retryable=False`, as `_connect_ws` sets it: the fallback is the
             // recovery.
             Err(Elapsed) => {
-                return Err(ApiError::timeout(Some(
-                    "turn detector connection timed out".to_owned(),
-                ))
-                .with_retryable(false));
+                let message = Some("turn detector connection timed out".to_owned());
+                let error =
+                    ApiError { phase: Some(TimeoutPhase::Connect), ..ApiError::timeout(message) };
+                return Err(error.with_retryable(false));
             }
             Ok(Err(e)) => return Err(e),
             Ok(Ok(halves)) => halves,

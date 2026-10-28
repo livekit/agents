@@ -99,7 +99,7 @@ class TestLLMErrorHandling:
             with pytest.raises(APIStatusError) as excinfo:
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0),
                 ) as stream:
                     async for _ in stream:
                         pass
@@ -125,7 +125,7 @@ class TestLLMErrorHandling:
             with pytest.raises(APIStatusError) as excinfo:
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0),
                 ) as stream:
                     async for _ in stream:
                         pass
@@ -155,7 +155,7 @@ class TestLLMErrorHandling:
             with pytest.raises(APIStatusError) as excinfo:
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0),
                 ) as stream:
                     async for chunk in stream:
                         chunks.append(chunk)
@@ -207,7 +207,7 @@ class TestChatCompletionsMode:
         try:
             async with model.chat(
                 chat_ctx=llm.ChatContext.empty(),
-                conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                conn_options=APIConnectOptions(max_retry=0),
             ) as stream:
                 async for chunk in stream:
                     chunks.append(chunk)
@@ -242,7 +242,7 @@ class TestChatCompletionsMode:
         try:
             async with model.chat(
                 chat_ctx=llm.ChatContext.empty(),
-                conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                conn_options=APIConnectOptions(max_retry=0),
             ) as stream:
                 async for chunk in stream:
                     chunks.append(chunk)
@@ -270,7 +270,7 @@ class TestChatCompletionsMode:
         try:
             async with model.chat(
                 chat_ctx=llm.ChatContext.empty(),
-                conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                conn_options=APIConnectOptions(max_retry=0),
             ) as stream:
                 async for chunk in stream:
                     chunks.append(chunk)
@@ -295,7 +295,7 @@ class TestChatCompletionsMode:
         try:
             async with model.chat(
                 chat_ctx=llm.ChatContext.empty(),
-                conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                conn_options=APIConnectOptions(max_retry=0),
             ) as stream:
                 async for _ in stream:
                     pass
@@ -314,7 +314,7 @@ class TestChatCompletionsMode:
             with pytest.raises(APIStatusError) as excinfo:
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=0),
                 ) as stream:
                     async for _ in stream:
                         pass
@@ -337,7 +337,7 @@ class TestChatCompletionsMode:
             with pytest.raises(APIStatusError) as excinfo:
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0),
                 ) as stream:
                     async for chunk in stream:
                         chunks.append(chunk)
@@ -358,7 +358,7 @@ class TestChatCompletionsMode:
             with pytest.raises(ValueError, match="Provider tools"):
                 async with model.chat(
                     chat_ctx=llm.ChatContext.empty(),
-                    conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                    conn_options=APIConnectOptions(max_retry=0),
                     tools=[WebSearch()],
                 ) as stream:
                     async for _ in stream:

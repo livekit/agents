@@ -139,7 +139,7 @@ def _drain(llm_model: LLM, *, max_retry: int):
     chat_ctx.add_message(role="user", content="hi")
     return llm_model.chat(
         chat_ctx=chat_ctx,
-        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0, timeout=5.0),
+        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.0),
     )
 
 

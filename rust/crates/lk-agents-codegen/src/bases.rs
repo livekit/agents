@@ -715,13 +715,16 @@ impl Writer<'_> {
             }
             Role::Conn { retry } => {
                 self.need("..types", "APIConnectOptions");
-                let view = format!("_{}Conn(self, APIConnectOptions(**conn))", self.p.class);
+                let class = &self.p.class;
                 match retry {
                     Some(r) => {
                         self.need("..", "_core");
-                        format!("return _core.{r}({view}, **conn)")
+                        format!(
+                            "options = APIConnectOptions(**conn)\n        \
+                             return _core.{r}(_{class}Conn(self, options), options)"
+                        )
                     }
-                    None => format!("return {view}"),
+                    None => format!("return _{class}Conn(self, APIConnectOptions(**conn))"),
                 }
             }
             Role::Markup => "return self.markup._provider_key()".to_owned(),
@@ -1324,7 +1327,14 @@ const RECOGNIZE: &str = r#"
             now = time.time()
             self._start_time_offset += now - started
             self._start_time = started = now
-            await self._run()
+            try:
+                await self._run()
+            except Exception:
+                if _core.api_attempt_connected(
+                    self._conn_options.connect_timeout, time.time() - started
+                ):
+                    self._core_attempts.count = 0
+                raise
 
         await self._core_attempts.run(attempt)
 

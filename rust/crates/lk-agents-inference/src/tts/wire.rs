@@ -97,7 +97,7 @@ pub fn session_create(opts: &TtsOptions) -> Value {
     }
     params.insert(
         "connection".into(),
-        json!({"timeout": opts.conn_options.timeout, "retries": opts.conn_options.max_retry}),
+        crate::extra::connection(&opts.conn_options),
     );
     Value::Object(params)
 }

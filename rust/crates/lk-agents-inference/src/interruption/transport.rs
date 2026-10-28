@@ -691,9 +691,9 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         .collect();
     headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
 
-    let timeout = Duration::from_secs_f64(ctx.config.conn_options.timeout.max(0.0));
+    let deadline = ctx.config.conn_options.connect_deadline(ctx.clock.now());
     let connect = ctx.config.transport.connect(&url, headers);
-    let (sender, receiver) = match lk_agents_abi::timeout(&*ctx.clock, timeout, connect).await {
+    let (sender, receiver) = match lk_agents_abi::before(&*ctx.clock, deadline, connect).await {
         Err(_) | Ok(Err(TransportError::Timeout)) => {
             return Err(StreamError {
                 request: None,

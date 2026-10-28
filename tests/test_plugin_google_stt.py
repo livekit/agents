@@ -110,7 +110,7 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
     client = _FakeSpeechClient()
     stream = SpeechStream(
         stt=_FakeSTT(),
-        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1),
         pool=_FakeConnectionPool(client),
         recognizer_cb=lambda _client: "",
         config=_default_stt_options(),
@@ -151,7 +151,7 @@ async def test_google_stt_stream_cancel_waits_for_cleanup_if_cancelled_twice(mon
     client = _FakeSpeechClient()
     stream = SpeechStream(
         stt=_FakeSTT(),
-        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1),
         pool=_FakeConnectionPool(client),
         recognizer_cb=lambda _client: "",
         config=_default_stt_options(),
@@ -644,7 +644,7 @@ async def test_custom_prompt_config_cleared_on_stream_model_switch_from_chirp_3(
     options.custom_prompt_config = custom_prompt_config
     stream = SpeechStream(
         stt=_FakeSTT(),
-        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1),
         pool=_FakeConnectionPool(client),
         recognizer_cb=lambda _client: "",
         config=options,

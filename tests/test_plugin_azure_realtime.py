@@ -303,7 +303,7 @@ def _model(fake: _FakeVoiceLive, **kwargs: Any) -> RealtimeModel:
     kwargs.setdefault("api_key", "test-key")
     return RealtimeModel(
         endpoint=fake.endpoint,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0),
+        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0),
         **kwargs,
     )
 
@@ -1279,7 +1279,7 @@ async def test_failing_replays_exhaust_the_retries(voice_live: _FakeVoiceLive) -
     model = RealtimeModel(
         endpoint=voice_live.endpoint,
         api_key="test-key",
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=5.0),
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0),
     )
     session = model.session()
     try:
@@ -1499,7 +1499,9 @@ async def test_exhausted_retries_close_the_session() -> None:
     model = RealtimeModel(
         endpoint="http://127.0.0.1:1",
         api_key="test-key",
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        conn_options=APIConnectOptions(
+            max_retry=1, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+        ),
     )
     session = model.session()
     try:

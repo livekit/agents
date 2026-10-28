@@ -24,7 +24,9 @@ from livekit.agents.types import APIConnectOptions
 
 pytestmark = pytest.mark.unit
 
-CONN_OPTIONS = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=1.0)
+CONN_OPTIONS = APIConnectOptions(
+    max_retry=0, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+)
 
 
 class _FakeWebSocket:

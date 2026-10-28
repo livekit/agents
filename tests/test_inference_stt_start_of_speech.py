@@ -146,7 +146,7 @@ async def test_connection_session_id_becomes_fallback_request_id(
         api_key="key",
         api_secret="secret",
     )
-    stream._conn_options = APIConnectOptions(timeout=1.0, max_retry=0)
+    stream._conn_options = APIConnectOptions(connect_timeout=1.0, read_timeout=1.0, max_retry=0)
     stream._request_id = "stt_request_fallback"
     http_session = _FakeHTTPSession()
 

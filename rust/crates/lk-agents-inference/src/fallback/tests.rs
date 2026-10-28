@@ -300,8 +300,8 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
     let _ = run_once(&rig, RecoverySlot::Streaming).await;
     let opened = primary.opened.lock().expect("opened").clone();
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].max_retry, 0, "the chain owns every retry");
-    assert_eq!(opened[0].timeout, caller().timeout, "TTS keeps the caller's timeout");
+    let limits = ApiConnectOptions { max_retry: 0, retry_interval: opened[0].retry_interval, ..caller() };
+    assert_eq!(opened[0], limits, "the chain owns every retry; TTS keeps the caller's limits");
 
     until("the probe to run", || primary.probe_count(RecoverySlot::Streaming) == 1).await;
     let probes = primary.probes.lock().expect("probes").clone();

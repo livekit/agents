@@ -250,6 +250,41 @@ async fn a_handshake_that_never_completes_is_reported_as_a_connection_timeout_on
     assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
 }
 
+// Catches: a send that never completes (the peer stopped reading and its TCP window filled)
+// wedging the session forever instead of failing the connection within `write_timeout`.
+#[tokio::test]
+async fn a_send_that_stalls_fails_the_connection_within_the_write_timeout() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let ws = Arc::new(FakeWs::stalling_sends());
+    let mut connect = Connect::openai("sk-test", "https://api.openai.com/v1");
+    connect.conn.max_retry = 0;
+    connect.conn.write_timeout = Some(3.0);
+    let realtime = NativeRealtime::new(
+        OPENAI,
+        "sk-test",
+        ws.clone(),
+        Arc::new(TokioSpawner::current()),
+        clock.clone(),
+        Arc::new(NoImages),
+    )
+    .with_connect(connect)
+    .with_ids(Arc::new(SeqIds::default()));
+    let session = realtime.session(false).await;
+
+    lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(3)).await;
+    loop {
+        match next_event(&session).await {
+            Event::Metrics(_) => continue,
+            Event::Error(err) => {
+                assert!(err.message.contains("write timeout"), "{}", err.message);
+                assert!(!err.recoverable, "no retry budget: there is nothing to resume");
+                break;
+            }
+            other => panic!("expected the write timeout, got {other:?}"),
+        }
+    }
+}
+
 // Catches: a dropped connection ending the session, or reconnecting without telling the caller
 // or without replaying the session. The reference's `_main_task` reports the drop as a recoverable
 // error, waits its first retry interval and reconnects, sending the session again.

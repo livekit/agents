@@ -19,7 +19,7 @@ pub struct TungsteniteEotConnector;
 
 #[async_trait]
 impl WebSocketConnector for TungsteniteEotConnector {
-    /// No timeout here: `CloudTransport::connect` bounds it with `conn_options.timeout`.
+    /// No timeout here: `CloudTransport::connect` bounds it with `conn_options.connect_timeout`.
     async fn connect(
         &self,
         url: &str,

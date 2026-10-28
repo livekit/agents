@@ -358,7 +358,9 @@ async def test_timeout_phases(mock_palabra_ws, phase):
     """
     ws = mock_palabra_ws
     tts = TTS(api_key="test-key")
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.5))
+    stream = tts.stream(
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
+    )
     pcm = b"\x55" * 2000
 
     if phase == "no_audio_times_out":

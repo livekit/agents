@@ -83,7 +83,9 @@ async def test_cartesia_inference_preserves_word_separators() -> None:
     )
     tts._pool = _FakePool(websocket, session_id="inference_connection")  # type: ignore[assignment]
 
-    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+    async with tts.stream(
+        conn_options=APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)
+    ) as stream:
         stream.push_text("hello world.")
         stream.end_input()
         events = [event async for event in stream]

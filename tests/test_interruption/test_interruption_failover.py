@@ -29,7 +29,9 @@ from livekit.agents.types import APIConnectOptions
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 MAX_RETRY = 2
-CONN_OPTIONS = APIConnectOptions(max_retry=MAX_RETRY, retry_interval=0.0, timeout=1.0)
+CONN_OPTIONS = APIConnectOptions(
+    max_retry=MAX_RETRY, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+)
 
 
 def _make_audio_frame(*, num_samples: int = 1600, sample_rate: int = 16000) -> rtc.AudioFrame:

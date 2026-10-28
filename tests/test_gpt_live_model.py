@@ -923,8 +923,8 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
         session.append_commentary("Ask for the order number.")
         session.push_audio(_silence(100))
 
-        # Context injection can outlast the connection timeout without holding later commands.
-        await asyncio.sleep(model._opts.conn_options.timeout * 2)
+        # A context receipt can outlast the read timeout without holding later commands.
+        await asyncio.sleep(model._opts.conn_options.read_timeout * 2)
         assert [event["type"] for event in ws.sent] == [
             "session.start",
             "session.instructions.append",

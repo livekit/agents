@@ -96,22 +96,20 @@ impl SentenceSplitter for PreSplit {
     }
 }
 
-/// `tts.StreamAdapter`'s engine: `provider` under `conn_options(max_retry, interval, timeout)`,
-/// fed sentences the host already split, answering the duplex stream.
+/// `tts.StreamAdapter`'s engine: `provider` under `conn_options`, fed sentences the host already
+/// split, answering the duplex stream.
 #[crate::host(export(name = "tts_adapter_stream", stream = crate::tts::tts::FallbackTtsStream))]
 pub async fn adapter_stream(
     provider: Arc<dyn Tts>,
-    maximum: u32,
-    interval: f64,
-    timeout: f64,
+    conn_options: crate::ApiConnectOptions,
     #[host(ambient)] clock: Arc<dyn Clock>,
 ) -> Result<(TtsSink, TtsSource), ProviderError> {
-    let options = crate::ApiConnectOptions::new(maximum, interval, timeout).map_err(|e| {
+    conn_options.validate().map_err(|e| {
         ProviderError::Local(ApiError { retryable: false, ..ApiError::new(e.to_string()) })
     })?;
-    let provider = provider.with_conn_options(&options).unwrap_or(provider);
+    let provider = provider.with_conn_options(&conn_options).unwrap_or(provider);
     StreamAdapter::new(provider, Arc::new(|_| Box::new(PreSplit)), clock)
-        .with_budget(options)
+        .with_budget(conn_options)
         .stream()
         .await
 }
@@ -1066,7 +1064,7 @@ mod tests {
     async fn a_failed_sentence_is_synthesized_again_within_its_budget() {
         let mut tts = FakeTts::new(3);
         Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-        let budget = crate::ApiConnectOptions::new(2, 0.0, 1.0).unwrap();
+        let budget = crate::ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..crate::ApiConnectOptions::default() };
         let clock = Arc::new(crate::utils::clock::SimClock::new());
         let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
         let adapter = StreamAdapter::new(tts.clone(), splitter, clock).with_budget(budget);

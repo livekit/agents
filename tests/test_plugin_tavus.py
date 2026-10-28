@@ -16,7 +16,7 @@ from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 
 pytestmark = pytest.mark.plugin("tavus")
 
-_OPTS = APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=1.0)
+_OPTS = APIConnectOptions(max_retry=2, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0)
 
 
 class _Response:

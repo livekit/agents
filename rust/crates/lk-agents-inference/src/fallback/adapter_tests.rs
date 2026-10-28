@@ -227,7 +227,7 @@ async fn a_wrapped_llm_receives_the_chains_conn_options_not_the_callers() {
         let seen = who.seen.lock().expect("seen").clone();
         let first = *seen.first().unwrap_or_else(|| panic!("{} was never called", who.label));
         assert_eq!(first.max_retry, 0, "max_retry_per_llm defaults to 0");
-        assert_eq!(first.timeout, 5.0, "attempt_timeout, not the caller's 10.0");
+        assert_eq!(first.total_timeout, Some(5.0), "attempt_timeout, not the caller's none");
         assert_eq!(first.retry_interval, 0.5);
     }
     assert_eq!(backup.seen.lock().expect("seen").len(), 1, "the backup served and was not probed");
@@ -476,8 +476,8 @@ async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
     let p: Vec<u32> = seen.iter().filter(|(l, _)| l == "p").map(|(_, c)| c.max_retry).collect();
     assert_eq!(p[0], 0, "the chain owns retry attempts");
     assert_eq!(p[1], 0, "the probe pins it to 0");
-    let attempt_timeout = seen.iter().find(|(l, _)| l == "p").expect("primary").1.timeout;
-    assert_eq!(attempt_timeout, 10.0);
+    let attempt_timeout = seen.iter().find(|(l, _)| l == "p").expect("primary").1.total_timeout;
+    assert_eq!(attempt_timeout, Some(10.0));
     fb.aclose();
 }
 

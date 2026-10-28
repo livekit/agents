@@ -82,7 +82,7 @@ def _new_synthesize_stream(tts: xai_tts.TTS) -> xai_tts.SynthesizeStream:
     stream = object.__new__(xai_tts.SynthesizeStream)
     stream._tts = tts  # pyright: ignore[reportPrivateUsage]
     stream._opts = replace(tts._opts)  # pyright: ignore[reportPrivateUsage]
-    stream._conn_options = APIConnectOptions(max_retry=0, timeout=1.0)  # pyright: ignore[reportPrivateUsage]
+    stream._conn_options = APIConnectOptions(max_retry=0, connect_timeout=1.0, read_timeout=1.0)  # pyright: ignore[reportPrivateUsage]
     stream._started_time = 0.0  # pyright: ignore[reportPrivateUsage]
     stream._acquire_time = 0.0  # pyright: ignore[reportPrivateUsage]
     stream._connection_reused = False  # pyright: ignore[reportPrivateUsage]

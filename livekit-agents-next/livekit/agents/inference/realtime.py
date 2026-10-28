@@ -4,11 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from .. import _core
 from ..llm import realtime as llm_realtime
-from ..llm._realtime import (
-    RealtimeModel as _RealtimeModel,
-    RealtimeSession,
-    _native_connect_timeout,
-)
+from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
 from ..llm.tool_context import ToolChoice
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ._utils import (
@@ -67,9 +63,7 @@ class RealtimeModel(_RealtimeModel):
             modalities=modalities or None,
             inference_provider=provider,
             inference_class=inference_class,
-            timeout=_native_connect_timeout(conn_options),
-            max_retry=conn_options.max_retry,
-            retry_interval=conn_options.retry_interval,
+            conn_options=conn_options,
             label=f"{type(self).__module__}.{type(self).__name__}",
             input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,

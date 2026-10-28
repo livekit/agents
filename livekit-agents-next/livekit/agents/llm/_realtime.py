@@ -43,18 +43,6 @@ DEFAULT_VOICE = "marin"
 _PLUGIN_LABEL = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
 
-def _native_connect_timeout(options: APIConnectOptions) -> float:
-    """The connect limit of the native websocket bridge, which takes only that phase.
-
-    It has no pool, and sends, response waits and the session's total are not yet passed to it.
-    """
-    # the bridge's deadline saturates, so the largest duration it accepts is no limit
-    return _NO_LIMIT if options.connect_timeout is None else options.connect_timeout
-
-
-_NO_LIMIT = float(2**63)
-
-
 # sessions run in the core; the name stays for the plugins that subclass it
 RealtimeSession = llm_realtime.RealtimeSession
 
@@ -139,9 +127,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             azure_deployment=azure_deployment,
             entra_token=entra_token,
             azure_defaults=_azure_defaults,
-            timeout=_native_connect_timeout(conn_options),
-            max_retry=conn_options.max_retry,
-            retry_interval=conn_options.retry_interval,
+            conn_options=conn_options,
             label=label,
             input_audio_transcription=input_audio_transcription,
             input_audio_noise_reduction=input_audio_noise_reduction,

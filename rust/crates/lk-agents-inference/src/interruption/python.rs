@@ -26,7 +26,7 @@ use super::{
 };
 use crate::creds::resolve_credential;
 use crate::headers::default_inference_url_from_env;
-use crate::python::{conn_options, header_provider, register_class, register_fn};
+use crate::python::{header_provider, register_class, register_fn};
 use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_abi::python::{CancellingHandle, HostBridge as _};
 
@@ -76,7 +76,7 @@ impl InterruptionDetector {
         api_key = None,
         api_secret = None,
         headers = None,
-        timeout = 10.0,
+        conn_options = lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
         token_ttl_secs = 600,
         http_session = None,
     ))]
@@ -92,7 +92,7 @@ impl InterruptionDetector {
         api_key: Option<String>,
         api_secret: Option<String>,
         headers: Option<Py<PyAny>>,
-        timeout: f64,
+        conn_options: lk_agents_abi::ApiConnectOptions,
         token_ttl_secs: u64,
         http_session: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
@@ -125,7 +125,7 @@ impl InterruptionDetector {
         // `Authorization`: the crate mints that.
         let headers = headers.map_or_else(|| ConnectionConfig::default().headers, header_provider);
         let config = ConnectionConfig {
-            conn_options: conn_options(timeout, 0),
+            conn_options: lk_agents_abi::ApiConnectOptions { max_retry: 0, ..conn_options },
             headers,
             token_ttl_secs,
             ..ConnectionConfig::default()

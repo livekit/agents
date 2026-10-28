@@ -145,7 +145,12 @@ async fn update_options_forces_a_reconnect_that_carries_the_new_settings() {
 async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
     let port = dead_port().await;
     let config = ConnectionConfig {
-        conn_options: ApiConnectOptions::new(2, 0.01, 1.0).unwrap(),
+        conn_options: ApiConnectOptions {
+            max_retry: 2,
+            retry_interval: 0.01,
+            connect_timeout: Some(1.0),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let (detector, mut events) = AdaptiveInterruptionDetector::new(

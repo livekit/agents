@@ -618,7 +618,7 @@ async fn the_intent_judge_forces_check_intent_with_the_default_options() {
     let seen = llm.request();
     assert_eq!(seen.tool_choice, Some(ToolChoice::Required));
     assert_eq!(seen.tools[0].name, "check_intent");
-    assert_eq!(seen.conn_options.timeout, lk_agents_abi::ApiConnectOptions::default().timeout);
+    assert_eq!(seen.conn_options, lk_agents_abi::ApiConnectOptions::default());
     assert_eq!(llm.closed.load(Ordering::SeqCst), 1);
 }
 

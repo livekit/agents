@@ -121,9 +121,7 @@ impl PyNativeRealtimeModel {
         api_secret = None,
         inference_provider = None,
         inference_class = None,
-        timeout = 10.0,
-        max_retry = 3,
-        retry_interval = 2.0,
+        conn_options = lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
         label = None,
         **options,
     ))]
@@ -141,13 +139,17 @@ impl PyNativeRealtimeModel {
         api_secret: Option<String>,
         inference_provider: Option<String>,
         inference_class: Option<String>,
-        timeout: f64,
-        max_retry: u32,
-        retry_interval: f64,
+        conn_options: ApiConnectOptions,
         label: Option<String>,
         options: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         check_pid()?;
+        // A realtime session runs until closed: there is no operation for a total limit to end.
+        if conn_options.total_timeout.is_some() {
+            return Err(PyValueError::new_err(
+                "conn_options.total_timeout is not supported by realtime models: leave it None",
+            ));
+        }
         let o = Options::read(options, &["max_session_duration"])?;
         let (input_audio_transcription, input_audio_noise_reduction, turn_detection) =
             (o.get("input_audio_transcription"), o.get("input_audio_noise_reduction"), o.get("turn_detection"));
@@ -231,7 +233,7 @@ impl PyNativeRealtimeModel {
             base_url,
             azure: is_azure.then_some(Azure { deployment: azure_deployment }),
             auth,
-            conn: ApiConnectOptions { max_retry, retry_interval, timeout, ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS },
+            conn: conn_options,
         };
         let mut native = NativeRealtime::new(
             dialect,

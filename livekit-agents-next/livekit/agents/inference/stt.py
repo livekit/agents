@@ -167,8 +167,7 @@ class STT(stt.STT):
             api_secret=self._creds.api_secret,
             extra_kwargs=self._extra,
             fallback=self._fallback or None,
-            timeout=self._conn.timeout,
-            max_retry=self._conn.max_retry,
+            conn_options=self._conn,
             vad=self._vad,
         )
 

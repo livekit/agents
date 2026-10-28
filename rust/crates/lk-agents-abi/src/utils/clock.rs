@@ -280,9 +280,23 @@ pub async fn timeout<F: Future>(
     limit: Duration,
     fut: F,
 ) -> Result<F::Output, Elapsed> {
-    let deadline = clock.now().saturating_add(limit);
+    before(clock, Some(clock.now().saturating_add(limit)), fut).await
+}
+
+/// `fut` unless `deadline` passes first; `None` never elapses. A ready result beats an elapsed
+/// deadline.
+pub async fn before<F: Future>(
+    clock: &dyn Clock,
+    deadline: Option<Ts>,
+    fut: F,
+) -> Result<F::Output, Elapsed> {
     let mut fut = pin!(fut);
-    let mut wait = pin!(clock.wait_until(deadline));
+    let mut wait = pin!(async {
+        match deadline {
+            Some(at) => clock.wait_until(at).await,
+            None => std::future::pending().await,
+        }
+    });
     std::future::poll_fn(|cx| {
         if let Poll::Ready(v) = fut.as_mut().poll(cx) {
             return Poll::Ready(Ok(v));

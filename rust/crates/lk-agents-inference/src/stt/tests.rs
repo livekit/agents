@@ -41,7 +41,6 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     opts.conn_options = ApiConnectOptions {
         max_retry: 2,
         retry_interval: 0.0,
-        timeout: 10.0,
         ..Default::default()
     };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));

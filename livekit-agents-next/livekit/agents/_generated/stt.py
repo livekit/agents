@@ -300,7 +300,8 @@ class STT(
         self._emit_error(error, recoverable)
 
     def _core_with_conn_options(self, conn: dict[str, Any]) -> Any:
-        return _core.RetryingStt(_STTConn(self, APIConnectOptions(**conn)), **conn)
+        options = APIConnectOptions(**conn)
+        return _core.RetryingStt(_STTConn(self, options), options)
 
     async def _core_recognize(
         self,
@@ -432,7 +433,14 @@ class RecognizeStream(ABC):
             now = time.time()
             self._start_time_offset += now - started
             self._start_time = started = now
-            await self._run()
+            try:
+                await self._run()
+            except Exception:
+                if _core.api_attempt_connected(
+                    self._conn_options.connect_timeout, time.time() - started
+                ):
+                    self._core_attempts.count = 0
+                raise
 
         await self._core_attempts.run(attempt)
 

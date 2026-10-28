@@ -26,7 +26,9 @@ from livekit.agents.utils import aio
 
 pytestmark = pytest.mark.unit
 
-CONN_OPTIONS = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=1.0)
+CONN_OPTIONS = APIConnectOptions(
+    max_retry=0, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0
+)
 
 
 def _make_detector(*, threshold: NotGivenOr[float] = NOT_GIVEN) -> AdaptiveInterruptionDetector:

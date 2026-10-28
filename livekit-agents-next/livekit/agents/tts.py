@@ -342,10 +342,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         if self._tts._stream_pacer:
             sentences = self._tts._stream_pacer.wrap(sentences, output_emitter)
         _initialize(output_emitter, self._tts, stream=True)
-        conn = self._conn_options
-        native = await _core.tts_adapter_stream(
-            self._tts._wrapped_tts, conn.max_retry, conn.retry_interval, conn.timeout
-        )
+        native = await _core.tts_adapter_stream(self._tts._wrapped_tts, self._conn_options)
 
         async def _forward() -> None:
             async for data in self.input:

@@ -3,7 +3,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Clock, Elapsed};
@@ -522,10 +522,10 @@ impl Pump {
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
         let headers = self.connect.headers()?;
-        // The handshake, bounded on the session clock.
-        let timeout = Duration::from_secs_f64(self.connect.conn.timeout.max(0.0));
+        // The handshake, bounded by `connect_timeout` on the session clock.
+        let deadline = self.connect.conn.connect_deadline(self.clock.now());
         let connect = self.transport.connect(&self.url, headers);
-        let (sender, receiver) = match lk_agents_abi::timeout(&*self.clock, timeout, connect).await {
+        let (sender, receiver) = match lk_agents_abi::before(&*self.clock, deadline, connect).await {
             Ok(Ok(pair)) => pair,
             Ok(Err(TransportError::Status { status, message, .. })) => {
                 return Err(ApiError::from_http(&message, status, None));
@@ -552,9 +552,9 @@ impl Pump {
             let now = self.clock.now();
             if reconnecting { m.reconnect(now) } else { m.open(now) }
         };
-        if !self.dispatch(step, sender.as_ref()).await {
+        if let Err(error) = self.dispatch(step, sender.as_ref()).await {
             sender.close().await;
-            return Err(self.lost());
+            return Err(error);
         }
         if reconnecting {
             *num_retries = 0;
@@ -620,13 +620,11 @@ impl Pump {
             };
 
             if let Some(error) = step.fatal.take() {
-                self.dispatch(step, sender.as_ref()).await;
+                let _ = self.dispatch(step, sender.as_ref()).await;
                 return Ok(Outcome::Fatal(error));
             }
             let recycle = step.recycle;
-            if !self.dispatch(step, sender.as_ref()).await {
-                return Err(self.lost());
-            }
+            self.dispatch(step, sender.as_ref()).await?;
             if recycle {
                 log::debug!("recycling the {} connection", self.provider_label);
                 return Ok(Outcome::Recycle);
@@ -654,22 +652,26 @@ impl Pump {
         }
     }
 
-    /// `false` means the socket died mid-send.
+    /// Each frame is sent within `write_timeout`; a socket that died or stalled mid-send fails the
+    /// connection, retryably.
     async fn dispatch(
         &self,
         step: Step,
         sender: &dyn lk_agents_inference::transport::WsSender,
-    ) -> bool {
+    ) -> Result<(), ApiError> {
         for mut frame in step.frames {
             self.shape.outbound(&mut frame);
-            if sender.send_text(frame.to_string()).await.is_err() {
-                return false;
+            let deadline = self.connect.conn.write_deadline(self.clock.now());
+            match lk_agents_abi::before(&*self.clock, deadline, sender.send_text(frame.to_string())).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return Err(self.lost()),
+                Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
             }
         }
         for ev in step.events {
             let _ = self.events.send(ev);
         }
-        true
+        Ok(())
     }
 
     fn emit_error(&self, err: ApiError, recoverable: bool) {

@@ -7,7 +7,7 @@ use lk_agents_abi::python::{Ambient, check_pid};
 use pyo3::prelude::*;
 
 use super::{InferenceTts, NativeTts, TtsClientConfig, TtsOptions};
-use crate::python::{conn_options, session_clock};
+use crate::python::session_clock;
 
 /// The keyword constructor's body (`TtsClientConfig`'s `#[host(client)]`).
 pub(crate) fn build(_py: Python<'_>, cfg: TtsClientConfig) -> PyResult<InferenceTts> {
@@ -23,7 +23,7 @@ pub(crate) fn build(_py: Python<'_>, cfg: TtsClientConfig) -> PyResult<Inference
         api_secret: cfg.api_secret,
         extra_kwargs: cfg.extra_kwargs.unwrap_or_default().0,
         fallback: cfg.fallback.map(|f| f.0).unwrap_or_default(),
-        conn_options: conn_options(cfg.timeout, cfg.max_retry),
+        conn_options: cfg.conn_options,
     };
     let native = NativeTts::new(
         opts,

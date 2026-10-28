@@ -1983,7 +1983,7 @@ async def decoder() -> None:
         assert rates == {expected}, (asked, rates)
 
 
-QUICK_RETRIES = APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0)
+QUICK_RETRIES = APIConnectOptions(max_retry=2, retry_interval=0.0)
 
 
 class FlakyLLM(ScriptedLLM):

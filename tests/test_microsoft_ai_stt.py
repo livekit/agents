@@ -34,7 +34,7 @@ from .microsoft_ai_fakes import (
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
-OPTIONS = APIConnectOptions(max_retry=0, timeout=0.5)
+OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
 STT_URL = "wss://stt.example.invalid/v1/realtime?intent=transcription&deployment=dummy"
 
 
@@ -351,7 +351,7 @@ async def test_bundled_vad_start_frames_preserve_delayed_onset_and_tail() -> Non
     frame = audio_frame(16437)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2)) as stream,
+        instance.stream(conn_options=APIConnectOptions(max_retry=0)) as stream,
     ):
         stream.push_frame(frame)
         stream.end_input()
@@ -690,7 +690,9 @@ async def test_acknowledged_completed_event_still_requires_string_transcript(
 async def test_missing_final_or_ack_has_finite_timeout(ack: bool) -> None:
     socket = FakeSocket(auto_commit=False)
     instance, _ = provider(socket)
-    options = APIConnectOptions(timeout=0.03, max_retry=3, retry_interval=0)
+    options = APIConnectOptions(
+        connect_timeout=0.03, read_timeout=0.03, max_retry=3, retry_interval=0
+    )
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame())
         stream.end_input()
@@ -712,7 +714,7 @@ async def test_live_vad_commit_timeout_propagates_with_input_still_open(ack: boo
         {512: vad.VADEventType.START_OF_SPEECH, 1024: vad.VADEventType.END_OF_SPEECH}
     )
     instance, http = provider(socket, detector=detector)
-    options = APIConnectOptions(timeout=0.1, max_retry=2)
+    options = APIConnectOptions(connect_timeout=0.1, read_timeout=0.1, max_retry=2)
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame(1024))
         await socket.wait_sent("input_audio_buffer.commit")
@@ -787,7 +789,9 @@ async def test_vad_finite_input_has_a_bounded_consumer_drain(
     instance, _ = provider(socket, detector=detector)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.1, read_timeout=0.1)
+        ) as stream,
     ):
         stream.push_frame(audio_frame(1024))
         await detector.wait_consumed(1024)
@@ -810,7 +814,7 @@ async def test_vad_cancellation_releases_a_pending_commit_and_open_input() -> No
     )
     instance, _ = provider(socket, detector=detector)
     async with instance:
-        stream = instance.stream(conn_options=APIConnectOptions(timeout=10.0))
+        stream = instance.stream(conn_options=APIConnectOptions())
         stream.push_frame(audio_frame(1024))
         await socket.wait_sent("input_audio_buffer.commit")
         assert not stream.input.closed
@@ -829,7 +833,9 @@ async def test_live_vad_input_does_not_get_a_stream_idle_timeout() -> None:
     instance, _ = provider(socket, detector=detector)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=0, connect_timeout=0.05, read_timeout=0.05)
+        ) as stream,
     ):
         stream.push_frame(audio_frame(1024))
         await detector.wait_consumed(1024)
@@ -894,7 +900,9 @@ async def test_disconnect_after_audio_does_not_retry_or_replay() -> None:
     instance, session = provider(socket)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=3, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=3, connect_timeout=0.2, read_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(audio_frame(817))
         await socket.wait_sent("input_audio_buffer.append")
@@ -918,7 +926,9 @@ async def test_connect_retry_preserves_queued_audio_and_sanitizes_transport_erro
     frame = audio_frame(33)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=1, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=1, connect_timeout=0.2, read_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(frame)
         stream.end_input()
@@ -936,7 +946,9 @@ async def test_handshake_timeout_retry_budget_is_finite() -> None:
     async with (
         instance,
         instance.stream(
-            conn_options=APIConnectOptions(max_retry=2, timeout=0.01, retry_interval=0)
+            conn_options=APIConnectOptions(
+                max_retry=2, connect_timeout=0.01, read_timeout=0.01, retry_interval=0
+            )
         ) as stream,
     ):
         stream.end_input()
@@ -972,7 +984,9 @@ async def test_provider_errors_preserve_status_without_echoing_body(code: str, s
     instance, session = provider(socket)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=2, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=2, connect_timeout=0.2, read_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(audio_frame())
         await socket.wait_sent("input_audio_buffer.append")
@@ -1054,7 +1068,7 @@ async def test_realtime_rate_limit_before_audio_can_retry() -> None:
     second = FakeSocket()
     instance, session = provider(first)
     session.ws_connect.side_effect = [first, second]
-    options = APIConnectOptions(max_retry=1, timeout=0.2)
+    options = APIConnectOptions(max_retry=1, connect_timeout=0.2, read_timeout=0.2)
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame(17))
         stream.end_input()
@@ -1077,7 +1091,7 @@ async def test_authentication_failure_does_not_spend_retry_budget() -> None:
 async def test_aclose_during_handshake_is_immediate() -> None:
     socket = FakeSocket(auto_update=False)
     instance, session = provider(socket)
-    stream = instance.stream(conn_options=APIConnectOptions(timeout=10))
+    stream = instance.stream(conn_options=APIConnectOptions())
     await socket.wait_sent("session.update")
     await asyncio.wait_for(instance.aclose(), 0.5)
     assert await collect(stream) == []

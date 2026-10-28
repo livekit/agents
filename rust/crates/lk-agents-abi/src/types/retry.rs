@@ -59,7 +59,8 @@ pub fn decide_for_host(
     status: Option<i64>,
     produced_output: bool,
 ) -> Result<(&'static str, f64, Option<String>), super::connect::ApiConnectOptionsError> {
-    let options = ApiConnectOptions::new(maximum, interval, 0.0)?;
+    let options = ApiConnectOptions { max_retry: maximum, retry_interval: interval, ..ApiConnectOptions::default() };
+    options.validate()?;
     let decision = decide(kind, &options, attempt, retryable, status, produced_output);
     let (delay, message) = match &decision {
         RetryDecision::Retry(delay) => (*delay, None),
@@ -134,7 +135,7 @@ mod tests {
     use super::*;
     #[test]
     fn gateway_and_interruption_preserve_their_error_contracts() {
-        let opts = ApiConnectOptions::new(2, 1.0, 10.0).unwrap();
+        let opts = ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
         assert_eq!(decide(RequestKind::Avatar, &opts, 2, true, None, false), RetryDecision::Raise);
         assert_eq!(
             decide(RequestKind::Avatar, &opts, 0, false, Some(400), false),
@@ -151,7 +152,7 @@ mod tests {
     }
     #[test]
     fn modality_and_partial_output_control_retries() {
-        let opts = ApiConnectOptions::new(2, 1.0, 10.0).unwrap();
+        let opts = ApiConnectOptions { max_retry: 2, retry_interval: 1.0, ..ApiConnectOptions::default() };
         assert_eq!(decide(RequestKind::Llm, &opts, 0, false, Some(499), true), RetryDecision::Stop);
         assert_eq!(
             decide(RequestKind::TtsStream, &opts, 0, true, None, true),

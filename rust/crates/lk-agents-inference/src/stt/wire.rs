@@ -61,7 +61,7 @@ pub fn session_create(opts: &SttOptions, session_keyterms: &[String]) -> Value {
 
     params.insert(
         "connection".into(),
-        json!({"timeout": opts.conn_options.timeout, "retries": opts.conn_options.max_retry}),
+        crate::extra::connection(&opts.conn_options),
     );
 
     params.insert("type".into(), json!("session.create"));
@@ -206,15 +206,21 @@ mod tests {
         assert!(session_create(&opts, &[])["settings"].get("language").is_none());
     }
 
-    // Catches: omitting the `connection` block when the caller configured no connect options.
+    // Catches: omitting the `connection` block when the caller configured no connect options, or
+    // sending a disabled connect limit (the gateway refuses `null`).
     #[test]
-    fn the_connection_block_is_always_sent() {
+    fn the_connection_block_carries_the_connect_limit_and_retries() {
         let frame = session_create(&SttOptions::default(), &[]);
-        let defaults = lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS;
-        assert_eq!(
-            frame["connection"],
-            json!({"timeout": defaults.timeout, "retries": defaults.max_retry})
-        );
+        assert_eq!(frame["connection"], json!({"timeout": 10.0, "retries": 3}));
+        let opts = SttOptions {
+            conn_options: lk_agents_abi::ApiConnectOptions {
+                connect_timeout: None,
+                max_retry: 1,
+                ..Default::default()
+            },
+            ..SttOptions::default()
+        };
+        assert_eq!(session_create(&opts, &[])["connection"], json!({"retries": 1}));
     }
 
     // Catches: sending the sample rate as a number.

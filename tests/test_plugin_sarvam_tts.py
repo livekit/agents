@@ -34,7 +34,7 @@ def test_synthesize_honors_explicit_conn_options(
 
     monkeypatch.setattr(sarvam_tts, "ChunkedStream", _CapturedChunkedStream)
     tts = _make_tts()
-    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, timeout=12.0)
+    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, read_timeout=12.0)
 
     tts.synthesize("hello", conn_options=conn_options)
 
@@ -42,7 +42,7 @@ def test_synthesize_honors_explicit_conn_options(
     assert stream_conn_options is conn_options
     assert stream_conn_options.max_retry == 5
     assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.timeout == 12.0
+    assert stream_conn_options.read_timeout == 12.0
 
 
 def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,7 +54,7 @@ def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(sarvam_tts, "SynthesizeStream", _CapturedSynthesizeStream)
     tts = _make_tts()
-    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, timeout=12.0)
+    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, read_timeout=12.0)
 
     tts.stream(conn_options=conn_options)
 
@@ -62,7 +62,7 @@ def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) ->
     assert stream_conn_options is conn_options
     assert stream_conn_options.max_retry == 5
     assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.timeout == 12.0
+    assert stream_conn_options.read_timeout == 12.0
 
 
 def test_v4_defaults_to_its_own_speaker_and_ws_v2_endpoint() -> None:
@@ -285,7 +285,7 @@ def _ws_stream(tts: sarvam_tts.TTS) -> sarvam_tts.SynthesizeStream:
     stream = object.__new__(sarvam_tts.SynthesizeStream)
     stream._tts = tts
     stream._opts = replace(tts._opts)
-    stream._conn_options = APIConnectOptions(max_retry=0, timeout=5.0)
+    stream._conn_options = APIConnectOptions(max_retry=0, read_timeout=5.0)
     stream._session_id = 0
     stream._connection_state = sarvam_tts.ConnectionState.DISCONNECTED
     stream._client_request_id = None

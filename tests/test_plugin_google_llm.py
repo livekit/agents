@@ -269,7 +269,7 @@ class TestCachedContentRequestSuppression:
         with patch.object(llm._client.aio.models, "generate_content_stream", fake):
             stream = llm.chat(
                 chat_ctx=ChatContext.empty(),
-                conn_options=APIConnectOptions(timeout=7.5),
+                conn_options=APIConnectOptions(),
             )
             try:
                 async for _ in stream:

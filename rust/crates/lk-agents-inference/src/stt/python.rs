@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::options as stt_opts;
 use super::{InferenceStt, InferenceSttStream, NativeStt, SttOptions};
 use crate::extra::{ExtraKwargs, Fallbacks};
-use crate::python::{conn_options, json_map, register_fn, session_clock};
+use crate::python::{json_map, register_fn, session_clock};
 
 #[pymethods]
 impl InferenceStt {
@@ -28,8 +28,7 @@ impl InferenceStt {
         api_secret,
         extra_kwargs = None,
         fallback = None,
-        timeout = 10.0,
-        max_retry = 3,
+        conn_options = lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
         vad = None,
         clock = None,
         headers = None,
@@ -45,8 +44,7 @@ impl InferenceStt {
         api_secret: String,
         extra_kwargs: Option<&Bound<'_, PyAny>>,
         fallback: Option<Fallbacks<SttFallbackModel>>,
-        timeout: f64,
-        max_retry: u32,
+        conn_options: lk_agents_abi::ApiConnectOptions,
         vad: Option<&Bound<'_, PyAny>>,
         clock: Option<&Bound<'_, PyAny>>,
         headers: Option<Vec<(String, String)>>,
@@ -70,7 +68,7 @@ impl InferenceStt {
             api_secret,
             extra_kwargs: extra_kwargs.0,
             fallback: fallback.map(|f| f.0).unwrap_or_default(),
-            conn_options: conn_options(timeout, max_retry),
+            conn_options,
         };
         // Not `parse_model_into`: the host already parsed `provider/model:language`; a second parse
         // would strip a legitimate `:` from the model name.

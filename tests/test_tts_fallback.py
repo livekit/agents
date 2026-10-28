@@ -324,7 +324,7 @@ async def test_tts_stream_ttfb_includes_failover_time() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     async with fallback_adapter.stream(
-        conn_options=APIConnectOptions(timeout=10.0, max_retry=0, retry_interval=0.1)
+        conn_options=APIConnectOptions(max_retry=0, retry_interval=0.1)
     ) as stream:
         start = time.perf_counter()
         stream.push_text("hello test")
@@ -358,7 +358,9 @@ async def test_tts_chunked_ttfb_includes_failover_time() -> None:
     start = time.perf_counter()
     async with fallback_adapter.synthesize(
         "hello test",
-        conn_options=APIConnectOptions(timeout=0.5, max_retry=0, retry_interval=0.1),
+        conn_options=APIConnectOptions(
+            connect_timeout=0.5, read_timeout=0.5, max_retry=0, retry_interval=0.1
+        ),
     ) as stream:
         frames: list[SynthesizedAudio] = []
         async for data in stream:
@@ -465,7 +467,7 @@ async def test_timeout():
     with pytest.raises(APIConnectionError):
         async with fallback_adapter.synthesize(
             "hello test",
-            conn_options=APIConnectOptions(timeout=0.1, max_retry=0),
+            conn_options=APIConnectOptions(connect_timeout=0.1, read_timeout=0.1, max_retry=0),
         ) as stream:
             async for _ in stream:
                 pass
@@ -482,7 +484,7 @@ async def test_timeout():
     # stream
     with pytest.raises(APIConnectionError):
         async with fallback_adapter.stream(
-            conn_options=APIConnectOptions(timeout=0.1, max_retry=0)
+            conn_options=APIConnectOptions(connect_timeout=0.1, read_timeout=0.1, max_retry=0)
         ) as stream:
             stream.push_text("hello test")
             stream.end_input()

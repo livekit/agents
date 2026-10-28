@@ -2,9 +2,9 @@
 //! blocks the other. No timeouts here: the client bounds every wait on the session clock.
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
+use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Make `ring` the process TLS provider, once: `reqwest` uses `rustls-no-provider` and panics without one.
 pub fn install_tls_provider() {
@@ -55,7 +55,10 @@ pub fn connect_error(what: &str, err: TransportError) -> ApiError {
         TransportError::Status { status, message, .. } => {
             ApiError::from_http(&message, status, None)
         }
-        TransportError::Timeout => ApiError::timeout(Some(format!("{what} connection timed out."))),
+        TransportError::Timeout => ApiError {
+            phase: Some(TimeoutPhase::Connect),
+            ..ApiError::timeout(Some(format!("{what} connection timed out.")))
+        },
         other => ApiError::connection(Some(format!("failed to connect to {what}: {other}"))),
     }
 }
@@ -63,25 +66,27 @@ pub fn connect_error(what: &str, err: TransportError) -> ApiError {
 /// A transport wait bounded on the session clock; the lapse is [`TransportError::Timeout`].
 pub async fn within<T>(
     clock: &dyn lk_agents_abi::Clock,
-    timeout: Duration,
+    deadline: Option<Ts>,
     fut: impl Future<Output = Result<T, TransportError>>,
 ) -> Result<T, TransportError> {
-    lk_agents_abi::timeout(clock, timeout, fut).await.unwrap_or(Err(TransportError::Timeout))
+    lk_agents_abi::before(clock, deadline, fut).await.unwrap_or(Err(TransportError::Timeout))
 }
 
-/// STT's and TTS's opening: connect within `timeout` (a stalled handshake is a retryable
-/// `APITimeoutError`), then send the session-create frame. Failures map through [`connect_error`].
+/// STT's and TTS's opening: connect within `conn_options.connect_timeout` (a stalled handshake is
+/// a retryable connect-phase `APITimeoutError`), then send the session-create frame. Failures map
+/// through [`connect_error`].
 pub async fn open_ws(
     ws: &dyn WsTransport,
     url: &str,
     headers: Vec<(String, String)>,
     clock: &dyn lk_agents_abi::Clock,
-    timeout: Duration,
+    conn_options: &ApiConnectOptions,
     what: &str,
     create_frame: &serde_json::Value,
 ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
+    let deadline = conn_options.connect_deadline(clock.now());
     let (sender, receiver) =
-        within(clock, timeout, ws.connect(url, headers)).await.map_err(|e| connect_error(what, e))?;
+        within(clock, deadline, ws.connect(url, headers)).await.map_err(|e| connect_error(what, e))?;
     if let Err(err) = sender.send_text(create_frame.to_string()).await {
         sender.close().await;
         return Err(connect_error(what, err));
@@ -203,6 +208,7 @@ mod tests {
 
         let err = connect_error("LiveKit Inference STT", TransportError::Timeout);
         assert_eq!(err.kind, ApiErrorKind::Timeout);
+        assert_eq!(err.phase, Some(TimeoutPhase::Connect));
         assert!(err.retryable);
 
         let err = connect_error("LiveKit Inference STT", TransportError::Connect("dns".into()));

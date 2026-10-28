@@ -112,7 +112,7 @@ async def test_sarvam_stt_recognize_preserves_native_status_error() -> None:
             conn_options=APIConnectOptions(
                 max_retry=0,
                 retry_interval=0.0,
-                timeout=1.0,
+                read_timeout=1.0,
             ),
         )
 
@@ -126,7 +126,7 @@ async def test_sarvam_stt_stream_run_preserves_native_api_status_error() -> None
     stream._conn_options = APIConnectOptions(
         max_retry=0,
         retry_interval=0.0,
-        timeout=1.0,
+        read_timeout=1.0,
     )
     stream._connection_lock = asyncio.Lock()
     stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
@@ -160,7 +160,7 @@ async def test_sarvam_stt_stream_run_does_not_retry_on_timeout() -> None:
     stream._conn_options = APIConnectOptions(
         max_retry=5,
         retry_interval=0.0,
-        timeout=1.0,
+        read_timeout=1.0,
     )
     stream._connection_lock = asyncio.Lock()
     stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
@@ -190,7 +190,7 @@ async def test_sarvam_stt_stream_run_wraps_unexpected_as_status_error() -> None:
     stream._conn_options = APIConnectOptions(
         max_retry=0,
         retry_interval=0.0,
-        timeout=1.0,
+        read_timeout=1.0,
     )
     stream._connection_lock = asyncio.Lock()
     stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
@@ -391,14 +391,14 @@ async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
         conn_options=APIConnectOptions(
             max_retry=9,
             retry_interval=1.5,
-            timeout=7.0,
+            read_timeout=7.0,
         ),
     )
 
     conn_options = captured["conn_options"]
     assert conn_options.max_retry == 0
     assert conn_options.retry_interval == 1.5
-    assert conn_options.timeout == 7.0
+    assert conn_options.read_timeout == 7.0
 
 
 @pytest.mark.asyncio
@@ -428,14 +428,14 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
         conn_options=APIConnectOptions(
             max_retry=8,
             retry_interval=0.2,
-            timeout=4.0,
+            read_timeout=4.0,
         )
     )
 
     conn_options = captured["conn_options"]
     assert conn_options.max_retry == 0
     assert conn_options.retry_interval == 0.2
-    assert conn_options.timeout == 4.0
+    assert conn_options.read_timeout == 4.0
 
     await captured["http_session"].close()
 

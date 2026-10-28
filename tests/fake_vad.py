@@ -4,7 +4,7 @@ import asyncio
 import time
 
 from livekit import rtc
-from livekit.agents.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+from livekit.agents import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 
 from .fake_stt import FakeUserSpeech
 

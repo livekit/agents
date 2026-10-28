@@ -227,7 +227,7 @@ lk_agents_abi::python::inventory::submit! {
 #[pymethods]
 impl PyEotStream {
     /// `model` is the detector's starting model; `turn-detector-v1` connects to the gateway
-    /// (`base_url`, credentials, `headers` called per connection, `timeout`/`max_retry`), the mini
+    /// (`base_url`, credentials, `headers` called per connection, `conn_options`), the mini
     /// model runs natively when the build links it, else `livekit.local_inference.EOT()`, also
     /// after a cloud failure when
     /// `local_fallback`. `on_metrics(dict)` hears each `EOTInferenceMetrics`.
@@ -242,8 +242,7 @@ impl PyEotStream {
         api_secret,
         headers,
         sample_rate,
-        timeout,
-        max_retry,
+        conn_options,
         on_metrics = None,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -256,8 +255,7 @@ impl PyEotStream {
         api_secret: String,
         headers: Py<PyAny>,
         sample_rate: u32,
-        timeout: f64,
-        max_retry: u32,
+        conn_options: lk_agents_abi::ApiConnectOptions,
         on_metrics: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         check_pid()?;
@@ -272,11 +270,7 @@ impl PyEotStream {
                     base_url: base_url.clone(),
                     api_key: api_key.clone(),
                     api_secret: api_secret.clone(),
-                    conn_options: lk_agents_abi::ApiConnectOptions {
-                        timeout,
-                        max_retry,
-                        ..lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS
-                    },
+                    conn_options,
                     sample_rate,
                     headers: header_provider(Python::attach(|py| headers.clone_ref(py))),
                 };

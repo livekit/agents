@@ -32,7 +32,7 @@ from .microsoft_ai_fakes import (
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
-OPTIONS = APIConnectOptions(max_retry=0, timeout=0.5)
+OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
 PCM = b"\x81\xff" * 3717
 TTS_URL = "https://tts.example.invalid/cognitiveservices/v1?deployment=dummy"
 VOICE = "en-US-Dummy:test-synthesizer"
@@ -172,7 +172,8 @@ async def test_retry_after_rate_limit_emits_only_successful_audio() -> None:
     async with (
         instance,
         instance.synthesize(
-            "Hello.", conn_options=APIConnectOptions(max_retry=1, timeout=0.5)
+            "Hello.",
+            conn_options=APIConnectOptions(max_retry=1, connect_timeout=0.5, read_timeout=0.5),
         ) as stream,
     ):
         events = await collect(stream)
@@ -189,7 +190,8 @@ async def test_interrupted_http_body_does_not_emit_stale_audio_on_retry() -> Non
     async with (
         instance,
         instance.synthesize(
-            "Hello.", conn_options=APIConnectOptions(max_retry=1, timeout=0.5)
+            "Hello.",
+            conn_options=APIConnectOptions(max_retry=1, connect_timeout=0.5, read_timeout=0.5),
         ) as stream,
     ):
         events = await collect(stream)
@@ -635,7 +637,9 @@ async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
             turn_handling={"turn_detection": None},
             user_away_timeout=None,
             conn_options=SessionConnectOptions(
-                tts_conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+                tts_conn_options=APIConnectOptions(
+                    max_retry=0, connect_timeout=0.5, read_timeout=0.5
+                )
             ),
         )
         session.output.audio = output

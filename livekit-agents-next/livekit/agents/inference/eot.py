@@ -9,7 +9,6 @@ from livekit import rtc
 
 from .. import _core, utils
 from .._generated.language import LanguageCode
-from ..llm._realtime import _native_connect_timeout
 from ..log import logger
 from ..metrics import EOTInferenceMetrics, Metadata
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -160,8 +159,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             api_secret=self._api_secret,
             headers=lambda: list(get_inference_headers().items()),
             sample_rate=self._sample_rate,
-            timeout=_native_connect_timeout(conn_options) if self._cloud else 0.0,
-            max_retry=conn_options.max_retry,
+            conn_options=conn_options,
             on_metrics=self._emit_metrics,
         )
 

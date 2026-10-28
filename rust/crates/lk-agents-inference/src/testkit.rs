@@ -39,6 +39,8 @@ pub struct FakeWs {
     keep_open: bool,
     /// Never complete the handshake; the client's connect bound ends it.
     hang_connect: bool,
+    /// Never complete a send: a peer that stopped reading, its TCP window full.
+    stall_sends: bool,
 }
 
 impl FakeWs {
@@ -51,6 +53,7 @@ impl FakeWs {
             connect_error: None,
             keep_open: false,
             hang_connect: false,
+            stall_sends: false,
         }
     }
 
@@ -63,6 +66,11 @@ impl FakeWs {
     pub fn keep_open(mut self) -> Self {
         self.keep_open = true;
         self
+    }
+
+    /// Connected and kept open, but no send ever completes.
+    pub fn stalling_sends() -> Self {
+        FakeWs { stall_sends: true, ..FakeWs::new(Vec::new()).keep_open() }
     }
 
     pub fn failing(err: TransportError) -> Self {
@@ -108,7 +116,11 @@ impl WsTransport for FakeWs {
         if self.hang_connect {
             std::future::pending::<()>().await;
         }
-        let sender = Arc::new(FakeWsSender { sent: self.sent.clone(), closed: Mutex::new(false) });
+        let sender = Arc::new(FakeWsSender {
+            sent: self.sent.clone(),
+            closed: Mutex::new(false),
+            stall: self.stall_sends,
+        });
         let receiver =
             Box::new(FakeWsReceiver { incoming: self.incoming.clone(), keep_open: self.keep_open });
         Ok((sender, receiver))
@@ -120,6 +132,7 @@ struct FakeWsSender {
     sent: Arc<Mutex<Vec<String>>>,
     #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Mutex<bool>,
+    stall: bool,
 }
 
 #[async_trait]
@@ -127,6 +140,9 @@ impl WsSender for FakeWsSender {
     async fn send_text(&self, text: String) -> Result<(), TransportError> {
         if *self.closed.lock().unwrap() {
             return Err(TransportError::Closed);
+        }
+        if self.stall {
+            std::future::pending::<()>().await;
         }
         self.sent.lock().unwrap().push(text);
         Ok(())
