@@ -298,8 +298,8 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
         read(declaration).expect("legacy native registration supplies the host type");
     assert!(declarations.proxies.is_empty(), "native-only traits never generate a host proxy");
     let argument = &declarations.classes[0].methods[1].params[0].ty;
-    assert!(matches!(argument, Ty::Proxy { native_only: true, host, .. }
-        if host == "livekit.agents._core.SessionClock"));
+    assert!(matches!(argument, Ty::Native { classes, .. }
+        if classes == &["livekit.agents._core.SessionClock"]));
     let converted =
         crate::adapter::from_object("obj", argument, "\"Client.clock\"", "test").unwrap();
     assert!(
@@ -325,8 +325,41 @@ fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy
     assert!(
         read(&unregistered)
             .unwrap_err()
-            .contains("native-only trait needs one registered host class")
+            .contains("native-only trait needs a registered host class")
     );
+}
+
+// Catches: a `native(refused = ..)` trait taken through its in-place `HostProxy` (pyo3 in ABI) or
+// constructing a proxy, its declared refusal replaced, or one of its classes missing from the stub.
+#[test]
+fn a_refused_native_trait_is_any_of_its_classes_and_refuses_other_objects() {
+    let declarations = read(
+        r#"
+        use std::sync::Arc;
+        #[crate::host(native(refused = "expected a native tracker"))]
+        pub trait Tracker: Send + Sync {}
+        #[crate::host(class(name = "PlaybackTracker", native = Tracker))]
+        pub trait Playback: Sized { #[host(new)] fn new() -> Self; }
+        #[crate::host(class(name = "MuteTracker", native = Tracker))]
+        pub trait Mute: Sized { #[host(new)] fn new() -> Self; }
+        #[crate::host(functions)]
+        pub trait Functions { #[host(function)] fn track(tracker: Arc<dyn Tracker>); }
+    "#,
+    )
+    .unwrap();
+    assert!(declarations.proxies.is_empty());
+    let functions = declarations.classes.iter().find(|c| c.form == Form::Functions).unwrap();
+    let argument = &functions.methods[0].params[0].ty;
+    let converted = crate::adapter::from_object("obj", argument, "\"track\"", "test").unwrap();
+    assert!(
+        converted.contains("python::native::<dyn ::lk_agents_abi::llm::class::Tracker>(&obj)")
+            && converted.contains("\": expected a native tracker\"")
+            && !converted.contains("HostProxy"),
+        "{converted}"
+    );
+    let stubs = crate::class_stub::emit(&declarations).unwrap();
+    let text = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
+    assert!(text.contains("def track(tracker: MuteTracker | PlaybackTracker) -> None"), "{text}");
 }
 
 #[test]

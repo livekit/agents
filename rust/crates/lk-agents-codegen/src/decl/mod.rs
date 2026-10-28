@@ -425,14 +425,20 @@ pub enum Ty {
         /// A generated provider base (`#[python(provider(..))]`): generic over its event names, so
         /// any instantiation is accepted.
         generic: bool,
-        /// A bare `#[host(native)]`: only the existing registered native class is accepted.
-        native_only: bool,
         /// A declaration-model proxy: `(family, trait)`, generated as `<family>::<trait>Proxy`.
         /// `None`: the trait's in-place `HostProxy`.
         declared: Option<(String, String)>,
         /// `Box<dyn Trait>`: an object the host hands over for the core to own (and consume, as a
         /// writer's `self: Box<Self>` close does); always behind the declared proxy.
         boxed: bool,
+    },
+    /// `Arc<dyn Trait>` of a `#[host(native)]` trait: an instance of one of the registered host
+    /// `classes` (dotted) implementing it, as itself; any other host object is refused with
+    /// `refused`. No host proxy exists. Input only.
+    Native {
+        rust: String,
+        classes: Vec<String>,
+        refused: String,
     },
     /// A pull source of `item`, handed to the host as the stream class `class`.
     Source {
@@ -556,7 +562,9 @@ impl Ty {
             Ty::Shared { rust, .. } => format!("::std::sync::Arc<{rust}>"),
             Ty::This => "Self".into(),
             Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),
-            Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),
+            Ty::Proxy { rust, .. } | Ty::Native { rust, .. } => {
+                format!("::std::sync::Arc<dyn {rust}>")
+            }
             Ty::Handle { assoc, .. } | Ty::Instance { assoc, .. } => format!("Self::{assoc}"),
             Ty::Source { item, .. } | Ty::HostSource(item) => {
                 format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())

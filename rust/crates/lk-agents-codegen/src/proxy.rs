@@ -366,6 +366,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         Ty::Unit
         | Ty::This
         | Ty::Proxy { .. }
+        | Ty::Native { .. }
         | Ty::Source { .. }
         | Ty::HostSource(_)
         | Ty::HostDuplex { .. }

@@ -421,6 +421,15 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             imports.add(".._core", class);
             class.clone()
         }
+        Ty::Native { classes, .. } => classes
+            .iter()
+            .map(|class| {
+                let (module, name) = class.rsplit_once('.').expect("a host class is dotted");
+                imports.add(module, name);
+                name
+            })
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }
 

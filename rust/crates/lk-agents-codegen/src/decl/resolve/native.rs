@@ -1,14 +1,37 @@
-//! The host class already registered for a native-only trait; no executable ABI proxy.
+//! `Arc<dyn Trait>` of a `#[host(native)]` trait: the host classes registered for it cross as
+//! themselves; there is no host proxy.
 
 use super::*;
 
 impl Resolver<'_> {
-    pub(super) fn native_host(
+    pub(super) fn native(
         &self,
         module: usize,
         item: usize,
+        native: &Entry,
+        boxed: bool,
         at: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Ty, String> {
+        let ident = self.krate.item_name(module, item);
+        if boxed {
+            return Err(format!("{at}: a native-only trait crosses as `Arc<dyn {ident}>`"));
+        }
+        voc::only(at, &native.nested, &["refused"])?;
+        let classes = self.native_classes(module, item, at)?;
+        let refused = match voc::text(at, &native.nested, "refused")? {
+            Some(refused) => refused,
+            None => format!("expected native {}", classes.join(" or ")),
+        };
+        Ok(Ty::Native {
+            rust: self.krate.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
+            classes,
+            refused,
+        })
+    }
+
+    /// The dotted host classes registered for the native trait: a declared class's
+    /// `native = Trait`, or a legacy object's `as_dyn(Trait = ..)`.
+    fn native_classes(&self, module: usize, item: usize, at: &str) -> Result<Vec<String>, String> {
         let wanted = Found::Item { module, item };
         let mut hosts = Vec::new();
         for (index, origin) in self.krate.modules.iter().enumerate() {
@@ -63,12 +86,9 @@ impl Resolver<'_> {
         }
         hosts.sort();
         hosts.dedup();
-        match hosts.as_slice() {
-            [host] => Ok(host.clone()),
-            _ => Err(format!(
-                "{at}: a native-only trait needs one registered host class, found {}",
-                hosts.len()
-            )),
+        if hosts.is_empty() {
+            return Err(format!("{at}: a native-only trait needs a registered host class"));
         }
+        Ok(hosts)
     }
 }

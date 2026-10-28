@@ -540,9 +540,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
                 from_object("item", t, path, at)?
             )
         }
-        Ty::Proxy { rust, host, native_only: true, .. } => format!(
+        Ty::Native { rust, refused, .. } => format!(
             "::lk_agents_abi::python::native::<dyn {rust}>(&{v}).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
-            message = format!(": expected native {host}"),
+            message = format!(": {refused}"),
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
             format!("crate::generated::{family}::{name}Proxy::owned(&{v})")

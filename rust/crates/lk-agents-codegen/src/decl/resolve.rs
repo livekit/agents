@@ -588,23 +588,9 @@ impl Resolver<'_> {
         };
         let entries = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
         if voc::find(&entries, "proxy").is_none()
-            && voc::find(&entries, "native")
-                .is_some_and(|entry| entry.value.is_none() && entry.nested.is_empty())
+            && let Some(native) = voc::find(&entries, "native")
         {
-            if boxed {
-                return Err(format!(
-                    "{at}: a native-only trait crosses as `Arc<dyn {}>`",
-                    tr.ident
-                ));
-            }
-            return Ok(Ty::Proxy {
-                rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
-                host: self.native_host(module, item, at)?,
-                generic: false,
-                native_only: true,
-                declared: None,
-                boxed: false,
-            });
+            return self.native(module, item, native, boxed, at);
         }
         let proxy = voc::find(&entries, "proxy")
             .ok_or_else(|| format!("{at}: `{}` is not a #[host(proxy)] trait", tr.ident))?;
@@ -630,7 +616,6 @@ impl Resolver<'_> {
             rust: k.extern_path(module, item).map_err(|e| format!("{at}: {e}"))?,
             host,
             generic,
-            native_only: false,
             declared,
             boxed,
         })
@@ -908,7 +893,9 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_output(at, t)),
         Ty::Maybe(_) => Err(format!("{at}: omission is an input state, not an output value")),
-        Ty::Proxy { .. } => Err(format!("{at}: a host proxy is not returned to the host")),
+        Ty::Proxy { .. } | Ty::Native { .. } => {
+            Err(format!("{at}: a host proxy is not returned to the host"))
+        }
         Ty::HostSource(_) | Ty::HostDuplex { .. } => {
             Err(format!("{at}: a host stream is not handed back to the host"))
         }

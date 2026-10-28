@@ -643,7 +643,7 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
                 "{path}: a record holds a shared `Arc<dyn ..>` proxy, not an owned one"
             ));
         }
-        Ty::Proxy { declared: Some(_), .. } | Ty::Proxy { native_only: true, .. } => {
+        Ty::Proxy { declared: Some(_), .. } | Ty::Native { .. } => {
             crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
         }
         Ty::Proxy { rust, .. } => {
@@ -1187,6 +1187,15 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
             typing.add(m, name);
             name.to_owned()
         }
+        Ty::Native { classes, .. } => classes
+            .iter()
+            .map(|class| {
+                let (m, name) = class.rsplit_once('.').expect("a host class is dotted");
+                typing.add(m, name);
+                name
+            })
+            .collect::<Vec<_>>()
+            .join(" | "),
         Ty::Record(r) if out && matches!(r.host, HostForm::Model { .. }) => {
             "dict[str, object]".into()
         }
