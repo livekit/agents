@@ -63,8 +63,9 @@ for the load/save contract and scope ownership.
 
 ## Session results
 
-`TextSession.run()` returns an envelope with `result: RunResult[Output]` and
-`state: TextSessionState`. The contained result uses the shared
+`TextSession.run()` returns `TextSessionTurn[Output]`, an envelope with
+`result: RunResult[Output]` and `state: TextSessionState`. These types are
+exported from `livekit.agents`. The contained result uses the shared
 [agent result contract](agents.md#running-a-turn): a completed typed output or
 an input-required question. The envelope retains session frames and pending
 calls separately from that invocation result.
