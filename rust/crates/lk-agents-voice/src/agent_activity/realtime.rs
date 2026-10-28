@@ -1241,9 +1241,8 @@ impl Driver {
         if call.is_none() {
             return;
         }
-        let id = self.session.ids.next_speech_id();
         let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
-        let handle = self.new_speech(call.as_ref().map(|c| &c.speech), id, allow_interruptions);
+        let (id, handle) = self.new_speech(call.as_ref().map(|c| &c.speech), allow_interruptions);
         match how {
             Settled::Failed(err) | Settled::TimedOut(err) => {
                 handle.mark_done(Some(fatal(err.message)))

@@ -247,6 +247,10 @@ pub enum InterruptStep {
         speech: Option<SpeechId>,
         force: bool,
     },
+    /// A host `interrupt()` of a speech that disallowed it by the time the loop read it.
+    HostInterruptRefused {
+        speech: SpeechId,
+    },
     /// `SpeechCommand::Interrupt` answered, with the speeches the walk reached, all done now.
     InterruptSettled {
         speeches: Vec<SpeechId>,
@@ -868,7 +872,8 @@ impl Step {
                 | InterruptStep::InterruptionTimedOut { speech }
                 | InterruptStep::InterruptionsToggled { speech, .. }
                 | InterruptStep::InterruptWalkStopped { speech }
-                | InterruptStep::PlayoutGate { speech, .. } => Some(*speech),
+                | InterruptStep::PlayoutGate { speech, .. }
+                | InterruptStep::HostInterruptRefused { speech } => Some(*speech),
                 InterruptStep::HostInterrupt { speech, .. } => *speech,
                 InterruptStep::ByAudioActivity(_)
                 | InterruptStep::ByAudioActivityRefused(_)

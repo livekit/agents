@@ -1107,7 +1107,7 @@ impl Run {
             return false;
         }
         let _ = (handle.id_for_host(), handle.num_steps(), handle.chat_items(), handle.scheduled());
-        let _ = (handle.interrupted_for_host(), handle.allow_interruptions());
+        let _ = (handle.interrupted_for_host(), handle.allow_interruptions_for_host());
         let _ = handle.exception_for_host();
 
         true

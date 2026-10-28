@@ -155,7 +155,8 @@ struct Interruptions {
     allow: bool,
     holds: u32,
     restore: bool,
-    /// What the host set before the loop created the speech: the speech is created with it.
+    /// What the host set and the loop has not applied yet: before the loop created the speech, the
+    /// speech is created with it; after, the host reads it until the loop's write lands.
     requested: Option<bool>,
 }
 
@@ -191,8 +192,10 @@ struct Inner {
 /// the host that holds it. A host's `say()` gets it before the loop has created the speech; until
 /// then every read answers as the reference's freshly constructed handle would.
 pub struct SpeechHandle {
-    /// Minted by the loop as it creates the speech.
+    /// Set by the loop as it creates the speech.
     id: OnceLock<SpeechId>,
+    /// The id a host call's handle was given as the call returned; the loop creates it under it.
+    reserved: Option<SpeechId>,
     /// `SpeechHandle.id`: `speech_{n}`, or what a detached handle was constructed with.
     speech_id: OnceLock<Arc<str>>,
     creation: watch::Sender<Creation>,
@@ -234,9 +237,15 @@ impl Eq for SpeechHandle {}
 use lk_agents_abi::lock;
 
 impl SpeechHandle {
-    fn base(creation: Creation, allow_interruptions: bool, api: Api) -> Self {
+    fn base(
+        creation: Creation,
+        reserved: Option<SpeechId>,
+        allow_interruptions: bool,
+        api: Api,
+    ) -> Self {
         SpeechHandle {
             id: OnceLock::new(),
+            reserved,
             speech_id: OnceLock::new(),
             creation: watch::Sender::new(creation),
             api,
@@ -270,15 +279,22 @@ impl SpeechHandle {
 
     /// A speech the loop creates on its own (a reply, a tool's follow-up).
     pub fn new(id: SpeechId, allow_interruptions: bool, api: Api) -> Self {
-        let handle = SpeechHandle::base(Creation::Created, allow_interruptions, api);
+        let handle = SpeechHandle::base(Creation::Created, None, allow_interruptions, api);
         handle.create(id, allow_interruptions);
         handle
     }
 
-    /// What a host's `say()` / `generate_reply()` answers, before the loop creates the speech.
-    /// `allow_interruptions` is what was passed; `None` reads `True` until the loop resolves it.
-    pub fn pending(api: Api, allow_interruptions: Option<bool>) -> Arc<Self> {
-        Arc::new(SpeechHandle::base(Creation::Pending, allow_interruptions.unwrap_or(true), api))
+    /// What a host's `say()` / `generate_reply()` answers, before the loop creates the speech:
+    /// its id, and the interruptibility it was asked with or the session's as the call returned.
+    pub fn pending(api: Api, id: SpeechId, allow_interruptions: bool) -> Arc<Self> {
+        let handle = SpeechHandle::base(Creation::Pending, Some(id), allow_interruptions, api);
+        let _ = handle.speech_id.set(id.to_string().into());
+        Arc::new(handle)
+    }
+
+    /// The id the loop creates a host call's speech under.
+    pub(crate) fn reserved(&self) -> Option<SpeechId> {
+        self.reserved
     }
 
     /// The loop creates the speech behind this handle: its id, and its resolved interruptibility,
@@ -349,6 +365,13 @@ impl SpeechHandle {
         self.interrupted.get()
     }
 
+    /// The loop refused the host's `interrupt()` (the speech disallowed it by then): the request
+    /// is dropped, so the speech is not reported interrupted for it.
+    pub(crate) fn interrupt_refused(&self) {
+        let _inner = lock(&self.inner);
+        self.interrupt_requested.store(false, Ordering::Release);
+    }
+
     /// A host `interrupt()` landed as the speech was marked done, once: the loop journals it.
     pub(crate) fn take_interrupted_at_done(&self) -> bool {
         std::mem::take(&mut lock(&self.inner).interrupted_at_done)
@@ -373,6 +396,11 @@ impl SpeechHandle {
         self.done.wait_for(|d| *d).await;
     }
 
+    /// `allow_interruptions` as the loop last wrote it.
+    pub fn allow_interruptions(&self) -> bool {
+        self.interruptions.borrow().allow
+    }
+
     /// The user may cut it now: not interrupted already, and interruptions allowed.
     pub fn interruptible(&self) -> bool {
         !self.interrupted() && self.allow_interruptions()
@@ -385,7 +413,9 @@ impl SpeechHandle {
             return Err(SpeechError::AlreadyInterrupted);
         }
         self.interruptions.send_if_modified(|s| {
-            // `!=` vs `==` is an equivalent mutant: nothing subscribes to `interruptions`.
+            if s.requested == Some(value) {
+                s.requested = None;
+            }
             let changed = s.allow != value;
             s.allow = value;
             changed
@@ -658,6 +688,7 @@ impl SpeechHandle {
     pub fn detached(speech_id: String, allow_interruptions: bool) -> Self {
         let handle = SpeechHandle::base(
             Creation::Detached,
+            None,
             allow_interruptions,
             crate::agent_session::Tx::disconnected(),
         );
@@ -714,17 +745,17 @@ impl SpeechHandle {
         self.done.get()
     }
 
-    /// `allow_interruptions`. Before the loop creates the speech: the value the caller passed, or
-    /// `True` when it passed none (the session default is resolved by the loop).
-    #[host(getter)]
-    pub fn allow_interruptions(&self) -> bool {
-        self.interruptions.borrow().allow
+    /// `allow_interruptions`: the host's last write, until the loop has applied it.
+    #[host(getter(name = "allow_interruptions"))]
+    pub fn allow_interruptions_for_host(&self) -> bool {
+        let s = self.interruptions.borrow();
+        s.requested.unwrap_or(s.allow)
     }
 
-    /// The setter (`speech_handle.py:117`): sent to the loop, the one writer of a speech's
-    /// interruption state, which journals it. Raises the reference's `RuntimeError` on an
-    /// already-interrupted speech; the getter follows the loop's write by one wake. Before the
-    /// loop has created the speech, the value is the one it is created with.
+    /// The setter: sent to the loop, the one writer of a speech's interruption state, which
+    /// journals it; the host reads its own write meanwhile. Raises the reference's `RuntimeError`
+    /// on an already-interrupted speech. Before the loop has created the speech, the value is the
+    /// one it is created with.
     #[host(setter(name = "allow_interruptions"))]
     pub fn set_allow_interruptions_for_host(&self, value: bool) -> Result<(), SpeechRefused> {
         if !value && self.interrupt_requested.load(Ordering::Acquire) {
@@ -744,6 +775,7 @@ impl SpeechHandle {
         if !value && self.interrupted() {
             return Err(SpeechError::AlreadyInterrupted.into());
         }
+        self.interruptions.send_modify(|s| s.requested = Some(value));
         // A closed loop has no speech left to protect.
         let _ = self.api.send(crate::agent_session::Command::from(
             crate::agent_session::SpeechCommand::SetAllowInterruptions { speech, allow: value },
@@ -779,7 +811,7 @@ impl SpeechHandle {
             {
                 return Ok(());
             }
-            if !force && !self.allow_interruptions() {
+            if !force && !self.allow_interruptions_for_host() {
                 return Err(SpeechError::InterruptionsNotAllowed.into());
             }
             self.interrupt_requested.store(true, Ordering::Release);

@@ -86,13 +86,13 @@ async fn host_waits_on_a_speech_never_created_raise_why() {
     assert!(matches!(detached.exception_for_host(), Ok(None)));
 
     // A setter before the loop created the speech is the value it is created with.
-    let pending = SpeechHandle::pending(Tx::disconnected(), None);
+    let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(7), true);
     pending.set_allow_interruptions_for_host(false).unwrap();
     assert!(!pending.allow_interruptions());
     pending.create(SpeechId(7), true);
     assert!(!pending.allow_interruptions(), "the host's later write wins over the resolved value");
 
-    let lost = SpeechHandle::pending(Tx::disconnected(), None);
+    let lost = SpeechHandle::pending(Tx::disconnected(), SpeechId(8), true);
     lost.interrupt_for_host(false, spawner()).unwrap();
     assert!(lost.interrupted_for_host());
     lost.answered(false);
@@ -134,4 +134,28 @@ fn a_speech_is_itself_across_handles() {
         (SpeechHandle::detached(String::new(), true), SpeechHandle::detached(String::new(), true));
     assert_ne!(a, b);
     assert_eq!(a, a);
+}
+
+// Catches: a host `interrupt()` that passes the handle's check but that the loop refuses leaving
+// the request behind (the speech read `interrupted` forever and was reported interrupted when it
+// played out), the check reading a stale `allow_interruptions` right after the setter, and a
+// handle with no id until the loop created it.
+#[tokio::test]
+async fn a_refused_host_interrupt_leaves_the_speech_uninterrupted() {
+    let pending = SpeechHandle::pending(Tx::disconnected(), SpeechId(3), false);
+    assert_eq!(pending.id_for_host(), "speech_3", "the id exists as the call returns");
+    assert!(pending.interrupt_for_host(false, spawner()).is_err(), "disallowed at the call");
+
+    let speech = Arc::new(created(true));
+    speech.set_allow_interruptions_for_host(false).unwrap();
+    assert!(!speech.allow_interruptions_for_host(), "the host reads its own write");
+    assert!(speech.interrupt_for_host(false, spawner()).is_err());
+
+    let speech = Arc::new(created(true));
+    speech.interrupt_for_host(false, spawner()).unwrap();
+    assert!(speech.interrupted_for_host());
+    speech.interrupt_refused();
+    assert!(!speech.interrupted_for_host());
+    speech.mark_done(None);
+    assert_eq!(speech.outcome(), crate::events::SpeechOutcome::Completed);
 }

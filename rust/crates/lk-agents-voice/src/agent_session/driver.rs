@@ -143,6 +143,8 @@ pub struct SessionHandle {
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
     pub ivr_detection: bool,
+    /// The session's id counter: a host speech call takes its speech's id from it.
+    pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
 }
 
 pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
@@ -370,20 +372,24 @@ impl Driver {
         }
     }
 
-    /// The handle of a speech the loop creates now: the one the host already holds for its
-    /// `say()` / `generate_reply()`, else a new one.
+    /// The speech the loop creates now: the handle the host already holds for its `say()` /
+    /// `generate_reply()`, under the id it was given, else a new one.
     pub(crate) fn new_speech(
-        &self,
+        &mut self,
         host: Option<&Arc<SpeechHandle>>,
-        id: SpeechId,
         allow_interruptions: bool,
-    ) -> Arc<SpeechHandle> {
+    ) -> (SpeechId, Arc<SpeechHandle>) {
         match host {
             Some(handle) => {
+                let id = handle.reserved().unwrap_or_else(|| self.session.ids.next_speech_id());
                 handle.create(id, allow_interruptions);
-                Arc::clone(handle)
+                (id, Arc::clone(handle))
             }
-            None => Arc::new(SpeechHandle::new(id, allow_interruptions, self.shared.queue.clone())),
+            None => {
+                let id = self.session.ids.next_speech_id();
+                let api = self.shared.queue.clone();
+                (id, Arc::new(SpeechHandle::new(id, allow_interruptions, api)))
+            }
         }
     }
 
@@ -524,9 +530,8 @@ impl Driver {
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
     pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
-        let id = self.session.ids.next_speech_id();
         let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
-        let handle = self.new_speech(call.as_ref().map(|c| &c.speech), id, allow_interruptions);
+        let (id, handle) = self.new_speech(call.as_ref().map(|c| &c.speech), allow_interruptions);
         handle.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
                 "the session loop ended before {what}() ran"

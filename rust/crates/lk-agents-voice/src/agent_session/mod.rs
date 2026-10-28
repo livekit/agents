@@ -129,7 +129,7 @@ impl VoiceSession {
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
-            ids: IdMint { session: session_id, next: 1, user_item: None },
+            ids: IdMint { session: session_id, next: Arc::new(1.into()), user_item: None },
             config,
             chat_ctx,
             llm,
@@ -339,10 +339,11 @@ pub(crate) fn mint_session_id() -> String {
     format!("AS_{:012x}", n & 0xffff_ffff_ffff)
 }
 
-/// The session's own ids: speeches and items share one counter, items carry the session's id.
+/// The session's own ids: speeches and items share one counter, items carry the session's id. The
+/// host's `say()` / `generate_reply()` take their speech's id from it as they return the handle.
 pub(crate) struct IdMint {
     session: String,
-    next: u64,
+    next: Arc<std::sync::atomic::AtomicU64>,
     /// The user item an interim transcript opened, reused until its final.
     user_item: Option<String>,
 }
@@ -354,8 +355,12 @@ impl IdMint {
     }
 
     pub(crate) fn next_speech_id(&mut self) -> SpeechId {
-        self.next += 1;
-        SpeechId(self.next - 1)
+        SpeechId(self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The counter, for the host's speech calls.
+    pub(crate) fn speech_ids(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.next)
     }
 
     pub(crate) fn user_transcript_item(&mut self, is_final: bool) -> String {

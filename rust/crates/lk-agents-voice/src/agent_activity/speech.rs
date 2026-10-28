@@ -3,7 +3,7 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::false_interruption::{
-    InterruptOutcome, InterruptRefusal, InterruptWaiter,
+    InterruptOutcome, InterruptWaiter,
 };
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind, Status};
 use crate::agent_session::effects::Out;
@@ -316,12 +316,13 @@ impl Driver {
                     // Already interrupted or done: a no-op, so another speech's live generation is
                     // not cancelled under it.
                     Ok(InterruptOutcome::Already) => false,
-                    // The reference raises before anything moves.
+                    // Disallowed by the time it landed: the handle drops the request.
                     Err(_) => {
-                        out.trace(InterruptStep::ByAudioActivityRefused(
-                            InterruptRefusal::NotAllowed,
-                        ));
-                        false
+                        out.trace(InterruptStep::HostInterruptRefused { speech: id });
+                        if let Some(h) = self.activity.speech_scheduler.handle(id) {
+                            h.interrupt_refused();
+                        }
+                        return;
                     }
                 };
                 if tell_socket {
@@ -635,9 +636,7 @@ impl Driver {
             | (None, _) => None,
         };
 
-        let id = self.session.ids.next_speech_id();
-
-        let handle = self.new_speech(spec.host_handle.as_ref(), id, spec.allow_interruptions);
+        let (id, handle) = self.new_speech(spec.host_handle.as_ref(), spec.allow_interruptions);
 
         self.activity.note_speech_agent(id, kind);
 

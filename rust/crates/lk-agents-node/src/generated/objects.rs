@@ -373,7 +373,7 @@ impl SpeechHandle {
 
     #[napi(getter, js_name = "allowInterruptions")]
     pub fn allow_interruptions(&self) -> bool {
-        self.inner.allow_interruptions()
+        self.inner.allow_interruptions_for_host()
     }
 
     #[napi(setter, js_name = "allowInterruptions")]

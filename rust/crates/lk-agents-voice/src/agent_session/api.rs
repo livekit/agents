@@ -196,6 +196,7 @@ impl SessionApi {
                 scheduling,
                 peer,
                 ivr_detection,
+                speech_ids,
             } = handle;
             #[cfg(feature = "dst")]
             let (host_event, queue_owner) = probe.unzip();
@@ -246,6 +247,7 @@ impl SessionApi {
                 amd: None,
                 tasks,
                 drained: Some(drained),
+                speech_ids,
             });
             // A drain that returned without reading drops the sender: nothing to wait for.
             let _ = opening_rx.await;
@@ -303,14 +305,18 @@ impl SessionApi {
         self.running(|r| Ok(r.calls.open(pick)))
     }
 
-    /// A `say()` / `generate_reply()`: the handle the host gets now, and the call that brings it
-    /// to the loop.
+    /// A `say()` / `generate_reply()`: the handle the host gets now, with its id and the
+    /// interruptibility it is created with (`allow_interruptions`, else the options' as they
+    /// stand), and the call that brings it to the loop.
     pub fn speech_call(
         &self,
         allow_interruptions: Option<bool>,
     ) -> Result<(Arc<SpeechHandle>, SpeechCall), SessionRefused> {
+        let allow = allow_interruptions
+            .unwrap_or_else(|| self.stack().resolve(&self.legs()).turn.interruption.enabled());
         self.running(|r| {
-            let speech = SpeechHandle::pending(r.api.clone(), allow_interruptions);
+            let id = crate::agent_activity::scheduling::SpeechId(r.speech_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            let speech = SpeechHandle::pending(r.api.clone(), id, allow);
             let id = r.calls.open_speech(&speech);
             Ok((Arc::clone(&speech), SpeechCall { id, speech }))
         })
@@ -703,6 +709,8 @@ struct Running {
     /// Resolves when the host's drain has handed over the last event, so `close` handlers are
     /// queued before the close completes.
     drained: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// The loop's id counter: a speech call's handle has its id before the loop creates it.
+    speech_ids: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Owns the turn-detector stream it closes once the loop is gone (the driver's legs never owned

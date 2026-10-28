@@ -241,6 +241,7 @@ impl DriverBuilder {
         let keyterms_pushed = driver.shared.keyterms.subscribe();
         let activity = driver.shared.activity.subscribe();
         let scheduling = driver.shared.scheduling.subscribe();
+        let speech_ids = driver.session.ids.speech_ids();
         let peer = PeerHandle {
             queue: queue.clone(),
             events: ev_tx,
@@ -263,6 +264,7 @@ impl DriverBuilder {
                 scheduling,
                 peer,
                 ivr_detection,
+                speech_ids,
             },
         ))
     }
