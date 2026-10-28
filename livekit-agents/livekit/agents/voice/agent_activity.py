@@ -499,8 +499,7 @@ class AgentActivity(RecognitionHooks):
         # the call an InputRequired left waiting: the next user message is its output.
         # TODO(agents-2.0): held in memory until the turn's task row carries it (plan 7.4)
         self._pending_input: llm.FunctionCallOutput | None = None
-        # a question whose answer goes back to its tool: the next reply is forced to call the
-        # tool, and the first call of it carries what the person said and the question's reference
+        # a claimed question: the next reply calls its tool with the person's words and reference
         self._forced_tool: str | None = None
         self._answering: tuple[str, InputRequired] | None = None
         # a spoken turn whose transcript has not arrived: a realtime model may answer it first
@@ -2453,9 +2452,8 @@ class AgentActivity(RecognitionHooks):
         return None
 
     def _claim_next_turn(self, tool_name: str, question: InputRequired) -> None:
-        """A question whose answer goes back to its tool: the person's next turn is a call of
-        it. A realtime model making its own responses is told now; a reply this activity makes
-        is told when the turn comes."""
+        """The person's next turn is a call of this tool. A realtime model making its own
+        responses is told now; a reply this activity makes is told when the turn comes."""
         self._forced_tool = tool_name
         self._answering = (tool_name, question)
         if self._rt_session is not None:
@@ -2483,9 +2481,8 @@ class AgentActivity(RecognitionHooks):
         raw_arguments: dict[str, Any],
         run_ctx: RunContext[Any, Any],
     ) -> dict[str, Any]:
-        """The arguments of a call that answers a claimed question: what the person said, as
-        they said it, in place of the model's, with the question's reference on ``run_ctx``; the
-        model's for any other call."""
+        """What the person said, in place of the model's arguments, for the call that answers a
+        claimed question, whose reference goes on ``run_ctx``; the model's for any other call."""
         if self._answering is None or tool.info.name != self._answering[0]:
             return raw_arguments
         run_ctx._answer_ref = self._answering[1]._answer_ref

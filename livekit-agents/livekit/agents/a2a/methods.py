@@ -422,10 +422,8 @@ class A2AService(Generic[S]):
         return TurnOutcome(result=result, context_id=thread_id)
 
     async def _continued(self, thread_id: str, message: StoredMessage) -> str | None:
-        """The task waiting on a question that this message continues (plan 5.5): the one its
-        ``taskId`` names, or, for the person's message with none, the question in front of
-        them. A ``taskId`` of a running task is a new task; of an ended one, refused unless the
-        message is resent; of another lane, not found."""
+        """The waiting task this message continues (plan 5.5): the one its ``taskId`` names, or
+        the oldest open question for the person's message with none; ``None`` for a new task."""
         tasks = await Thread(self._storage, thread_id, agent_name=self.lane).tasks()
         named = str(message.get("taskId") or "")
         if not named:

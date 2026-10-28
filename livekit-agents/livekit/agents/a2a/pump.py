@@ -3,11 +3,10 @@
 ``WireHost`` is the host object of a wire turn: it runs the handler and turns the turn's calls
 into the A2A frames of the response. Every frame goes through the ``ResponsePump``: appended to
 the task's stream as it is produced, whether or not a client is still reading, and the stream
-is closed at the terminal frame; a task waiting on a question keeps it for its answer's frames.
-The turn runs in a task of its own and emits here; the response generator relays what has
-already been made durable. A client that goes away leaves that generator suspended, which
-changes nothing: the turn runs to its commit, and a ``tasks/resubscribe`` replays the stream
-from any offset.
+is closed at the terminal frame (a waiting task's stays open for its answer). The turn runs in
+a task of its own and emits here; the response generator relays what has already been made
+durable. A client that goes away leaves that generator suspended, which changes nothing: the
+turn runs to its commit, and a ``tasks/resubscribe`` replays the stream from any offset.
 """
 
 from __future__ import annotations
@@ -77,8 +76,7 @@ class ResponsePump(Generic[T]):
         self._queue.put_nowait(event)
 
     async def finish(self, outcome: T, *, close: bool = True) -> None:
-        """The last frame was emitted: end the relay, and close the stream unless the task
-        goes on, as one waiting on a question does."""
+        """The last frame was emitted: end the relay, and close the stream with ``close``."""
         self._outcome = outcome
         if close:
             await self._close()

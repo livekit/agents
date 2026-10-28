@@ -108,15 +108,14 @@ class RunHooks:
     a flagged ``working`` frame. ``on_token`` receives the model's text as it arrives, so the
     text door shows the reply as it is written. ``thread_id`` is the session the run belongs to,
     what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
-    ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry, the
-    server's registry; the run resolves them itself since only it knows the root. ``answer_tool``
-    names the tool the message is handed to before the model runs, with ``answer_ref`` on its
-    ``RunContext``: the last turn's question came from a call of it with that reference, a
-    delegate's, and this message is its answer. ``delegated`` says the turn's message came from
-    another agent: the run does not phrase its questions, the agent facing the person does. ``lane``
-    is the door's lane of the thread, what ``A2ADelegate`` names as the caller's. ``task_id`` is the
-    task the turn runs under, which marks what the run records (``TASK_KEY``); ``open_tasks`` are
-    the lane's other open tasks, whose items after this task's own last one the model does not read.
+    ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
+    the server's registry; the run resolves them itself since only it knows the root.
+    ``answer_tool`` is the tool whose question this message answers, called with it before the
+    model runs and with ``answer_ref`` on its ``RunContext``. ``delegated``
+    says the turn's message came from another agent: the run does not phrase its questions,
+    the agent facing the person does. ``lane`` is the door's lane of the thread, what
+    ``A2ADelegate`` names as the caller's. ``task_id`` marks what the run records
+    (``TASK_KEY``); ``open_tasks`` are the lane's other open tasks, whose later items it skips.
     """
 
     boundary: Callable[[], Awaitable[bool]] | None = None
@@ -824,9 +823,8 @@ class AgentRun(Generic[Run_T]):
         *,
         answer_ref: str | None = None,
     ) -> ToolExecutionOutput | AgentTask[Any, Any]:
-        """Run one tool with a ``RunContext`` of this run, carrying ``answer_ref`` when the call
-        forwards an answer; the output is what the model reads, or the ``AgentTask`` the tool
-        awaited."""
+        """Run one tool with a ``RunContext`` of this run and ``answer_ref``; the output is what
+        the model reads, or the ``AgentTask`` the tool awaited."""
         if tool is None:
             return make_tool_output(
                 fnc_call=fnc_call,

@@ -229,14 +229,10 @@ class Rejected:
 
 @dataclass(frozen=True)
 class InputRequired:
-    """The turn or task waits on the person for an answer to ``question``, with no timeout.
+    """The turn or task waits on the person for an input a tool needs, such as an email.
 
-    Only for an input a tool needs to go on: an email, a yes or no on a read-back, a card
-    number. A conversational question is a plain reply, and the next message is a new request.
     The agent facing the person asks it in its own words, or exactly as written with
-    ``verbatim=True``. The answer continues the waiting task as the person's next message, and
-    the task's model reads it; from a conversation tool the call keeps the question as its
-    output.
+    ``verbatim=True``, and the task's model reads the person's answer.
     """
 
     question: str
@@ -395,8 +391,8 @@ answer alone reads like a call that ran."""
 
 
 def _read_back_answers(items: Sequence[Any]) -> dict[str, str]:
-    """The person's answer to each read-back of a tool that requires approval, by call id, read
-    from the history, which is what persists across workers."""
+    """The person's answer to each read-back, by call id: their next message in the same task.
+    Approval reads it from the history, since the answer may reach another worker."""
     from .chat_context import ChatMessage, FunctionCall
 
     answered: dict[str, str] = {}
@@ -436,12 +432,9 @@ message, never this output."""
 
 
 def approval_granted(items: Sequence[Any], call: Any) -> bool:
-    """Whether ``call`` repeats the latest read-back of its tool in its task, with the same
-    arguments, after the person answered it in that task, and no earlier repeat used that answer.
-
-    A reading of the history by the calls' ``APPROVAL_KEY`` and ``TASK_KEY`` marks and the
-    person's messages: a call that asked something else, such as a missing detail, is neither a
-    read-back nor a run."""
+    """Whether ``call`` repeats, with the same arguments, the latest answered read-back of its
+    tool in its task, and no earlier repeat used that answer. A call that asked something else,
+    such as a missing detail, is not a read-back."""
     from .chat_context import FunctionCall
 
     def key(c: FunctionCall) -> str:
