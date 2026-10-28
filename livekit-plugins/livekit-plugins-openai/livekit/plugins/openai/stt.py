@@ -400,6 +400,38 @@ class STT(stt.STT):
         )
 
     @staticmethod
+    def with_audexum(
+        *,
+        model: str = "whisper-1",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: str = "https://audexum.com/v1",
+        client: openai.AsyncClient | None = None,
+        language: str | list[str] = "en",
+        detect_language: bool = False,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+    ) -> STT:
+        """
+        Create a new instance of Audexum STT.
+
+        ``api_key`` must be set to your Audexum API key, either using the argument or by setting
+        the ``AUDEXUM_API_KEY`` environmental variable.
+        """
+        audexum_api_key = api_key if is_given(api_key) else os.environ.get("AUDEXUM_API_KEY")
+        if not audexum_api_key:
+            raise ValueError("Audexum API key is required")
+
+        return STT(
+            model=model,
+            api_key=audexum_api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
+            prompt=prompt,
+            use_realtime=False,
+        )
+
+    @staticmethod
     def with_ovhcloud(
         *,
         model: str = "whisper-large-v3-turbo",
