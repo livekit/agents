@@ -4,10 +4,9 @@
 //! a host interrupt, a Close, or user speech and turn input. Causes the runtime owns alone
 //! (superseded, watchdog, schedule rejected, handoff, detector) need no input.
 //!
-//! `Host` is broader than the two interrupt calls. Swapping the audio output while a speech is
-//! playing also interrupts it as the host's own doing, because a segment already playing into
-//! the old sink cannot move; the driver takes that path without a `HostInterrupt` step, so the
-//! sink swap counts as a permitted input here.
+//! `Host` is the interrupt calls and a DTMF reply interrupting first. Swapping the audio output
+//! while a speech is playing cuts it as `OutputReplaced`: a segment already playing into the old
+//! sink cannot move.
 use lk_agents_voice::trace::{CloseStep, InterruptCause, InterruptStep::Interrupted, Step};
 
 use crate::{
@@ -22,7 +21,7 @@ pub struct InterruptionHasCause;
 impl Rule for InterruptionHasCause {
     const CONTRACT: Contract = Contract {
         id: "interruption_has_cause",
-        guarantee: "A journalled interruption's cause matches an input that permits it: for Host, an interrupt the case issued or a sink swap it forced.",
+        guarantee: "A journalled interruption's cause matches an input that permits it: for Host, an interrupt the case issued; for OutputReplaced, a sink swap.",
         examples: &[host_interrupt_then_journal, sink_swap_then_journal, own_close_then_journal],
         counterexamples: &[host_cause_without_host_call, closing_cause_without_close],
         probe: None,
@@ -35,6 +34,9 @@ impl Rule for InterruptionHasCause {
             // The journalled cause names who asked; that party must actually have acted before it.
             let permitted = match cause {
                 InterruptCause::Host => host_interrupted_before(&inputs, at),
+                InterruptCause::OutputReplaced => inputs.sent().iter().any(|sent| {
+                    sent.at < at && matches!(sent.input, Input::SetAudioOutput { .. })
+                }),
                 // The case's `Close`, or the session's own: its error policy, the room going.
                 InterruptCause::Closing => r.close_begun().is_some_and(|c| c < at),
                 InterruptCause::ByAudioActivity | InterruptCause::UserTurn => {
@@ -84,15 +86,13 @@ impl Rule for InterruptionHasCause {
 }
 
 /// Something the case did before `at` that the driver treats as the host interrupting: an
-/// interrupt call, an audio-output swap, which cuts whatever is playing into the old sink, or a
-/// key pressed into a DTMF collection, whose reply interrupts first (`GetDtmfTask`).
+/// interrupt call, or a key pressed into a DTMF collection, whose reply interrupts first
+/// (`GetDtmfTask`).
 fn host_interrupted_before(inputs: &InputsView, at: Observed) -> bool {
     inputs.sent().iter().any(|sent| {
         sent.at < at
             && match sent.input {
-                Input::Interrupt { .. }
-                | Input::InterruptSpeech { .. }
-                | Input::SetAudioOutput { .. } => true,
+                Input::Interrupt { .. } | Input::InterruptSpeech { .. } => true,
                 Input::Dtmf { input: DtmfInput::Digit, .. } => sent.accepted,
                 _ => false,
             }
@@ -151,7 +151,7 @@ fn sink_swap_then_journal() -> Recording {
         .sent(Input::SetAudioOutput { attach: false })
         .journal(Step::Interrupt(Interrupted {
             speech: SpeechId(3),
-            cause: InterruptCause::Host,
+            cause: InterruptCause::OutputReplaced,
             force: true,
         }))
         .done()

@@ -388,7 +388,7 @@ impl Driver {
                             match self.interrupt_speech(
                                 now,
                                 speech,
-                                InterruptCause::Host,
+                                InterruptCause::OutputReplaced,
                                 true,
                                 out,
                             ) {
@@ -399,7 +399,7 @@ impl Driver {
                         None => false,
                     };
                     if !socket_told {
-                        self.realtime_interrupt(InterruptCause::Host, out);
+                        self.realtime_interrupt(InterruptCause::OutputReplaced, out);
                     }
                 }
                 // `can_pause` and "audio enabled" are the new sink's; release a pause it can't hold.

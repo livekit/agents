@@ -719,7 +719,11 @@ pub enum CloseAct {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptCause {
     ByAudioActivity,
+    /// The host's `interrupt()`, a speech's own, or a DTMF collection's reply interrupting first.
     Host,
+    /// The audio output was replaced while a speech played into the old one, which it cannot
+    /// leave: cut whatever its `allow_interruptions`, as a cause of its own.
+    OutputReplaced,
     /// A detector's verdict (AMD: a machine answered), forced past `allow_interruptions`.
     Detector,
     Superseded,
