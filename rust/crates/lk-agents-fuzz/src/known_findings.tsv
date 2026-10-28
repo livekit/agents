@@ -4,4 +4,4 @@
 # or `-`, and why it is open.
 tool_lifecycle	Tool	-	listed since 6420a8baa with no cause recorded; not reached by the recent gate windows
 transcript_follows_audio	Speech	-	the synchroniser, for a lost playback_finished, rotates to the next turn's first frame or text while the last segment still plays out: that segment's later progress moves the new segment's pacer, so words show before their audio (seeds 1906 3322 17865 22545 22658)
-message_executes_once	Continuation	-	continuing a pending question by its taskId cannot commit: settle stamps the continuation's messageId on the continued task while answer_pending stamps it on the receipt row, and the unique (lane, message_id) task index fails the commit (A2A_SEED=8)
+message_executes_once	Continuation	-	after 78f8da08f a continuation of a pending question (m0 continuing AST_r6) is answered by the continued task, but the durable rows disagree: the continued task's history lacks the reply and the receipt row is not merged into it, later failing on its own (A2A_SEED=154 239; 21 of 2048 seeds)

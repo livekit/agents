@@ -12,15 +12,24 @@
 //! verdicts; the recogniser model against the recorded speech spans. The realtime server is also
 //! held to the probes (`corpus/probes`, `corpus/probe_realtime.py`): the protocol's edge cases
 //! driven on the real server on purpose, each client frame answered as the real one answered it.
+//!
+//! The fake server speaks the realtime core's typed records: the recorded client frames go in as
+//! the frames the core sends ([`outgoing`]), and its events are read as the wire carried them
+//! ([`wire`]).
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::SystemTime;
 
 use lk_agents_abi::Ts;
 use lk_agents_abi::utils::vocabulary::Coverage;
 use lk_agents_fuzz::corpus;
-use lk_agents_fuzz::fakes::realtime::server::{Exo, NoHooks, Server};
+use lk_agents_fuzz::fakes::realtime::server::{Exo, NoHooks, Server, event_id_of};
 use lk_agents_fuzz::fakes::vocabulary;
 use lk_agents_fuzz::search::stt_kinds;
 use serde_json::{Value, json};
+
+#[path = "conformance/typed.rs"]
+mod typed;
+use typed::{outgoing, wire};
 
 fn recordings(prefix: &str) -> Vec<(String, Value)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/recordings");
@@ -132,6 +141,7 @@ enum Step {
 fn replay(rec: &Value, seed: u64) -> Vec<(f64, Value)> {
     let mut server = Server::new(seed);
     let mut hooks = NoHooks(0);
+    let mut minted = 0;
     let mut steps: Vec<(f64, u32, Step)> = Vec::new();
     for c in rec["client"].as_array().unwrap() {
         let ty = c["type"].as_str().unwrap().to_owned();
@@ -158,13 +168,16 @@ fn replay(rec: &Value, seed: u64) -> Vec<(f64, Value)> {
     let drain = |server: &mut Server, until: Ts, out: &mut Vec<(f64, Value)>,
                      last_message: &mut Option<String>, last_call: &mut Option<String>| {
         while let Some(due) = server.next_due().filter(|d| *d <= until) {
-            while let Some(frame) = server.pop(due, &mut NoHooks(0)) {
-                if frame["type"] == "response.output_item.added" {
-                    match frame["item"]["type"].as_str() {
-                        Some("message") => *last_message = frame["item"]["id"].as_str().map(str::to_owned),
-                        Some("function_call") => *last_call = frame["item"]["call_id"].as_str().map(str::to_owned),
-                        _ => {}
+            while let Some(delivered) = server.pop(due, SystemTime::UNIX_EPOCH, &mut NoHooks(0)) {
+                let frame = wire(&delivered);
+                match (frame["type"].as_str(), frame["item"]["type"].as_str()) {
+                    (Some("response.output_item.added"), Some("message")) => {
+                        *last_message = frame["item"]["id"].as_str().map(str::to_owned);
                     }
+                    (Some("conversation.item.added"), Some("function_call")) => {
+                        *last_call = frame["item"]["call_id"].as_str().map(str::to_owned);
+                    }
+                    _ => {}
                 }
                 out.push((ms_of(due), frame));
             }
@@ -178,7 +191,10 @@ fn replay(rec: &Value, seed: u64) -> Vec<(f64, Value)> {
             Step::Audio(ms) => {
                 let pcm = vec![0u8; (ms / 1000.0 * 24_000.0) as usize * 2];
                 let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
-                server.client(now, &json!({"type": "input_audio_buffer.append", "audio": audio}), &mut hooks);
+                let append = json!({"type": "input_audio_buffer.append", "audio": audio});
+                for frame in outgoing(&append, &mut minted) {
+                    server.client(now, &frame, &mut hooks);
+                }
             }
             Step::Exo(exo) => {
                 server.exo(now, exo);
@@ -201,7 +217,9 @@ fn replay(rec: &Value, seed: u64) -> Vec<(f64, Value)> {
                         "type": "function_call_output", "call_id": last_call.clone().unwrap_or_default(), "output": "{}"}}),
                     other => json!({"type": other}),
                 };
-                server.client(now, &frame, &mut hooks);
+                for frame in outgoing(&frame, &mut minted) {
+                    server.client(now, &frame, &mut hooks);
+                }
             }
         }
     }
@@ -220,8 +238,13 @@ fn response_shapes(events: &[Value]) -> BTreeSet<String> {
     let mut of_item: BTreeMap<String, String> = BTreeMap::new();
     let mut shapes: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
+    // An item's type, from the event that carried it: the fake names a done item by id alone.
+    let mut kinds: BTreeMap<String, String> = BTreeMap::new();
     for e in events {
         let ty = e["type"].as_str().unwrap();
+        if let (Some(id), Some(kind)) = (e["item"]["id"].as_str(), e["item"]["type"].as_str()) {
+            kinds.insert(id.to_owned(), kind.to_owned());
+        }
         let resp = e["response_id"]
             .as_str()
             .or_else(|| e["response"]["id"].as_str())
@@ -240,7 +263,8 @@ fn response_shapes(events: &[Value]) -> BTreeSet<String> {
             "response.output_audio.delta" | "response.output_audio_transcript.delta" => "delta".to_owned(),
             "response.output_item.added" | "response.output_item.done" | "conversation.item.added"
             | "conversation.item.done" => {
-                format!("{ty}:{}", e["item"]["type"].as_str().unwrap_or("?"))
+                let named = e["item_id"].as_str().and_then(|id| kinds.get(id)).map(String::as_str);
+                format!("{ty}:{}", e["item"]["type"].as_str().or(named).unwrap_or("?"))
             }
             other => other.to_owned(),
         };
@@ -440,24 +464,30 @@ fn the_realtime_server_behaves_as_recorded() {
 fn the_realtime_failures_send_documented_events() {
     let mut server = Server::new(3);
     let mut hooks = NoHooks(0);
+    let mut minted = 0;
+    let mut send = |server: &mut Server, t: f64, frame: Value| {
+        for frame in outgoing(&frame, &mut minted) {
+            server.client(at(t), &frame, &mut hooks);
+        }
+    };
     server.connect(at(0.0));
     let session = json!({"type": "session.update", "session": {"output_modalities": ["audio"], "audio": {"input": {
         "transcription": {"model": "m"}, "turn_detection": turn_detection("server_vad")}}}});
-    server.client(at(0.0), &session, &mut hooks);
+    send(&mut server, 0.0, session);
     let pcm = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![1u8; 4800]);
-    server.client(at(0.1), &json!({"type": "input_audio_buffer.append", "audio": pcm}), &mut hooks);
+    send(&mut server, 0.1, json!({"type": "input_audio_buffer.append", "audio": pcm}));
     assert!(server.exo(at(0.2), Exo::SpeechStarted));
     assert!(server.exo(at(1.0), Exo::SpeechStopped));
     assert!(server.exo(at(1.05), Exo::ResponseFailed));
     assert!(server.exo(at(1.1), Exo::TranscriptionFailed));
     assert!(server.exo(at(1.2), Exo::ServerError));
     assert!(server.exo(at(1.3), Exo::StrayDelta));
-    server.client(at(2.0), &json!({"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": []}}), &mut hooks);
-    server.client(at(2.1), &json!({"type": "conversation.item.delete", "item_id": "nope"}), &mut hooks);
+    send(&mut server, 2.0, json!({"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": []}}));
+    send(&mut server, 2.1, json!({"type": "conversation.item.delete", "item_id": "nope"}));
     let mut types = BTreeSet::new();
     while let Some(due) = server.next_due() {
-        while let Some(frame) = server.pop(due, &mut hooks) {
-            types.insert(frame["type"].as_str().unwrap().to_owned());
+        while let Some(delivered) = server.pop(due, SystemTime::UNIX_EPOCH, &mut NoHooks(0)) {
+            types.insert(wire(&delivered)["type"].as_str().unwrap().to_owned());
         }
     }
     for t in &types {
@@ -610,7 +640,15 @@ fn audio_of(events: &[Ev], item: &str, t: f64) -> f64 {
 
 /// What the server answered `frame` with, sent at `t`: the first event not yet claimed that
 /// acknowledges a frame of its type, or an error citing it (or citing nothing).
-fn reaction(frame: &Value, t: f64, events: &[Ev], claimed: &mut BTreeSet<usize>) -> (String, f64) {
+/// `citable`: the frame went with an `event_id`; one that went without has its error cite
+/// nothing, and the first acknowledgement or uncited error is its answer.
+fn reaction(
+    frame: &Value,
+    t: f64,
+    events: &[Ev],
+    claimed: &mut BTreeSet<usize>,
+    citable: bool,
+) -> (String, f64) {
     let ty = frame["type"].as_str().unwrap();
     let id = frame["event_id"].as_str();
     let acks = |e: &Ev| match ty {
@@ -639,7 +677,11 @@ fn reaction(frame: &Value, t: f64, events: &[Ev], claimed: &mut BTreeSet<usize>)
     let find = |pick: &dyn Fn(&Ev) -> bool| {
         events.iter().enumerate().find(|(n, e)| open(n, e) && pick(e))
     };
-    let hit = find(&|e| acks(e) || cites(e)).or_else(|| find(&uncited));
+    let hit = if citable {
+        find(&|e| acks(e) || cites(e)).or_else(|| find(&uncited))
+    } else {
+        find(&|e| acks(e) || uncited(e))
+    };
     match hit {
         Some((n, e)) => {
             claimed.insert(n);
@@ -684,13 +726,24 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
     steps.sort_by(|a, b| a.0.total_cmp(&b.0));
     // A step's anchor: the last event the real server sent before it, as `(type, how many of
     // that type came before it)`, and the gap after it.
+    // What the real server sent for a frame the core never sends is nothing to wait on.
+    let unsent: BTreeSet<&str> = frames
+        .iter()
+        .filter(|f| outgoing(&f["frame"], &mut 0).is_empty())
+        .filter_map(|f| f["frame"]["event_id"].as_str())
+        .collect();
+    let answered_unsent = |e: &Ev| {
+        e.ty == "conversation.item.retrieved"
+            || (e.ty == "error" && e.cites.as_deref().is_some_and(|c| unsent.contains(c)))
+    };
     let anchors: Vec<Option<(String, usize, f64)>> = steps
         .iter()
         .map(|(t, _, step)| {
             if matches!(step, ProbeStep::Exo(_)) {
                 return None;
             }
-            let before: Vec<&Ev> = real.iter().filter(|e| e.t < *t).collect();
+            let before: Vec<&Ev> =
+                real.iter().filter(|e| e.t < *t && !answered_unsent(e)).collect();
             let last = before.last()?;
             let nth = before.iter().filter(|e| e.ty == last.ty).count() - 1;
             Some((last.ty.clone(), nth, t - last.t))
@@ -699,6 +752,7 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
 
     let mut server = Server::new(seed).with_ids(format!("s{seed}_"));
     let mut hooks = NoHooks(0);
+    let mut minted = 0;
     let mut ids = Ordinals::default();
     let mut out: Vec<Ev> = Vec::new();
     let mut sent: Vec<(f64, Value)> = Vec::new();
@@ -711,7 +765,8 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
     loop {
         let now = secs(clock);
         // Deliver what is due now.
-        while let Some(frame) = server.pop(clock, &mut hooks) {
+        while let Some(delivered) = server.pop(clock, SystemTime::UNIX_EPOCH, &mut hooks) {
+            let frame = wire(&delivered);
             ids.read(&frame);
             out.push(faked(now, &frame, &ids));
             sent.push((now * 1000.0, frame));
@@ -741,7 +796,10 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
                     let samples = ((upto - appended) * 24.0) as usize;
                     let pcm = vec![1u8; samples * 2];
                     let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pcm);
-                    server.client(clock, &json!({"type": "input_audio_buffer.append", "audio": audio}), &mut hooks);
+                    let append = json!({"type": "input_audio_buffer.append", "audio": audio});
+                    for frame in outgoing(&append, &mut minted) {
+                        server.client(clock, &frame, &mut hooks);
+                    }
                     appended = *upto;
                 }
                 match step {
@@ -750,7 +808,9 @@ fn replay_probe(rec: &Value, seed: u64) -> Option<(Vec<Ev>, Vec<(f64, Value)>, V
                     }
                     ProbeStep::Frame(k, frame) => {
                         let frame = substitute(frame, &ids, &real, &out, now)?;
-                        server.client(clock, &frame, &mut hooks);
+                        for frame in outgoing(&frame, &mut minted) {
+                            server.client(clock, &frame, &mut hooks);
+                        }
                         frame_sent[*k] = now;
                     }
                 }
@@ -820,9 +880,27 @@ fn the_realtime_server_answers_the_probes_as_the_real_one() {
             .iter()
             .map(|f| (f["t"].as_f64().unwrap(), f["frame"].clone()))
             .collect();
+        // A frame the core sends with no `event_id` (a commit, a cancel, a truncation) can have no
+        // refusal cite it: the real server's answers are read as it would have cited them.
+        let citable = |frame: &Value| {
+            outgoing(frame, &mut 0).first().is_some_and(|sent| event_id_of(sent).is_some())
+        };
+        let uncitable: BTreeSet<&str> = frames
+            .iter()
+            .filter(|(_, f)| !citable(f))
+            .filter_map(|(_, f)| f["event_id"].as_str())
+            .collect();
+        let mut real = real;
+        for e in &mut real {
+            if e.cites.as_deref().is_some_and(|c| uncitable.contains(c)) {
+                e.cites = None;
+            }
+        }
         let mut claimed = BTreeSet::new();
-        let expected: Vec<(String, f64)> =
-            frames.iter().map(|(t, f)| reaction(f, *t, &real, &mut claimed)).collect();
+        let expected: Vec<(String, f64)> = frames
+            .iter()
+            .map(|(t, f)| reaction(f, *t, &real, &mut claimed, citable(f)))
+            .collect();
         let onsets: Vec<f64> = real.iter().filter(|e| e.ty == "input_audio_buffer.speech_started").map(|e| e.t).collect();
         let ends = |events: &[Ev], from: f64| -> Option<String> {
             // How the reply generating at an onset ended.
@@ -843,8 +921,13 @@ fn the_realtime_server_answers_the_probes_as_the_real_one() {
             }
             let mut claimed = BTreeSet::new();
             for (n, (t, frame)) in frames.iter().enumerate() {
+                // A frame the core never sends is not the fake's to answer.
+                if outgoing(frame, &mut 0).is_empty() {
+                    compared[n] = true;
+                    continue;
+                }
                 let ft = frame_sent[n];
-                let got = reaction(frame, ft, &fake, &mut claimed);
+                let got = reaction(frame, ft, &fake, &mut claimed, citable(frame));
                 let ty = frame["type"].as_str().unwrap();
                 // A frame whose answer hangs on a reply generating, where the fake's was not in
                 // the state the real one's was, is not this seed's to judge.

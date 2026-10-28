@@ -315,7 +315,9 @@ fn observe(db: &SimDb, seen: &mut Observed, online: &mut Vec<String>) {
     let rows = db.inspect(&plans::tasks(LANE, None, 10_000).statement);
     let mut pending = 0;
     for row in rows.iter().map(|r| TaskRow::from_row(r).expect("a task row")) {
-        if row.status == TaskState::InputRequired && row.internal.is_some() {
+        if row.status == TaskState::InputRequired
+            && row.internal.as_ref().is_some_and(|i| i.ask.is_some())
+        {
             pending += 1;
         }
         let log = seen.statuses.entry(row.task_id.clone()).or_default();

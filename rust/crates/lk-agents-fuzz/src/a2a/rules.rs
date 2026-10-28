@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use lk_agents_a2a::{A2A_CHANNEL, channel_of_record};
+use lk_agents_a2a::{A2A_CHANNEL, channel_of};
 use lk_agents_storage::run::{INTERRUPTED_KEY, MERGED_INTO_KEY, TaskRow, TaskState};
 
 use super::Record;
@@ -205,12 +205,13 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
 }
 
 /// Only a turn under `interrupt` yields to a newer message: an interrupted task answered a
-/// message of a channel whose policy is `interrupt` (`a2a` by default).
+/// message of a channel whose policy is `interrupt` (`a2a` by default). The turn's message is the
+/// task's last: a continued task keeps the question's message first (78f8da08f).
 pub fn only_interrupt_yields(record: &Record) -> Vec<Violation> {
     let mut out = Vec::new();
     for t in &record.tasks {
         let interrupted = t.data.metadata.get(INTERRUPTED_KEY).and_then(|v| v.as_bool());
-        let channel = channel_of_record(t);
+        let channel = t.data.history.last().map(channel_of);
         if interrupted == Some(true) && channel.as_deref() != Some(A2A_CHANNEL) {
             out.push(v("Task", format!("{} was interrupted on channel {channel:?}", t.task_id)));
         }

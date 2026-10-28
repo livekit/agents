@@ -244,7 +244,7 @@ impl Request {
             message_id: Some(msg.message_id.clone()),
             name: None,
             data: TaskData { history: vec![msg.to_a2a()], ..TaskData::default() },
-            ask: None,
+            internal: None,
         }
     }
 
@@ -390,7 +390,10 @@ impl Request {
         let pending = acquired
             .tasks
             .iter()
-            .find(|r| r.status == TaskState::InputRequired && r.internal.is_some())
+            .find(|r| {
+                r.status == TaskState::InputRequired
+                    && r.internal.as_ref().is_some_and(|i| i.ask.is_some())
+            })
             .cloned();
         let answer = answer_pending(
             &mut history,

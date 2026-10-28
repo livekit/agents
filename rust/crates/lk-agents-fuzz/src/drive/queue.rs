@@ -171,6 +171,10 @@ fn label(event: &Event) -> &'static str {
             Input::InputStarted { .. } => "InputStarted",
             Input::GateSilenced(_) => "GateSilenced",
             Input::InputCensus(_) => "InputCensus",
+            Input::StorageReloaded(_) => "StorageReloaded",
+            Input::StorageSettled(_) => "StorageSettled",
+            Input::StorageAbandoned(_) => "StorageAbandoned",
+            Input::StorageLost(_) => "StorageLost",
         },
     }
 }
@@ -253,7 +257,8 @@ impl Queue {
             self.note(None, "Wake");
             return Some(Next::Wake);
         }
-        let processes: Vec<u64> = tasks_ready.then_some(POOL).into_iter().chain(ready.iter().copied()).collect();
+        let processes: Vec<u64> =
+            tasks_ready.then_some(POOL).into_iter().chain(ready.iter().copied()).collect();
         match self.sched.next(&processes)? {
             Step::Item { arrival, item } => {
                 self.fold(1, arrival);

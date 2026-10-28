@@ -12,7 +12,7 @@ use lk_agents_abi::{
     utils::vocabulary::{Coverage, Covers},
     vad::events::{assert_vad_event_type_is_covered, vad_event_type_vocabulary as vad},
 };
-use lk_agents_inference::realtime::wire::{
+use lk_agents_inference::realtime::protocol::{
     assert_incoming_is_covered, incoming_coverage, incoming_vocabulary as wire,
 };
 
@@ -48,7 +48,7 @@ table! { Vad:
     vad::EndOfSpeech => Covered("VadEnd");
 }
 
-/// The realtime wire the core decodes (`lk_agents_inference::realtime::wire::Incoming`), by the
+/// The realtime wire the core decodes (`lk_agents_inference::realtime::protocol::Incoming`), by the
 /// server event type the simulated server sends for it.
 pub struct RealtimeWire;
 table! { RealtimeWire:
@@ -97,6 +97,7 @@ table! { RealtimeEvents:
     event::Metrics => Covered("response.done usage, transcription usage");
     event::Error => Covered("error, a failed connection");
     event::HostError => Skipped("a host session's wall-clock error");
+    event::TranscriptAttribution => Skipped("a duplex model's (`lk_agents_inference::duplex::Segmenter`): the DST runs no duplex setup yet");
 }
 
 /// Compiles only while every variant of every provider vocabulary is covered or skipped.
