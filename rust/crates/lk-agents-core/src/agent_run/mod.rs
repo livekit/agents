@@ -56,6 +56,8 @@ pub struct RunInput {
     pub answer_tool: Option<String>,
     /// Another agent asked this run: questions pass up as written; the facing agent words them.
     pub delegated: bool,
+    /// The coordinator reading the outcome table.
+    pub mode: tool_outcome::Mode,
     /// Maps supplied instants to wall stamps on recorded items.
     pub wall: WallAnchor,
     /// How long cancelled work may take to settle before it is reported incomplete.
@@ -716,7 +718,7 @@ impl AgentRun {
         let mut items = Vec::with_capacity(recorded.len() * 2);
         for Recorded { id, item, settled } in recorded {
             let outcome = &settled.outcome;
-            let shape = tool_outcome::shape(outcome);
+            let shape = tool_outcome::shape(outcome, self.input.mode);
             let mut text = tool_outcome::delivered(outcome).unwrap_or(shape.text);
             let mut reply_required = shape.reply_required;
             if let Some(said) = tool_outcome::verbatim(outcome) {

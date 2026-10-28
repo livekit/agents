@@ -14,9 +14,21 @@ pub struct ToolShape {
     pub reply_required: bool,
 }
 
+/// Which coordinator reads the table. The two differ in one row only, a `None` return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// `agent.run()` and TextSession: `None` is a value the model reads and continues from
+    /// (tools.md "What a tool returns").
+    Text,
+    /// A call: a silent tool asks for no follow-up reply, the reference's
+    /// `reply_required = fnc_out is not None`. Interim until the owner rules on the `None` row for
+    /// calls (pending question, OVERNIGHT.md; settled with E-3).
+    Voice,
+}
+
 /// `make_tool_output` and the transitions as one table. A verbatim result's delivery is the
 /// coordinator's: [`delivered`] is what the model reads once it was said.
-pub fn shape(outcome: &ToolOutcome) -> ToolShape {
+pub fn shape(outcome: &ToolOutcome, mode: Mode) -> ToolShape {
     let shape = |text: &str, is_error: bool, reply_required: bool| ToolShape {
         text: text.to_owned(),
         is_error,
@@ -24,9 +36,8 @@ pub fn shape(outcome: &ToolOutcome) -> ToolShape {
     };
     match outcome {
         ToolOutcome::Value { text, reply_required, .. } => shape(text, false, *reply_required),
-        ToolOutcome::Nothing | ToolOutcome::StopResponse | ToolOutcome::Cancelled => {
-            shape("", false, false)
-        }
+        ToolOutcome::Nothing => shape("", false, mode == Mode::Text),
+        ToolOutcome::StopResponse | ToolOutcome::Cancelled => shape("", false, false),
         // `ModelRetry` is feedback, as a `ToolError` is: the model reads the reason and calls
         // again. The retry budget is the invocation's.
         ToolOutcome::ToolError(message) | ToolOutcome::ModelRetry(message) => {
@@ -69,7 +80,7 @@ pub fn delivered(outcome: &ToolOutcome) -> Option<String> {
 mod tests {
     use super::*;
 
-    // Catches: a transition read as silent (its output lost), `Failed`/`Rejected` not errors, an
+    // Catches: a `None` return read as asking for no reply, a transition read as silent (its output lost), `Failed`/`Rejected` not errors, an
     // `InputRequired` with no question, `ToolResult(reply_required=False)` losing its text,
     // `ModelRetry` hidden as an internal error, or exception detail reaching the model.
     #[test]
@@ -88,7 +99,7 @@ mod tests {
         let cases: &[(ToolOutcome, (&str, bool, bool))] = &[
             (value("12C", true), ("12C", false, true)),
             (value("sent DTMF 1", false), ("sent DTMF 1", false, false)),
-            (ToolOutcome::Nothing, ("", false, false)),
+            (ToolOutcome::Nothing, ("", false, true)),
             (ToolOutcome::StopResponse, ("", false, false)),
             (ToolOutcome::ToolError("nope".into()), ("nope", true, true)),
             (ToolOutcome::ModelRetry("use a date".into()), ("use a date", true, true)),
@@ -104,7 +115,7 @@ mod tests {
             (ToolOutcome::Working(None), ("working", false, false)),
         ];
         for (outcome, (text, is_error, reply)) in cases {
-            let got = shape(outcome);
+            let got = shape(outcome, Mode::Text);
             assert_eq!(
                 (got.text.as_str(), got.is_error, got.reply_required),
                 (*text, *is_error, *reply),
@@ -127,5 +138,6 @@ mod tests {
         let want = "delivered to the person as written: Your code is 1234.\nask if they need more";
         assert_eq!(delivered(&v).as_deref(), Some(want));
         assert_eq!(delivered(&ToolOutcome::Nothing), None);
+        assert!(!shape(&ToolOutcome::Nothing, Mode::Voice).reply_required);
     }
 }

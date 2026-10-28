@@ -39,7 +39,6 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tts,
@@ -77,19 +76,6 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
     if unknown:
         raise TypeError(
             f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
-        )
-
-
-def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
-    if (
-        conn_options.pool_timeout is not None
-        or conn_options.write_timeout is not None
-        or conn_options.total_timeout is not None
-    ):
-        raise APIError(
-            "gnani streaming requires pool_timeout=None, write_timeout=None, total_timeout=None; "
-            "these timeout phases are not observable by this adapter",
-            retryable=False,
         )
 
 
@@ -280,13 +266,15 @@ class RESTChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/inference",
                 json=_build_payload(self._opts, self._input_text),
                 headers=_build_headers(self._opts),
-                timeout=http_timeout,
+                timeout=aiohttp.ClientTimeout(
+                    total=self._conn_options.timeout,
+                    sock_connect=self._conn_options.timeout,
+                ),
             ) as res:
                 if res.status != 200:
                     error_text = await res.text()
@@ -337,14 +325,16 @@ class SSEChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        http_timeout = utils.http_context.client_timeout(self._conn_options)
         request_id = utils.shortuuid()
         try:
             async with self._tts._ensure_session().post(
                 url=f"{self._opts.base_url}/api/v1/tts/sse",
                 json=_build_payload(self._opts, self._input_text),
                 headers=_build_headers(self._opts),
-                timeout=http_timeout,
+                timeout=aiohttp.ClientTimeout(
+                    total=self._conn_options.timeout,
+                    sock_connect=self._conn_options.timeout,
+                ),
                 read_bufsize=10 * 1024 * 1024,
             ) as res:
                 if res.status != 200:
@@ -428,7 +418,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
     """
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
-        _check_stream_timeouts(conn_options)
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -452,7 +441,6 @@ class WebSocketChunkedStream(tts.ChunkedStream):
             async with websockets.connect(
                 ws_url,
                 additional_headers=_build_headers(self._opts),
-                open_timeout=self._conn_options.connect_timeout,
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -467,8 +455,7 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                     mime_type=_mime_type(self._opts),
                 )
 
-                while True:
-                    msg = await asyncio.wait_for(ws.recv(), self._conn_options.read_timeout)
+                async for msg in ws:
                     if isinstance(msg, bytes):
                         output_emitter.push(msg)
                         continue
@@ -520,7 +507,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     """WebSocket-based streaming TTS — wss://api.vachana.ai/api/v1/tts."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        _check_stream_timeouts(conn_options)
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -566,7 +552,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             async with websockets.connect(
                 ws_url,
                 additional_headers=_build_headers(self._opts),
-                open_timeout=self._conn_options.connect_timeout,
                 ping_interval=20,
                 ping_timeout=20,
                 close_timeout=10,
@@ -576,8 +561,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 self.mark_started()
 
-                while True:
-                    msg = await asyncio.wait_for(ws.recv(), self._conn_options.read_timeout)
+                async for msg in ws:
                     if isinstance(msg, bytes):
                         output_emitter.push(msg)
                         continue

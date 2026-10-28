@@ -92,7 +92,7 @@ impl Rule for ToolOutputFollowsOutcome {
                 continue;
             }
             let outcome = crate::fakes::tools::outcome_of(*answer, text);
-            let mut shape = lk_agents_core::tool_outcome::shape(&outcome);
+            let mut shape = lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
             if *answer == ToolAnswer::Completed && in_task(speech) {
                 shape.reply_required = false;
             }

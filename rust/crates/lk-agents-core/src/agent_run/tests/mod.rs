@@ -89,6 +89,7 @@ impl Driver {
                 history,
                 answer_tool: None,
                 delegated: false,
+            mode: crate::tool_outcome::Mode::Text,
                 wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
                 cleanup_timeout: Duration::from_secs(5),
             },

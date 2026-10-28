@@ -26,7 +26,6 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -39,19 +38,6 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
-
-
-def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
-    if (
-        conn_options.pool_timeout is not None
-        or conn_options.write_timeout is not None
-        or conn_options.total_timeout is not None
-    ):
-        raise APIError(
-            "gradium streaming requires pool_timeout=None, write_timeout=None, total_timeout=None; "
-            "these timeout phases are not observable by this adapter",
-            retryable=False,
-        )
 
 
 @dataclass
@@ -133,7 +119,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
-    async def _connect_ws(self, timeout: float | None) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._model_endpoint,
@@ -194,7 +180,6 @@ class ChunkedStream(tts.ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
-        _check_stream_timeouts(conn_options)
         super().__init__(
             tts=tts,
             input_text=input_text,
@@ -210,8 +195,11 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
-            ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
-            async with ws:
+            async with self._tts._ensure_session().ws_connect(
+                self._tts._model_endpoint,
+                headers={"x-api-key": self._tts._api_key},
+                timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
+            ) as ws:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
@@ -239,7 +227,7 @@ class ChunkedStream(tts.ChunkedStream):
                 await ws.send_str(json.dumps(flush_msg))
 
                 while True:
-                    msg = await asyncio.wait_for(ws.receive(), self._conn_options.read_timeout)
+                    msg = await ws.receive()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
@@ -280,13 +268,6 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Stream-based text-to-speech synthesis using Gradium WebSocket API."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
-        _check_stream_timeouts(conn_options)
-        if conn_options.read_timeout is not None:
-            raise APIError(
-                "gradium streaming cannot distinguish response waits from input pauses; "
-                "set read_timeout=None",
-                retryable=False,
-            )
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
@@ -400,8 +381,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
-        ws = await self._tts._connect_ws(self._conn_options.connect_timeout)
-        async with ws:
+        async with self._tts._ensure_session().ws_connect(
+            self._tts._model_endpoint,
+            headers={"x-api-key": self._tts._api_key},
+            timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
+        ) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

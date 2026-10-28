@@ -95,6 +95,18 @@ fn a_tool_that_asks_for_no_reply_ends_the_turn() {
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Nothing });
 }
 
+// Catches: a tool returning `None` ending the turn; `None` is a value the model reads and goes
+// on from (tools.md), unlike an explicit no-reply result.
+#[test]
+fn none_return_continues() {
+    let mut d = Driver::new(text_agent(vec![string_tool("log_visit", "note")]), "log it", vec![]);
+    d.reply("", &[("log_visit", json!({"note": "seen"}))]);
+    d.run_tools(|_| ToolOutcome::Nothing);
+    assert_eq!(d.requests(), 2);
+    d.reply("Logged.", &[]);
+    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Logged.".into()) });
+}
+
 // Catches: `StopResponse` continuing the loop, or a verbatim result losing its delivered text or
 // its exact words on the result.
 #[test]

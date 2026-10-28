@@ -500,7 +500,7 @@ pub use lk_agents_abi::llm::tool_executor::{Approval, ToolOutcome, ToolReport};
 #[lk_agents_abi::host(export(pid = false))]
 pub fn tool_call_output(outcome: ToolOutcome) -> (String, bool, bool) {
     let lk_agents_core::tool_outcome::ToolShape { text, is_error, reply_required } =
-        lk_agents_core::tool_outcome::shape(&outcome);
+        lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     (text, is_error, reply_required)
 }
 
@@ -659,7 +659,7 @@ impl std::fmt::Debug for dyn HostToolRunner {
 /// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
     let ToolReport { outcome, approval, transition } = report;
-    let shape = lk_agents_core::tool_outcome::shape(&outcome);
+    let shape = lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     let mut output = FunctionCallOutput::new(
         format!("{}_out", call.id),
         call.call_id.clone(),

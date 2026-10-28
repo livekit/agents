@@ -443,7 +443,8 @@ fn settle(call: &mut Call, outcome: ToolOutcome, retry: bool, fx: &mut Vec<Effec
 
 /// The call's result as it is recognised, before any model-order assembly.
 fn result_event(item: &FunctionCall, outcome: &ToolOutcome) -> Effect {
-    let shape = tool_outcome::shape(outcome);
+    // The text and error flag: the same in every mode.
+    let shape = tool_outcome::shape(outcome, tool_outcome::Mode::Text);
     let status = match outcome {
         ToolOutcome::Cancelled => ToolResultStatus::Cancelled,
         _ if shape.is_error => ToolResultStatus::Failed,
