@@ -9,22 +9,28 @@ PYTHONPATH=livekit-agents-next:. uv run --no-sync pytest tests/conformance --uni
 `cases.json` contains language-neutral input/outcome tables. Non-finite floats and the
 omission sentinel use string encodings (`nan`, `inf`, `NOT_GIVEN`). The pytest module
 drives real `_core` entrypoints; it adds no product exports or alternate conversions.
-Only demonstrated, scope-cited defects are strict xfails. An unexpected exception type
-still fails, and an XPASS requires removing the xfail when its owning slice lands.
+The B-3/B-4 null, bool-as-int and invalid-duration cases now pass through the production
+ABI registrations, so their five strict xfails have been removed. The buffer cases also
+exercise mutable input after handoff and the documented `AudioByteStream` input types.
 
-| Family | Current bridge and assertions | Later closure |
-| --- | --- | --- |
-| Presence | Generated ExpFilter arguments: omitted/sentinel/zero/null; invalid update preserves state | B-3: reject invalid null, attribute/item lookup failures, nullable updates and reverse bridge |
-| Scalars | Generated results/options/filters: Unicode, empty string, bool/int separation, double precision, unsigned range | B-4: reject bool for int, remaining numeric ranges/newtypes and reverse bridge |
-| Time | PlaybackTracker reports and native await: seconds, fractional precision, invalid sink reports before settlement | B-4: refuse invalid durations with field paths; generated secs_from_py inputs, timestamps and reverse bridge |
-| Collections | Generated list conversion and native result: order, empty, invalid elements, snapshot | B-5: typed maps, nested error paths, records/default factories and reverse bridge |
-| Errors | Generated constructor/method exceptions: domain class, argument detail, unchanged state on rejection | B-8/B-14: host failures with type/value/cause in both directions |
-| Cancellation | Native future cancelled before start/during wait; idempotence, late completion, operation survives a cancelled waiter | B-10/B-12: host stream cancellation, owned-task settlement, cleanup and every runtime adapter await point |
+The matching Rust cases live in `lk-agents-abi/src/python/conversion_tests.rs` and the
+poisoned-sink regression in `python/node.rs`. Run them with the Python-feature ABI suite
+under nextest (one interpreter process per test). They cover both conversion directions,
+lookup exception identity/cause, typed map keys and nested values, per-instance defaults,
+Unicode/surrogates, float ranges, newtype validation, stale/foreign references, invalid
+media elements, immutable retained bytes, writable aliases, i16le layout, and poisoned
+generated objects. ABI fixtures model SDK buffers; the pytest cases use the installed SDK.
 
-This is explicitly the B-19 S0 skeleton, not final conformance sign-off. Records/variants,
-buffers, calls, callbacks, streams, notifications and resources need their own complete
-tables and both bridge directions as the shared generated adapters land. No required
-future family is represented by a skipped or unconditional-xfail placeholder.
+| Family | Checked behavior |
+| --- | --- |
+| Presence | Generated omission/null rejection; native nullable record round trips and lookup failures |
+| Scalars | Unicode, bool/int separation, float ranges and newtype validation |
+| Time | Invalid playback reports fail before settlement; native durations reject invalid ranges |
+| Collections | Typed map/record paths, snapshots and per-instance defaults |
+| Buffers | Immutable retention, writable aliases, i16le layouts, owner release and stream inputs |
+| References/panics | Stale/foreign failures; generated mutex and sink refuse poisoned state |
+| Errors | Domain class, argument detail and unchanged state on rejection |
+| Cancellation | Before start/during wait, idempotence, late completion and cancelled waiters |
 
 The bootstrap and telemetry modules are ordinary G-8/G-9/J-5 regression tests. Notebook tests
 replace the display and network boundaries, so they need no IPython or credentials.

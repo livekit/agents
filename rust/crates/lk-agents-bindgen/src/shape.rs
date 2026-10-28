@@ -110,7 +110,7 @@ pub fn output(t: &syn::Type, e: TokenStream) -> Option<Out> {
     }
     // A side-table key is the host object it names.
     if is(t, "HostRef") || is(t, "MediaRef") {
-        return Some(Out { ty: quote!(::pyo3::Py<::pyo3::PyAny>), expr: quote!(#rt::resolve_key(py, #e.id())?), py: true, fallible: true });
+        return Some(Out { ty: quote!(::pyo3::Py<::pyo3::PyAny>), expr: quote!(::pyo3::IntoPyObjectExt::into_py_any(#e, py)?), py: true, fallible: true });
     }
     // An `Arc<T>` of an `arc`-cell class: that class over the same `Arc`, a shared handle.
     if let Some(inner) = one(t, "Arc")

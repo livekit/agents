@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 
+/// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
 /// The field names are `rtc.AudioFrame(..)`'s keyword arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +45,7 @@ impl<'py> pyo3::IntoPyObject<'py> for AudioFrame {
     }
 }
 
-/// `data` from any buffer: `bytes` as is, anything else (a `memoryview`) through `.tobytes()`. The
+/// `data` is snapshotted once through the buffer protocol. The
 /// scalars are read first, so an object that is not an audio frame (a video frame tried as one)
 /// fails before its buffer is copied.
 #[cfg(feature = "python")]
@@ -52,19 +53,15 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AudioFrame {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_with};
-        use pyo3::types::{PyAnyMethods as _, PyBytesMethods as _};
+        use crate::python::{attr_with, number_from_py};
         const OWNER: &str = "AudioFrameFromPy";
         let obj = &*obj;
-        let sample_rate = attr(obj, OWNER, "sample_rate")?;
-        let num_channels = attr(obj, OWNER, "num_channels")?;
-        let samples_per_channel = attr(obj, OWNER, "samples_per_channel")?;
+        let sample_rate = attr_with(obj, OWNER, "sample_rate", |v| number_from_py(v, "AudioFrame.sample_rate"))?;
+        let num_channels = attr_with(obj, OWNER, "num_channels", |v| number_from_py(v, "AudioFrame.num_channels"))?;
+        let samples_per_channel = attr_with(obj, OWNER, "samples_per_channel", |v| number_from_py(v, "AudioFrame.samples_per_channel"))?;
         Ok(AudioFrame {
             data: attr_with(obj, OWNER, "data", |v| {
-                if let Ok(b) = v.cast::<pyo3::types::PyBytes>() {
-                    return Ok(Arc::from(b.as_bytes()));
-                }
-                Ok(Arc::from(v.call_method0("tobytes")?.cast::<pyo3::types::PyBytes>()?.as_bytes()))
+                crate::python::snapshot_buffer(v, crate::python::BufferFormat::I16Le, "AudioFrame.data")
             })?,
             sample_rate,
             num_channels,

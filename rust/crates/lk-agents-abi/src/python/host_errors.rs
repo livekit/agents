@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyType};
@@ -222,7 +222,7 @@ pub fn resolve(py: Python<'_>, id: u64) -> Option<Py<PyAny>> {
 /// A miss means the table is corrupt; raise rather than panic.
 pub fn resolve_key(py: Python<'_>, id: u64) -> PyResult<Py<PyAny>> {
     resolve(py, id).ok_or_else(|| {
-        PyValueError::new_err(format!("host media ref {id} is no longer in the side table"))
+        super::HostException::to_py_err(&crate::utils::host_ref::StaleHostRef { id })
     })
 }
 
@@ -230,8 +230,8 @@ pub fn resolve_key(py: Python<'_>, id: u64) -> PyResult<Py<PyAny>> {
 ///
 /// Read, not released: the entry belongs to whatever core value still holds the id.
 #[pyfunction]
-pub fn resolve_host_ref(py: Python<'_>, id: u64) -> Option<Py<PyAny>> {
-    resolve(py, id)
+pub fn resolve_host_ref(py: Python<'_>, id: u64) -> PyResult<Py<PyAny>> {
+    resolve_key(py, id)
 }
 
 crate::register_host!(fn self::resolve_host_ref);

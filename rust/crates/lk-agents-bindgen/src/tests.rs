@@ -32,7 +32,7 @@ fn an_export_is_a_guarded_registered_pyfunction_with_the_declared_signature() {
     .unwrap();
     assert!(out.starts_with("# [cfg (feature = \"python\")] const _ : () ="), "{out}");
     assert!(out.contains("# [pyo3 (name = \"split_sentences\" , signature = (text , min_sentence_len = 20 , * , retain_format = false))]"), "{out}");
-    assert!(out.contains("fn __host_py_split_sentences (text : & str , min_sentence_len : usize , retain_format : bool) -> :: pyo3 :: PyResult < Vec < Sentence > >"), "{out}");
+    assert!(out.contains("fn __host_py_split_sentences (text : & str , # [pyo3 (from_py_with = __host_read_split_sentences_min_sentence_len)] min_sentence_len : usize , retain_format : bool) -> :: pyo3 :: PyResult < Vec < Sentence > >"), "{out}");
     assert!(out.contains(":: lk_agents_abi :: python :: check_pid () ?"), "{out}");
     assert!(out.contains("let out = split_sentences (text , min_sentence_len , retain_format) ;"), "{out}");
     assert!(out.contains("wrap_pyfunction ! (__host_py_split_sentences , m)"), "{out}");
@@ -97,7 +97,7 @@ fn a_plain_object_is_pymethods_on_the_type_itself() {
     assert!(out.contains("# [new] fn __host_py_new () -> :: pyo3 :: PyResult < Self >"), "{out}");
     assert!(out.contains("# [pyo3 (name = \"__len__\")] fn __host_py_len (& self ,)"), "{out}");
     assert!(out.contains("# [pyo3 (name = \"read\" , signature = (size = - 1))]"), "{out}");
-    assert!(out.contains("fn __host_py_read_up_to < 'py > (& self , py : :: pyo3 :: Python < 'py > , size : isize)"), "{out}");
+    assert!(out.contains("fn __host_py_read_up_to < 'py > (& self , py : :: pyo3 :: Python < 'py > , # [pyo3 (from_py_with = __host_read_read_up_to_size)] size : isize)"), "{out}");
     assert!(out.contains("let out = py . detach (|| Self :: read_up_to (self , size)) ;"), "{out}");
     assert!(!out.contains("__host_py_read ("), "an unmarked method is not bound: {out}");
 }
@@ -120,12 +120,12 @@ fn a_mutex_object_is_a_frozen_class_over_the_core_type_beside_it() {
     )
     .unwrap();
     assert!(out.contains("# [doc = \" `AudioStreamDecoder`'s engine.\"] # [:: pyo3 :: pyclass (frozen , name = \"AudioDecoder\" , module = \"livekit.agents._core\")] pub struct PyAudioDecoder { pub inner : :: std :: sync :: Mutex < Decoder > , }"), "{out}");
-    assert!(out.contains("# [pyo3 (signature = (mime , * , sample_rate = 48000))] fn __host_py_new (mime : & str , sample_rate : u32) -> :: pyo3 :: PyResult < PyAudioDecoder >"), "{out}");
+    assert!(out.contains("# [pyo3 (signature = (mime , * , sample_rate = 48000))] fn __host_py_new (mime : & str , # [pyo3 (from_py_with = __host_read_new_sample_rate)] sample_rate : u32) -> :: pyo3 :: PyResult < PyAudioDecoder >"), "{out}");
     assert!(out.contains("let out = < Decoder > :: new (mime , sample_rate) ;"), "{out}");
     assert!(out.contains("Ok (PyAudioDecoder { inner : :: std :: sync :: Mutex :: new (out) })"), "{out}");
     assert!(out.contains("# [getter (output_format)] fn __host_py_output_format_pair (& self ,)"), "{out}");
     assert!(out.contains("fn __host_py_flush_bytes (& self ,)"), "{out}");
-    assert!(out.contains("self . inner . lock () . unwrap_or_else (:: std :: sync :: PoisonError :: into_inner) . flush_bytes ()"), "{out}");
+    assert!(out.contains("self . inner . lock () . map_err (| _ | :: pyo3 :: exceptions :: PyRuntimeError :: new_err (\"native object state is poisoned\")) ? . flush_bytes ()"), "{out}");
     assert!(out.contains("m . add_class :: < PyAudioDecoder > ()"), "{out}");
 }
 
@@ -326,7 +326,7 @@ fn a_keyword_record_parameter_is_spread_through_the_records_macro() {
     .unwrap();
     assert!(out.contains("__host_kwargs_Frame ! {"), "{out}");
     assert!(out.contains("{ id , * , } { }"), "{out}");
-    assert!(out.contains("{ & self , py : :: pyo3 :: Python < 'py > , id : u64 , } { }"), "{out}");
+    assert!(out.contains("{ & self , py : :: pyo3 :: Python < 'py > , # [pyo3 (from_py_with = __host_read_update_id)] id : u64 , } { }"), "{out}");
     assert!(out.contains("let out = Self :: update (self , id , frame) ;"), "{out}");
 }
 
@@ -448,7 +448,7 @@ fn a_record_is_named_by_itself_and_the_twin_keys_are_refused() {
         crate::record(&input).map(text)
     };
     let out = rec(quote!(#[binding(extract)])).unwrap();
-    assert!(out.contains("extract_struct_field :: < u32 > (& value , \"Usage\" , \"tokens\")"), "{out}");
+    assert!(out.contains("number_from_py :: < u32 > (v , \"tokens\")"), "{out}");
     for bad in [quote!(#[binding(emit, module = "m")]), quote!(#[binding(extract, extract_name = "UsageFromPy")]), quote!(#[binding(emit, name = "UsagePy")])] {
         let e = rec(bad).expect_err("a twin key");
         assert!(e.to_string().contains("is not a key here"), "{e}");

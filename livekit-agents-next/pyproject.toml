@@ -12,7 +12,7 @@ version = "2.0.0b1"
 description = "LiveKit Agents over the Rust core: the developer surface, the session run by `_core`"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.11,<3.15"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
@@ -156,9 +156,9 @@ Source = "https://github.com/livekit/agents"
 module-name = "livekit.agents._core"
 python-source = "."
 manifest-path = "../rust/crates/lk-agents-py/Cargo.toml"
-# abi3: one wheel per platform for every Python from 3.10
+# abi3: one wheel per platform for every Python from 3.11 (the stable buffer protocol API).
 # ffmpeg: the core decodes mp3, ogg/opus, aac and flac (AudioStreamDecoder, AudioEmitter)
-features = ["pyo3/extension-module", "pyo3/abi3-py310", "ffmpeg"]
+features = ["pyo3/extension-module", "pyo3/abi3-py311", "ffmpeg"]
 include = [
     { path = "livekit/agents/resources/*", format = "wheel" },
     { path = "livekit/agents/debug/index.html", format = "wheel" },

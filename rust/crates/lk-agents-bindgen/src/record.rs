@@ -404,6 +404,9 @@ fn emit_value(t: &syn::Type, e: TokenStream) -> TokenStream {
 /// `None` when the type's own `FromPyObject` reads it. `label` names the value in a JSON error.
 fn extract_value(t: &syn::Type, v: TokenStream, label: &str) -> Option<TokenStream> {
     let rt = quote!(::lk_agents_abi::python);
+    if crate::cross::checked_input(t) {
+        return Some(crate::cross::from_py_at(t, &v, &quote!(#label)));
+    }
     if !structural(t) {
         return None;
     }
@@ -412,7 +415,7 @@ fn extract_value(t: &syn::Type, v: TokenStream, label: &str) -> Option<TokenStre
         return Some(quote!((#x).map(::std::boxed::Box::new)));
     }
     if is(t, "Duration") {
-        return Some(quote!(#rt::secs_from_py(#v)));
+        return Some(quote!(#rt::secs_from_py_at(#v, #label)));
     }
     if is(t, "SystemTime") {
         return Some(quote!(#v.extract::<f64>().and_then(|s| #rt::wall_from_py(s, #label))));
@@ -735,17 +738,35 @@ fn attr_field(f: &Field, owner: &TokenStream, items: &TokenStream) -> TokenStrea
         Dflt::None => quote!({ let value = #getter?; #x }),
         _ => {
             let d = default_of(f);
-            quote!(if let ::std::result::Result::Ok(value) = #getter { #x } else { #d })
+            let x = read_value(f, quote!(value), owner, false);
+            quote! {
+                if #items {
+                    ::lk_agents_abi::python::item_or(obj, #owner, #key, |value| ::std::result::Result::Ok(#x), || #d)?
+                } else {
+                    ::lk_agents_abi::python::attr_or(obj, #owner, #key, |value| ::std::result::Result::Ok(#x), || #d)?
+                }
+            }
         }
     }
 }
 
 /// In the all-optional dict reader: present keys raise their own error.
-fn manual_field(f: &Field) -> TokenStream {
+fn manual_field(f: &Field, owner: &TokenStream) -> TokenStream {
     let key = &f.key;
     let x = read_value(f, quote!(v), &quote!(""), false);
     let d = default_of(f);
-    quote!(match ::pyo3::types::PyDictMethods::get_item(d, #key)? { ::std::option::Option::Some(v) => #x, ::std::option::Option::None => #d })
+    quote!({
+        let value = ::lk_agents_abi::python::item_or(d.as_any(), #owner, #key,
+            |v| ::std::result::Result::Ok(::std::option::Option::Some(v.clone())),
+            || ::std::option::Option::None)?;
+        match value {
+            ::std::option::Option::Some(v) => {
+                (|| -> ::pyo3::PyResult<_> { ::std::result::Result::Ok(#x) })()
+                    .map_err(|e| ::lk_agents_abi::python::at_path(d.py(), e, &::std::format!("{}.{}", #owner, #key)))?
+            }
+            ::std::option::Option::None => #d,
+        }
+    })
 }
 
 /// `#[binding(fields_only)]`, for `flatten`.
@@ -828,7 +849,7 @@ fn extract_struct(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<Token
             inits.push(quote!(#i: <#ty as ::lk_agents_abi::python::FlatRecord>::read_flat(obj, #owner, #items)?));
             continue;
         }
-        let x = if manual { manual_field(f) } else { attr_field(f, &owner, &quote!(#items)) };
+        let x = if manual { manual_field(f, &owner) } else { attr_field(f, &owner, &quote!(#items)) };
         inits.push(quote!(#i: #x));
     }
     let rest = fields.iter().any(|f| f.private).then(|| quote!(..::std::default::Default::default()));
@@ -855,6 +876,7 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
     let ident = &r.ident;
     let name = ident.to_string();
     let mut methods = Vec::new();
+    let mut converters = Vec::new();
     if t.new {
         let mut sig = Vec::new();
         let mut params = Vec::new();
@@ -873,7 +895,20 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
                 Dflt::Bare => quote!(#arg = <#ty>::default()),
                 Dflt::None => quote!(#arg),
             });
-            params.push(quote!(#arg: #ty));
+            let checked = crate::cross::checked_input(ty).then(|| {
+                let label = format!("{name}.{}", f.key);
+                let read = crate::cross::from_py_at(ty, &quote!(value), &quote!(#label));
+                let reader = format_ident!("__host_read_{}_{}", name, f.key);
+                converters.push(quote! {
+                    #[allow(non_snake_case)]
+                    fn #reader(value: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<#ty> {
+                        use ::pyo3::types::PyAnyMethods as _;
+                        #read
+                    }
+                });
+                quote!(#[pyo3(from_py_with = #reader)])
+            });
+            params.push(quote!(#checked #arg: #ty));
             init.push(if *i == arg { quote!(#i) } else { quote!(#i: #arg) });
         }
         let d1 = format!(" `{name}(**fields)`: every field as a keyword argument. The field list appears here");
@@ -911,6 +946,7 @@ fn class(r: &Record, t: &Target, fields: &[Field]) -> syn::Result<TokenStream> {
     let message = format!("the record's class is `{name}`: its #[lk_agents_abi::class] names it so");
     Ok(quote! {
         const _: () = assert!(::lk_agents_abi::python::same_name(<#ident as ::pyo3::PyClass>::NAME, #name), #message);
+        #(#converters)*
         #[::pyo3::pymethods]
         impl #ident {
             #(#methods)*

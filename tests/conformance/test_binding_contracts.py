@@ -113,6 +113,19 @@ def test_declared_errors_keep_argument_and_domain_details(case: dict[str, Any]) 
             _core.ExpFilter(case["value"])
 
 
+@pytest.mark.parametrize("buffer_type", [bytes, bytearray, memoryview])
+def test_audio_byte_stream_copies_input_before_host_mutation(buffer_type: Any) -> None:
+    owner = bytearray(b"\x01\x00")
+    data = buffer_type(owner)
+    stream = _core.AudioByteStream(16000, 1, samples_per_channel=2)
+    assert stream.push(data) == []
+    owner[0] = 9
+    del data, owner
+    frames = stream.write(memoryview(b"\x02\x00"))
+    assert len(frames) == 1
+    assert bytes(frames[0].data) == b"\x01\x00\x02\x00"
+
+
 @pytest.mark.parametrize("case", _cases("cancellation"))
 async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, Any]) -> None:
     tracker = _core.PlaybackTracker()

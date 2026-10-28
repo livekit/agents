@@ -17,6 +17,14 @@ side_table_ref!(HostRef);
 pub struct MediaRef(std::sync::Arc<crate::errors::side_table::Entry>);
 side_table_ref!(MediaRef);
 
+/// A handle whose originating host no longer owns a live entry.
+#[crate::host(error(kind = "StaleHandle", declare = "RuntimeError"))]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("host reference {id} is stale or belongs to another runtime")]
+pub struct StaleHostRef {
+    pub id: u64,
+}
+
 /// The reverse of [`HostRef`]: a core object the host receives as a live handle.
 #[derive(Clone)]
 pub struct CoreObject(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
@@ -45,10 +53,10 @@ impl<'py> pyo3::IntoPyObject<'py> for &HostRef {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
-        Ok(match crate::python::resolve(py, self.id()) {
-            Some(obj) => obj.into_bound(py),
-            None => py.None().into_bound(py),
-        })
+        if !self.belongs_to(crate::python::media().registry()) {
+            return Err(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() }));
+        }
+        Ok(crate::python::resolve_key(py, self.id())?.into_bound(py))
     }
 }
 
@@ -81,6 +89,9 @@ impl<'py> pyo3::IntoPyObject<'py> for &MediaRef {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: pyo3::Python<'py>) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+        if !self.belongs_to(crate::python::media().registry()) {
+            return Err(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() }));
+        }
         Ok(crate::python::resolve_key(py, self.id())?.into_bound(py))
     }
 }
@@ -95,19 +106,32 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for MediaRef {
 }
 
 impl MediaRef {
-    /// The audio frames a host list holds (`VADEvent.frames`), read back; none without a host.
-    pub fn audio_frames(&self) -> Vec<crate::AudioFrame> {
+    /// Validate every audio frame a host list holds; a stale reference or invalid frame fails.
+    pub fn audio_frames(&self) -> Result<Vec<crate::AudioFrame>, crate::errors::ProviderError> {
         #[cfg(feature = "python")]
         {
             use pyo3::types::PyAnyMethods as _;
             pyo3::Python::attach(|py| {
-                crate::python::resolve(py, self.id())
-                    .and_then(|list| list.bind(py).extract::<Vec<crate::AudioFrame>>().ok())
-                    .unwrap_or_default()
+                if !self.belongs_to(crate::python::media().registry()) {
+                    return Err(crate::python::captured(crate::python::HostException::to_py_err(&StaleHostRef { id: self.id() })));
+                }
+                let list = crate::python::resolve_key(py, self.id()).map_err(crate::python::captured)?;
+                let list = list.bind(py);
+                let mut frames = Vec::new();
+                for (index, item) in list.try_iter().map_err(crate::python::captured)?.enumerate() {
+                    let frame = item.and_then(|item| item.extract::<crate::AudioFrame>()).map_err(|e| {
+                        crate::python::captured(crate::python::at_path(py, e, &format!("frames[{index}]")))
+                    })?;
+                    frames.push(frame);
+                }
+                Ok(frames)
             })
         }
         #[cfg(not(feature = "python"))]
-        Vec::new()
+        Err(crate::errors::ApiError {
+            retryable: false,
+            ..crate::errors::ApiError::new("host media cannot be read without a host runtime")
+        }.into())
     }
 }
 
@@ -150,11 +174,13 @@ impl<'py> pyo3::IntoPyObject<'py> for CoreObject {
 
 #[cfg(test)]
 mod tests {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::{Arc, Mutex};
 
     use super::*;
 
     /// Stand-in for the binding's table: records what it was asked to forget.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     struct Table(Arc<Mutex<Vec<u64>>>);
 
     impl RefRegistry for Table {
@@ -163,6 +189,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn table() -> (Arc<dyn RefRegistry>, Arc<Mutex<Vec<u64>>>) {
         let log = Arc::new(Mutex::new(Vec::new()));
         (Arc::new(Table(log.clone())), log)

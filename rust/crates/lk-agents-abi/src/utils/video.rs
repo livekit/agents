@@ -43,29 +43,20 @@ impl<'py> pyo3::IntoPyObject<'py> for VideoFrame {
 }
 
 /// `data` held as the host's own `bytes` when the frame's buffer is one, else copied once
-/// (`memoryview.tobytes()`).
+/// through the buffer protocol. Read-only views of mutable exporters still copy.
 #[cfg(feature = "python")]
 impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for VideoFrame {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use crate::python::{attr, attr_with};
-        use pyo3::types::PyAnyMethods as _;
+        use crate::python::{attr_with, number_from_py};
         const OWNER: &str = "VideoFrameFromPy";
         let obj = &*obj;
-        let width = attr(obj, OWNER, "width")?;
-        let height = attr(obj, OWNER, "height")?;
-        let buffer_type = attr(obj, OWNER, "type")?;
+        let width = attr_with(obj, OWNER, "width", |v| number_from_py(v, "VideoFrame.width"))?;
+        let height = attr_with(obj, OWNER, "height", |v| number_from_py(v, "VideoFrame.height"))?;
+        let buffer_type = attr_with(obj, OWNER, "type", |v| number_from_py(v, "VideoFrame.type"))?;
         let data = attr_with(obj, OWNER, "data", |view| {
-            let whole = view.getattr("obj").ok().filter(|b| {
-                b.is_instance_of::<pyo3::types::PyBytes>()
-                    && b.len().ok() == view.getattr("nbytes").and_then(|n| n.extract::<usize>()).ok()
-            });
-            let buffer = match whole {
-                Some(b) => b,
-                None => view.call_method0("tobytes")?,
-            };
-            Ok(bytes::Bytes::from_owner(buffer.extract::<pyo3::pybacked::PyBackedBytes>()?))
+            crate::python::retained_bytes(view, "VideoFrame.data")
         })?;
         Ok(VideoFrame { width, height, buffer_type, data })
     }

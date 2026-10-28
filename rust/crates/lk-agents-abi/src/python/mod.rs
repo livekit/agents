@@ -2,19 +2,24 @@
 //! conversion). In ABI because every core crate depends on it and it names ABI's own types.
 
 mod bridge;
+mod buffers;
 mod host_errors;
 #[cfg(test)]
 mod host_tests;
 mod loop_time;
 mod node;
 mod values;
+#[cfg(test)]
+mod conversion_tests;
 
 pub use bridge::*;
+pub use buffers::*;
 pub use host_errors::*;
 pub use loop_time::{LoopRuntime, VIRTUAL_TIME_ENV, future_into_py};
 pub use node::{Convert, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls, item_stream};
 pub use values::*;
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use std::sync::RwLock;
 
 use pyo3::exceptions::PyRuntimeError;
@@ -24,6 +29,7 @@ use pyo3::prelude::*;
 pub use inventory;
 pub use pyo3_async_runtimes;
 pub use log;
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Awaited in `recv`, taken in `aclose`.
 pub use tokio::sync::Mutex as AsyncMutex;
 
@@ -63,6 +69,7 @@ pub const fn same_name(a: &str, b: &str) -> bool {
 // Importing `_core` must start nothing: the forkserver imports then forks, and `fork()` clones only
 // the calling thread, so a runtime started at import would hang the child on its first `block_on`.
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// Not a `OnceLock`: a forked child must be able to re-declare itself.
 static STATE: RwLock<Option<u32>> = RwLock::new(None);
 
@@ -77,12 +84,14 @@ fn forked_without_init() -> PyErr {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 /// Overwriting is safe: nothing has started.
 pub fn declare() -> PyResult<()> {
     *STATE.write().map_err(|_| poisoned())? = Some(std::process::id());
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 /// Turns a silent deadlock on a runtime whose threads did not survive `fork()` into an exception.
 pub fn check_pid() -> PyResult<()> {
     let pid = std::process::id();
@@ -147,6 +156,7 @@ mod tests {
     }
 
     // N402: the reference needs no initialiser, so first use must not raise.
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
     #[test]
     fn a_process_that_never_declared_itself_is_usable() {
         with_py(|_| {
@@ -158,6 +168,7 @@ mod tests {
 
     // The failure the guard exists for, and its remedy: with `STATE` as a `OnceLock`, `init`
     // returned the error whose remedy is this call.
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
     #[test]
     fn a_forked_child_is_refused_until_it_re_declares_itself() {
         with_py(|_| {

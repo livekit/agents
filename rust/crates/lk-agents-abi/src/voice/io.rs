@@ -5,6 +5,7 @@
 use crate::voice::rtc::TrackSid;
 use crate::{AudioFrame, TimedString, Ts, WallAnchor};
 use async_trait::async_trait;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::Notify as IoChainNotify;
@@ -79,8 +80,10 @@ impl TrackerState {
 /// The segment bookkeeping every [`AudioOutput`] shares, plus the fan-out to observers. Also the
 /// observer a child registers with, so a terminal's event counts at every level.
 pub struct PlaybackTracker {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<TrackerState>,
     wake: IoChainNotify,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     observers: Mutex<Vec<Arc<dyn PlaybackObserver>>>,
     /// The session's clock as wall seconds, for a host sink's `time.time()` stamps. Set once.
     anchor: OnceLock<WallAnchor>,
@@ -102,6 +105,7 @@ impl Default for PlaybackTracker {
 /// its own `time.time()` stamps and float seconds.
 #[crate::host(object(cell = "arc"))]
 impl PlaybackTracker {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[host(new)]
     pub fn new() -> Self {
         PlaybackTracker {
@@ -135,11 +139,14 @@ impl PlaybackTracker {
         self.playback_started(self.anchor().ts(created_at));
     }
 
-    /// `on_playback_progressed(started_at=, offset=, duration=)`. A negative or non-finite figure
-    /// (a buggy sink) is zero.
+    /// `on_playback_progressed(started_at=, offset=, duration=)`. Invalid durations are refused
+    /// before updating playback or notifying observers.
     #[host(method(name = "playback_progressed"))]
-    pub fn report_progressed(&self, started_at: f64, offset: f64, duration: f64) {
-        self.playback_progressed(self.anchor().ts(started_at), seconds(offset), seconds(duration));
+    pub fn report_progressed(&self, started_at: f64, offset: f64, duration: f64) -> std::result::Result<(), InvalidPlaybackTime> {
+        let offset = seconds(offset, "offset")?;
+        let duration = seconds(duration, "duration")?;
+        self.playback_progressed(self.anchor().ts(started_at), offset, duration);
+        Ok(())
     }
 
     /// `on_playback_finished(..)`. `False` when no segment was outstanding (nothing is emitted).
@@ -149,12 +156,13 @@ impl PlaybackTracker {
         playback_position: f64,
         interrupted: bool,
         #[host(required)] synchronized_transcript: Option<String>,
-    ) -> bool {
-        self.playback_finished(PlaybackFinished {
-            playback_position: seconds(playback_position),
+    ) -> std::result::Result<bool, InvalidPlaybackTime> {
+        let playback_position = seconds(playback_position, "playback_position")?;
+        Ok(self.playback_finished(PlaybackFinished {
+            playback_position,
             interrupted,
             synchronized_transcript,
-        })
+        }))
     }
 
     /// Forward this node's events to `observer` (`next.on("playback_finished", ...)`). Pass the
@@ -320,9 +328,17 @@ impl PlaybackObserver for PlaybackTracker {
     }
 }
 
-/// Host seconds as a [`Duration`]; a negative, NaN or infinite figure is zero.
-fn seconds(s: f64) -> Duration {
-    if s.is_finite() && s > 0.0 { Duration::from_secs_f64(s) } else { Duration::ZERO }
+/// Invalid host sink input, raised before any segment is consumed.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, thiserror::Error)]
+#[error("{path}={value} is not a usable duration in seconds")]
+pub struct InvalidPlaybackTime {
+    path: &'static str,
+    value: f64,
+}
+
+fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, InvalidPlaybackTime> {
+    Duration::try_from_secs_f64(value).map_err(|_| InvalidPlaybackTime { path, value })
 }
 
 /// What a host wrapper over a core leg hears of its playback (`_ParticipantAudioOutput`, re-emitting

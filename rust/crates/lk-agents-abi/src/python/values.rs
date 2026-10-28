@@ -1,6 +1,6 @@
 //! Values as the host spells them: JSON, the `NotGiven` bridge, and wall-clock seconds.
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyAttributeError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
@@ -20,12 +20,42 @@ where
     s.parse().map_err(|e| PyValueError::new_err(format!("{path}: {e}")))
 }
 
-pub fn or_default<'a, 'py, T>(v: &'a Bound<'py, PyAny>) -> PyResult<T>
+/// Attach a validation path without replacing an exception, its subclass, or its cause. Python
+/// 3.11 exception notes appear in tracebacks and pytest's match text.
+pub fn at_path(py: Python<'_>, error: PyErr, path: &str) -> PyErr {
+    let _ = error.value(py).call_method1("add_note", (format!("at {path}"),));
+    error
+}
+
+pub fn extract_at<'a, 'py, T>(obj: &'a Bound<'py, PyAny>, path: &str) -> PyResult<T>
 where
-    T: FromPyObject<'a, 'py> + Default,
+    T: FromPyObject<'a, 'py>,
     T::Error: Into<PyErr>,
 {
-    if v.is_none() { Ok(T::default()) } else { v.extract().map_err(Into::into) }
+    obj.extract::<T>().map_err(|e| at_path(obj.py(), e.into(), path))
+}
+
+/// Numeric declarations do not accept Python's bool-as-int inheritance. Integer widths and
+/// signedness are then checked by the destination's own FromPyObject implementation.
+pub fn number_from_py<'a, 'py, T>(obj: &'a Bound<'py, PyAny>, path: &str) -> PyResult<T>
+where
+    T: FromPyObject<'a, 'py>,
+    T::Error: Into<PyErr>,
+{
+    if obj.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!("{path}: expected a number, got bool")));
+    }
+    extract_at(obj, path)
+}
+
+/// IEEE binary32 permits explicit NaN/infinity; a finite binary64 input must fit before rounding.
+pub fn f32_from_py(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<f32> {
+    let value = number_from_py::<f64>(obj, path)?;
+    let narrowed = value as f32;
+    if value.is_finite() && !narrowed.is_finite() {
+        return Err(PyValueError::new_err(format!("{path}: {value} is out of range for f32")));
+    }
+    Ok(narrowed)
 }
 
 /// The top level must be a dict, because the field is typed as one.
@@ -176,6 +206,10 @@ pub(crate) fn not_given_type(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
         .map(|t| t.bind(py))
 }
 
+pub fn is_not_given(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
+    obj.is_instance(not_given_type(obj.py())?)
+}
+
 /// A stamp the core cannot represent is a `ValueError` naming the argument.
 pub fn wall_from_py(secs: f64, path: &str) -> PyResult<std::time::SystemTime> {
     crate::wall_from_secs(secs)
@@ -222,14 +256,12 @@ where
     type Error = PyErr;
 
     fn extract(ob: pyo3::Borrowed<'a, 'py, PyAny>) -> Result<Self, PyErr> {
-        // `NotGiven` first: it is the absent sentinel, and `None` is a value from here on.
-        if ob.is_instance(not_given_type(ob.py())?)? {
-            return Ok(MaybeNull::NotGiven);
-        }
-        if ob.is_none() {
-            return Ok(MaybeNull::Null);
-        }
-        T::extract(ob).map(MaybeNull::Given).map_err(Into::into)
+        // Compatibility for callers migrating to Maybe<Option<T>>: one extraction rule.
+        Ok(match crate::Maybe::<Option<T>>::extract(ob)? {
+            crate::Maybe::NotGiven => MaybeNull::NotGiven,
+            crate::Maybe::Given(None) => MaybeNull::Null,
+            crate::Maybe::Given(Some(value)) => MaybeNull::Given(value),
+        })
     }
 }
 
@@ -318,10 +350,18 @@ pub trait FlatRecord: Sized {
     fn read_flat(obj: &Bound<'_, PyAny>, owner: &'static str, items: bool) -> PyResult<Self>;
 }
 
-/// Negative or non-finite seconds clamp to zero: a user option must not panic `from_secs_f64`.
+/// Duration seconds, with no clamping and no panic for unsupported values.
 pub fn secs_from_py(v: &Bound<'_, PyAny>) -> PyResult<std::time::Duration> {
-    let s = v.extract::<f64>()?;
-    Ok(if s.is_finite() && s > 0.0 { std::time::Duration::from_secs_f64(s) } else { std::time::Duration::ZERO })
+    secs_from_py_at(v, "duration")
+}
+
+pub fn secs_from_py_at(v: &Bound<'_, PyAny>, path: &str) -> PyResult<std::time::Duration> {
+    duration_from_secs(number_from_py(v, path)?, path)
+}
+
+pub fn duration_from_secs(seconds: f64, path: &str) -> PyResult<std::time::Duration> {
+    std::time::Duration::try_from_secs_f64(seconds)
+        .map_err(|e| PyValueError::new_err(format!("{path}={seconds}: {e}")))
 }
 
 /// As pyo3's derive raises it: `TypeError("failed to extract field <owner>.<key>")` caused by the
@@ -360,8 +400,26 @@ pub fn attr_or<'py, T>(
 ) -> PyResult<T> {
     match obj.getattr(key) {
         Ok(value) => read(&value).map_err(|e| field_error(obj.py(), e, owner, key)),
-        Err(_) => Ok(default()),
+        Err(e) if attribute_missing(obj, key, &e)? => Ok(default()),
+        Err(e) => Err(e),
     }
+}
+
+fn attribute_missing(obj: &Bound<'_, PyAny>, key: &str, error: &PyErr) -> PyResult<bool> {
+    let py = obj.py();
+    if !error.is_instance_of::<PyAttributeError>(py) {
+        return Ok(false);
+    }
+    // AttributeError from a descriptor is still a failed lookup, not omission. Static lookup
+    // checks whether the attribute is declared without invoking the descriptor a second time.
+    static GETATTR_STATIC: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let lookup = GETATTR_STATIC.get_or_try_init(py, || {
+        py.import("inspect")?.getattr("getattr_static").map(Bound::unbind)
+    })?;
+    Ok(match lookup.bind(py).call1((obj, key)) {
+        Ok(_) => false,
+        Err(e) => e.is_instance_of::<PyAttributeError>(py),
+    })
 }
 
 /// A failure is a `ValueError` naming the message.
@@ -458,8 +516,19 @@ pub fn item_or<'py, T>(
 ) -> PyResult<T> {
     match obj.get_item(key) {
         Ok(value) => read(&value).map_err(|e| field_error(obj.py(), e, owner, key)),
-        Err(_) => Ok(default()),
+        Err(e) if item_missing(obj, key, &e) => Ok(default()),
+        Err(e) => Err(e),
     }
+}
+
+fn item_missing(obj: &Bound<'_, PyAny>, key: &str, error: &PyErr) -> bool {
+    if !error.is_instance_of::<PyKeyError>(obj.py()) {
+        return false;
+    }
+    // A dictionary override can raise KeyError for an entry that exists. Inspect its snapshot
+    // without invoking that getter again. Other mappings must declare their own missing policy;
+    // an arbitrary getter failure alone does not establish absence.
+    obj.cast::<PyDict>().is_ok_and(|dict| matches!(dict.get_item(key), Ok(None)))
 }
 
 /// Autoref dispatch: `(&&&ArgRef::<T>::new(v, "name")).hold()` borrows a class off its host

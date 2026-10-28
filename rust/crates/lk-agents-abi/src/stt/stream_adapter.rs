@@ -195,7 +195,7 @@ impl StreamSource<SpeechEvent> for AdapterSource {
                         - event.inference_duration;
                     self.speech_end = Some(ended);
                     self.utterance =
-                        Some(event.frames.map(|f| f.audio_frames()).unwrap_or_default());
+                        Some(event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default());
                     let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
                     end.speech_end_time = Some(ended);
                     return Ok(Some(end));
@@ -229,6 +229,7 @@ mod tests {
     use crate::utils::stream::StreamSink;
     use crate::vad::vad::VadCapabilities;
     use std::collections::VecDeque;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::Mutex;
 
     struct Ignore;
@@ -271,6 +272,7 @@ mod tests {
     }
 
     /// Recognizes each utterance as the next of its texts.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     struct BatchStt(Mutex<VecDeque<&'static str>>);
 
     #[async_trait]
@@ -302,6 +304,7 @@ mod tests {
 
     // Catches: a transcript before its end of speech, an empty recognition reported, or the
     // VAD's inference ticks leaking out as events.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn each_utterance_is_recognized_once_it_ends() {
         use VadEventType::{EndOfSpeech, InferenceDone, StartOfSpeech};

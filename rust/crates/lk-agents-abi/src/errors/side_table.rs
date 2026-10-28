@@ -1,6 +1,7 @@
 //! The refcounted side-table keys. The registry is held by [`Weak`] so keys never keep the host
 //! table alive; `release` may run on any thread, so it must not block or take the GIL.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -19,17 +20,27 @@ pub trait RefRegistry: Send + Sync + 'static {
 pub struct Entry {
     id: u64,
     registry: Weak<dyn RefRegistry>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// So `Drop` does not release a moved payload.
     taken: AtomicBool,
 }
 
 impl Entry {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(id: u64, registry: &Arc<dyn RefRegistry>) -> Self {
         Entry { id, registry: Arc::downgrade(registry), taken: AtomicBool::new(false) }
     }
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    pub fn belongs_to(&self, registry: &Arc<dyn RefRegistry>) -> bool {
+        self.registry.ptr_eq(&Arc::downgrade(registry))
+    }
+
+    pub(crate) fn same_registry(&self, other: &Self) -> bool {
+        self.registry.ptr_eq(&other.registry)
     }
 
     /// `Some` once, then `None` from any clone.
@@ -67,12 +78,16 @@ macro_rules! side_table_ref {
             pub fn id(self: &Self) -> u64 {
                 self.0.id()
             }
+
+            pub fn belongs_to(&self, registry: &::std::sync::Arc<dyn $crate::errors::RefRegistry>) -> bool {
+                self.0.belongs_to(registry)
+            }
         }
 
         /// By id: the payload is not inspectable here.
         impl PartialEq for $name {
             fn eq(&self, other: &Self) -> bool {
-                self.0.id() == other.0.id()
+                self.0.id() == other.0.id() && self.0.same_registry(&other.0)
             }
         }
 
@@ -93,16 +108,19 @@ pub(crate) mod testkit {
     //! A stand-in for the binding's table, shared by the `HostRef` and `CapturedError` tests.
 
     use std::collections::BTreeSet;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::{Arc, Mutex};
 
     use super::RefRegistry;
 
     /// Holds ids the way the binding does, and answers `outstanding` from what is left.
     pub struct Table {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         live: Mutex<BTreeSet<u64>>,
     }
 
     impl Table {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         /// A table already holding `ids`, as if the binding had captured them.
         pub fn holding(ids: impl IntoIterator<Item = u64>) -> Arc<Table> {
             Arc::new(Table { live: Mutex::new(ids.into_iter().collect()) })

@@ -14,6 +14,7 @@ pub fn export_fn(attr: TokenStream, f: &syn::ItemFn) -> syn::Result<TokenStream>
     let s = crate::read_export(attr, f)?;
     let wrapper = format_ident!("__host_py_{}", s.rust);
     let docs = doc_attrs(&crate::summary(&s.doc));
+    let converters = checked_converters(&s);
     let func = if s.params.iter().any(|p| p.kwargs) {
         let name = &s.name;
         spread(&s, Spread {
@@ -40,6 +41,7 @@ pub fn export_fn(attr: TokenStream, f: &syn::ItemFn) -> syn::Result<TokenStream>
     Ok(quote! {
         #[cfg(feature = "python")]
         const _: () = {
+            #converters
             #func
             ::lk_agents_abi::python::inventory::submit! {
                 ::lk_agents_abi::python::Registration(|m| {
@@ -333,6 +335,12 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
     let methods = plain.iter().map(|m| method(&o, m)).collect::<Vec<_>>();
     let spread = spread.iter().map(|m| method(&o, m)).collect::<Vec<_>>();
     let consts = o.consts.iter().map(class_const).collect::<Vec<_>>();
+    let converters: Vec<_> = o.methods.iter().map(|m| {
+        let mut sig = m.sig.clone();
+        let mut to_core = SelfTo(o.self_ty.clone());
+        for p in &mut sig.params { to_core.visit_type_mut(&mut p.ty); }
+        checked_converters(&sig)
+    }).collect();
     let core = &o.self_ty;
     let natives = o.as_dyn.iter().map(|(tr, m)| {
         let class = o.cell.class().map(|c| quote!(#c)).unwrap_or_else(|| quote!(#core));
@@ -365,6 +373,7 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
                 const _: () = {
                     // The stub reads the impl's name and pyo3 the struct's; they are one name.
                     assert!(::lk_agents_abi::python::same_name(<#core as ::pyo3::PyClass>::NAME, #name), #message);
+                    #(#converters)*
                     #[::pyo3::pymethods]
                     impl #core { #(#consts)* #(#methods)* }
                     #(#spread)*
@@ -468,6 +477,7 @@ pub fn object(attr: TokenStream, imp: &syn::ItemImpl) -> syn::Result<TokenStream
                 }
                 #[cfg(feature = "python")]
                 const _: () = {
+                    #(#converters)*
                     #[::pyo3::pymethods]
                     impl #rust_name { #(#consts)* #(#methods)* }
                     #(#spread)*
@@ -744,9 +754,36 @@ fn params(s: &Sig) -> TokenStream {
     let items = s.params.iter().zip(inputs(s)).filter_map(|(p, i)| {
         let i = i?;
         let (name, ty) = (&p.name, &i.ty);
-        Some(quote!(#name: #ty))
+        let checked = checked_param(s, p, &i);
+        Some(quote!(#checked #name: #ty))
     });
     quote!(#(#items),*)
+}
+
+fn checked_param(s: &Sig, p: &crate::Param, input: &crate::shape::In) -> TokenStream {
+    if input.prelude.is_some() || !crate::cross::checked_input(&p.ty) {
+        return TokenStream::new();
+    }
+    let reader = format_ident!("__host_read_{}_{}", s.rust, p.name);
+    quote!(#[pyo3(from_py_with = #reader)])
+}
+
+fn checked_converters(s: &Sig) -> TokenStream {
+    let functions = s.params.iter().zip(inputs(s)).filter_map(|(p, input)| {
+        let input = input?;
+        if input.prelude.is_some() || !crate::cross::checked_input(&p.ty) { return None; }
+        let reader = format_ident!("__host_read_{}_{}", s.rust, p.name);
+        let label = p.label.clone().unwrap_or_else(|| p.name.to_string());
+        let read = crate::cross::from_py_at(&p.ty, &quote!(v), &quote!(#label));
+        let ty = &p.ty;
+        Some(quote! {
+            fn #reader(v: &::pyo3::Bound<'_, ::pyo3::PyAny>) -> ::pyo3::PyResult<#ty> {
+                use ::pyo3::types::PyAnyMethods as _;
+                #read
+            }
+        })
+    });
+    quote!(#(#functions)*)
 }
 
 /// The core's, a cell constructor's class, a stream class, or an `async` callable's awaitable.
@@ -863,13 +900,17 @@ fn body_parts(s: &Sig, call: &Call, wrap: Option<(&syn::Ident, Wrap)>) -> (Token
         (Call::Own, _) => quote!(Self::#rust(self, #(#args),*)),
         (Call::Locked(core) | Call::Shared(core), Receiver::None) => quote!(<#core>::#rust(#(#args),*)),
         (Call::Locked(_), _) => {
-            quote!(self.inner.lock().unwrap_or_else(::std::sync::PoisonError::into_inner).#rust(#(#args),*))
+            quote!(self.inner.lock().map_err(|_| ::pyo3::exceptions::PyRuntimeError::new_err("native object state is poisoned"))?.#rust(#(#args),*))
         }
         (Call::Shared(_), _) if s.is_async => quote!(inner.#rust(#(#args),*)),
         (Call::Shared(_), _) => quote!(self.inner.#rust(#(#args),*)),
     };
     let target = if s.is_async { quote!(#target.await) } else { target };
-    let target = if s.detach { quote!(py.detach(|| #target)) } else { target };
+    let target = if s.detach && matches!(call, Call::Locked(_)) && s.receiver != Receiver::None {
+        quote!(py.detach(|| -> ::pyo3::PyResult<_> { ::std::result::Result::Ok(#target) })?)
+    } else if s.detach {
+        quote!(py.detach(|| #target))
+    } else { target };
     let fail = match &s.ret {
         Ret::Result(_) => fail_rule(s),
         _ => TokenStream::new(),
@@ -1016,7 +1057,8 @@ fn spread(s: &Sig, k: Spread) -> TokenStream {
         let p = &s.params[i];
         let input = ins[i].as_ref()?;
         let (name, ty) = (&p.name, &input.ty);
-        Some(quote!(#name: #ty,))
+        let checked = checked_param(s, p, input);
+        Some(quote!(#checked #name: #ty,))
     };
     let params_pre: Vec<TokenStream> = (0..kw).filter_map(param).collect();
     let params_post: Vec<TokenStream> = (kw + 1..s.params.len()).filter_map(param).collect();

@@ -26,8 +26,8 @@ const MIN_PROGRESSIVE_MS: u32 = 20;
 #[crate::host(object(
     pid = false,
     module = "livekit.agents.utils.audio",
-    stub = "def push(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...",
-    stub = "def write(self, data: bytes | memoryview) -> list[rtc.AudioFrame]: ...",
+    stub = "def push(self, data: bytes | bytearray | memoryview) -> list[rtc.AudioFrame]: ...",
+    stub = "def write(self, data: bytes | bytearray | memoryview) -> list[rtc.AudioFrame]: ...",
     stub = "def flush(self) -> list[rtc.AudioFrame]: ...",
     stub_import = "from livekit import rtc"
 ))]
@@ -142,9 +142,10 @@ impl AudioByteStream {
     fn host_push(
         &mut self,
         py: pyo3::Python<'_>,
-        data: &[u8],
+        data: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
-        let frames = self.push(data);
+        let data = crate::python::snapshot_buffer(data, crate::python::BufferFormat::PcmChunk, "data")?;
+        let frames = self.push(&data);
         self.to_host_frames(py, frames)
     }
 
@@ -153,7 +154,7 @@ impl AudioByteStream {
     fn host_write(
         &mut self,
         py: pyo3::Python<'_>,
-        data: &[u8],
+        data: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<pyo3::Py<pyo3::types::PyList>> {
         self.host_push(py, data)
     }

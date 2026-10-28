@@ -338,6 +338,7 @@ out = (loop, context, [context.run(f) for f in (stream, one, nothing)])
     // provider's (a non-streaming TTS's sentences, as the reference's `ChunkedStream`s report
     // theirs), or those records read twice; a node that ran no default node metered at all; the
     // call in flight when the node is cut not ended.
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     #[test]
     fn a_node_reports_the_calls_its_default_node_made() {
         use crate::StreamSource as _;
@@ -734,7 +735,7 @@ mod session_bridge {
     use crate::python::{extract_generated, value_to_py};
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
-    use serde_json::{Map, Value};
+    use serde_json::Value;
 
     fn attach<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         Python::initialize();
@@ -782,16 +783,18 @@ mod session_bridge {
         });
     }
 
-    // Catches: a `None` json_schema answered with `Null` (providers reject it), a `None`
-    // description refused, or an omitted key read as a default rather than refused.
+    // Defaults apply only to omission. Explicit JSON null remains a JSON value; fields whose
+    // types are not nullable must refuse it.
     #[test]
-    fn none_reads_as_empty_and_an_omitted_key_raises() {
+    fn tool_defaults_apply_to_omission_and_nonnullable_fields_refuse_null() {
         attach(|py| {
             let none = parse_specs(py, "out[0]['json_schema'] = None").unwrap();
-            assert_eq!(none[0].json_schema, Value::Object(Map::new()));
-            assert_eq!(parse_specs(py, "out[0]['description'] = None").unwrap()[0].description, "");
+            assert_eq!(none[0].json_schema, Value::Null);
+            assert!(parse_specs(py, "out[0]['description'] = None").is_err());
+            assert!(parse_specs(py, "out[0]['ignore_on_enter'] = None").is_err());
             assert!(parse_specs(py, "del out[0]['json_schema']").is_err());
-            assert!(parse_specs(py, "del out[0]['ignore_on_enter']").is_err());
+            assert!(!parse_specs(py, "del out[0]['ignore_on_enter']").unwrap()[0].flags.ignore_on_enter);
+            assert_eq!(parse_specs(py, "del out[0]['description']").unwrap()[0].description, "");
         });
     }
 

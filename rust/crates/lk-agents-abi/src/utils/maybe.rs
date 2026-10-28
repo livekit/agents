@@ -1,5 +1,5 @@
-//! `Maybe<T>`, instead of an unreadable `Option<Option<T>>`. Unlike the binding's `Maybe`, `None`
-//! here is a value: `Agent(llm=None)` means "no LLM", not "unchanged".
+//! Omission is distinct from a value. `Maybe<Option<T>>` represents omitted, null, and non-null
+//! values across the binding: `Agent(llm=None)` means "no LLM", not "unchanged".
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Maybe<T> {
@@ -39,7 +39,7 @@ impl<T> std::fmt::Debug for Maybe<Option<T>> {
 }
 
 /// `NOT_GIVEN` is `NotGiven`; `None` is a *given* `None` when `T` reads one (`Maybe<Option<U>>`),
-/// else `NotGiven`. An in-place parameter of this type defaults to `NotGiven`.
+/// otherwise null is invalid. Only `NOT_GIVEN` denotes omission.
 #[cfg(feature = "python")]
 impl<'a, 'py, T> pyo3::FromPyObject<'a, 'py> for Maybe<T>
 where
@@ -52,9 +52,6 @@ where
         use pyo3::types::PyAnyMethods as _;
         if ob.is_instance(crate::python::not_given_type(ob.py())?)? {
             return Ok(Maybe::NotGiven);
-        }
-        if ob.is_none() {
-            return Ok(T::extract(ob).map_or(Maybe::NotGiven, Maybe::Given));
         }
         T::extract(ob).map(Maybe::Given).map_err(Into::into)
     }

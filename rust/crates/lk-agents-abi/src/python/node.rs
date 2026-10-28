@@ -4,12 +4,14 @@
 //! and a core channel read by the host as an async iterator ([`ItemStream`], fed through
 //! [`ItemSink`]).
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::mpsc;
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use super::{
     AsyncMutex, CancellingHandle, HostBridge as _, HostHandle, capture, captured, provider_error_to_py,
 };
@@ -22,6 +24,7 @@ type Item = Result<Py<PyAny>, ProviderError>;
 /// is raised where it happened.
 #[pyclass(frozen, name = "ItemStream", module = "livekit.agents._core")]
 pub struct ItemStream {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     rx: Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>,
 }
 
@@ -61,6 +64,7 @@ impl ItemStream {
 
 /// The core's end of an [`ItemStream`]: each item converted to its host object as it is pushed.
 pub struct ItemSink<I> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     tx: Mutex<Option<mpsc::UnboundedSender<Item>>>,
     to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
 }
@@ -68,23 +72,31 @@ pub struct ItemSink<I> {
 impl<I> ItemSink<I> {
     /// Whether the host still reads.
     pub fn send(&self, item: &I) -> bool {
-        let Some(tx) = self.tx.lock().unwrap_or_else(|p| p.into_inner()).clone() else {
-            return false;
+        self.try_send(item).expect("ItemSink state is poisoned")
+    }
+
+    fn try_send(&self, item: &I) -> Result<bool, ProviderError> {
+        let tx = self.tx.lock().map_err(|poison| {
+            drop(poison);
+            captured(pyo3::exceptions::PyRuntimeError::new_err("ItemSink state is poisoned"))
+        })?.clone();
+        let Some(tx) = tx else {
+            return Ok(false);
         };
         let converted = Python::attach(|py| (self.to_py)(py, item)).map_err(captured);
-        tx.send(converted).is_ok()
+        Ok(tx.send(converted).is_ok())
     }
 
     /// Raised on the host's next read; nothing follows it.
     pub fn fail(&self, error: ProviderError) {
-        if let Some(tx) = self.tx.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some(tx) = self.tx.lock().expect("ItemSink state is poisoned").take() {
             let _ = tx.send(Err(error));
         }
     }
 
     /// Resolves once the host stopped reading (closed or dropped the stream).
     pub async fn closed(&self) {
-        let tx = self.tx.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let tx = self.tx.lock().expect("ItemSink state is poisoned").clone();
         if let Some(tx) = tx {
             tx.closed().await;
         }
@@ -94,7 +106,7 @@ impl<I> ItemSink<I> {
 impl<I: Send + Sync> crate::StreamSink<I> for ItemSink<I> {
     /// A host that stopped reading drops the rest, as a node that returned early ignores its input.
     fn push(&self, item: I) -> Result<(), ProviderError> {
-        self.send(&item);
+        self.try_send(&item)?;
         Ok(())
     }
 
@@ -104,10 +116,12 @@ impl<I: Send + Sync> crate::StreamSink<I> for ItemSink<I> {
     }
 
     fn end_input(&self) {
-        self.tx.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.tx.lock().expect("ItemSink state is poisoned").take();
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// A channel the core feeds and the host reads.
 pub fn item_stream<I>(
     py: Python<'_>,
@@ -121,6 +135,7 @@ pub fn item_stream<I>(
 /// Turns one item of a node's output into the core's.
 pub type Convert<T> = Box<dyn Fn(&Bound<'_, PyAny>) -> PyResult<T> + Send + Sync>;
 
+#[allow(clippy::disallowed_types, reason = "S0: legacy host channel state")]
 enum State {
     /// What the node returned, not yet looked at: an async iterable, an awaitable, one value or
     /// `None`.
@@ -136,7 +151,7 @@ enum State {
 
 /// The provider calls of the default nodes a node runs, as the reference meters a TTS's streams
 /// and not the node's output.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub enum NodeCallState {
     /// No default node: the node makes its own audio, which no provider call stands behind.
     #[default]
@@ -147,6 +162,7 @@ pub enum NodeCallState {
     Metered(Vec<crate::utils::stream::CallLedger>),
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 pub type NodeCalls = Arc<Mutex<NodeCallState>>;
 
 /// The one host-iterable bridge: what a host callable returned (a node's output, a callable's
@@ -252,6 +268,7 @@ where
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: legacy host channel state")]
 enum Look {
     Channel(Arc<AsyncMutex<Option<mpsc::UnboundedReceiver<Item>>>>),
     Iterate(Py<PyAny>),
@@ -345,7 +362,8 @@ impl<T: Send> crate::StreamSource<T> for HostSource<T> {
         in_flight: bool,
     ) -> Option<Vec<crate::metrics::base::AgentMetrics>> {
         let calls = self.calls.as_ref()?;
-        match &*calls.lock().unwrap_or_else(|p| p.into_inner()) {
+        let calls = calls.lock().expect("NodeCallState is poisoned").clone();
+        match calls {
             NodeCallState::Unused => in_flight.then(Vec::new),
             NodeCallState::Streamed => None,
             NodeCallState::Metered(ledgers) => {
@@ -394,5 +412,26 @@ impl<T: Send> crate::StreamSource<T> for HostSource<T> {
             }
             State::Ended(_) | State::Channel(_) | State::Done => crate::Closed::Clean,
         }
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+    use crate::StreamSink;
+
+    #[test]
+    fn poisoned_sink_refuses_new_items() {
+        Python::initialize();
+        Python::attach(|py| {
+            let (sink, _stream) = item_stream(py, |py, item: &u32| {
+                Ok(item.into_pyobject(py)?.into_any().unbind())
+            }).unwrap();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = sink.tx.lock().unwrap();
+                panic!("interrupted while changing the sink");
+            }));
+            assert!(sink.push(1).is_err(), "a poisoned sink must not resume delivery");
+        });
     }
 }

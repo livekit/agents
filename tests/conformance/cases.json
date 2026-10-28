@@ -3,23 +3,23 @@
     {"id": "omitted-preserves-value", "arguments": {}, "expected": 8.0},
     {"id": "sentinel-preserves-value", "arguments": {"initial": "NOT_GIVEN"}, "expected": 8.0},
     {"id": "zero-is-a-value", "arguments": {"initial": 0.0}, "expected": 0.0},
-    {"id": "invalid-null-is-not-omission", "arguments": {"initial": null}, "error": "initial", "defect": "B-3: Maybe<T> accepts invalid None as NotGiven"}
+    {"id": "invalid-null-is-not-omission", "arguments": {"initial": null}, "error": "initial"}
   ],
   "scalars": [
     {"id": "unicode-preserved", "kind": "string", "value": "é / é / 日本語 / 🦀 / \u0000", "expected": "é / é / 日本語 / 🦀 / \u0000"},
     {"id": "empty-string-is-a-value", "kind": "string", "value": "", "expected": ""},
     {"id": "false-is-a-value", "kind": "bool", "value": false, "expected": false},
     {"id": "int-is-not-bool", "kind": "bool", "value": 1, "error": "audio"},
-    {"id": "bool-is-not-int", "kind": "int", "value": true, "error": "window_size", "defect": "B-4: generated integer conversion accepts Python bool"},
+    {"id": "bool-is-not-int", "kind": "int", "value": true, "error": "window_size"},
     {"id": "unsigned-rejects-negative", "kind": "int", "value": -1, "error": "negative"},
     {"id": "double-precision-preserved", "kind": "float", "value": 0.12345678901234566, "expected": 0.12345678901234566}
   ],
   "time": [
     {"id": "zero-duration", "value": 0.0, "expected": 0.0},
     {"id": "fractional-seconds", "value": 0.125, "expected": 0.125},
-    {"id": "negative-duration", "value": -0.25, "error": "playback_position", "defect": "B-4: PlaybackTracker::seconds clamps invalid sink reports"},
-    {"id": "nan-duration", "value": "nan", "error": "playback_position", "defect": "B-4: PlaybackTracker::seconds clamps invalid sink reports"},
-    {"id": "infinite-duration", "value": "inf", "error": "playback_position", "defect": "B-4: PlaybackTracker::seconds clamps invalid sink reports"}
+    {"id": "negative-duration", "value": -0.25, "error": "playback_position"},
+    {"id": "nan-duration", "value": "nan", "error": "playback_position"},
+    {"id": "infinite-duration", "value": "inf", "error": "playback_position"}
   ],
   "collections": [
     {"id": "ordered-list", "value": ["1", "2", "#"], "expected": "1 2 #"},
