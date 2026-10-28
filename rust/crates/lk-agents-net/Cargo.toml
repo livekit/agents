@@ -1,0 +1,28 @@
+[package]
+name = "lk-agents-net"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The shared async transport (decision 77): owned tasks, server-sent events, the WebSocket seam and
+# its tungstenite implementation, phase-bounded waits and LiveKit token signing. Used by
+# inference, the A2A client, storage backends and the worker.
+[lib]
+doctest = false
+
+[dependencies]
+lk-agents-abi = { path = "../lk-agents-abi" }
+livekit-token.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# TLS crypto provider: `ring` only (reqwest/tungstenite use `rustls-no-provider`-style builds).
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+log.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }

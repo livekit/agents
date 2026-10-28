@@ -23,11 +23,11 @@ use lk_agents_inference::avatar::{
     AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request,
 };
 use lk_agents_inference::headers::Headers;
-use lk_agents_inference::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
-use crate::task::{OwnedTask, TaskOutcome};
+use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 const LOG: &str = "livekit.agents";
 
@@ -167,7 +167,7 @@ impl InferenceAvatar for GatewayAvatar {
         let unavailable = |e: String| AvatarError::from(ApiError::new(e).with_retryable(false));
         conn_options.validate().map_err(|e| unavailable(e.to_string()))?;
         // Signing then cannot fail when an attempt launches.
-        crate::token::inference_bearer(&api_key, &api_secret)?;
+        lk_agents_net::token::inference_bearer(&api_key, &api_secret)?;
         let opts = AvatarOptions::new(
             &model,
             avatar_identity,
@@ -466,15 +466,17 @@ impl Driver {
         let room = self.pending_create.as_ref()?;
         let key: [u8; 16] = rand::random();
         let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        let exchange =
-            match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1) {
-                Ok(bearer) => create_request(&self.opts, room, self.headers.clone(), &bearer, &key),
-                Err(error) => {
-                    // A launch failure is reported like any other failed attempt.
-                    self.failed_launch(request, attempt, error);
-                    return None;
-                }
-            };
+        let exchange = match lk_agents_net::token::inference_bearer(
+            &self.credentials.0,
+            &self.credentials.1,
+        ) {
+            Ok(bearer) => create_request(&self.opts, room, self.headers.clone(), &bearer, &key),
+            Err(error) => {
+                // A launch failure is reported like any other failed attempt.
+                self.failed_launch(request, attempt, error);
+                return None;
+            }
+        };
         let exchange = Arc::new(exchange);
         self.exchanges.insert(request, exchange.clone());
         Some(exchange)
@@ -486,8 +488,10 @@ impl Driver {
         attempt: u32,
         session: &ProviderSession,
     ) -> Option<Arc<HttpRequest>> {
-        let bearer = match crate::token::inference_bearer(&self.credentials.0, &self.credentials.1)
-        {
+        let bearer = match lk_agents_net::token::inference_bearer(
+            &self.credentials.0,
+            &self.credentials.1,
+        ) {
             Ok(bearer) => bearer,
             Err(error) => {
                 self.failed_launch(request, attempt, error);

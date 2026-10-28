@@ -90,7 +90,7 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
             "lk-agents-a2a": {"lk-agents-abi", "lk-agents-storage"},
             # The realtime and duplex fakes still run inference's realtime machine (decision 70).
-            "lk-agents-fuzz": PURE - {"lk-agents-rtc"} | {"lk-agents-inference"},
+            "lk-agents-fuzz": PURE - {"lk-agents-rtc"} | {"lk-agents-inference", "lk-agents-net"},
             "lk-agents-runtime": PURE - {"lk-agents-rtc"} | ASYNC,
             "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
         }.get(name, {"lk-agents-abi"})

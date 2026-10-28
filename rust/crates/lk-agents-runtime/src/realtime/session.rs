@@ -9,7 +9,7 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_inference::transport::{TransportError, WsMessage, WsTransport};
+use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::realtime::wire::{self, Azure, IdGen, RandomIds, WireShape};
@@ -88,7 +88,7 @@ impl Connect {
                     }
                     h
                 });
-                let token = crate::token::inference_bearer(api_key, api_secret)?;
+                let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
                 h.set("Authorization", format!("Bearer {token}"));
                 if let Some(p) = provider {
                     h.set(lk_agents_inference::HEADER_INFERENCE_PROVIDER, p.clone());
@@ -595,7 +595,7 @@ impl Pump {
                 }
                 result = &mut connect => match result {
                     Ok(pair) => break pair,
-                    Err(error) => return Err(lk_agents_inference::transport::connect_error(self.provider_label, error)),
+                    Err(error) => return Err(lk_agents_net::transport::connect_error(self.provider_label, error)),
                 }
             }
         };
@@ -621,8 +621,8 @@ impl Pump {
     async fn run_ws(
         &self,
         commands: &mut mpsc::Receiver<Cmd>,
-        sender: Arc<dyn lk_agents_inference::transport::WsSender>,
-        mut receiver: Box<dyn lk_agents_inference::transport::WsReceiver>,
+        sender: Arc<dyn lk_agents_net::transport::WsSender>,
+        mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
         connection: &mut lk_agents_inference::realtime::connection::RealtimeConnection,
     ) -> Result<Outcome, ApiError> {
@@ -818,7 +818,7 @@ impl Pump {
 
     async fn close_sender(
         &self,
-        sender: Arc<dyn lk_agents_inference::transport::WsSender>,
+        sender: Arc<dyn lk_agents_net::transport::WsSender>,
         generation: u64,
     ) -> bool {
         let (settled, done) = tokio::sync::oneshot::channel();

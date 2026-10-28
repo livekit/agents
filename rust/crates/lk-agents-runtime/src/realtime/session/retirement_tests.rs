@@ -189,7 +189,7 @@ async fn permanent_worker_startup_failure_settles_cleanup_without_retaining_the_
 async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure() {
     use crate::media_workers::{MediaWorkerClass, MediaWorkerLimits, MediaWorkers};
     use lk_agents_abi::llm::realtime::{CancelReply, Interrupt, PushAudio};
-    use lk_agents_inference::transport::WsMessage;
+    use lk_agents_net::transport::WsMessage;
 
     let workers = MediaWorkers::new(
         tokio::runtime::Handle::current(),

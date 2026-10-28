@@ -14,14 +14,14 @@ use lk_agents_a2a::client::{Client, ClientError, HttpMethod, ReplyState, Request
 use lk_agents_a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
-use lk_agents_inference::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::source::{NativeSource, PullError, Pulled};
-use crate::sse::SseDecoder;
-use crate::task::{OwnedTask, TaskOutcome};
+use lk_agents_net::sse::SseDecoder;
+use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;

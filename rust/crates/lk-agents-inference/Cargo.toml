@@ -21,6 +21,7 @@ license.workspace = true
 # docs/CONTRACTS.md §4.7's home for the Llm/Stt/Tts/Vad traits. This crate is one of the two implementations of every
 # one of them (§1.0's table); it defines none of its own.
 lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-net = { path = "../lk-agents-net" }
 # `build_strict_openai_schema`, which is what `ToolContext.parse_function_tools("openai",
 # strict=True)` returns and what the gateway's OpenAI-compatible body carries.
 # `AudioByteStream` (the 50 ms re-framing every STT send loop does) and nothing else. Reaching for

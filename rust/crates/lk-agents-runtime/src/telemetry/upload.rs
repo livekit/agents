@@ -35,8 +35,9 @@ impl SessionReportUpload for SessionReportUploader {
     fn new(api_key: String, api_secret: String) -> Result<Self, UploadError> {
         let create = move || {
             // Validate credentials before creating a client or retaining a report.
-            crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
-            lk_agents_inference::transport::install_tls_provider();
+            lk_agents_net::token::observability_bearer(&api_key, &api_secret)
+                .map_err(upload_error)?;
+            lk_agents_net::transport::install_tls_provider();
             let client = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
@@ -55,7 +56,8 @@ impl SessionReportUpload for SessionReportUploader {
     }
 
     fn bearer(&self) -> Result<String, UploadError> {
-        crate::token::observability_bearer(&self.api_key, &self.api_secret).map_err(upload_error)
+        lk_agents_net::token::observability_bearer(&self.api_key, &self.api_secret)
+            .map_err(upload_error)
     }
 
     fn content_policy(

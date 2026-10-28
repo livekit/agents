@@ -10,7 +10,7 @@ use lk_agents_storage::{Fence, StorageError};
 use tokio::sync::watch;
 
 use super::engine::ThreadDb;
-use crate::task::OwnedTask;
+use lk_agents_net::task::OwnedTask;
 
 /// A lease an acquire or a receive took: the lane at `version` under `token`. Cloned by the run
 /// and its checkpoint; [`Lease::keep_alive`] extends it while the run works.

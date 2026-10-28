@@ -18,7 +18,7 @@ use crate::abi::{
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
-use crate::transport::{WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url};
+use lk_agents_net::transport::{WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url};
 use async_trait::async_trait;
 
 use futures_util::future::{Either, select};

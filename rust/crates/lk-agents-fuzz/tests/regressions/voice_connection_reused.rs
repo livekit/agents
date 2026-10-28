@@ -14,10 +14,8 @@ use std::{
 use base64::Engine;
 use lk_agents_abi::{SimClock, TokioSpawner, Tts};
 use lk_agents_fuzz::{corpus, drive::simulate};
-use lk_agents_inference::{
-    transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport},
-    tts::{NativeTts, TtsOptions},
-};
+use lk_agents_inference::tts::{NativeTts, TtsOptions};
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use tokio::sync::mpsc;
 
 /// What opening a gateway connection costs before its first frame. Measured on calls: a reply

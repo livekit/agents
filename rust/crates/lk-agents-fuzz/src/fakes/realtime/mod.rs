@@ -31,13 +31,11 @@ use lk_agents_abi::{
     llm::realtime::{Event, Interrupt, RealtimeCapabilities, RealtimeModelError},
     utils::byte_stream::AudioByteStream,
 };
-use lk_agents_inference::{
-    realtime::{
-        ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
-        Step, TurnDetection,
-    },
-    transport::{TransportError, connect_error},
+use lk_agents_inference::realtime::{
+    ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
+    Step, TurnDetection,
 };
+use lk_agents_net::transport::{TransportError, connect_error};
 
 use super::{Control, Registry, SAMPLE_RATE, Slot};
 use crate::{

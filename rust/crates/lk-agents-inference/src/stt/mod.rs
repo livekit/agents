@@ -20,7 +20,7 @@ pub mod wire;
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
 use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
-use crate::transport::{
+use lk_agents_net::transport::{
     TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
     to_ws_url, within,
 };
@@ -1057,7 +1057,7 @@ impl Pump {
 
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn recv_loop(
-        receiver: &mut dyn crate::transport::WsReceiver,
+        receiver: &mut dyn lk_agents_net::transport::WsReceiver,
         machine: Arc<Mutex<SttProtocol>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {

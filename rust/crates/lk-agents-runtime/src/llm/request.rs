@@ -6,7 +6,7 @@ use lk_agents_abi::{ChatContext, ToolSpec};
 use lk_agents_inference::headers::{Headers, identification_headers};
 use lk_agents_inference::llm::request::ChatArgs;
 use lk_agents_inference::llm::{LlmOptions, models, request};
-use lk_agents_inference::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;

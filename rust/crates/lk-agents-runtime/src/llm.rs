@@ -22,12 +22,12 @@ use lk_agents_inference::llm::lifecycle::{
 use lk_agents_inference::llm::request::ChatArgs;
 use lk_agents_inference::llm::{LlmOptions, models};
 mod request;
-use lk_agents_inference::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
 use crate::http::{GatewayHttp, Reporter, Stamped};
-use crate::task::{OwnedTask, TaskOutcome};
+use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
 const OBSERVATION_QUEUE: usize = 32;
@@ -108,7 +108,7 @@ impl GatewayLlm {
         // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
         let identification = identification.or(self.identity.as_ref());
-        let bearer = crate::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
+        let bearer = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
         let request =
             build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
@@ -246,7 +246,8 @@ impl Llm for GatewayLlm {
     /// Opens a connection in the background so the first request finds it pooled.
     fn prewarm(&self) {
         let opts = self.options();
-        let Ok(bearer) = crate::token::inference_bearer(&opts.api_key, &opts.api_secret) else {
+        let Ok(bearer) = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)
+        else {
             return;
         };
         let mut headers = identification_headers(self.identity.as_ref(), None, None);

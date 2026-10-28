@@ -13,10 +13,10 @@ use lk_agents_abi::{Clock, Ts};
 use lk_agents_inference::attempts::AttemptFailure;
 use lk_agents_inference::llm::lifecycle::LlmRequestEvent;
 use lk_agents_inference::llm::parse::WireChunk;
-use lk_agents_inference::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{Notify, mpsc};
 
-use crate::sse::SseDecoder;
+use lk_agents_net::sse::SseDecoder;
 
 /// A transport observation and the instant it was made.
 #[derive(Debug)]
@@ -70,7 +70,7 @@ impl GatewayHttp {
     }
 
     pub fn new() -> Result<Self, String> {
-        lk_agents_inference::transport::install_tls_provider();
+        lk_agents_net::transport::install_tls_provider();
         let client = reqwest::Client::builder()
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))

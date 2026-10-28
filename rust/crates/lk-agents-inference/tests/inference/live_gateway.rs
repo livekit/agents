@@ -32,12 +32,12 @@ fn credentials() -> Option<(String, String, String)> {
 /// the `input_transcript` → `output_audio` → `done` sequence.
 ///
 /// The LLM's happy path proves the HTTP transport; this proves the other one, and they share no
-/// code below [`lk_agents_inference::transport`].
+/// code below [`lk_agents_net::transport`].
 #[tokio::test]
 #[ignore = "needs LIVEKIT_INFERENCE_API_KEY/_SECRET and the network"]
 async fn a_tts_synthesis_round_trips_over_the_websocket() {
     use lk_agents_inference::abi::Tts;
-    use lk_agents_inference::native::TungsteniteTransport;
+    use lk_agents_net::websocket::TungsteniteTransport;
     use lk_agents_inference::tts::{NativeTts, TtsOptions};
 
     let Some((api_key, api_secret, base_url)) = credentials() else {
@@ -82,7 +82,7 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
 #[ignore = "needs LIVEKIT_INFERENCE_API_KEY/_SECRET and the network"]
 async fn an_stt_session_opens_and_accepts_audio() {
     use lk_agents_inference::abi::{AudioFrame, Stt};
-    use lk_agents_inference::native::TungsteniteTransport;
+    use lk_agents_net::websocket::TungsteniteTransport;
     use lk_agents_inference::stt::{NativeStt, SttOptions};
     use lk_agents_abi::SpeechEventType;
 

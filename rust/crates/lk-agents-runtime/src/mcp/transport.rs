@@ -390,7 +390,7 @@ pub(super) async fn connect_http(
     read_timeout: Duration,
     receipt: Arc<TransportReceipt>,
 ) -> Result<HttpConnection, McpError> {
-    lk_agents_inference::transport::install_tls_provider();
+    lk_agents_net::transport::install_tls_provider();
     let headers = headers
         .into_iter()
         .map(|(key, value)| {

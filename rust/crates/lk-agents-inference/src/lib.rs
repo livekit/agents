@@ -1,10 +1,5 @@
-#![allow(
-    clippy::disallowed_macros,
-    reason = "Clippy checks macro bans at crate scope; exact legacy macro sites are ratcheted."
-)]
-
-//! The `Native*` inference-gateway clients, detectors and fallback adapters. The socket appears
-//! only in [`transport`] and [`native`]; every other module is pure over bytes, JSON and state.
+//! The `Native*` inference-gateway clients, detectors and fallback adapters, over the shared
+//! transport of `lk-agents-net`.
 
 /// docs/CONTRACTS.md §4.7's provider traits, re-exported so a call site names one crate.
 pub use lk_agents_abi as abi;
@@ -38,11 +33,9 @@ pub mod stt;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod token;
-pub mod transport;
 pub mod tts;
 pub mod vad;
 
-pub mod native;
 
 #[cfg(feature = "python")]
 pub(crate) mod python;

@@ -35,7 +35,7 @@ use crate::interruption::retry::{
 };
 use crate::interruption::{LABEL, MODEL, PROVIDER};
 use crate::token::{DEFAULT_TTL_SECS, create_access_token};
-use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
+use lk_agents_net::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 
 /// One connection's two halves.
 struct Socket {
@@ -60,7 +60,7 @@ impl Default for ConnectionConfig {
     fn default() -> Self {
         ConnectionConfig {
             conn_options: ApiConnectOptions::default(),
-            transport: Arc::new(crate::native::TungsteniteTransport),
+            transport: Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             headers: Arc::new(Vec::new),
             token_ttl_secs: DEFAULT_TTL_SECS,
         }
@@ -741,7 +741,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         let opts = ctx.opts.lock().unwrap();
         (
             // `_connect_ws`'s URL (`inference/interruption.py:986`).
-            format!("{}/bargein", crate::transport::to_ws_url(&opts.base_url)),
+            format!("{}/bargein", lk_agents_net::transport::to_ws_url(&opts.base_url)),
             SessionCreateSettings {
                 sample_rate: opts.sample_rate,
                 num_channels: 1,

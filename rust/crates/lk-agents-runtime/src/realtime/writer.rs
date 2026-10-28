@@ -7,8 +7,8 @@ use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, AudioByteStream, Clock, Elapsed, Ts};
 use lk_agents_inference::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 use lk_agents_inference::realtime::machine::Outgoing;
-use lk_agents_inference::transport::WsSender;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_net::transport::WsSender;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -138,10 +138,7 @@ pub(super) async fn run(
                     }
                 }
                 Ok(Err(error)) => {
-                    return Err(lk_agents_inference::transport::connect_error(
-                        "realtime writer",
-                        error,
-                    ));
+                    return Err(lk_agents_net::transport::connect_error("realtime writer", error));
                 }
                 Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
             }

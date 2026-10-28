@@ -1,6 +1,6 @@
 //! The one [`WebSocketConnector`] that opens a real socket, over `tokio-tungstenite`. Binary
-//! (protobuf), so separate from [`crate::native`]'s text transport, but it shares
-//! [`classify_tungstenite`](crate::native::classify_tungstenite) for handshake statuses.
+//! (protobuf), so separate from [`lk_agents_net::websocket`]'s text transport, but it shares
+//! [`classify_tungstenite`](lk_agents_net::websocket::classify_tungstenite) for handshake statuses.
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -8,7 +8,7 @@ use lk_agents_abi::errors::ApiError;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::eot::cloud::{WebSocketConnector, WebSocketSink, WebSocketStream};
-use crate::transport::TransportError;
+use lk_agents_net::transport::TransportError;
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -36,7 +36,7 @@ impl WebSocketConnector for TungsteniteEotConnector {
 
         let (socket, _response) = tokio_tungstenite::connect_async(request)
             .await
-            .map_err(|e| translate(crate::native::classify_tungstenite(e)))?;
+            .map_err(|e| translate(lk_agents_net::websocket::classify_tungstenite(e)))?;
         let (sink, stream) = socket.split();
         Ok((Box::new(TungsteniteEotSink { sink }), Box::new(TungsteniteEotStream { stream })))
     }
@@ -45,7 +45,7 @@ impl WebSocketConnector for TungsteniteEotConnector {
 /// Every connect failure is non-retryable, as in `_connect_ws`: the cloud->local fallback is the
 /// recovery.
 fn translate(err: TransportError) -> ApiError {
-    crate::transport::connect_error("LiveKit turn detector", err).with_retryable(false)
+    lk_agents_net::transport::connect_error("LiveKit turn detector", err).with_retryable(false)
 }
 
 fn connect_failed(url: &str, err: impl std::fmt::Display) -> ApiError {
@@ -67,7 +67,7 @@ impl WebSocketSink for TungsteniteEotSink {
             self.sink
                 .send(Message::binary(data))
                 .await
-                .map_err(|e| translate(crate::native::classify_tungstenite(e)))
+                .map_err(|e| translate(lk_agents_net::websocket::classify_tungstenite(e)))
         })
     }
 }
@@ -85,7 +85,7 @@ impl WebSocketStream for TungsteniteEotStream {
                     Some(Ok(Message::Binary(data))) => Some(Ok(data.to_vec())),
                     Some(Ok(Message::Close(_))) | None => None,
                     Some(Ok(_)) => continue,
-                    Some(Err(e)) => Some(Err(translate(crate::native::classify_tungstenite(e)))),
+                    Some(Err(e)) => Some(Err(translate(lk_agents_net::websocket::classify_tungstenite(e)))),
                 };
             }
         })
@@ -117,7 +117,7 @@ mod tests {
             .status(401)
             .body(Some(b"invalid inference grant".to_vec()))
             .expect("a response");
-        let err = translate(crate::native::classify_tungstenite(WsError::Http(Box::new(response))));
+        let err = translate(lk_agents_net::websocket::classify_tungstenite(WsError::Http(Box::new(response))));
         assert_eq!(err.status_code, Some(401));
         assert!(err.message.contains("invalid inference grant"));
         assert!(!err.retryable);

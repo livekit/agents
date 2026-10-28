@@ -74,7 +74,7 @@ impl InferenceStt {
         // would strip a legitimate `:` from the model name.
         let native = NativeStt::new(
             opts,
-            Arc::new(crate::native::TungsteniteTransport),
+            Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient(),
         )
         .with_clock(Arc::clone(&clock));

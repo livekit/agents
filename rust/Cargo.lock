@@ -1465,6 +1465,7 @@ dependencies = [
  "lk-agents-core",
  "lk-agents-inference",
  "lk-agents-media",
+ "lk-agents-net",
  "lk-agents-rtc",
  "lk-agents-storage",
  "lk-agents-voice",
@@ -1498,6 +1499,7 @@ dependencies = [
  "lk-agents-abi",
  "lk-agents-inference",
  "lk-agents-media",
+ "lk-agents-net",
  "log",
  "pbjson-types",
  "prost",
@@ -1523,6 +1525,22 @@ dependencies = [
  "pyo3",
  "soxr-sys",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "lk-agents-net"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "livekit-token",
+ "lk-agents-abi",
+ "log",
+ "rustls",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]
@@ -1572,6 +1590,7 @@ dependencies = [
  "lk-agents-core",
  "lk-agents-inference",
  "lk-agents-media",
+ "lk-agents-net",
  "lk-agents-storage",
  "lk-agents-voice",
  "lk-agents-worker",

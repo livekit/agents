@@ -2,7 +2,7 @@
 
 use super::machine::{Effect, Event, Synthesis};
 use super::*;
-use crate::transport::{WsMessage, connect_error};
+use lk_agents_net::transport::{WsMessage, connect_error};
 use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;

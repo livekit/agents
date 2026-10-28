@@ -307,7 +307,7 @@ async fn an_unexpected_close_is_recoverable_and_the_session_reconnects() {
     .with_ids(Arc::new(SeqIds::default()));
     let session = realtime.session(false).await;
     frames(&ws, 1).await;
-    ws.feed(Ok(lk_agents_inference::transport::WsMessage::Closed));
+    ws.feed(Ok(lk_agents_net::transport::WsMessage::Closed));
 
     loop {
         match next_event(&session).await {
@@ -593,7 +593,7 @@ async fn realtime_total_deadline_during_handshake_retains_its_total_phase() {
 
 #[tokio::test]
 async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
-    use lk_agents_inference::transport::{TransportError, WsReceiver, WsSender, WsTransport};
+    use lk_agents_net::transport::{TransportError, WsReceiver, WsSender, WsTransport};
     struct StalledClose {
         sender: Arc<dyn WsSender>,
         started: Arc<tokio::sync::Notify>,

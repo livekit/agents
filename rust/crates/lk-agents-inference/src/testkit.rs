@@ -1,7 +1,7 @@
-//! Fakes for the [`crate::transport`] seam, for tests only (`cfg(test)` or the `testkit` feature).
+//! Fakes for the [`lk_agents_net::transport`] seam, for tests only (`cfg(test)` or the `testkit` feature).
 //! Deterministic; the only clock is the caller's `VirtualClock`.
 
-use crate::transport::{
+use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport,
 };
 use async_trait::async_trait;

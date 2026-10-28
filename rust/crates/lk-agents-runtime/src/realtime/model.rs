@@ -130,7 +130,7 @@ impl NativeRealtimeModel for NativeRealtime {
         let mut native = NativeRealtime::new(
             dialect,
             "",
-            Arc::new(lk_agents_inference::native::TungsteniteTransport),
+            Arc::new(lk_agents_net::websocket::TungsteniteTransport),
             Arc::new(TokioSpawner::new(runtime)),
             Arc::new(lk_agents_abi::RealClock::default()),
             Arc::new(super::images::NativeImages),

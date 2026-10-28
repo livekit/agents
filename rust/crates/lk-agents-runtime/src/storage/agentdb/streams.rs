@@ -19,7 +19,7 @@ use lk_agents_storage::streams::{CONTENT_TYPE, DEFAULT_TTL, START, StreamInfo};
 
 use super::conn::TokenMinter;
 use super::http_ok;
-use crate::sse::{SseDecoder, SseEvent};
+use lk_agents_net::sse::{SseDecoder, SseEvent};
 
 mod cursor;
 use cursor::{MAX_BYTES, MAX_RECORDS, Position, invalid};

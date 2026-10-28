@@ -563,7 +563,7 @@ fn session_keyterms_are_only_applied_when_they_change() {
 
 #[tokio::test]
 async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
-    use crate::transport::{WsReceiver, WsTransport};
+    use lk_agents_net::transport::{WsReceiver, WsTransport};
     struct ObservedWs {
         inner: FakeWs,
         closing: tokio::sync::watch::Sender<bool>,

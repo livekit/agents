@@ -26,6 +26,7 @@ bytes = "1"
 # The realtime fake runs the production native session (its wire machine, reconnects and all)
 # over a socket whose far end is the simulated OpenAI Realtime server.
 lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
+lk-agents-net = { path = "../lk-agents-net" }
 base64.workspace = true
 tokio = { workspace = true, features = ["test-util", "io-util"] }
 prost.workspace = true

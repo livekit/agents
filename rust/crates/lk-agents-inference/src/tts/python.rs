@@ -27,7 +27,7 @@ pub(crate) fn build(_py: Python<'_>, cfg: TtsClientConfig) -> PyResult<Inference
     };
     let native = NativeTts::new(
         opts,
-        Arc::new(crate::native::TungsteniteTransport),
+        Arc::new(lk_agents_net::websocket::TungsteniteTransport),
         <Arc<dyn lk_agents_abi::Spawner> as Ambient>::ambient(),
     )
     .with_clock(<Arc<dyn lk_agents_abi::Clock> as Ambient>::ambient());

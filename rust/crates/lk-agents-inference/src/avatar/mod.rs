@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::attempts::AttemptFailure;
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
-use crate::transport::HttpRequest;
+use lk_agents_net::transport::HttpRequest;
 pub use lifecycle::ProviderSession;
 
 /// The rate when the gateway's answer names none (older gateways); the gateway is authoritative.
