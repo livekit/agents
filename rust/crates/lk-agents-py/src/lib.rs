@@ -12,9 +12,7 @@
 use pyo3::prelude::*;
 
 // Linked for their registrations alone: nothing here names their items, and a crate the binary
-// never mentions is not linked (its `inventory` entries with it).
-extern crate lk_agents_inference as _;
-extern crate lk_agents_media as _;
+// never mentions is not linked (its `inventory` entries with it). The runtime links the others.
 extern crate lk_agents_rtc as _;
 extern crate lk_agents_voice as _;
 
@@ -42,7 +40,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
-    type ProviderAttempts = lk_agents_inference::provider::ProviderAttempts;
+    type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;
     type VoiceStore = lk_agents_runtime::storage::voice::VoiceStore;
@@ -64,7 +62,7 @@ impl generated::Implementations for Selected {
     type WorkerCli = lk_agents_runtime::worker::cli::WorkerCli;
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
-    type InferenceCredentials = lk_agents_inference::creds::Credentials;
+    type InferenceCredentials = lk_agents_runtime::cores::InferenceCredentials;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;
@@ -81,8 +79,8 @@ impl generated::Implementations for Selected {
     type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;
     type FallbackLlm = lk_agents_runtime::fallback::FallbackLlm;
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;
-    type ChoiceParser = lk_agents_inference::llm::parse::ChoiceParser;
-    type CompletionWire = lk_agents_inference::llm::parse::CompletionWire;
+    type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;
+    type CompletionWire = lk_agents_runtime::cores::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;
 }
 

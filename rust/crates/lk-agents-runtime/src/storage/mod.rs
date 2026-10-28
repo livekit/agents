@@ -29,6 +29,9 @@ use lk_agents_storage::StorageError;
 use lk_agents_storage::sql::{BatchResult, Row, Statement};
 
 pub use engine::{CommitOptions, Lane, LaneDb, Run, RunOptions, Tasks, Thread, ThreadDb};
+// The storage core's rows and queries the thread API takes and hands out.
+pub use lk_agents_storage::db::TaskQuery;
+pub use lk_agents_storage::run::{ItemRow, RunOutcome, TaskState};
 pub use lease::Lease;
 pub use streams::{LocalStreams, QueuedStreams, ResponseStreams, StreamRead};
 

@@ -1528,17 +1528,10 @@ name = "lk-agents-py"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "livekit-protocol",
- "lk-agents-a2a",
  "lk-agents-abi",
- "lk-agents-host-derive",
- "lk-agents-inference",
- "lk-agents-media",
  "lk-agents-rtc",
  "lk-agents-runtime",
- "lk-agents-storage",
  "lk-agents-voice",
- "pbjson-types",
  "pyo3",
  "pyo3-log",
  "serde",

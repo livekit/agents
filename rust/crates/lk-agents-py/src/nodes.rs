@@ -527,7 +527,7 @@ fn tts_node(
     let tts = tts.with_conn_options(&options).unwrap_or(tts);
     let tts = lk_agents_abi::StreamAdapter::adapted(
         tts,
-        lk_agents_media::blingfire::SentenceBuffer::factory(),
+        lk_agents_runtime::cores::SentenceBuffer::factory(),
         Arc::clone(&clock),
         options,
     );

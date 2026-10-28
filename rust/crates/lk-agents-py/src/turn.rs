@@ -7,16 +7,17 @@
 
 use std::sync::Arc;
 
-use lk_agents_a2a::{TurnHost, TurnOptions};
 use lk_agents_abi::python::{
     HostProxy, check_pid, pyo3_async_runtimes, value_from_py, value_to_py,
 };
+use lk_agents_abi::a2a::options::TurnOptions;
+use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage as host;
 use lk_agents_abi::{Clock, RealClock};
 use lk_agents_runtime::a2a::Turn;
-use lk_agents_runtime::storage::{CommitOptions, Run, RunOptions, Thread};
-use lk_agents_storage::db::TaskQuery;
-use lk_agents_storage::run::{ItemRow, RunOutcome, TaskState};
+use lk_agents_runtime::storage::{
+    CommitOptions, ItemRow, Run, RunOptions, RunOutcome, TaskQuery, TaskState, Thread,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -448,7 +449,7 @@ mod tests {
     fn options_cross_as_a_dict() {
         use std::time::Duration;
 
-        use lk_agents_a2a::{DebounceSpec, Policy, PolicySpec};
+        use lk_agents_abi::a2a::options::{DebounceSpec, Policy, PolicySpec};
 
         Python::initialize();
         Python::attach(|py| {

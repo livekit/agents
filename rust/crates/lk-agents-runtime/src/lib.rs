@@ -15,6 +15,23 @@
 //! - [`storage`]: thread storage I/O over AgentDB and local SQLite.
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
+/// What the extension names of the subject cores (decision 67: it reaches them through the
+/// runtime): the declared classes a core implements outright, and the sentence splitter its
+/// default TTS node composes.
+pub mod cores {
+    pub use lk_agents_inference::creds::Credentials as InferenceCredentials;
+    pub use lk_agents_inference::llm::parse::{ChoiceParser, CompletionWire};
+    pub use lk_agents_inference::provider::ProviderAttempts;
+    pub use lk_agents_media::blingfire::SentenceBuffer;
+}
+
+// The cores' in-place `_core` registrations are linked with the extension only from a crate it
+// links that names them.
+#[cfg(feature = "python")]
+extern crate lk_agents_inference as _;
+#[cfg(feature = "python")]
+extern crate lk_agents_media as _;
+
 pub mod agent_run;
 pub mod codecs;
 #[cfg(feature = "media-images")]

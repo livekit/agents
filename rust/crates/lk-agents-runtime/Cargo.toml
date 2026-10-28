@@ -72,7 +72,20 @@ media-ffmpeg = ["lk-agents-media/ffmpeg"]
 media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images"]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
-python = ["media-images", "dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python", "lk-agents-voice/python"]
+# It also gives the cores the features the extension links them with (decision 67: the extension
+# reaches them through the runtime).
+python = [
+    "media-images",
+    "dep:pyo3",
+    "lk-agents-abi/python",
+    "lk-agents-inference/python",
+    "lk-agents-inference/native-audio",
+    "lk-agents-a2a/python",
+    "lk-agents-voice/python",
+    "lk-agents-voice/native-audio",
+    "lk-agents-media/python",
+    "lk-agents-media/blingfire",
+]
 
 [build-dependencies]
 serde.workspace = true
