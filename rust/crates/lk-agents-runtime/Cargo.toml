@@ -25,7 +25,7 @@ bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 pyo3 = { workspace = true, optional = true }
 # Thread storage and the A2A door: the cores' plans executed against AgentDB and local SQLite.
-lk-agents-storage = { path = "../lk-agents-storage" }
+lk-agents-storage = { path = "../lk-agents-storage", features = ["sqlite"] }
 lk-agents-a2a = { path = "../lk-agents-a2a" }
 livekit-protocol.workspace = true
 pbjson-types.workspace = true

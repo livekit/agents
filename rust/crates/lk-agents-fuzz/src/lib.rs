@@ -37,3 +37,4 @@ pub mod input;
 pub mod record;
 pub mod rules;
 pub mod search;
+pub mod storage;

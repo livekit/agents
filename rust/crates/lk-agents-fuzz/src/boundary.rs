@@ -56,6 +56,27 @@ pub const VOICE: Boundary = Boundary {
     ],
 };
 
+/// The storage campaign (`tests/storage_survey.rs`, `storage` module).
+pub const STORAGE: Boundary = Boundary {
+    cores: &["storage core (lk_agents_storage::db plans and decodings, run_commit, merge_write, \
+         Renewal, LanePoll, the commit Resolution), stepped by simulated workers one plan at a time"],
+    fakes: &[
+        "storage::db: the thread database as a real SQLite in memory (rusqlite, test tooling) \
+         whose unixepoch() is the simulated clock",
+        "the AgentDB faults: commit acknowledgment lost before or after it applied, unreachable \
+         windows, paused owners whose lease lapses, workers lost mid-run, client cancels",
+    ],
+    transitional: &[
+        "storage::worker mirrors the runtime engine's and the A2A turn's step order by hand \
+         until the lane/turn orchestration is a core machine (I-1)",
+    ],
+    outside: &[
+        "lk_agents_runtime::storage engine, SqliteStorage files and the AgentDB wsdb client \
+         (I-27 backend contract suite, conformance with injected faults)",
+        "the A2A turn driver and the host's handler (runtime a2a_turns suite)",
+    ],
+};
+
 impl Boundary {
     /// Prints the boundary with what the campaign actually delivered, and fails on an empty
     /// inventory: a campaign that cannot say what it covered proves nothing.

@@ -12,12 +12,15 @@
 //! * [`run`]: task states and transitions, the run's outcome and the commit it writes.
 //! * [`lease`]: lease renewal and lane polling decisions on supplied time.
 //! * [`streams`]: the answer streams' records.
+//! * `sqlite` (feature): the statements executed on a SQLite connection the caller owns.
 
 pub mod db;
 pub mod lease;
 pub mod run;
 pub mod schema;
 pub mod sql;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 pub mod streams;
 
 pub use db::{Commit, Committed, EventWrite, Fence, TaskWrite};

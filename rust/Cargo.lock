@@ -1427,17 +1427,21 @@ dependencies = [
 name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
+ "a2a-lf",
  "async-trait",
  "base64 0.22.1",
  "bytes",
  "fastrand",
+ "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-rtc",
+ "lk-agents-storage",
  "lk-agents-voice",
  "prost",
+ "rusqlite",
  "serde_json",
  "tokio",
 ]

@@ -24,6 +24,12 @@ a2a.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
 thiserror.workspace = true
+# The `sqlite` feature: statements executed on a caller-owned connection (the local backend's
+# files, the simulation's in-memory database).
+rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+
+[features]
+sqlite = ["dep:rusqlite"]
 
 # `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
 # a feature this crate does not have (it is host-neutral): name the value so check-cfg does not
