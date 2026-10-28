@@ -2,7 +2,7 @@
 ``AgentDBStorage``, LiveKit Cloud's agentstore, and ``SQLiteStorage``, a local directory.
 
 Both configure the one Rust ``_core.Storage``; Python inheritance is not the backend extension
-mechanism. ``GetThread`` is cached per process for ``GET_THREAD_TTL`` seconds.
+mechanism. Thread metadata is loaded from its backend for every request.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import functools
 import os
 import socket
-import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -18,10 +17,6 @@ from typing import Any
 from .. import _core
 from .._core import Streams, Thread
 from .._generated.storage_class import ThreadInfo
-
-GET_THREAD_TTL = 30.0
-
-_thread_cache: dict[str, tuple[float, ThreadInfo]] = {}
 
 
 class Storage:
@@ -54,14 +49,8 @@ class Storage:
         return await self._core.streams()
 
     async def get_thread(self, thread_id: str, *, fresh: bool = False) -> ThreadInfo:
-        """``GetThread``, cached per process for ``GET_THREAD_TTL`` seconds."""
-        cached = _thread_cache.get(thread_id)
-        if cached is not None and not fresh and cached[0] > time.monotonic():
-            return cached[1]
-
-        info = await self._core.get_thread(thread_id)
-        _thread_cache[info.thread_id] = (time.monotonic() + GET_THREAD_TTL, info)
-        return info
+        """Load authoritative metadata, including updates, deletion and expiry."""
+        return await self._core.get_thread(thread_id)
 
     async def open(self, thread_id: str) -> Thread:
         """The thread's handle, its writes under this worker's holder. Takes no lease."""
@@ -171,4 +160,4 @@ class SQLiteStorage(Storage):
         return self._core.location
 
 
-__all__ = ["GET_THREAD_TTL", "AgentDBStorage", "SQLiteStorage", "Storage"]
+__all__ = ["AgentDBStorage", "SQLiteStorage", "Storage"]
