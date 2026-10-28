@@ -240,7 +240,6 @@ pub struct SessionUsageUpdated {
 #[crate::host(record(
     module = "events",
     name = "_TypeDiscriminator",
-    emit,
     constant(type = "unknown")
 ))]
 pub struct TypeDiscriminator {}

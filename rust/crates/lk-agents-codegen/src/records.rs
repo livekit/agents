@@ -76,7 +76,8 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
     );
     for module in modules {
         text.push_str(&format!("\npub mod {module} {{\n    use pyo3::prelude::*;\n"));
-        for r in decls.records.iter().filter(|r| r.module == module) {
+        // A model only (neither direction) has no conversion.
+        for r in decls.records.iter().filter(|r| r.module == module && (r.extract || r.emit)) {
             text.push_str(&format!("\n    // Declared in {}.\n", r.source));
             let body = if r.in_place { in_place_rust(r) } else { record_rust(r, false, decls)? };
             for line in body.lines() {

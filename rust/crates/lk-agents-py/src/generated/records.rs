@@ -959,16 +959,6 @@ pub mod evals {
 
 pub mod events {
     use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static __TYPE_DISCRIMINATOR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn __type_discriminator_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::events::TypeDiscriminator) -> PyResult<Bound<'py, PyAny>> {
-            let ::lk_agents_abi::voice::events::TypeDiscriminator {  } = value;
-            let kwargs = ::pyo3::types::PyDict::new(py);
-            crate::host::construct(__TYPE_DISCRIMINATOR.import(py, "livekit.agents._generated.events", "_TypeDiscriminator")?.as_any(), (), Some(&kwargs))
-    }
 }
 
 pub mod llm_fallback {
