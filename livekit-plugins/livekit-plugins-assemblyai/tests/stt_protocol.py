@@ -1,5 +1,8 @@
 """Universal Streaming v3: Begin, audio, Turn, Terminate, Termination, close."""
 
+import json
+from dataclasses import replace
+
 import aiohttp
 
 from tests.stt_harness.faults import TransportFixture, plugin
@@ -88,5 +91,39 @@ PROVIDERS = (
         live_options={},
         live_options_from_env={},
         completion_on_close=False,
+    ),
+)
+
+
+LANGUAGE_CODES_36 = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+
+
+class Universal36(Universal):
+    async def open(self, request):
+        assert request.query["speech_model"] == "universal-3-6-pro"
+        assert json.loads(request.query["language_codes"]) == LANGUAGE_CODES_36
+        await super().open(request)
+
+
+def create_universal_36_stt(server, monkeypatch):
+    from livekit.plugins.assemblyai import STT
+
+    return STT(
+        api_key="test-key",
+        base_url=server.ws_url,
+        sample_rate=16000,
+        model="universal-3-6-pro",
+        language_codes=LANGUAGE_CODES_36,
+    )
+
+
+PROVIDERS += (
+    replace(
+        PROVIDERS[0],
+        name="assemblyai_universal36",
+        protocol=Universal36,
+        create_stt=create_universal_36_stt,
+        transport_fixture=None,
+        live_options={"model": "universal-3-6-pro", "language_codes": LANGUAGE_CODES_36},
     ),
 )

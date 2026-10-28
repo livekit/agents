@@ -459,7 +459,7 @@ async def test_queued_flushes_preserve_all_audio_and_results(provider, monkeypat
 async def test_normal_close_cannot_replace_a_required_completion(provider, monkeypatch):
     server = STTServer(provider, segments=make_audio_segments(provider))
     server.release_results.clear()
-    async with open_stream(provider, monkeypatch, server=server) as (
+    async with open_stream(provider, monkeypatch, server=server, max_retry=2) as (
         stream,
         collector,
         _,
@@ -470,10 +470,13 @@ async def test_normal_close_cannot_replace_a_required_completion(provider, monke
             push_audio(stream, provider, segment)
         stream.end_input()
         await asyncio.wait_for(server.wait_for_audio(len(server.expected_audio)), 1)
+        await asyncio.wait_for(server.final_requested.wait(), 1)
         await server.connections[0].ws.close()
         with pytest.raises(APIError):
             await asyncio.wait_for(collector, provider.final_response_timeout + 1)
         assert errors and not errors[-1].recoverable
+
+        assert len(server.connections) == 1
 
 
 @pytest.mark.parametrize(

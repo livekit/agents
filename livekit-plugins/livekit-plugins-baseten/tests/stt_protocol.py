@@ -1,6 +1,7 @@
 """Whisper and Qwen3-ASR deployments have different audio and stop messages."""
 
 import base64
+from dataclasses import replace
 
 import aiohttp
 
@@ -43,6 +44,15 @@ class Whisper(Protocol):
             },
             final=result.final,
         )
+
+
+class LegacyWhisper(Whisper):
+    async def receive(self, message):
+        if self.configured and message.type == aiohttp.WSMsgType.TEXT:
+            assert json_message(message) == {"type": "end_audio"}
+            self.connection.end_input()
+            return
+        await super().receive(message)
 
 
 class Qwen(Whisper):
@@ -88,6 +98,7 @@ PROVIDERS = (
         Whisper,
         create_whisper_stt,
         (SOURCE,),
+        completion_on_close=False,
         transport_fixture=TransportFixture(
             "baseten",
             plugin("baseten.stt"),
@@ -129,5 +140,18 @@ PROVIDERS = (
         live_options={"model": "qwen3-asr"},
         live_options_from_env={"model_endpoint": "BASETEN_QWEN_MODEL_ENDPOINT"},
         completion_on_close=False,
+    ),
+)
+
+
+PROVIDERS += (
+    replace(
+        PROVIDERS[0],
+        name="baseten_legacy",
+        protocol=LegacyWhisper,
+        completion_unknown_reason="Older Whisper runtimes do not acknowledge end_audio",
+        completion_on_close=True,
+        transport_fixture=None,
+        live_constructor="",
     ),
 )

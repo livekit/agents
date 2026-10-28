@@ -477,7 +477,7 @@ class RecognizeStream(ABC):
         background: Sequence[asyncio.Future[Any]] = (),
         sender_waits_for_completion: bool = False,
         drain_started: asyncio.Event | None = None,
-        require_completion: bool = True,
+        require_completion: bool | asyncio.Event = True,
     ) -> bool:
         """Run one provider connection; return True when a reconnect is requested.
 
@@ -489,7 +489,9 @@ class RecognizeStream(ABC):
         Once sending finishes, final_response_timeout bounds the remaining wait.
         Providers without a completion guarantee use a best-effort drain by setting
         require_completion=False. A drain timeout then ends normally; write and
-        transport failures still propagate. Transport activity cannot extend it.
+        transport failures still propagate. For a negotiated guarantee, pass an event
+        that is set when the peer acknowledges completion support. Transport activity
+        cannot extend the deadline.
         Set sender_waits_for_completion when the sender waits for the final acknowledgement.
         All supplied tasks are cancelled and awaited on exit.
         """
@@ -512,7 +514,12 @@ class RecognizeStream(ABC):
                     pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
                 )
                 if not done:
-                    if sender.done() and not require_completion:
+                    completion_required = (
+                        require_completion.is_set()
+                        if isinstance(require_completion, asyncio.Event)
+                        else require_completion
+                    )
+                    if sender.done() and not completion_required:
                         return False
                     raise APITimeoutError("STT final response timed out")
                 # Failures take precedence over a simultaneous completion or reconnect.

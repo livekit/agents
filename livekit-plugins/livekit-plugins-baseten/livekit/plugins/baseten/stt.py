@@ -380,8 +380,8 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
+    # The server acknowledges end_audio, sends trailing transcripts, then finished.
+    _END_AUDIO_MSG: str = json.dumps({"type": "end_audio"})
 
     def __init__(
         self,
@@ -437,6 +437,7 @@ class SpeechStream(stt.SpeechStream):
         """
 
         drain_started = asyncio.Event()
+        completion_required = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 512
@@ -460,8 +461,10 @@ class SpeechStream(stt.SpeechStream):
 
                         int16_array = np.frombuffer(frame.data, dtype=np.int16)
                         await ws.send_bytes(int16_array.tobytes())
+                for frame in audio_bstream.flush():
+                    await ws.send_bytes(frame.data.tobytes())
                 drain_started.set()
-                await ws.send_str(json.dumps({"type": "end_audio"}))
+                await ws.send_str(SpeechStream._END_AUDIO_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
@@ -470,16 +473,15 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
-                except asyncio.TimeoutError:
-                    continue
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    if completion_required.is_set():
+                        raise APIConnectionError("Baseten closed before end_audio finished")
                     return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -491,8 +493,11 @@ class SpeechStream(stt.SpeechStream):
 
                     msg_type = data.get("type")
                     if msg_type == "end_audio":
-                        if data.get("body", {}).get("status") == "finished":
+                        status = (data.get("body") or {}).get("status")
+                        if status == "finished":
                             return
+                        if status == "acknowledged":
+                            completion_required.set()
                         continue
                     if msg_type == "error":
                         raise APIStatusError("Baseten STT returned an error", body=data)
@@ -600,12 +605,15 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                drain_started.clear()
+                completion_required.clear()
                 ws = await self._connect_ws()
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     reconnect=self._reconnect_event,
                     drain_started=drain_started,
+                    require_completion=completion_required,
                 )
                 if not reconnect:
                     break

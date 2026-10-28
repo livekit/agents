@@ -277,3 +277,21 @@ async def test_drained_input_is_not_retried_even_for_a_retryable_error(error):
             assert not errors[0].recoverable
     finally:
         await provider.aclose()
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+async def test_completion_support_can_be_negotiated_during_drain(stream, acknowledged):
+    sender, receiver, _ = futures()
+    sender.set_result(None)
+    completion_required = asyncio.Event()
+    task = asyncio.create_task(
+        stream._run_connection_tasks(sender, receiver, require_completion=completion_required)
+    )
+    await asyncio.sleep(0.5)
+    if acknowledged:
+        completion_required.set()
+        with pytest.raises(APITimeoutError):
+            await task
+    else:
+        assert await task is False
+    assert receiver.cancelled()

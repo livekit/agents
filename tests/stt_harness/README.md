@@ -47,7 +47,9 @@ The common scenarios cover active transcription, delayed final results, flush,
 active and draining cancellation, remote close and abort, unanswered probes,
 answered client and server pings, bounded retries, fallback, empty input, and
 long-lived input, and retry recovery after useful provider traffic. OpenAI also
-has an out-of-order commit-completion scenario. SLNG keeps a separate replay
+has an out-of-order commit-completion scenario. Mistral contracts cover both Voxtral
+generations, server turn events, and diarized segments. Flush completions leave the
+stream open; a separate end-of-input completion closes it. SLNG keeps a separate replay
 budget: its contract requires a final before buffered-audio replay debt clears.
 
 `completion_unknown_reason` records a missing provider guarantee. These providers use a
@@ -55,7 +57,9 @@ bounded best-effort drain: normal `end_input()` does not emit an error when the
 grace period expires. Write failures, abnormal closes, and failed liveness probes
 still fail. The tests verify final audio bytes and events without inventing a
 completion acknowledgement. This applies to Fireworks, Gnani, Nabrah, legacy
-Sarvam, Simplismart, SLNG, and the Telnyx Google and Azure engines.
+Sarvam, Simplismart, SLNG, older Baseten Whisper runtimes, and the Telnyx Google
+and Azure engines. Baseten completion becomes required once the server acknowledges
+`end_audio`; missing `finished` then fails within the final-response budget.
 
 `completion_on_close=False` identifies protocols that require a terminal event or
 correlated final results. Their tests also close a healthy socket without that
