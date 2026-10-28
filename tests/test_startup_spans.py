@@ -23,12 +23,13 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
+    _JobProc,
     _join_timing,
     _record_dispatch_timeline,
     _server_timestamp_seconds,
 )
-from livekit.agents.ipc.proto import JoinTiming, StartJobRequest
-from livekit.agents.job import AutoSubscribe, JobAcceptArguments, RunningJobInfo
+from livekit.agents.ipc.proto import InitializeRequest, JoinTiming, StartJobRequest
+from livekit.agents.job import AutoSubscribe, JobAcceptArguments, JobExecutorType, RunningJobInfo
 from livekit.agents.telemetry import session_context, set_tracer_provider, trace_types, tracer
 from livekit.protocol import agent as agent_proto
 
@@ -544,7 +545,7 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
 # -- join timing --
 
 
-def test_join_timing_durations() -> None:
+def test_join_timing_instants() -> None:
     info = _info(
         received_mono=100.0,
         accepted_mono=100.2,
@@ -553,26 +554,46 @@ def test_join_timing_durations() -> None:
         launched_warm=True,
     )
     timing = _join_timing(
-        info, entrypoint_started_mono=101.0, connect_called_mono=103.0, connected_mono=103.25
+        info,
+        prewarm_started_mono=90.0,
+        prewarm_ended_mono=91.5,
+        entrypoint_started_mono=101.0,
+        connect_called_mono=103.0,
+        connected_mono=103.25,
     )
     assert timing == agent_proto.JobJoinTiming(
-        accept_ms=200,
-        assignment_ms=300,
-        launch_ms=100,
+        offer_received_us=100_000_000,
+        accepted_us=100_200_000,
+        assignment_received_us=100_500_000,
+        launched_us=100_600_000,
         launch_warm=True,
-        entrypoint_ms=400,
-        pre_connect_ms=2000,
-        connect_ms=250,
+        prewarm_started_us=90_000_000,
+        prewarm_ended_us=91_500_000,
+        entrypoint_started_us=101_000_000,
+        connect_called_us=103_000_000,
+        connected_us=103_250_000,
     )
 
 
 def test_join_timing_unknown_stage_sends_nothing() -> None:
     # simulation / console / resumed jobs carry no worker stamps
-    assert _join_timing(_info(), 101.0, 103.0, 103.25) is None
+    assert _join_timing(_info(), 90.0, 91.5, 101.0, 103.0, 103.25) is None
+
+
+def test_initialize_stamps_prewarm() -> None:
+    job_proc = _JobProc(
+        lambda proc: None,
+        lambda ctx: None,
+        None,
+        session_end_timeout=1.0,
+        executor_type=JobExecutorType.THREAD,
+    )
+    job_proc.initialize(InitializeRequest(), MagicMock())
+    assert 0 < job_proc._prewarm_started_mono <= job_proc._prewarm_ended_mono
 
 
 def test_join_timing_ipc_round_trip() -> None:
-    msg = JoinTiming(timing=agent_proto.JobJoinTiming(accept_ms=7, connect_ms=9))
+    msg = JoinTiming(timing=agent_proto.JobJoinTiming(accepted_us=7, connected_us=9))
     buf = io.BytesIO()
     msg.write(buf)
     buf.seek(0)

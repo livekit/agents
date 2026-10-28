@@ -249,7 +249,7 @@ class ShuttingDown:
 @dataclass
 class JoinTiming:
     """sent by the subprocess once the job connected to the room: the worker-side join
-    stages, which the main process forwards to the server in its job status update"""
+    instants, which the main process forwards to the server in its job status update"""
 
     MSG_ID: ClassVar[int] = 12
     timing: agent.JobJoinTiming = field(default_factory=agent.JobJoinTiming)
