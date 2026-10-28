@@ -52,7 +52,7 @@ pub const VOICE: Boundary = Boundary {
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
         "worker, IPC and job processes (G-12 stress; worker DST is K-2)",
-        "agent-db storage and the A2A door (I-27 backend contracts; DST K-3, K-4)",
+        "agent-db storage and the A2A door's transport (I-27 backend contracts; DST K-3, K-4)",
     ],
 };
 
@@ -74,6 +74,38 @@ pub const STORAGE: Boundary = Boundary {
         "lk_agents_runtime::storage engine, SqliteStorage files and the AgentDB wsdb client \
          (I-27 backend contract suite, conformance with injected faults)",
         "the A2A turn driver and the host's handler (runtime a2a_turns suite)",
+    ],
+};
+
+/// The A2A campaign (`tests/a2a_survey.rs`, `a2a` module).
+pub const A2A: Boundary = Boundary {
+    cores: &[
+        "A2A core (lk_agents_a2a: resolve_policy, resolve_debounce, answer_pending, \
+         checkpoint_stop, settle, result_for), stepped by simulated door requests one decision \
+         at a time",
+        "storage core (lk_agents_storage::db plans and decodings: acquire with submit and pickup, \
+         set_waiter, checkpoint, cancel, commit, resolve_commit, list_tasks; run_commit, \
+         merge_write, Renewal, LanePoll)",
+    ],
+    fakes: &[
+        "storage::db: the thread database as a real SQLite in memory on the simulated clock",
+        "a2a::door's handler: drawn work time, checkpoints, text/raise/question endings, a yield \
+         seen at once or only at the next await",
+        "the clients: out-of-order arrivals on the a2a and delegation channels, resends after a \
+         lost or failed answer and at once, continuations of the pending question, cancels, \
+         ListTasks paging with a page token tried under other filters",
+        "the AgentDB faults: lost commit acknowledgments, unreachable windows, paused and lost \
+         workers",
+    ],
+    transitional: &[
+        "a2a::door mirrors lk_agents_runtime::a2a::Turn::exclusive and the storage engine's run \
+         by hand until the arrival policy and task transitions are a core machine (I-1, I-8)",
+    ],
+    outside: &[
+        "SubscribeToTask and resubscribe from a cursor (current Task first, then the frames \
+         after the offset): runtime door and response streams, no core decision (K-30, I-27)",
+        "the batch, concurrent and reject policies: next K-4 slice",
+        "the door's HTTP/JSON-RPC transport and the host's handler (runtime a2a_turns suite)",
     ],
 };
 

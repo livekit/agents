@@ -1169,10 +1169,11 @@ under both orders in the launch gate and prints its boundary (`boundary.rs`).
 | LLM request (`src/inference/llm.rs`) | `LlmRequest` over `Attempts` | gateway with the recorded gpt-4.1-mini chunk timing, refusals, rejections, drops, stalls, malformed and unterminated bodies, late or lost releases; a consumer with backpressure and cancels | one outcome, no replay after output, bounded backed-off retries, deadlines as the policy sets them, only the current attempt delivers, every attempt released | `inference_survey` |
 | avatar session (`src/inference/avatar.rs`) | `AvatarSessionLifecycle` | idempotent gateway that applies what it received (one session per operation), answers replays from its record, loses answers, drops silent connections after 1-2 min; callers that race, leave, refuse, close | no leaked session, one session per instance, one outcome per caller, retirements with their cause, every attempt released, retirement bounded | `inference_survey` |
 | process pool (`src/worker.rs`) | `PoolState` | job processes that fail to spawn, crash or hang in init, die before a launch, exit after their job, close late, with failing exit watches and reaps; duplicate dispatches, cancels, drains, the close | every admitted request settles, one disposition per assignment, retired processes stay retired, every process released and the close completes once | `worker_survey` |
+| A2A door (`src/a2a`) | `lk-agents-a2a` policy resolution, `answer_pending`, `checkpoint_stop`, `settle`, `result_for` over the storage plans (exclusive `interrupt`/`queue` turns, by hand as `Turn::exclusive` runs them) | the storage SQLite with lost acks (the connection sometimes down past the 10 s resolution wait), outages, paused and lost workers; clients that resend, continue the pending question, cancel at random and page `ListTasks` with tokens tried under other filters; a handler that yields at once or late | a message runs one committed turn and every answer names its task, every request answered once, terminal tasks never change, a cancel answers the row, a committed run's rows are what it staged (decision 39), only `interrupt` yields, one question pending, listings complete and bound to their filters | `a2a_survey` (2048 seeds) |
 
-Still to come: the A2A door (K-4: task transitions, cancel against completion, lost acks per
-decision 39, ListTasks cursors) and the worker's registration and assignment state (the rest of
-K-2); TextSession once its core lands.
+Still to come: the A2A door's `batch`, `concurrent` and `reject` policies (the rest of K-4;
+`SubscribeToTask` and its cursor resume are runtime code with no core decision, outside the DST),
+the worker's registration and assignment state (the rest of K-2); TextSession once its core lands.
 
 ## Appendix: operation x phase, exact seeds
 

@@ -1454,6 +1454,7 @@ dependencies = [
  "bytes",
  "fastrand",
  "livekit-protocol",
+ "lk-agents-a2a",
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-inference",

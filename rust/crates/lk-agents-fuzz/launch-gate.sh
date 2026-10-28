@@ -27,9 +27,10 @@ soak_seeds=${VOICE_SOAK_SEEDS:-8}
 storage_seeds=${STORAGE_SEEDS:-4096}
 inference_seeds=${INFERENCE_SEEDS:-4096}
 worker_seeds=${WORKER_SEEDS:-4096}
+a2a_seeds=${A2A_SEEDS:-2048}
 for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
     "VOICE_SOAK_SEEDS=$soak_seeds" "STORAGE_SEEDS=$storage_seeds" \
-    "INFERENCE_SEEDS=$inference_seeds" "WORKER_SEEDS=$worker_seeds"; do
+    "INFERENCE_SEEDS=$inference_seeds" "WORKER_SEEDS=$worker_seeds" "A2A_SEEDS=$a2a_seeds"; do
     [[ ${pair#*=} =~ ^[1-9][0-9]*$ ]] || fail "$pair: a campaign needs a positive number of seeds"
 done
 
@@ -46,7 +47,7 @@ compiled=(
 )
 outside=(
     "lk-agents-storage: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's storage survey"
-    "lk-agents-a2a: ci.yml storage-tests (cargo test); A2A DST is K-4"
+    "lk-agents-a2a: ci.yml storage-tests (cargo test); its DST runs in lk-agents-fuzz's A2A survey"
 )
 
 if [[ ${1:-} == --skip-architecture ]]; then
@@ -146,5 +147,7 @@ campaign "inference survey (LLM request, avatar session), $inference_seeds seeds
     inference_survey survey INFERENCE_SEEDS="$inference_seeds"
 campaign "worker survey (process pool), $worker_seeds seeds" worker_survey survey \
     WORKER_SEEDS="$worker_seeds"
+campaign "A2A survey (exclusive door turns), $a2a_seeds seeds" a2a_survey survey \
+    A2A_SEEDS="$a2a_seeds"
 
 printf '\nlaunch gate passed\n'
