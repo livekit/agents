@@ -113,6 +113,8 @@ struct Ledger {
     /// The source-side position the current window started at (the source resets per
     /// `wait_for_playout`, and a pause can drain it more than once).
     window_base: Duration,
+    /// Heard audio from source windows already consumed by wait_for_playout.
+    settled_played: Duration,
 }
 
 struct Run {
@@ -248,6 +250,40 @@ impl Shared {
         }
     }
 
+    fn fail(&self, error: lk_agents_abi::voice::io::IoError, source_played: Duration) {
+        let (captured, played, run) = {
+            let mut state = self.lock();
+            if state.closed || state.publication.outcome().is_some_and(|outcome| outcome.is_err()) {
+                return;
+            }
+            state.publication.fail(error.clone());
+            let captured = state.phase != Phase::Idle;
+            state.phase = Phase::Idle;
+            state.paused = false;
+            state.discard_backlog();
+            state.handed.clear();
+            state.bstream.clear();
+            state.pending = 0;
+            let played = state.ledger.settled_played + source_played;
+            let unreported = played.saturating_sub(state.ledger.played);
+            let at = state.ledger.run_offset + unreported;
+            let run = state.ledger.report_run(at, self.clock.now(), None);
+            state.ledger = Ledger::default();
+            (captured, played, run)
+        };
+        log::error!(target: "livekit.agents", "room audio source failed: {error}");
+        self.report(run);
+        if captured {
+            self.tracker.note_flush();
+            self.tracker.playback_finished(PlaybackFinished {
+                playback_position: played,
+                interrupted: true,
+                synchronized_transcript: None,
+            });
+        }
+        self.wake.notify_waiters();
+    }
+
     fn framed(&self, f: lk_agents_abi::Frame) -> AudioFrame {
         AudioFrame::new(f.data, self.sample_rate, self.num_channels, f.samples_per_channel)
     }
@@ -336,7 +372,14 @@ impl Shared {
         }
 
         // The await that paces everything.
-        let _ = src.capture(&frame).await;
+        if let Err(error) = src.capture(&frame).await {
+            if !self.lock().closed {
+                let played = src.playback_info().played;
+                src.clear_queue();
+                self.fail(error.into(), played);
+            }
+            return;
+        }
 
         let queued = src.queued_duration();
         let (paused, cutting) = {
@@ -437,7 +480,11 @@ impl Shared {
                 info.played += more.played;
                 info.discarded += more.discarded;
                 // The source's counters start over from here; the ledger keeps counting.
-                self.lock().ledger.window_base += playhead(more);
+                {
+                    let mut state = self.lock();
+                    state.ledger.window_base += playhead(more);
+                    state.ledger.settled_played += more.played;
+                }
                 // A pause holds the finish until the sink plays again or the pause becomes a cut,
                 // unless the pause put audio back; then measure again until nothing is queued.
                 self.wait_until(|s| s.closed || !(s.paused && s.phase == Phase::Flushed)).await;
@@ -605,17 +652,22 @@ impl ParticipantAudioOutput {
 
     async fn capture_chunk(&self, frame: &AudioFrame) -> Result<()> {
         self.shared.wait_until(|s| s.publication.outcome().is_some()).await;
-        self.shared.lock().publication.outcome().expect("readiness settled")?;
         loop {
             let parked = self.shared.wake.notified();
             tokio::pin!(parked);
             parked.as_mut().enable();
             let queued = {
                 let mut st = self.shared.lock();
-                if st.closed {
-                    return Err(lk_agents_abi::voice::io::IoError::Rtc(
-                        "room audio output is closed".into(),
-                    ));
+                if let Some(Err(error)) = st.publication.outcome() {
+                    drop(st);
+                    // capture_frame may already have opened a segment for this refused frame.
+                    self.shared.tracker.note_flush();
+                    self.shared.tracker.playback_finished(PlaybackFinished {
+                        playback_position: Duration::ZERO,
+                        interrupted: true,
+                        synchronized_transcript: None,
+                    });
+                    return Err(error);
                 }
                 match st.phase {
                     Phase::Idle | Phase::Capturing => {
@@ -1035,5 +1087,91 @@ mod tests {
         local.flow_publications(true);
         close.await;
         assert!(local.publications().is_empty(), "cancellation must not orphan a created SID");
+    }
+    #[tokio::test]
+    async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
+        use lk_agents_abi::voice::io::AudioOutputExt;
+
+        async fn finished(output: &ParticipantAudioOutput) -> PlaybackFinished {
+            lk_agents_abi::timeout(
+                &lk_agents_abi::RealClock::new(),
+                Duration::from_secs(1),
+                output.tracker().wait_for_playout(),
+            )
+            .await
+            .expect("source failure must settle the captured segment")
+        }
+
+        let mut outcomes = Vec::new();
+        for mode in ["fresh", "queued", "heard", "blocked"] {
+            let (rtc, clock) = FakeRtc::with_virtual_clock();
+            let room = rtc.room(mode);
+            let local = room.local_participant();
+            let output = ParticipantAudioOutput::new(
+                room,
+                clock.clone(),
+                Arc::new(TokioSpawner::current()),
+                AudioOutputConfig::default(),
+            );
+            output.start().await.unwrap();
+            let frame = lk_agents_rtc::silence_frame(480, 24_000, 1);
+            let (refused, playback) = if mode == "blocked" {
+                output.pause();
+                for _ in 0..10 {
+                    output.capture_frame(&frame).await.unwrap();
+                }
+                let mut waiting = Box::pin(output.capture_frame(&frame));
+                crate::room_io::tests::pending(waiting.as_mut()).await;
+                local.sources()[0].close().await.unwrap();
+                output.resume();
+                let refused = waiting.await;
+                (refused, finished(&output).await)
+            } else {
+                if mode == "queued" || mode == "heard" {
+                    output.capture_frame(&frame).await.unwrap();
+                    for _ in 0..8 {
+                        tokio::task::yield_now().await;
+                    }
+                    assert_eq!(local.sources()[0].captured().len(), 1);
+                    if mode == "heard" {
+                        clock.advance(Duration::from_millis(10));
+                    }
+                }
+                local.sources()[0].close().await.unwrap();
+                output.capture_frame(&frame).await.unwrap();
+                output.flush();
+                for _ in 0..8 {
+                    tokio::task::yield_now().await;
+                }
+                let playback = finished(&output).await;
+                (output.capture_frame(&frame).await, playback)
+            };
+            output.flush_segment();
+            output.aclose().await;
+            let settled = lk_agents_abi::timeout(
+                &lk_agents_abi::RealClock::new(),
+                Duration::from_secs(1),
+                output.tracker().wait_for_playout(),
+            )
+            .await
+            .is_ok();
+            outcomes.push((
+                mode,
+                playback.interrupted,
+                playback.playback_position,
+                refused.is_err(),
+                settled,
+            ));
+        }
+        assert_eq!(
+            outcomes,
+            [
+                ("fresh", true, Duration::ZERO, true, true),
+                ("queued", true, Duration::ZERO, true, true),
+                ("heard", true, Duration::from_millis(10), true, true),
+                ("blocked", true, Duration::ZERO, true, true),
+            ],
+            "source failure must preserve heard media, refuse parked and later captures, and settle every waiter"
+        );
     }
 }

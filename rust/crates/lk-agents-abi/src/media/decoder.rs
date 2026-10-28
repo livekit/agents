@@ -1,4 +1,4 @@
-//! Runtime file decoding consumed by background playback, without a core-to-runtime dependency.
+//! Runtime decoding consumed by background playback and buffered room input.
 
 use std::time::Duration;
 
@@ -19,20 +19,41 @@ pub struct FileDecoderOptions {
     pub num_channels: u16,
 }
 
-/// The runtime supplies file I/O and decoding when linked into the application.
+/// A finite encoded head, normalized before it enters the live processing chain.
+pub struct ByteDecoderOptions {
+    pub mime: String,
+    pub data: Vec<u8>,
+    /// Raw PCM input format; containers describe their own source format.
+    pub pcm_format: Option<(u32, u16)>,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+    pub max_input_bytes: usize,
+    pub max_duration: Duration,
+}
+
+/// The runtime supplies admitted file and finite-buffer decoding when linked into the application.
 pub struct FileDecoderProvider {
     pub open: fn(FileDecoderOptions) -> Result<Box<dyn FileDecoder>, String>,
+    pub open_bytes: fn(ByteDecoderOptions) -> Result<Box<dyn FileDecoder>, String>,
 }
 
 inventory::collect!(FileDecoderProvider);
 
-pub fn open(options: FileDecoderOptions) -> Result<Box<dyn FileDecoder>, String> {
+fn provider() -> Result<&'static FileDecoderProvider, String> {
     let mut providers = inventory::iter::<FileDecoderProvider>.into_iter();
     let provider = providers.next().ok_or("file decoder service unavailable: no runtime linked")?;
     if providers.next().is_some() {
         return Err("file decoder service unavailable: multiple runtimes linked".into());
     }
-    (provider.open)(options)
+    Ok(provider)
+}
+
+pub fn open(options: FileDecoderOptions) -> Result<Box<dyn FileDecoder>, String> {
+    (provider()?.open)(options)
+}
+
+pub fn open_bytes(options: ByteDecoderOptions) -> Result<Box<dyn FileDecoder>, String> {
+    (provider()?.open_bytes)(options)
 }
 
 #[cfg(test)]
@@ -43,8 +64,12 @@ mod tests {
         panic!("ambiguous providers must be refused before opening a file")
     }
 
-    inventory::submit! { FileDecoderProvider { open: unexpected_open } }
-    inventory::submit! { FileDecoderProvider { open: unexpected_open } }
+    fn unexpected_bytes(_: ByteDecoderOptions) -> Result<Box<dyn FileDecoder>, String> {
+        panic!("ambiguous providers must be refused before decoding bytes")
+    }
+
+    inventory::submit! { FileDecoderProvider { open: unexpected_open, open_bytes: unexpected_bytes } }
+    inventory::submit! { FileDecoderProvider { open: unexpected_open, open_bytes: unexpected_bytes } }
 
     #[test]
     fn conflicting_runtime_providers_refuse_file_open_before_effects() {

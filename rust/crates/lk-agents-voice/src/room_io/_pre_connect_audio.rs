@@ -1,9 +1,9 @@
 use crate::room_io::{PRE_CONNECT_AUDIO_BUFFER_STREAM, PRE_CONNECT_MAX_DELTA};
 use lk_agents_abi::AbortHandle;
+use lk_agents_abi::media::decoder::{ByteDecoderOptions, open_bytes};
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::Result;
-use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
-use lk_agents_media::{Decoder, pcm_bytes};
+use lk_agents_abi::{AudioFrame, Clock, Spawner, SpawnerExt, Ts};
 use lk_agents_rtc::{ByteStream, RtcRoom, TrackSid};
 use std::collections::{BTreeMap, BTreeSet};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -96,6 +96,7 @@ pub struct PreConnectAudioHandler {
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
+    format: (u32, u16),
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     buffers: Mutex<Buffers>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -109,12 +110,14 @@ impl PreConnectAudioHandler {
         spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
         timeout: Duration,
+        format: (u32, u16),
     ) -> Arc<Self> {
         Arc::new(Self {
             room,
             spawner,
             clock,
             timeout,
+            format,
             buffers: Mutex::new(Buffers::default()),
             tasks: Mutex::new(Tasks::default()),
         })
@@ -219,7 +222,8 @@ impl PreConnectAudioHandler {
             buffers.receiving.insert(track.clone());
             slot
         };
-        let received = lk_agents_abi::timeout(&*self.clock, self.timeout, receive(stream)).await;
+        let received =
+            lk_agents_abi::timeout(&*self.clock, self.timeout, receive(stream, self.format)).await;
         let outcome = match received {
             Ok(Ok(frames)) => Ok(PreConnectBuffer { received_at: self.clock.now(), frames }),
             Ok(Err(error)) => Err(error),
@@ -261,7 +265,10 @@ impl PreConnectAudioHandler {
     }
 }
 
-async fn receive(mut stream: ByteStream) -> std::result::Result<Vec<AudioFrame>, String> {
+async fn receive(
+    mut stream: ByteStream,
+    format: (u32, u16),
+) -> std::result::Result<Vec<AudioFrame>, String> {
     let attrs = &stream.info.attributes;
     let sample_rate = attrs
         .get("sampleRate")
@@ -273,68 +280,156 @@ async fn receive(mut stream: ByteStream) -> std::result::Result<Vec<AudioFrame>,
         .and_then(|v| v.parse::<u16>().ok())
         .filter(|channels| (1..=2).contains(channels))
         .ok_or("pre-connect channels must be 1 or 2")?;
+    if !(8000..=192000).contains(&format.0) || !(1..=8).contains(&format.1) {
+        return Err("pre-connect target must be 8-192 kHz with 1-8 channels".into());
+    }
     if stream.info.total_length.is_some_and(|size| size > MAX_BYTES as u64) {
         return Err("pre-connect encoded byte capacity exceeded".into());
     }
-    let is_opus =
-        stream.info.mime_type == "audio/opus" || stream.info.mime_type.contains("codecs=opus");
-    let mut decoder = if is_opus {
-        Some(
-            Decoder::new(&stream.info.mime_type, Some(sample_rate), num_channels)
-                .map_err(|error| format!("pre-connect opus: {error}"))?,
-        )
-    } else {
-        None
-    };
+    let raw = stream.info.mime_type.is_empty() || stream.info.mime_type == "audio/pcm";
     let pcm_limit =
         (u64::from(sample_rate) * u64::from(num_channels) * 2 * MAX_DURATION.as_secs()) as usize;
-    let mut bstream = AudioByteStream::new(sample_rate, num_channels, None, false);
-    let mut frames = Vec::new();
-    let mut encoded_bytes = 0usize;
-    let mut pcm_bytes_received = 0usize;
-    let mut push_pcm = |bytes: &[u8]| -> std::result::Result<(), String> {
-        if bytes.len() > pcm_limit.saturating_sub(pcm_bytes_received)
-            || bytes.len() > MAX_BYTES.saturating_sub(pcm_bytes_received)
-        {
-            return Err("pre-connect PCM duration/byte capacity exceeded".into());
-        }
-        pcm_bytes_received += bytes.len();
-        frames.extend(bstream.push(bytes).into_iter().map(|frame| {
-            AudioFrame::new(frame.data, sample_rate, num_channels, frame.samples_per_channel)
-        }));
-        Ok(())
-    };
+    let mut data = Vec::new();
     while let Some(chunk) = stream.chunks.recv().await {
-        if chunk.len() > MAX_BYTES.saturating_sub(encoded_bytes) {
+        if chunk.len() > MAX_BYTES.saturating_sub(data.len()) {
             return Err("pre-connect encoded byte capacity exceeded".into());
         }
-        encoded_bytes += chunk.len();
-        match &mut decoder {
-            Some(decoder) => {
-                let pcm =
-                    decoder.push(&chunk).map_err(|error| format!("pre-connect decode: {error}"))?;
-                push_pcm(&pcm_bytes(&pcm))?;
-            }
-            None => push_pcm(&chunk)?,
+        if raw && chunk.len() > pcm_limit.saturating_sub(data.len()) {
+            return Err("pre-connect PCM duration/byte capacity exceeded".into());
         }
+        data.extend_from_slice(&chunk);
         tokio::task::yield_now().await;
     }
-    if let Some(decoder) = &mut decoder {
-        let pcm = decoder.flush().map_err(|error| format!("pre-connect flush: {error}"))?;
-        push_pcm(&pcm_bytes(&pcm))?;
+    let mut decoder = open_bytes(ByteDecoderOptions {
+        mime: stream.info.mime_type,
+        data,
+        pcm_format: raw.then_some((sample_rate, num_channels)),
+        sample_rate: format.0,
+        num_channels: format.1,
+        max_input_bytes: MAX_BYTES,
+        max_duration: MAX_DURATION,
+    })?;
+    let outcome = async {
+        let mut frames = Vec::new();
+        let mut retained = 0usize;
+        let pcm_limit =
+            format.0 as usize * usize::from(format.1) * 2 * MAX_DURATION.as_secs() as usize;
+        while let Some(frame) = decoder.next().await? {
+            if (frame.sample_rate, frame.num_channels) != format
+                || frame.data.len() > pcm_limit.saturating_sub(retained)
+                || frame.data.len() > MAX_BYTES.saturating_sub(retained)
+            {
+                return Err(
+                    "pre-connect decoder exceeded the admitted PCM format or capacity".into()
+                );
+            }
+            retained += frame.data.len();
+            frames.push(frame);
+            tokio::task::yield_now().await;
+        }
+        Ok(frames)
     }
-    if !pcm_bytes_received.is_multiple_of(usize::from(num_channels) * 2) {
-        return Err("pre-connect PCM ended within a sample".into());
+    .await;
+    let cleanup = decoder.close(lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await;
+    match (outcome, cleanup) {
+        (Ok(frames), Ok(())) => Ok(frames),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("pre-connect decoder cleanup: {error}")),
+        (Err(error), Err(cleanup)) => {
+            Err(format!("{error}; pre-connect decoder cleanup: {cleanup}"))
+        }
     }
-    frames.extend(bstream.flush().into_iter().map(|frame| {
-        AudioFrame::new(frame.data, sample_rate, num_channels, frame.samples_per_channel)
-    }));
-    Ok(frames)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::media::decoder::{FileDecoder, FileDecoderProvider};
+    use lk_agents_abi::utils::spawner::BoxFuture;
+
+    struct DecodedFrames(std::vec::IntoIter<AudioFrame>);
+
+    impl FileDecoder for DecodedFrames {
+        fn next(&mut self) -> BoxFuture<'_, std::result::Result<Option<AudioFrame>, String>> {
+            Box::pin(std::future::ready(Ok(self.0.next())))
+        }
+
+        fn close(&mut self, _: Duration) -> BoxFuture<'_, std::result::Result<(), String>> {
+            self.0 = Vec::new().into_iter();
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    // Core tests use native media calculators; runtime tests exercise real admission and cleanup.
+    fn decode_fixture(
+        options: ByteDecoderOptions,
+    ) -> std::result::Result<Box<dyn FileDecoder>, String> {
+        use lk_agents_media::{AudioFormat, FrameResampler, Quality, downmix_mono, pcm_bytes};
+        if !matches!(options.mime.as_str(), "" | "audio/pcm") {
+            return Err("the core fixture only receives supplied PCM".into());
+        }
+        let (source_rate, source_channels) = options.pcm_format.ok_or("missing PCM format")?;
+        let mut source =
+            lk_agents_abi::AudioByteStream::new(source_rate, source_channels, None, false);
+        let mut frames = source.push(&options.data);
+        frames.extend(source.flush());
+        let mut resampler = if source_rate == options.sample_rate {
+            None
+        } else {
+            Some(
+                FrameResampler::fixed(
+                    AudioFormat::new(source_rate, options.num_channels),
+                    options.sample_rate,
+                    Quality::default(),
+                )
+                .map_err(|error| error.to_string())?,
+            )
+        };
+        let mut normalized = Vec::new();
+        for frame in frames {
+            let samples = frame
+                .data
+                .chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .collect::<Vec<_>>();
+            let samples = if source_channels == options.num_channels {
+                samples
+            } else if options.num_channels == 1 {
+                downmix_mono(&samples, source_channels)
+            } else if source_channels == 1 {
+                samples
+                    .into_iter()
+                    .flat_map(|sample| {
+                        std::iter::repeat_n(sample, usize::from(options.num_channels))
+                    })
+                    .collect()
+            } else {
+                return Err("unsupported fixture channel conversion".into());
+            };
+            let frame = AudioFrame::new(
+                pcm_bytes(&samples),
+                source_rate,
+                options.num_channels,
+                frame.samples_per_channel,
+            );
+            if let Some(resampler) = &mut resampler {
+                normalized.extend(resampler.push(&frame).map_err(|error| error.to_string())?);
+            } else {
+                normalized.push(frame);
+            }
+        }
+        if let Some(resampler) = &mut resampler {
+            normalized.extend(resampler.flush().map_err(|error| error.to_string())?);
+        }
+        Ok(Box::new(DecodedFrames(normalized.into_iter())))
+    }
+
+    lk_agents_abi::inventory::submit! {
+        FileDecoderProvider {
+            open: |_| Err("the room core does not open files".into()),
+            open_bytes: decode_fixture,
+        }
+    }
 
     #[tokio::test]
     async fn failed_registration_does_not_remove_another_stream_owner() {
@@ -346,6 +441,7 @@ mod tests {
             Arc::new(lk_agents_abi::TokioSpawner::current()),
             clock,
             Duration::from_secs(3),
+            (24_000, 1),
         );
         assert!(!handler.register());
         handler.aclose().await;
@@ -368,6 +464,7 @@ mod tests {
             Arc::new(lk_agents_abi::TokioSpawner::current()),
             clock,
             Duration::from_secs(3),
+            (24_000, 1),
         );
         handler.aclose().await;
         assert!(!handler.register());
@@ -398,6 +495,7 @@ mod tests {
             Arc::new(lk_agents_abi::TokioSpawner::current()),
             clock,
             Duration::from_secs(3),
+            (24_000, 1),
         );
         assert!(handler.register());
         let tracks = (0..MAX_TRACKS).map(|n| TrackSid::from(format!("TR_{n}"))).collect::<Vec<_>>();
@@ -428,6 +526,7 @@ mod tests {
             Arc::new(lk_agents_abi::TokioSpawner::current()),
             clock.clone(),
             Duration::from_secs(3),
+            (24_000, 1),
         );
         assert!(handler.register());
         let chunks = room.open_byte_stream("user", pcm_info("TR_expired")).unwrap();
@@ -471,6 +570,7 @@ mod tests {
             Arc::new(lk_agents_abi::TokioSpawner::current()),
             clock,
             Duration::from_secs(3),
+            (24_000, 1),
         );
         let info = lk_agents_rtc::StreamInfo {
             id: "buffer".into(),

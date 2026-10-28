@@ -3,10 +3,9 @@ use crate::room_io::decide_track;
 use crate::room_io::{AUDIO_INPUT_SOURCES, AudioInputConfig};
 use async_trait::async_trait;
 use lk_agents_abi::AbortHandle;
+use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::voice::io::VideoInput;
-use lk_agents_abi::voice::io::{AudioInput, IoError};
 use lk_agents_abi::{AudioFrame, BoundedLossy, LossyTx, Pushed, Spawner, SpawnerExt, Ts};
-use lk_agents_media::{AudioFormat, FrameResampler, Quality};
 use lk_agents_rtc::{
     AudioStreamOptions, AudioTrackFeature, ParticipantIdentity, RemoteParticipant, RoomEvent,
     RtcRoom, TrackPublication, TrackSid, TrackSource, VideoFrameRef, silence_frame,
@@ -340,7 +339,7 @@ impl<T> TrackReader<T> {
         identity: Option<ParticipantIdentity>,
         try_read: impl TryRead,
     ) {
-        if !self.link(identity.clone()) {
+        if !self.link(identity.clone()) && self.reading().is_some() {
             return;
         }
         if let Some(p) = identity.and_then(|i| room.participant(&i)) {
@@ -439,8 +438,8 @@ impl<T> TrackReader<T> {
     }
 
     /// One item from the pump holding `lease`; `false` when superseded. The generation check is the
-    /// stop the signal can't cover: the pre-connect leg never polls `stopped()`, and the live
-    /// `select!` isn't atomic with `stop_pump`. Both are decided under the same mutex.
+    /// stop the signal can't cover: a successful pull isn't atomic with `stop_pump`. Both are
+    /// decided under the same mutex.
     pub(crate) fn deliver(&self, lease: &Lease, item: T) -> bool {
         let state = self.state.lock().unwrap();
         if state.generation != lease.generation || state.reading.is_none() {
@@ -607,145 +606,50 @@ impl ParticipantAudioInput {
         mut stream: BoundedLossy<AudioFrame>,
         pre_connect: Option<Arc<dyn TrackPublication>>,
     ) {
-        if let Some(publication) = pre_connect
-            && let Some(handler) = &self.pre_connect
-        {
+        let replay = async {
+            let Some(publication) = pre_connect else { return true };
+            let Some(handler) = &self.pre_connect else { return true };
             // A timeout or malformed buffer isn't fatal: the live stream follows.
-            if let Ok(frames) = handler.wait_for_data(&sid).await {
-                match self.normalize_preconnect(frames).await {
-                    Ok(frames) => {
-                        for frame in frames {
-                            match publication.process_audio(vec![frame]).await {
-                                Ok(processed) => {
-                                    for frame in processed {
-                                        if !self.reader.deliver(&lease, frame) {
-                                            return;
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    log::warn!(target: "livekit.agents", "pre-connect processing failed: {error}");
-                                    break;
-                                }
+            let Ok(frames) = handler.wait_for_data(&sid).await else { return true };
+            for frame in frames {
+                match publication.process_audio(vec![frame]).await {
+                    Ok(processed) => {
+                        for frame in processed {
+                            if !self.reader.deliver(&lease, frame) {
+                                return false;
                             }
-                            tokio::task::yield_now().await;
                         }
                     }
                     Err(error) => {
-                        log::warn!(target: "livekit.agents", "pre-connect normalization failed: {error}")
+                        log::warn!(target: "livekit.agents", "pre-connect processing failed: {error}");
+                        break;
                     }
                 }
+                tokio::task::yield_now().await;
             }
-        }
-
-        loop {
-            tokio::select! {
-                // Stopping wins over a simultaneous frame.
-                biased;
-                // `return`, not `break`: a superseded track must not get the end-of-track silence flush.
-                () = lease.stopped() => return,
-                frame = stream.recv() => match frame {
-                    // `false`: superseded.
-                    Some(frame) => {
-                        if !self.reader.deliver(&lease, frame) {
-                            return;
-                        }
-                    }
-                    // The track itself ended: fall through to the flush.
-                    None => break,
-                },
-            }
-        }
-
-        // Track ended: half a second of silence flushes a pending STT final.
-        let samples = self.config.sample_rate / 2;
-        let silence = silence_frame(samples, self.config.sample_rate, self.config.num_channels);
-        self.reader.deliver(&lease, silence);
-        self.reader.ended(&lease);
-    }
-
-    /// Normalize before processing, including a channel-only conversion.
-    async fn normalize_preconnect(
-        &self,
-        frames: Vec<AudioFrame>,
-    ) -> Result<Vec<AudioFrame>, IoError> {
-        let Some(first) = frames.first() else { return Ok(frames) };
-        let source = AudioFormat::new(first.sample_rate, first.num_channels);
-        let target_channels = self.config.num_channels;
-        if !(8000..=48000).contains(&source.sample_rate)
-            || !(8000..=48000).contains(&self.config.sample_rate)
-            || !(1..=2).contains(&source.num_channels)
-            || !(1..=2).contains(&target_channels)
-        {
-            return Err(IoError::Resample(
-                "pre-connect format must be 8–48 kHz mono or stereo".into(),
-            ));
-        }
-        let mut resampler = if source.sample_rate == self.config.sample_rate {
-            None
-        } else {
-            Some(
-                FrameResampler::fixed(
-                    AudioFormat::new(source.sample_rate, target_channels),
-                    self.config.sample_rate,
-                    Quality::default(),
-                )
-                .map_err(|error| IoError::Resample(error.to_string()))?,
-            )
+            true
         };
-        let mut output = Vec::new();
-        for frame in frames {
-            if frame.sample_rate != source.sample_rate
-                || frame.num_channels != source.num_channels
-                || frame.data.len()
-                    != frame.samples_per_channel as usize * usize::from(frame.num_channels) * 2
-            {
-                return Err(IoError::Resample("inconsistent pre-connect PCM format".into()));
+        let reading = async {
+            if !replay.await {
+                return;
             }
-            let converted = if source.num_channels == target_channels {
-                frame
-            } else if target_channels == 1 {
-                let data = frame
-                    .data
-                    .chunks_exact(usize::from(source.num_channels) * 2)
-                    .flat_map(|sample| {
-                        let sum: i64 = sample
-                            .chunks_exact(2)
-                            .map(|b| i64::from(i16::from_le_bytes([b[0], b[1]])))
-                            .sum();
-                        ((sum / i64::from(source.num_channels)) as i16).to_le_bytes()
-                    })
-                    .collect::<Vec<_>>();
-                AudioFrame::new(data, frame.sample_rate, 1, frame.samples_per_channel)
-            } else if source.num_channels == 1 {
-                let data = frame
-                    .data
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .flat_map(|sample| {
-                        (0..target_channels).flat_map(move |_| sample.iter().copied())
-                    })
-                    .collect::<Vec<_>>();
-                AudioFrame::new(data, frame.sample_rate, target_channels, frame.samples_per_channel)
-            } else {
-                return Err(IoError::Resample("unsupported pre-connect channel conversion".into()));
-            };
-            if let Some(resampler) = &mut resampler {
-                output.extend(
-                    resampler
-                        .push(&converted)
-                        .map_err(|error| IoError::Resample(error.to_string()))?,
-                );
-            } else {
-                output.push(converted);
+            while let Some(frame) = stream.recv().await {
+                if !self.reader.deliver(&lease, frame) {
+                    return;
+                }
             }
-            tokio::task::yield_now().await;
+            // Track ended: half a second of silence flushes a pending STT final.
+            let samples = self.config.sample_rate / 2;
+            let silence = silence_frame(samples, self.config.sample_rate, self.config.num_channels);
+            self.reader.deliver(&lease, silence);
+            self.reader.ended(&lease);
+        };
+        tokio::select! {
+            // Superseding the input closes both its buffered head and live subscription.
+            biased;
+            () = lease.stopped() => {},
+            () = reading => {},
         }
-        if let Some(resampler) = &mut resampler {
-            output.extend(resampler.flush().map_err(|error| IoError::Resample(error.to_string()))?);
-        }
-        Ok(output)
     }
 
     #[host(method)]
@@ -813,6 +717,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn track_replacement_releases_pending_preconnect_input() {
+        use std::future::Future;
+        use std::task::Poll;
+
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("replace-pending-preconnect");
+        let handler = PreConnectAudioHandler::new(
+            room.clone(),
+            Arc::new(TokioSpawner::current()),
+            clock,
+            Duration::from_secs(3),
+            (24_000, 1),
+        );
+        let input = ParticipantAudioInput::new(
+            room,
+            Arc::new(TokioSpawner::current()),
+            AudioInputConfig::default(),
+            Some(handler.clone()),
+        );
+        input.reader.link(Some("user".into()));
+        let old = input
+            .reader
+            .claim(&"user".into(), TrackSource::Microphone, &"old".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        let processor = Arc::new(Processor {
+            fail: false,
+            formats: lk_agents_abi::Monotone::new(Vec::new()),
+            sid: "old".into(),
+        });
+        let (frames, stream) = BoundedLossy::audio();
+        let mut pump = Box::pin(input.clone().pump(old, "old".into(), stream, Some(processor)));
+        crate::room_io::tests::pending(pump.as_mut()).await;
+        input
+            .reader
+            .claim(&"user".into(), TrackSource::Microphone, &"new".into(), AUDIO_INPUT_SOURCES)
+            .unwrap();
+        std::future::poll_fn(|cx| {
+            assert!(
+                pump.as_mut().poll(cx).is_ready(),
+                "replacing a track must release its stream without waiting for pre-connect data"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(
+            frames.push(silence_frame(480, 24000, 1)),
+            Pushed::Closed,
+            "the obsolete subscription must be closed"
+        );
+        input.aclose().await;
+        handler.aclose().await;
+    }
+
+    #[tokio::test]
     async fn a_track_ending_preserves_its_accepted_audio() {
         let reader = TrackReader::new(BoundedLossy::channel(8));
         reader.link(Some("user".into()));
@@ -825,19 +783,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preconnect_normalizes_channels_even_when_rate_matches() {
+    async fn linking_an_arrived_participant_reads_their_existing_track() {
         let (rtc, _) = FakeRtc::with_virtual_clock();
+        let room = rtc.room("participant-arrival");
         let input = ParticipantAudioInput::new(
-            rtc.room("normalize"),
+            room.clone(),
             Arc::new(TokioSpawner::current()),
             AudioInputConfig::default(),
             None,
         );
-        let stereo = AudioFrame::new([100, 0, 200, 0].repeat(480), 24000, 2, 480);
-        let frames = input.normalize_preconnect(vec![stereo]).await.unwrap();
-        assert!(frames.iter().all(|f| f.sample_rate == 24000 && f.num_channels == 1));
-        assert_eq!(frames.iter().map(|f| f.data.len()).sum::<usize>(), 960);
+        input.set_participant(Some("user".into()));
+        let participant = room.add_participant("user", lk_agents_rtc::ParticipantKind::Standard);
+        let microphone = participant.publish_track("microphone", TrackSource::Microphone);
+        input.set_participant(Some("user".into()));
+        assert_eq!(input.reading(), Some("microphone".into()));
+        input.set_participant(Some("user".into()));
+        assert_eq!(microphone.stream_requests().len(), 1, "an active track must remain attached");
+        assert_eq!(microphone.push_frame(silence_frame(480, 24000, 1)), 1);
+        assert_eq!(input.next_frame().await.unwrap().unwrap().samples_per_channel, 480);
+        input.aclose().await;
     }
+
     struct Processor {
         fail: bool,
         formats: lk_agents_abi::Monotone<Vec<(u32, u16)>>,
@@ -884,6 +850,7 @@ mod tests {
                 Arc::new(TokioSpawner::current()),
                 clock,
                 Duration::from_secs(3),
+                (24_000, 1),
             );
             assert!(handler.register());
             let input = ParticipantAudioInput::new(

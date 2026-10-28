@@ -260,3 +260,75 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
         "repeated close must retain the original timeout outcome"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn room_disconnection_settles_readiness_before_a_participant_links() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("disconnected-ready");
+    let io = room_io(room.clone(), clock, config());
+    io.start();
+    room.close(DisconnectReason::ClientInitiated);
+    let ready = lk_agents_abi::timeout(
+        &lk_agents_abi::RealClock::new(),
+        Duration::from_secs(1),
+        io.wait_for_ready(),
+    )
+    .await;
+    io.aclose().await;
+    assert!(ready.is_ok(), "a disconnected room must settle readiness without a participant");
+    assert!(ready.unwrap().is_err(), "a disconnected room cannot become ready");
+}
+
+#[tokio::test]
+async fn room_relinks_input_after_the_linked_participant_is_replaced() {
+    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("relinked-input");
+    let original = room.add_participant("first", ParticipantKind::Standard);
+    original.publish_microphone("TR_first");
+    let mut config = config();
+    config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
+    let io = room_io(room.clone(), clock, config);
+    io.start();
+    io.wait_for_ready().await.unwrap();
+    assert_eq!(io.audio_input_leg().unwrap().reading(), Some("TR_first".into()));
+    room.remove_participant(&"first".into(), DisconnectReason::ClientInitiated);
+    let replacement = room.add_participant("second", ParticipantKind::Standard);
+    replacement.publish_microphone("TR_second");
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    let linked = io.linked_participant();
+    let reading = io.audio_input_leg().unwrap().reading();
+    io.aclose().await;
+    assert_eq!(linked, Some("second".into()), "the replacement participant must become linked");
+    assert_eq!(reading, Some("TR_second".into()), "the microphone must follow the new link");
+}
+
+#[tokio::test]
+async fn selecting_the_same_participant_retires_buffered_input_from_the_old_attachment() {
+    use lk_agents_abi::voice::io::AudioInput;
+
+    let (rtc, clock) = FakeRtc::with_virtual_clock();
+    let room = rtc.room("reselected-input");
+    let person = room.add_participant("person", ParticipantKind::Standard);
+    let microphone = person.publish_microphone("TR_mic");
+    let mut config = config();
+    config.audio_input = Some(AudioInputConfig { pre_connect_audio: false, ..Default::default() });
+    let io = room_io(room, clock, config);
+    io.start();
+    io.wait_for_ready().await.unwrap();
+    let input = io.audio_input_leg().unwrap();
+    assert!(
+        microphone.push_frame(lk_agents_abi::AudioFrame::new(vec![1; 960], 24_000, 1, 480)) > 0
+    );
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    io.set_participant(Some("person".into())).await;
+    assert!(
+        microphone.push_frame(lk_agents_abi::AudioFrame::new(vec![2; 960], 24_000, 1, 480)) > 0
+    );
+    let received = input.next_frame().await.unwrap().unwrap();
+    io.aclose().await;
+    assert_eq!(received.data.as_ref(), &[2; 960], "old queued audio must not cross reattachment");
+}

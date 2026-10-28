@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::media::decoder::ByteDecoderOptions;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::{AudioFormat, CodecError, Decoder};
 use tokio::sync::Notify;
@@ -44,6 +45,7 @@ pub enum DecoderError {
 struct State {
     output: VecDeque<AudioFrame>,
     output_samples: usize,
+    decoded_samples: usize,
     done: bool,
     error: Option<DecoderError>,
 }
@@ -61,6 +63,7 @@ struct Shared {
     cancelled: AtomicBool,
     ready: Notify,
     limits: DecoderLimits,
+    sample_limit: Option<usize>,
 }
 
 impl Shared {
@@ -122,9 +125,18 @@ impl Shared {
             if let Some(error) = state.error.as_ref() {
                 return Err(error.clone());
             }
+            if self
+                .sample_limit
+                .is_some_and(|limit| samples.len() > limit.saturating_sub(state.decoded_samples))
+            {
+                let error = DecoderError::Overflow("decoded duration");
+                Self::fail(&mut state, error.clone());
+                return Err(error);
+            }
             if samples.len() <= self.limits.output_samples.saturating_sub(state.output_samples) {
                 // Reserve worker-local prepared PCM before releasing the lock.
                 state.output_samples += samples.len();
+                state.decoded_samples += samples.len();
                 break;
             }
             if samples.len() <= self.limits.output_samples {
@@ -167,7 +179,7 @@ impl Shared {
     }
 }
 
-/// One admitted file decoder. EOF follows native completion and delivery of all decoded PCM.
+/// One admitted decoder. EOF follows native completion and delivery of all decoded PCM.
 pub struct AudioDecoder {
     shared: Arc<Shared>,
     worker: Option<MediaWorker<Result<(), DecoderError>>>,
@@ -206,6 +218,61 @@ impl AudioDecoder {
                 }
             }
         };
+        Self::start(workers, sample_rate, num_channels, limits, None, decode)
+    }
+
+    /// A finite head uses the same admission, bounded output and cleanup receipt as file audio.
+    pub fn open_bytes(
+        workers: &MediaWorkers,
+        options: ByteDecoderOptions,
+        limits: DecoderLimits,
+    ) -> Result<Self, DecoderError> {
+        if options.max_input_bytes == 0 || options.max_duration.is_zero() {
+            return Err(DecoderError::InvalidLimits);
+        }
+        if options.data.len() > options.max_input_bytes {
+            return Err(DecoderError::Overflow("encoded bytes"));
+        }
+        let sample_limit = u128::from(options.sample_rate)
+            .checked_mul(u128::from(options.num_channels))
+            .and_then(|rate| rate.checked_mul(options.max_duration.as_nanos()))
+            .and_then(|samples| usize::try_from(samples / 1_000_000_000).ok())
+            .filter(|samples| *samples > 0)
+            .ok_or(DecoderError::InvalidLimits)?;
+        let sample_rate = options.sample_rate;
+        let num_channels = options.num_channels;
+        Self::start(workers, sample_rate, num_channels, limits, Some(sample_limit), move |shared| {
+            if options.mime == "audio/pcm" || options.mime.is_empty() {
+                let (source_rate, source_channels) =
+                    options.pcm_format.ok_or(DecoderError::InvalidLimits)?;
+                decode_pcm(
+                    shared,
+                    &options.data,
+                    AudioFormat::new(source_rate, source_channels),
+                    sample_rate,
+                    num_channels,
+                )
+            } else {
+                decode_reader(
+                    shared,
+                    &options.mime,
+                    sample_rate,
+                    num_channels,
+                    &mut std::io::Cursor::new(options.data),
+                )
+                .map(|_| ())
+            }
+        })
+    }
+
+    fn start(
+        workers: &MediaWorkers,
+        sample_rate: u32,
+        num_channels: u16,
+        limits: DecoderLimits,
+        sample_limit: Option<usize>,
+        decode: impl FnOnce(&Arc<Shared>) -> Result<(), DecoderError> + Send + 'static,
+    ) -> Result<Self, DecoderError> {
         if !limits.format.is_valid()
             || limits.output_samples == 0
             || limits.output_chunk_samples == 0
@@ -222,6 +289,7 @@ impl AudioDecoder {
             state: Mutex::new(State {
                 output: VecDeque::new(),
                 output_samples: 0,
+                decoded_samples: 0,
                 done: false,
                 error: None,
             }),
@@ -229,6 +297,7 @@ impl AudioDecoder {
             cancelled: AtomicBool::new(false),
             ready: Notify::new(),
             limits,
+            sample_limit,
         });
         let resource = shared.clone();
         let worker = workers.try_spawn(MediaWorkerClass::Decoder, move || {
@@ -330,12 +399,12 @@ impl Drop for AudioDecoder {
     }
 }
 
-fn decode_reader(
+fn decode_reader<R: Read>(
     shared: &Arc<Shared>,
     mime: &str,
     sample_rate: u32,
     num_channels: u16,
-    input: &mut std::fs::File,
+    input: &mut R,
 ) -> Result<bool, DecoderError> {
     let mut emitted = false;
     if lk_agents_media::mime_to_av_format(Some(mime)) == Some("wav") {
@@ -350,13 +419,15 @@ fn decode_reader(
             }
             let pcm = decoder.push(&bytes[..n])?;
             if let Some(format) = decoder.output_format() {
-                shared.output(format, &pcm)?;
+                let pcm = remix(&pcm, format.num_channels, num_channels)?;
+                shared.output(AudioFormat::new(format.sample_rate, num_channels), &pcm)?;
                 emitted |= !pcm.is_empty();
             }
         }
         let tail = decoder.finish()?;
         if let Some(format) = decoder.output_format() {
-            shared.output(format, &tail)?;
+            let tail = remix(&tail, format.num_channels, num_channels)?;
+            shared.output(AudioFormat::new(format.sample_rate, num_channels), &tail)?;
             emitted |= !tail.is_empty();
         }
         Ok(emitted)
@@ -391,6 +462,71 @@ fn decode_reader(
     }
 }
 
+fn remix(samples: &[i16], from: u16, to: u16) -> Result<Vec<i16>, DecoderError> {
+    if from == to {
+        return Ok(samples.to_vec());
+    }
+    if to == 1 {
+        return Ok(lk_agents_media::downmix_mono(samples, from));
+    }
+    if from == 1 {
+        return Ok(samples
+            .iter()
+            .flat_map(|sample| std::iter::repeat_n(*sample, usize::from(to)))
+            .collect());
+    }
+    Err(DecoderError::InvalidLimits)
+}
+
+fn decode_pcm(
+    shared: &Arc<Shared>,
+    bytes: &[u8],
+    source: AudioFormat,
+    sample_rate: u32,
+    num_channels: u16,
+) -> Result<(), DecoderError> {
+    shared.limits.format.validate(source, Some(sample_rate), 0)?;
+    let width = usize::from(source.num_channels) * 2;
+    if !bytes.len().is_multiple_of(width) {
+        return Err(DecoderError::Codec(CodecError::DecodeLimit("truncated PCM sample")));
+    }
+    let mut resampler = if source.sample_rate == sample_rate {
+        None
+    } else {
+        Some(
+            lk_agents_media::new_resampler(
+                source.sample_rate,
+                sample_rate,
+                u32::from(num_channels),
+                lk_agents_media::Quality::default(),
+            )
+            .map_err(|error| DecoderError::WorkerFailed(error.to_string()))?,
+        )
+    };
+    let output_format = AudioFormat::new(sample_rate, num_channels);
+    // Ten milliseconds of source PCM bounds conversion and native resampling scratch space.
+    let chunk_bytes = (source.sample_rate as usize / 100).max(1) * width;
+    for chunk in bytes.chunks(chunk_bytes) {
+        let samples =
+            chunk.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>();
+        let samples = remix(&samples, source.num_channels, num_channels)?;
+        if let Some(resampler) = &mut resampler {
+            let output = resampler
+                .push(&samples)
+                .map_err(|error| DecoderError::WorkerFailed(error.to_string()))?;
+            shared.output(output_format, output)?;
+        } else {
+            shared.output(output_format, &samples)?;
+        }
+    }
+    if let Some(resampler) = &mut resampler {
+        let tail =
+            resampler.flush().map_err(|error| DecoderError::WorkerFailed(error.to_string()))?;
+        shared.output(output_format, tail)?;
+    }
+    Ok(())
+}
+
 impl lk_agents_abi::media::decoder::FileDecoder for AudioDecoder {
     fn next(
         &mut self,
@@ -416,23 +552,35 @@ lk_agents_abi::inventory::submit! {
                 path, looping, sample_rate, num_channels,
             } = options;
             let workers = crate::process::workers().map_err(|error| error.to_string())?;
-            let output_samples = (sample_rate as usize) * usize::from(num_channels) * 2;
-            let limits = DecoderLimits {
-                format: DecodeLimits {
-                    min_sample_rate: 8_000,
-                    max_sample_rate: 192_000,
-                    max_channels: 8,
-                    max_streams: 8,
-                    max_expansion_ratio: 24,
-                    max_samples_per_frame: output_samples,
-                },
-                output_samples,
-                output_chunk_samples: (sample_rate as usize / 100).max(1) * usize::from(num_channels),
-            };
+            let limits = decoder_limits(sample_rate, num_channels);
             AudioDecoder::open_file(&workers, path, looping, sample_rate, num_channels, limits)
                 .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
                 .map_err(|error| error.to_string())
         },
+        open_bytes: |options| {
+            let workers = crate::process::workers().map_err(|error| error.to_string())?;
+            let limits = decoder_limits(options.sample_rate, options.num_channels);
+            AudioDecoder::open_bytes(&workers, options, limits)
+                .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
+                .map_err(|error| error.to_string())
+        },
+    }
+}
+
+fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
+    let output_samples =
+        (sample_rate as usize).saturating_mul(usize::from(num_channels)).saturating_mul(2);
+    DecoderLimits {
+        format: DecodeLimits {
+            min_sample_rate: 8_000,
+            max_sample_rate: 192_000,
+            max_channels: 8,
+            max_streams: 8,
+            max_expansion_ratio: 24,
+            max_samples_per_frame: output_samples,
+        },
+        output_samples,
+        output_chunk_samples: (sample_rate as usize / 100).max(1) * usize::from(num_channels),
     }
 }
 
@@ -511,6 +659,121 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    #[tokio::test]
+    async fn decoded_stereo_is_normalized_before_delivery_to_a_mono_input() {
+        let file = AudioFile::wav("stereo-normalization", &[]);
+        std::fs::write(&file.0, wav(2, &[100, 200].repeat(480))).unwrap();
+        let mut decoder =
+            AudioDecoder::open_file(&workers(), file.path(), false, 24_000, 1, limits()).unwrap();
+        let mut samples = Vec::new();
+        while let Some(frame) = decoder.next().await.unwrap() {
+            assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
+            samples.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+        }
+        assert_eq!(samples, vec![150; 480]);
+        decoder.close(Duration::from_secs(1)).await.unwrap();
+    }
+
+    fn byte_options(data: Vec<u8>) -> ByteDecoderOptions {
+        ByteDecoderOptions {
+            mime: "audio/pcm".into(),
+            data,
+            pcm_format: Some((24_000, 1)),
+            sample_rate: 24_000,
+            num_channels: 1,
+            max_input_bytes: 2 * 1024 * 1024,
+            max_duration: Duration::from_secs(10),
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_pcm_is_normalized_on_the_admitted_decoder_worker() {
+        for (source_rate, target_rate) in
+            [(24_000, 24_000), (48_000, 24_000), (24_000, 96_000), (24_000, 192_000)]
+        {
+            let options = ByteDecoderOptions {
+                data: lk_agents_media::pcm_bytes(&[100, 200].repeat(source_rate / 10)),
+                pcm_format: Some((source_rate as u32, 2)),
+                sample_rate: target_rate,
+                ..byte_options(Vec::new())
+            };
+            let mut decoder = AudioDecoder::open_bytes(&workers(), options, limits()).unwrap();
+            let mut samples = Vec::new();
+            while let Some(frame) = decoder.next().await.unwrap() {
+                assert_eq!((frame.sample_rate, frame.num_channels), (target_rate, 1));
+                samples
+                    .extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
+            }
+            assert_eq!(
+                samples.len(),
+                target_rate as usize / 10,
+                "normalization must preserve the head's duration"
+            );
+            if source_rate as u32 == target_rate {
+                assert_eq!(samples, vec![150; 2400]);
+            }
+            decoder.close(Duration::from_secs(1)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_decoder_refuses_encoded_and_decoded_excess_without_delivering_it() {
+        let options = ByteDecoderOptions { max_input_bytes: 4, ..byte_options(vec![0; 6]) };
+        let workers = workers();
+        assert!(matches!(
+            AudioDecoder::open_bytes(&workers, options, limits()),
+            Err(DecoderError::Overflow("encoded bytes"))
+        ));
+        let options = ByteDecoderOptions {
+            max_duration: Duration::from_millis(10),
+            ..byte_options(lk_agents_media::pcm_bytes(&vec![100; 480]))
+        };
+        let mut decoder = AudioDecoder::open_bytes(&workers, options, limits()).unwrap();
+        let mut samples = 0;
+        loop {
+            match decoder.next().await {
+                Ok(Some(frame)) => samples += frame.samples_per_channel,
+                Err(DecoderError::Overflow("decoded duration")) => break,
+                result => panic!("expected an explicit duration overflow, got {result:?}"),
+            }
+        }
+        assert!(samples <= 240, "excess decoded audio must never enter the output queue");
+        decoder.close(Duration::from_secs(1)).await.unwrap();
+        let mut valid =
+            AudioDecoder::open_bytes(&workers, byte_options(vec![0; 480]), limits()).unwrap();
+        assert!(
+            valid.next().await.unwrap().is_some(),
+            "refused heads must release decoder admission"
+        );
+        valid.close(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[cfg(feature = "media-ffmpeg")]
+    #[tokio::test]
+    async fn compressed_heads_stop_before_retaining_audio_beyond_the_duration_limit() {
+        let mut encoder = lk_agents_media::ffmpeg::OggOpusEncoder::new(48_000, 1, 24_000).unwrap();
+        let mut data = encoder.push(&vec![100; 4800]).unwrap();
+        data.extend(encoder.finish().unwrap());
+        let options = ByteDecoderOptions {
+            mime: "audio/ogg;codecs=opus".into(),
+            data,
+            pcm_format: None,
+            max_duration: Duration::from_millis(20),
+            ..byte_options(Vec::new())
+        };
+        let mut decoder = AudioDecoder::open_bytes(&workers(), options, limits()).unwrap();
+        let mut samples = 0;
+        loop {
+            match decoder.next().await {
+                Ok(Some(frame)) => samples += frame.samples_per_channel,
+                Err(DecoderError::Overflow("decoded duration")) => break,
+                result => panic!("compressed duration excess must be explicit: {result:?}"),
+            }
+        }
+        assert!(samples <= 480);
+        decoder.close(Duration::from_secs(1)).await.unwrap();
     }
 
     #[tokio::test]

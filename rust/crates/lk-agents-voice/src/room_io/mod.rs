@@ -163,6 +163,7 @@ impl RoomIo {
                 spawner.clone(),
                 clock.clone(),
                 a.pre_connect_audio_timeout,
+                (a.sample_rate, a.num_channels),
             )
         });
 
@@ -324,10 +325,10 @@ impl RoomIo {
         // Replay participants who joined before the handler was registered.
         for p in self.room.remote_participants() {
             let attrs = p.attributes();
-            self.consider(p.identity(), p.kind(), publishes_on_behalf_of(&attrs));
+            self.consider(p.identity(), p.kind(), publishes_on_behalf_of(&attrs)).await;
         }
 
-        let identity = {
+        {
             let mut state = self.coordinator.subscribe();
             let state = state
                 .wait_for(|coordinator| {
@@ -336,14 +337,10 @@ impl RoomIo {
                 })
                 .await;
             match state {
-                Ok(state) => match state.state().linked {
-                    Some(identity) => identity,
-                    None => return,
-                },
-                Err(_) => return,
+                Ok(state) if state.state().linked.is_some() => {}
+                Ok(_) | Err(_) => return,
             }
-        };
-        self.set_participant(Some(identity)).await;
+        }
 
         if let Some(agent_tr) = &self.agent_tr {
             // The agent transcribes *itself*, so its transcript hangs off its own track.
@@ -376,36 +373,33 @@ impl RoomIo {
             }));
         }
 
-        if let Some(input) = &self.audio_input {
-            input.set_participant(Some(identity.clone()));
+        // A repeated selection retires the old attachment's buffered media too.
+        if previous.as_ref() == Some(&identity) {
+            self.attach_participant(None).await;
         }
-        if let Some(video) = &self.video_input {
-            // Same participant as the audio leg, from the same call.
-            video.set_participant(Some(identity.clone()));
-        }
-        if let Some(user_tr) = &self.user_tr {
-            user_tr.set_participant(Some(identity)).await;
-        }
+        self.attach_participant(Some(identity)).await;
     }
 
     pub async fn unset_participant(&self) {
-        if !self.coordinate(|coordinator| coordinator.select(None, false)) {
-            return;
+        if self.coordinate(|coordinator| coordinator.select(None, false)) {
+            self.attach_participant(None).await;
         }
+    }
+
+    async fn attach_participant(&self, identity: Option<ParticipantIdentity>) {
         if let Some(input) = &self.audio_input {
-            input.set_participant(None);
+            input.set_participant(identity.clone());
         }
         if let Some(video) = &self.video_input {
-            // Stop reading the camera of someone who left.
-            video.set_participant(None);
+            video.set_participant(identity.clone());
         }
         if let Some(user_tr) = &self.user_tr {
-            user_tr.set_participant(None).await;
+            user_tr.set_participant(identity).await;
         }
     }
 
     /// `_on_participant_connected`'s filter.
-    fn consider(
+    async fn consider(
         &self,
         candidate: &ParticipantIdentity,
         kind: lk_agents_rtc::ParticipantKind,
@@ -424,6 +418,7 @@ impl RoomIo {
             let _ = self.events_tx.send(RoomIoEvent::ParticipantLinked(ParticipantLinked {
                 identity: candidate.clone(),
             }));
+            self.attach_participant(Some(candidate.clone())).await;
         }
     }
 
@@ -453,10 +448,17 @@ impl RoomIo {
                     participant.identity(),
                     participant.kind(),
                     publishes_on_behalf_of(&attrs),
-                );
+                )
+                .await;
             }
             RoomEvent::ParticipantDisconnected { participant, reason } => {
-                self.on_participant_disconnected(participant.identity(), *reason);
+                self.on_participant_disconnected(participant.identity(), *reason).await;
+            }
+            RoomEvent::Close { reason } => {
+                if let Some(identity) = self.linked_participant() {
+                    self.on_participant_disconnected(&identity, *reason).await;
+                }
+                self.aclose().await;
             }
             RoomEvent::TrackSubscribed { .. }
             | RoomEvent::TrackUnsubscribed { .. }
@@ -465,7 +467,6 @@ impl RoomIo {
             | RoomEvent::LocalTrackPublished { .. }
             | RoomEvent::ParticipantActive { .. }
             | RoomEvent::ParticipantAttributesChanged { .. }
-            | RoomEvent::Close { .. }
             | RoomEvent::SipDtmf { participant: None, .. } => {}
             // `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
             RoomEvent::SipDtmf { participant: Some(who), .. } => {
@@ -476,7 +477,7 @@ impl RoomIo {
         }
     }
 
-    fn on_participant_disconnected(
+    async fn on_participant_disconnected(
         &self,
         identity: &ParticipantIdentity,
         reason: DisconnectReason,
@@ -484,6 +485,7 @@ impl RoomIo {
         if !self.coordinate(|coordinator| coordinator.disconnect(identity)) {
             return;
         }
+        self.attach_participant(None).await;
         // Whether the departure closes the session is `RoomLink`'s.
         let _ = self.events_tx.send(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked {
             identity: identity.clone(),

@@ -62,7 +62,7 @@ impl Publication {
     pub(super) fn fail(&mut self, error: IoError) {
         self.phase = match std::mem::take(&mut self.phase) {
             Phase::Creating => Phase::Failed { error, sid: None },
-            Phase::Subscribing(sid) => Phase::Failed { error, sid: Some(sid) },
+            Phase::Subscribing(sid) | Phase::Ready(sid) => Phase::Failed { error, sid: Some(sid) },
             Phase::Closed { sid, .. } => Phase::Closed { creating: false, sid },
             other => other,
         };
