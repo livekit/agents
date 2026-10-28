@@ -86,6 +86,7 @@ struct Buffers {
 
 #[derive(Default)]
 struct Tasks {
+    closed: bool,
     listener: Option<AbortHandle>,
     readers: Vec<AbortHandle>,
 }
@@ -120,6 +121,9 @@ impl PreConnectAudioHandler {
     }
 
     pub fn register(self: &Arc<Self>) -> bool {
+        if self.tasks.lock().unwrap().closed {
+            return false;
+        }
         let Ok(mut streams) = self.room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM) else {
             return false;
         };
@@ -127,6 +131,9 @@ impl PreConnectAudioHandler {
         let handle = self.spawner.spawn_unboxed(async move {
             while let Some(stream) = streams.recv().await {
                 let mut tasks = this.tasks.lock().unwrap();
+                if tasks.closed {
+                    break;
+                }
                 tasks.readers.retain(|task| !task.is_finished());
                 if tasks.readers.len() == MAX_STREAMS {
                     if let Some(track) = stream.info.attributes.get("trackId")
@@ -139,7 +146,14 @@ impl PreConnectAudioHandler {
                 tasks.readers.push(this.spawner.spawn_unboxed(this.clone().read_stream(stream)));
             }
         });
-        self.tasks.lock().unwrap().listener = Some(handle);
+        let mut tasks = self.tasks.lock().unwrap();
+        if tasks.closed {
+            drop(tasks);
+            handle.abort();
+            self.room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM);
+            return false;
+        }
+        tasks.listener = Some(handle);
         true
     }
 
@@ -217,7 +231,6 @@ impl PreConnectAudioHandler {
     }
 
     pub async fn aclose(&self) {
-        self.room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM);
         let mut buffers = self.buffers.lock().unwrap();
         buffers.closed = true;
         for (_, slot) in std::mem::take(&mut buffers.slots) {
@@ -231,11 +244,18 @@ impl PreConnectAudioHandler {
         buffers.transfers.clear();
         buffers.receiving.clear();
         drop(buffers);
-        let mut tasks = self.tasks.lock().unwrap();
-        if let Some(listener) = tasks.listener.take() {
+        let (listener, readers) = {
+            let mut tasks = self.tasks.lock().unwrap();
+            tasks.closed = true;
+            (tasks.listener.take(), std::mem::take(&mut tasks.readers))
+        };
+        // A failed registration never acquired the topic. Removing it would disconnect the
+        // handler that was already there; a registration racing close retires its own result.
+        if let Some(listener) = listener {
+            self.room.unregister_byte_stream_handler(PRE_CONNECT_AUDIO_BUFFER_STREAM);
             listener.abort();
         }
-        for task in tasks.readers.drain(..) {
+        for task in readers {
             task.abort();
         }
     }
@@ -315,6 +335,113 @@ async fn receive(mut stream: ByteStream) -> std::result::Result<Vec<AudioFrame>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_registration_does_not_remove_another_stream_owner() {
+        let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+        let room = rtc.room("registration-owner");
+        let mut original = room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).unwrap();
+        let handler = PreConnectAudioHandler::new(
+            room.clone(),
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            clock,
+            Duration::from_secs(3),
+        );
+        assert!(!handler.register());
+        handler.aclose().await;
+        let info = lk_agents_rtc::StreamInfo {
+            id: "original-owner".into(),
+            topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+            ..Default::default()
+        };
+        room.send_byte_stream("user", info, [vec![1, 2]]).unwrap();
+        let mut stream = original.recv().await.unwrap();
+        assert_eq!(stream.chunks.recv().await.unwrap(), vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn closed_preconnect_input_cannot_register_again() {
+        let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+        let room = rtc.room("closed-registration");
+        let handler = PreConnectAudioHandler::new(
+            room.clone(),
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            clock,
+            Duration::from_secs(3),
+        );
+        handler.aclose().await;
+        assert!(!handler.register());
+        assert!(room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).is_ok());
+    }
+
+    fn pcm_info(track: &str) -> lk_agents_rtc::StreamInfo {
+        lk_agents_rtc::StreamInfo {
+            id: track.into(),
+            topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+            attributes: [
+                ("trackId".into(), track.into()),
+                ("sampleRate".into(), "24000".into()),
+                ("channels".into(), "1".into()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn preconnect_overload_preserves_already_admitted_tracks() {
+        let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+        let room = rtc.room("track-capacity");
+        let handler = PreConnectAudioHandler::new(
+            room.clone(),
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            clock,
+            Duration::from_secs(3),
+        );
+        assert!(handler.register());
+        let tracks = (0..MAX_TRACKS).map(|n| TrackSid::from(format!("TR_{n}"))).collect::<Vec<_>>();
+        let mut waiters =
+            tracks.iter().map(|track| Box::pin(handler.wait_for_data(track))).collect::<Vec<_>>();
+        for waiter in &mut waiters {
+            crate::room_io::tests::pending(waiter.as_mut()).await;
+        }
+        assert!(matches!(
+            handler.wait_for_data(&"TR_overload".into()).await,
+            Err(IoError::PreConnectMalformed(error)) if error.contains("track capacity")
+        ));
+        room.send_byte_stream("user", pcm_info("TR_0"), [vec![1; 960]]).unwrap();
+        let frames = waiters.remove(0).await.unwrap();
+        assert_eq!(frames.iter().map(|frame| frame.data.len()).sum::<usize>(), 960);
+        handler.aclose().await;
+        for waiter in waiters {
+            assert!(waiter.await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn preconnect_receive_deadline_discards_partial_pcm() {
+        let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+        let room = rtc.room("receive-deadline");
+        let handler = PreConnectAudioHandler::new(
+            room.clone(),
+            Arc::new(lk_agents_abi::TokioSpawner::current()),
+            clock.clone(),
+            Duration::from_secs(3),
+        );
+        assert!(handler.register());
+        let chunks = room.open_byte_stream("user", pcm_info("TR_expired")).unwrap();
+        chunks.send(vec![1; 960]).unwrap();
+        let track = TrackSid::from("TR_expired");
+        let mut result = Box::pin(handler.wait_for_data(&track));
+        crate::room_io::tests::pending(result.as_mut()).await;
+        tokio::task::yield_now().await;
+        clock.advance(Duration::from_secs(3));
+        assert!(result.await.is_err());
+        tokio::task::yield_now().await;
+        assert!(chunks.send(vec![2; 960]).is_err(), "expired input must be closed");
+        handler.aclose().await;
+    }
 
     #[tokio::test]
     async fn preconnect_single_transfer() {

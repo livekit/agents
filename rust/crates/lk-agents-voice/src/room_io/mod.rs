@@ -1,11 +1,13 @@
 pub mod _input;
 pub mod _output;
 pub mod _pre_connect_audio;
-pub mod rooms;
+mod coordinator;
 mod publication;
+pub mod rooms;
 #[cfg(test)]
 mod tests;
 
+use self::coordinator::RoomCoordinator;
 use crate::agent_session::effects::{Out, StreamKind};
 use crate::agent_session::{Close, Driver, HostEvent};
 use crate::room_io::_input::{ParticipantAudioInput, ParticipantVideoInput};
@@ -24,8 +26,8 @@ pub use lk_agents_abi::voice::room_io::{
     ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
 };
 use lk_agents_abi::{
-    ATTRIBUTE_AGENT_STATE, ATTRIBUTE_PUBLISH_ON_BEHALF, Clock, Monotone, Spawner, SpawnerExt,
-    TOPIC_CHAT, Ts,
+    ATTRIBUTE_AGENT_STATE, ATTRIBUTE_PUBLISH_ON_BEHALF, Clock, Closed, HOST_TEARDOWN_TIMEOUT,
+    Monotone, Spawner, SpawnerExt, TOPIC_CHAT, Ts,
 };
 use lk_agents_rtc::{
     ConnectionState, DisconnectReason, LocalParticipant, ParticipantIdentity, ParticipantKind,
@@ -109,6 +111,7 @@ pub enum RoomIoEvent {
 
 pub struct RoomIo {
     room: Arc<dyn RtcRoom>,
+    clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     config: RoomIoConfig,
 
@@ -122,13 +125,9 @@ pub struct RoomIo {
     agent_tr: Option<Arc<ParticipantTranscriptionOutput>>,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    target: Mutex<Option<ParticipantIdentity>>,
-    /// `_participant_available_fut`. Always `send_replace`: `send` fails with no receiver, which
-    /// would drop a link made before `_init_task` subscribes.
-    linked: watch::Sender<Option<ParticipantIdentity>>,
+    /// One coordinator owns decisions and wakes readers after each transition.
+    coordinator: watch::Sender<RoomCoordinator>,
     connected: Monotone<bool>,
-    ready: Monotone<bool>,
 
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     events_tx: mpsc::UnboundedSender<RoomIoEvent>,
@@ -207,9 +206,11 @@ impl RoomIo {
         };
 
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let coordinator = RoomCoordinator::new(config.participant_identity.clone());
         Arc::new(RoomIo {
-            target: Mutex::new(config.participant_identity.clone()),
+            coordinator: watch::channel(coordinator).0,
             room,
+            clock,
             spawner,
             config,
             audio_input,
@@ -218,9 +219,7 @@ impl RoomIo {
             user_tr,
             agent_tr,
             pre_connect,
-            linked: watch::channel(None).0,
             connected: Monotone::new(false),
-            ready: Monotone::new(false),
             events_tx,
             events_rx: Mutex::new(Some(events_rx)),
             tasks: Mutex::new(Vec::new()),
@@ -267,15 +266,23 @@ impl RoomIo {
     }
 
     pub fn linked_participant(&self) -> Option<ParticipantIdentity> {
-        self.linked.borrow().clone()
+        self.coordinator.borrow().state().linked
     }
 
     /// `wait_for_ready`.
-    pub async fn wait_for_ready(&self) {
-        self.ready.wait_for(|set| *set).await;
+    pub async fn wait_for_ready(&self) -> Result<()> {
+        let mut state = self.coordinator.subscribe();
+        let state = state
+            .wait_for(|state| state.state().ready.is_some())
+            .await
+            .expect("RoomIo retains the state sender");
+        state.state().ready.expect("readiness matched a terminal outcome")
     }
 
     pub fn start(self: &Arc<Self>) {
+        if !self.coordinate(RoomCoordinator::start) {
+            return;
+        }
         if let Some(pc) = &self.pre_connect {
             pc.register();
         }
@@ -298,7 +305,7 @@ impl RoomIo {
                 }
             }
         });
-        self.tasks.lock().unwrap().push(handle);
+        self.keep_task(handle);
 
         // The room may already be connected, so read the state rather than wait for the event.
         if self.room.connection_state().is_connected() {
@@ -307,7 +314,7 @@ impl RoomIo {
 
         let this = self.clone();
         let handle = self.spawner.spawn_unboxed(async move { this.init().await });
-        self.tasks.lock().unwrap().push(handle);
+        self.keep_task(handle);
     }
 
     /// `_init_task`.
@@ -321,10 +328,18 @@ impl RoomIo {
         }
 
         let identity = {
-            let mut rx = self.linked.subscribe();
-            let v = rx.wait_for(|v| v.is_some()).await;
-            match v {
-                Ok(v) => v.clone().expect("wait_for matched Some"),
+            let mut state = self.coordinator.subscribe();
+            let state = state
+                .wait_for(|coordinator| {
+                    let state = coordinator.state();
+                    state.linked.is_some() || state.ready.is_some()
+                })
+                .await;
+            match state {
+                Ok(state) => match state.state().linked {
+                    Some(identity) => identity,
+                    None => return,
+                },
                 Err(_) => return,
             }
         };
@@ -334,13 +349,11 @@ impl RoomIo {
             // The agent transcribes *itself*, so its transcript hangs off its own track.
             agent_tr.set_participant(Some(self.room.local().identity())).await;
         }
-        // As the reference's `_init_task`: a failed start leaves the room io never ready.
-        if let Some(out) = &self.audio_output
-            && out.start().await.is_err()
-        {
-            return;
-        }
-        self.ready.set(true);
+        let outcome = match &self.audio_output {
+            Some(out) => out.start().await,
+            None => Ok(()),
+        };
+        self.coordinate(|coordinator| coordinator.finish_start(outcome));
     }
 
     /// `set_participant`.
@@ -350,17 +363,18 @@ impl RoomIo {
             return;
         };
 
-        let previous = self.target.lock().unwrap().clone();
-        if previous.as_ref().is_some_and(|p| *p != identity) {
-            // Switching: forget the old link, then re-check whether the new one is already here.
-            self.linked.send_replace(None);
-            if self.room.participant(&identity).is_some() {
-                self.linked.send_replace(Some(identity.clone()));
-                let linked = ParticipantLinked { identity: identity.clone() };
-                let _ = self.events_tx.send(RoomIoEvent::ParticipantLinked(linked));
-            }
+        let present = self.room.participant(&identity).is_some();
+        let Some(previous) = self.coordinate(|coordinator| {
+            let previous = coordinator.state().linked;
+            coordinator.select(Some(identity.clone()), present).then_some(previous)
+        }) else {
+            return;
+        };
+        if present && previous.as_ref() != Some(&identity) {
+            let _ = self.events_tx.send(RoomIoEvent::ParticipantLinked(ParticipantLinked {
+                identity: identity.clone(),
+            }));
         }
-        *self.target.lock().unwrap() = Some(identity.clone());
 
         if let Some(input) = &self.audio_input {
             input.set_participant(Some(identity.clone()));
@@ -375,8 +389,9 @@ impl RoomIo {
     }
 
     pub async fn unset_participant(&self) {
-        *self.target.lock().unwrap() = None;
-        self.linked.send_replace(None);
+        if !self.coordinate(|coordinator| coordinator.select(None, false)) {
+            return;
+        }
         if let Some(input) = &self.audio_input {
             input.set_participant(None);
         }
@@ -396,18 +411,16 @@ impl RoomIo {
         kind: lk_agents_rtc::ParticipantKind,
         on_behalf_of: Option<&str>,
     ) {
-        let target = self.target.lock().unwrap().clone();
-        let link = decide_link(
-            self.linked.borrow().is_some(),
-            target.as_ref(),
-            candidate,
-            kind,
-            on_behalf_of,
-            &self.room.local().identity(),
-            accepted_kinds(&self.config),
-        );
-        if link {
-            self.linked.send_replace(Some(candidate.clone()));
+        let agent_identity = self.room.local().identity();
+        if self.coordinate(|coordinator| {
+            coordinator.consider(
+                candidate,
+                kind,
+                on_behalf_of,
+                &agent_identity,
+                accepted_kinds(&self.config),
+            )
+        }) {
             let _ = self.events_tx.send(RoomIoEvent::ParticipantLinked(ParticipantLinked {
                 identity: candidate.clone(),
             }));
@@ -456,7 +469,7 @@ impl RoomIo {
             | RoomEvent::SipDtmf { participant: None, .. } => {}
             // `_on_sip_dtmf_received`: a key the linked participant pressed is activity.
             RoomEvent::SipDtmf { participant: Some(who), .. } => {
-                if self.linked.borrow().as_ref() == Some(who) {
+                if self.coordinator.borrow().state().linked.as_ref() == Some(who) {
                     let _ = self.events_tx.send(RoomIoEvent::KeyPressed);
                 }
             }
@@ -468,11 +481,10 @@ impl RoomIo {
         identity: &ParticipantIdentity,
         reason: DisconnectReason,
     ) {
-        if self.linked.borrow().as_ref() != Some(identity) {
+        if !self.coordinate(|coordinator| coordinator.disconnect(identity)) {
             return;
         }
         // Whether the departure closes the session is `RoomLink`'s.
-        self.linked.send_replace(None);
         let _ = self.events_tx.send(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked {
             identity: identity.clone(),
             reason,
@@ -482,6 +494,9 @@ impl RoomIo {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `_on_agent_state_changed`: cancels the in-flight write so changes land in order.
     pub fn on_agent_state_changed(self: &Arc<Self>, state: &str) {
+        if !self.coordinator.borrow().is_open() {
+            return;
+        }
         let room = self.room.clone();
         let state = state.to_owned();
         *self.agent_state.lock().unwrap() = Some(state.clone());
@@ -494,8 +509,13 @@ impl RoomIo {
                 .set_attributes(HashMap::from([(ATTRIBUTE_AGENT_STATE.to_owned(), state)]))
                 .await;
         });
-        if let Some(old) = self.state_task.lock().unwrap().replace(handle) {
-            old.abort();
+        let coordinator = self.coordinator.borrow();
+        if coordinator.is_open() {
+            if let Some(old) = self.state_task.lock().unwrap().replace(handle) {
+                old.abort();
+            }
+        } else {
+            handle.abort();
         }
     }
 
@@ -515,39 +535,87 @@ impl RoomIo {
             // Already registered by another `RoomIO`. Warn-and-continue, as the reference does.
             return;
         };
-        *self.chat_registered.lock().unwrap() = true;
+        let registered = {
+            let coordinator = self.coordinator.borrow();
+            if coordinator.is_open() {
+                *self.chat_registered.lock().unwrap() = true;
+                true
+            } else {
+                false
+            }
+        };
+        if !registered {
+            self.room.unregister_text_stream_handler(TOPIC_CHAT);
+            return;
+        }
 
         let this = self.clone();
         let handle = self.spawner.spawn_unboxed(async move {
             while let Some(mut stream) = streams.recv().await {
-                // Only the linked participant may drive the agent.
-                if let Some(linked) = this.linked.borrow().clone()
-                    && stream.sender != linked
-                {
+                // The stream belongs to the attachment that accepted its header.
+                let Some(attachment) = this.coordinator.borrow().attachment(&stream.sender) else {
                     continue;
-                }
+                };
                 if this.room.participant(&stream.sender).is_none() {
                     continue;
                 }
                 // One task per stream, so a stalled sender holds back no other message.
-                let events = this.events_tx.clone();
+                let owner = this.clone();
                 let reader = this.spawner.spawn_unboxed(async move {
                     let text = stream.read_all().await;
-                    let _ = events.send(RoomIoEvent::TextInput(TextInput {
+                    let coordinator = owner.coordinator.borrow();
+                    if !coordinator.accepts(attachment, &stream.sender) {
+                        return;
+                    }
+                    let _ = owner.events_tx.send(RoomIoEvent::TextInput(TextInput {
                         text,
                         participant: stream.sender,
                         info: Box::new(stream.info),
                     }));
                 });
-                let mut tasks = this.tasks.lock().unwrap();
-                tasks.retain(|t| !t.is_finished());
-                tasks.push(reader);
+                this.keep_task(reader);
             }
         });
-        self.tasks.lock().unwrap().push(handle);
+        self.keep_task(handle);
     }
 
-    pub async fn aclose(&self) {
+    fn keep_task(&self, task: AbortHandle) {
+        let coordinator = self.coordinator.borrow();
+        if !coordinator.is_open() {
+            task.abort();
+            return;
+        }
+        let mut tasks = self.tasks.lock().unwrap();
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+
+    fn coordinate<T>(&self, transition: impl FnOnce(&mut RoomCoordinator) -> T) -> T {
+        let mut outcome = None;
+        self.coordinator.send_modify(|coordinator| outcome = Some(transition(coordinator)));
+        outcome.expect("watch applies each transition synchronously")
+    }
+
+    pub async fn aclose(self: &Arc<Self>) -> Closed {
+        let closing = self.coordinate(RoomCoordinator::begin_close);
+        if closing {
+            // The owner survives cancellation of any caller waiting for cleanup.
+            let this = self.clone();
+            let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+            self.spawner.spawn_unboxed(async move {
+                let outcome = this.close(deadline).await;
+                this.coordinate(|coordinator| coordinator.finish_close(outcome));
+            });
+        }
+        let mut state = self.coordinator.subscribe();
+        let state = state
+            .wait_for(|state| state.state().closed.is_some())
+            .await
+            .expect("RoomIo retains the cleanup result sender");
+        state.state().closed.expect("cleanup matched a terminal outcome")
+    }
+
+    async fn close(&self, deadline: Ts) -> Closed {
         for h in self.tasks.lock().unwrap().drain(..) {
             h.abort();
         }
@@ -558,26 +626,37 @@ impl RoomIo {
             *self.chat_registered.lock().unwrap() = false;
             self.room.unregister_text_stream_handler(TOPIC_CHAT);
         }
+        let mut outcome = Closed::Clean;
         if let Some(pc) = &self.pre_connect {
-            pc.aclose().await;
+            outcome =
+                outcome.and(Closed::bounded(self.clock.as_ref(), deadline, pc.aclose()).await);
         }
         if let Some(input) = &self.audio_input {
-            input.aclose().await;
+            outcome =
+                outcome.and(Closed::bounded(self.clock.as_ref(), deadline, input.aclose()).await);
         }
         if let Some(video) = &self.video_input {
             // `aclose` makes a waiting `next_frame` return `None`.
-            video.aclose().await;
+            outcome =
+                outcome.and(Closed::bounded(self.clock.as_ref(), deadline, video.aclose()).await);
         }
-        // Transcripts first: the final header must go out while the room is usable.
+        // Each owned performer keeps retiring after its waiter reaches the common deadline.
         if let Some(user_tr) = &self.user_tr {
-            user_tr.aclose().await;
+            outcome =
+                outcome.and(Closed::bounded(self.clock.as_ref(), deadline, user_tr.aclose()).await);
         }
         if let Some(agent_tr) = &self.agent_tr {
-            agent_tr.aclose().await;
+            outcome = outcome
+                .and(Closed::bounded(self.clock.as_ref(), deadline, agent_tr.aclose()).await);
         }
         if let Some(out) = &self.audio_output {
-            out.aclose().await;
+            let remaining = deadline.saturating_duration_since(self.clock.now());
+            let closed = lk_agents_abi::timeout(self.clock.as_ref(), remaining, out.aclose())
+                .await
+                .unwrap_or(Closed::TimedOut);
+            outcome = outcome.and(closed);
         }
+        outcome
     }
 }
 

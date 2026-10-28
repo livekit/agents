@@ -523,7 +523,7 @@ impl SessionApi {
 
     /// Resolve once `RoomIo` has linked a participant and published the agent's track.
     #[host(method)]
-    pub fn wait_until_ready(&self) -> Reply<()> {
+    pub fn wait_until_ready(&self) -> Reply<lk_agents_abi::voice::io::Result<()>> {
         let room_io = Arc::clone(&self.room_io);
         Reply::new(async move { room_io.wait_for_ready().await })
     }

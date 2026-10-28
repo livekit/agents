@@ -3,10 +3,10 @@
 
 use crate::room_io::{AudioOutputConfig, publication::Publication};
 use async_trait::async_trait;
-use lk_agents_abi::AbortHandle;
 use lk_agents_abi::voice::io::Result;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackFinished, PlaybackTracker};
 use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
+use lk_agents_abi::{AbortHandle, Closed, HOST_TEARDOWN_TIMEOUT, timeout};
 use lk_agents_abi::{AudioByteStream, AudioFrame, Clock, Spawner, SpawnerExt, Ts};
 use lk_agents_rtc::{AudioSource, PlaybackInfo, RtcRoom, frame_duration};
 use std::collections::VecDeque;
@@ -180,6 +180,8 @@ struct Playback {
     source: Option<Arc<dyn AudioSource>>,
     publication: Publication,
     cleanup_finished: bool,
+    cleanup_outcome: Option<Closed>,
+    cleanup_deadline: Option<Ts>,
 }
 
 impl Playback {
@@ -516,6 +518,8 @@ impl ParticipantAudioOutput {
             source: None,
             publication: Publication::default(),
             cleanup_finished: false,
+            cleanup_outcome: None,
+            cleanup_deadline: None,
         };
         Arc::new(ParticipantAudioOutput {
             room,
@@ -546,6 +550,7 @@ impl ParticipantAudioOutput {
             let room = self.room.clone();
             let shared = self.shared.clone();
             let options = self.config.publish.clone();
+            let self_spawner = self.spawner.clone();
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
             tasks.push(self.spawner.spawn_unboxed(async move {
@@ -567,7 +572,17 @@ impl ParticipantAudioOutput {
                     }
                 };
                 if !adopted {
-                    retire_publication(room.as_ref(), source.as_ref(), publication.sid()).await;
+                    let outcome = retire_publication(
+                        room.clone(),
+                        source,
+                        publication.sid().clone(),
+                        self_spawner,
+                    )
+                    .await;
+                    let mut state = shared.lock();
+                    state.cleanup_outcome =
+                        Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
+                    drop(state);
                     shared.lock().publication.creation_retired();
                     shared.wake.notify_waiters();
                     return;
@@ -631,8 +646,8 @@ impl ParticipantAudioOutput {
         }
     }
 
-    pub async fn aclose(&self) {
-        let (first, captured) = {
+    pub async fn aclose(&self) -> Closed {
+        let (first, captured, deadline) = {
             let mut state = self.shared.lock();
             let first = !state.closed;
             let captured = state.phase != Phase::Idle;
@@ -644,7 +659,10 @@ impl ParticipantAudioOutput {
             state.handed.clear();
             state.bstream.clear();
             state.pending = 0;
-            (first, captured)
+            let deadline = *state.cleanup_deadline.get_or_insert_with(|| {
+                self.shared.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)
+            });
+            (first, captured, deadline)
         };
         self.shared.wake.notify_waiters();
         if first {
@@ -659,53 +677,91 @@ impl ParticipantAudioOutput {
             }
             let shared = self.shared.clone();
             let room = self.room.clone();
+            let spawner = self.spawner.clone();
             self.spawner.spawn_unboxed(async move {
                 shared.wait_until(|s| !s.publication.creating()).await;
                 let (source, sid) = {
                     let mut state = shared.lock();
                     (state.source.take(), state.publication.retire())
                 };
+                let mut outcome = Closed::Clean;
                 if let Some(source) = source {
                     if captured {
                         shared.report(shared.clear_source(source.as_ref(), false).0);
                     }
+                    if captured {
+                        let played = shared.lock().ledger.played;
+                        shared.tracker.note_flush();
+                        shared.tracker.playback_finished(PlaybackFinished {
+                            playback_position: played,
+                            interrupted: true,
+                            synchronized_transcript: None,
+                        });
+                    }
                     if let Some(sid) = sid {
-                        retire_publication(room.as_ref(), source.as_ref(), &sid).await;
+                        outcome = retire_publication(room, source, sid, spawner).await;
                     } else {
-                        let _ = source.close().await;
+                        outcome = cleanup_outcome(source.close().await, "audio source");
                     }
                 }
-                if captured {
-                    let played = shared.lock().ledger.played;
-                    shared.tracker.note_flush();
-                    shared.tracker.playback_finished(PlaybackFinished {
-                        playback_position: played,
-                        interrupted: true,
-                        synchronized_transcript: None,
-                    });
+                {
+                    let mut state = shared.lock();
+                    state.cleanup_finished = true;
+                    state.cleanup_outcome =
+                        Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
                 }
-                shared.lock().cleanup_finished = true;
                 shared.wake.notify_waiters();
             });
         }
-        self.shared.wait_until(|s| s.cleanup_finished).await;
-        for handle in self.tasks.lock().unwrap().drain(..) {
-            handle.abort();
+        let remaining = deadline.saturating_duration_since(self.shared.clock.now());
+        let settled = timeout(
+            self.shared.clock.as_ref(),
+            remaining,
+            self.shared.wait_until(|s| s.cleanup_finished),
+        )
+        .await
+        .is_ok();
+        let outcome = {
+            let mut state = self.shared.lock();
+            if !settled {
+                state.cleanup_outcome = Some(Closed::TimedOut);
+            }
+            state.cleanup_outcome.unwrap_or(Closed::TimedOut)
+        };
+        if settled {
+            for handle in self.tasks.lock().unwrap().drain(..) {
+                handle.abort();
+            }
         }
+        outcome
     }
 }
 
 async fn retire_publication(
-    room: &dyn RtcRoom,
-    source: &dyn AudioSource,
-    sid: &lk_agents_rtc::TrackSid,
-) {
-    // Each half is independently owned: failure closing the source must not skip unpublication.
-    if let Err(error) = source.close().await {
-        log::error!(target: "livekit.agents", "room audio source cleanup failed: {error}");
-    }
-    if let Err(error) = room.local().unpublish_track(sid).await {
-        log::error!(target: "livekit.agents", "room audio publication cleanup failed for {sid}: {error}");
+    room: Arc<dyn RtcRoom>,
+    source: Arc<dyn AudioSource>,
+    sid: lk_agents_rtc::TrackSid,
+    spawner: Arc<dyn Spawner>,
+) -> Closed {
+    // Source closure and SID retirement are separate obligations: either SDK call may hang.
+    // This task retains both receipts after a close waiter reports its deadline outcome.
+    let (closed, closing) = tokio::sync::oneshot::channel();
+    spawner.spawn_unboxed(async move {
+        let outcome = cleanup_outcome(source.close().await, "audio source");
+        let _ = closed.send(outcome);
+    });
+    let unpublished =
+        cleanup_outcome(room.local().unpublish_track(&sid).await, "audio publication");
+    unpublished.and(closing.await.unwrap_or(Closed::Failed))
+}
+
+fn cleanup_outcome(result: lk_agents_rtc::Result<()>, resource: &str) -> Closed {
+    match result {
+        Ok(()) => Closed::Clean,
+        Err(error) => {
+            log::error!(target: "livekit.agents", "room {resource} cleanup failed: {error}");
+            Closed::Failed
+        }
     }
 }
 
