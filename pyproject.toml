@@ -17,8 +17,8 @@ required-environments = [
 livekit-agents-next = { workspace = true }
 # Match the protocol schema consumed by the local Rust SDK.
 livekit-protocol = { path = "../python-sdks/livekit-protocol", editable = true }
-# python-sdks main has the agent grants, not yet released to PyPI; an archive, since git clones fail on LFS
-livekit-api = { url = "https://github.com/livekit/python-sdks/archive/bdeadbacc75ece1274c55e02d3da9a34c8bde5b8.tar.gz", subdirectory = "livekit-api" }
+# The local SDK supplies the matching thread APIs and agent grants.
+livekit-api = { path = "../python-sdks/livekit-api", editable = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }
@@ -44,7 +44,6 @@ livekit-plugins-gladia = { workspace = true }
 livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
-livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
@@ -100,7 +99,6 @@ members = ["livekit-plugins/*", "livekit-agents-next", "examples_old/avatar", "e
 exclude = [
     "livekit-plugins/community",
     "livekit-plugins/livekit-blockguard",
-    "livekit-plugins/livekit-durable",
 ]
 
 [dependency-groups]
@@ -124,6 +122,7 @@ dev = [
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
 typing = [
+    "pyright",
     # .pyi stubs, never used at runtime
     "pandas-stubs>=3.0.3.260530",
     "scipy-stubs>=1.17.1.5",
@@ -212,7 +211,6 @@ markers = [
 
 [tool.mypy]
 strict = true
-disallow_any_generics = false
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
@@ -269,3 +267,13 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "livekit.plugins"
 follow_untyped_imports = true
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
+executionEnvironments = [
+    { root = "examples/airline-support", extraPaths = ["examples/airline-support"] },
+    { root = "examples/frontdesk", extraPaths = ["examples/frontdesk"] },
+    { root = "examples/hotel-receptionist", extraPaths = ["examples/hotel-receptionist"] },
+    { root = "." },
+]

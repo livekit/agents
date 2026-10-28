@@ -31,7 +31,7 @@ from livekit.agents import Plugin
 
 class ClovaSTTPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __name__)
 
     def download_files(self) -> None:
         pass

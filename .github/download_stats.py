@@ -93,7 +93,6 @@ def _fetch_all() -> list[tuple[str, int, int, int, float | None, float | None, f
         "livekit-agents",
         "livekit-blingfire",
         "livekit-blockguard",
-        "livekit-durable",
     ] + _iter_plugin_names()
 
     today = datetime.now().date()

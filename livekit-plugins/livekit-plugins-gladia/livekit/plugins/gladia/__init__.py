@@ -30,7 +30,7 @@ from .log import logger
 
 class GladiaPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __name__, logger)
 
 
 Plugin.register_plugin(GladiaPlugin())

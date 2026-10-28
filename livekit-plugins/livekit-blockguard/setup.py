@@ -34,7 +34,6 @@ setuptools.setup(
         "Operating System :: POSIX",
         "Topic :: Software Development :: Debuggers",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
@@ -49,7 +48,7 @@ setuptools.setup(
     ],
     package_data={"livekit.blockguard": ["py.typed"]},
     packages=setuptools.find_namespace_packages(include=["livekit.*"]),
-    python_requires=">=3.10.0,<3.15",
+    python_requires=">=3.11.0,<3.15",
     project_urls={
         "Documentation": "https://docs.livekit.io",
         "Website": "https://livekit.io/",

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run mypy type checking on all livekit packages.
+"""Run strict mypy and pyright on the public API, every plugin and examples.
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
 Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
-Passes given arguments to mypy. Arguments after `--` passed to `uv run`.
+Use --checker=mypy or --checker=pyright for one checker. Other arguments go to mypy.
+Arguments after `--` go to `uv run`.
 
 Third-party type stubs are declared in the `typing` dependency group in
 pyproject.toml and locked in uv.lock. We intentionally do NOT use
@@ -20,16 +21,10 @@ exact `uv add` command to declare and lock them. The script never installs stubs
 itself, so every run is a single deterministic pass..
 """
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
-
-# Plugins to exclude from type checking
-EXCLUDED_PLUGINS = [
-    "browser",
-    "nvidia",
-    "rtzr",
-]
 
 # mypy records the full set of stub packages it wants here, one per line.
 _MISSING_STUBS = ".mypy_cache/missing_stubs"
@@ -55,8 +50,6 @@ def get_packages(repo_root: Path) -> list[str]:
             # livekit-plugins-openai -> openai
             # livekit-plugins-microsoft-ai -> microsoft_ai
             plugin_name = plugin_dir.name.replace("livekit-plugins-", "").replace("-", "_")
-            if plugin_name in EXCLUDED_PLUGINS:
-                continue
             packages.append(f"livekit.plugins.{plugin_name}")
 
     return packages
@@ -87,17 +80,19 @@ def main() -> None:
     else:
         mypy_args, uv_run_args = sys.argv[1:mypy_args_end], sys.argv[mypy_args_end + 1 :]
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--checker", choices=("mypy", "pyright", "all"), default="all")
+    options, mypy_args = parser.parse_known_args(mypy_args)
+
     pkg_args: list[str] = []
     for pkg in packages:
         pkg_args.extend(["-p", pkg])
 
-    command = [
-        "uv",
-        "run",
-        "--group",
-        "typing",
-        *uv_run_args,
+    uv = ["uv", "run", "--group", "typing", *uv_run_args]
+    mypy = [
+        *uv,
         "mypy",
+        "--strict",
         "--untyped-calls-exclude=smithy_aws_core",
         # Analyze for linux regardless of the host OS, matching the CI gate.
         # Host-platform analysis breaks on Windows: the unix branch of
@@ -108,14 +103,47 @@ def main() -> None:
         # --platform still overrides this default.
         "--platform",
         "linux",
-        *pkg_args,
-        *mypy_args,
     ]
-    print(*command, "\n")
-    returncode = subprocess.run(command, cwd=repo_root).returncode
+    returncode = 0
+    if options.checker in ("mypy", "all"):
+        targets = [[*pkg_args, "livekit-plugins/livekit-blockguard/livekit/blockguard"]]
+        # Examples are separate applications and can use the same module names.
+        targets.extend(
+            [str(path.relative_to(repo_root))]
+            for path in sorted((repo_root / "examples").iterdir())
+            if path.is_dir() or path.suffix == ".py"
+        )
+        for target in targets:
+            command = [*mypy, *target, *mypy_args]
+            print(*command, "\n", flush=True)
+            result = subprocess.run(command, cwd=repo_root).returncode
+            if not returncode:
+                returncode = result
+        if returncode and (missing := read_missing_stubs(repo_root)):
+            print(INSTALL_STUBS_MESSAGE.format(" ".join(missing)), file=sys.stderr)
 
-    if returncode and (missing := read_missing_stubs(repo_root)):
-        print(INSTALL_STUBS_MESSAGE.format(" ".join(missing)), file=sys.stderr)
+    if options.checker in ("pyright", "all"):
+        source_paths = [
+            "livekit-agents-next/livekit/agents",
+            "tests/type_checks",
+            "examples",
+            "livekit-plugins/livekit-blockguard/livekit/blockguard",
+        ]
+        source_paths.extend(
+            str(path.relative_to(repo_root))
+            for path in sorted((repo_root / "livekit-plugins").glob("livekit-plugins-*/livekit"))
+        )
+        pyright = [
+            *uv,
+            "pyright",
+            "--pythonpath",
+            sys.executable,
+            *source_paths,
+        ]
+        print(*pyright, "\n", flush=True)
+        pyright_returncode = subprocess.run(pyright, cwd=repo_root).returncode
+        if not returncode:
+            returncode = pyright_returncode
 
     sys.exit(returncode)
 

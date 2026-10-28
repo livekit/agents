@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LiveKit Agents plugin for Gnani Vachana speech AI — STT & TTS for Indian languages"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "LiveKit", email = "support@livekit.io" }]
 keywords = [
     "webrtc", "realtime", "audio", "livekit", "livekit-agents",
@@ -22,7 +22,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

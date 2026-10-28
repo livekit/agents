@@ -28,7 +28,7 @@ from livekit.agents import Plugin
 
 class ResemblePlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __name__)
 
 
 Plugin.register_plugin(ResemblePlugin())

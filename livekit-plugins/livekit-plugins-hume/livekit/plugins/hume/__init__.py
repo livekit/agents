@@ -44,7 +44,7 @@ __all__ = [
 
 class HumeAIPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __name__)
 
 
 Plugin.register_plugin(HumeAIPlugin())

@@ -23,6 +23,7 @@ wheel and exposes a :class:`_LicenseKrispFrameProcessor` that
 from __future__ import annotations
 
 from threading import Lock
+from types import TracebackType
 from typing import Any, Literal
 
 import numpy as np
@@ -361,7 +362,10 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         return self
 
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> Literal[False]:
         self._close()
         return False

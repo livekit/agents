@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any, Literal, Protocol
+from types import TracebackType
+from typing import Literal, Protocol
 
 from livekit import rtc
 from livekit.plugins.krisp_internal import VivaMode
@@ -327,7 +328,10 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         return self
 
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Context manager exit - clean up session."""
         self.close()

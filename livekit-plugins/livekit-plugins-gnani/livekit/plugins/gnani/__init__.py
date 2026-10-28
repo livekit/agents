@@ -36,7 +36,7 @@ from .log import logger
 
 class GnaniPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __name__, logger)
 
 
 Plugin.register_plugin(GnaniPlugin())

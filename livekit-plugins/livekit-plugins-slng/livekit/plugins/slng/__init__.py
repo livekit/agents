@@ -40,7 +40,7 @@ from livekit.agents import Plugin
 
 class SLNGPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __name__, logger)
 
 
 Plugin.register_plugin(SLNGPlugin())

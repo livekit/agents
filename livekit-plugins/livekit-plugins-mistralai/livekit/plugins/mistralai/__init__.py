@@ -14,7 +14,7 @@ __all__ = ["ApiMode", "LLM", "STT", "TTS", "tools", "__version__"]
 
 class MistralAIPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __name__, logger)
 
 
 Plugin.register_plugin(MistralAIPlugin())

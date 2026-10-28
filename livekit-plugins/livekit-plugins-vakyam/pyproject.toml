@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LiveKit Agents plugin for Vakyam AI TTS (Raaga 1) — Indian-language text-to-speech"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10.0"
+requires-python = ">=3.11.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = [
     "webrtc",
@@ -27,7 +27,6 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",

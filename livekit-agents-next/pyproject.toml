@@ -22,7 +22,6 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -98,7 +97,6 @@ gladia = ["livekit-plugins-gladia>=1.8.6"]
 gnani = ["livekit-plugins-gnani>=1.8.6"]
 google = ["livekit-plugins-google>=1.8.6"]
 groq = ["livekit-plugins-groq>=1.8.6"]
-hamming = ["livekit-plugins-hamming>=1.8.6"]
 hume = ["livekit-plugins-hume>=1.8.6"]
 inworld = ["livekit-plugins-inworld>=1.8.6"]
 keyframe = ["livekit-plugins-keyframe>=1.8.6"]

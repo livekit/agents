@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LiveKit Agents plugin for Nabrah Arabic speech-to-text"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = [
     "webrtc",
@@ -29,7 +29,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = ["livekit-agents-next>=1.8.6", "aiohttp"]

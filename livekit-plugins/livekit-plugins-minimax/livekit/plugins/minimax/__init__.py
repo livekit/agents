@@ -36,7 +36,7 @@ from .log import logger
 class MiniMaxPlugin(Plugin):
     def __init__(self) -> None:
         # The super() call requires the plugin name, version, package path, and logger.
-        super().__init__(__name__, __version__, __package__, logger)
+        super().__init__(__name__, __version__, __name__, logger)
 
 
 # Register an instance of our plugin with the LiveKit Agents framework.
