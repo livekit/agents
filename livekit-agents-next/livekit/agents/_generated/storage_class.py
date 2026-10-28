@@ -77,11 +77,11 @@ class Ask:
     """What a task waiting on the person holds: the question and the call that takes the answer."""
 
     question: str
-    tool: str | None
+    tool: str | None = None
     """The tool that asked."""
-    call_id: str | None
+    call_id: str | None = None
     """The asking call, whose output the answer becomes."""
-    answer_tool: str | None
+    answer_tool: str | None = None
     """The tool that takes the answer before the model runs."""
 
 
@@ -189,3 +189,13 @@ class InboxRow:
     message: object
     """The A2A `Message`."""
     received_at: int
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class RunUsage:
+    """Token usage of a managed run, recorded in its journal."""
+
+    requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0

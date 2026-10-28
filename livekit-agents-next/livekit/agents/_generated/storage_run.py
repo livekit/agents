@@ -1,7 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
-#     rust/crates/lk-agents-storage/src/schema.rs
 #     rust/crates/lk-agents-storage/src/run.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -9,67 +8,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
-
-from .storage import Ask, TaskData
-
-
-class ItemRow(BaseModel):
-    """One history item of a lane."""
-
-    model_config = ConfigDict(frozen=True)
-    id: str
-    message_id: str | None = None
-    """The A2A `messageId` of the message this item came from, the idempotency key."""
-    payload: dict[str, Any]
-    """The `ChatContext.ChatItem`, as protobuf JSON."""
-
-
-class TaskRow(BaseModel):
-    """One A2A task of a lane. The A2A `Task` is
-    `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
-    plus the fields of `data`.
-    """
-
-    model_config = ConfigDict(frozen=True)
-    task_id: str
-    lane: str
-    seq: int
-    """Submission order; the lane runs its runnable tasks in it."""
-    name: str | None
-    """An optional application task label."""
-    message_id: str | None
-    status: TaskState
-    updated_at: int
-    """Unix milliseconds."""
-    data: TaskData
-    """The A2A `Task` fields: `history`, `artifacts`, `metadata`."""
-    internal: Ask | None
-    """What the framework keeps to resume the task: the question it waits on the person to
-    answer, while it does.
-    """
-
-
-class RunUsage(BaseModel):
-    """Token usage of one run; written as a `usage` event when the run
-    made a request or a tool call.
-    """
-
-    requests: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    tool_calls: int = 0
-
-
-TaskState = Literal[
-    "submitted", "working", "input-required", "completed", "failed", "canceled", "rejected"
-]
-"""The framework's task states; the terminal ones are immutable. The A2A edge maps them to its
-own.
-"""
-
+from pydantic import BaseModel
 
 RunOutcome = Literal["completed", "input-required", "failed", "canceled", "rejected"]
 """What `run_ended` records."""

@@ -16,7 +16,7 @@ doctest = false
 lk-agents-storage = { path = "../lk-agents-storage" }
 # `#[host(proxy)]` on `TurnHost` and the stream halves it returns: the host's handler is driven like
 # any other host object the core calls.
-lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 pyo3 = { workspace = true, optional = true }
 # `Host` for the records the host reads, so their pydantic twins come from `lk-agents-codegen`.
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }

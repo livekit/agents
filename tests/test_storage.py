@@ -16,7 +16,8 @@ import pytest
 
 from livekit.agents import Agent, InputRequired, RunContext, RunResult, _core, persisted
 from livekit.agents._generated.storage_class import LaneRow, TaskRecord
-from livekit.agents._generated.storage_turn import TurnOptions, TurnResult
+from livekit.agents._generated.storage_options import TurnOptions
+from livekit.agents._generated.storage_turn import TurnResult
 from livekit.agents.a2a.extension import (
     CHANNEL,
     INTERRUPTED,
@@ -28,6 +29,7 @@ from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import RunRejected, Storage
 from livekit.agents.storage.context import A2ASessionContext, Handler, TurnHost
+from livekit.agents.storage.protocol import payload_to_item
 from livekit.agents.storage.resolve import Thread, resolve_thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -849,7 +851,7 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     assert second.output == "reply to: again"
     core = await storage.open(info.thread_id)
     items = await core.history("front")
-    assert [i.payload["content"][0] for i in items] == [
+    assert [payload_to_item(i.payload).text_content for i in items] == [
         "hi",
         "reply to: hi",
         "again",

@@ -96,14 +96,22 @@ pub fn storage_error_to_py(error: StorageError) -> pyo3::PyErr {
         }
         _ => "StorageError",
     };
-    let err = crate::python::host_exception("livekit.agents.storage.errors", class, message);
     if let StorageError::RunRejected { running_task_id } = error {
-        // an attribute of the instance, so the exception's text stays the plain sentence
-        Python::attach(|py| {
-            let _ = err.value(py).setattr("running_task_id", running_task_id);
+        return Python::attach(|py| {
+            let build = || -> pyo3::PyResult<_> {
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("running_task_id", running_task_id)?;
+                py.import("livekit.agents.storage.errors")?
+                    .getattr("RunRejected")?
+                    .call((message,), Some(&kwargs))
+            };
+            match build() {
+                Ok(instance) => pyo3::PyErr::from_value(instance),
+                Err(error) => error,
+            }
         });
     }
-    err
+    crate::python::host_exception("livekit.agents.storage.errors", class, message)
 }
 
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local

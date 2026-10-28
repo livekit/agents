@@ -35,7 +35,6 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._generated.storage_class import StreamInfo, TaskData, TaskRecord
-from .._generated.storage_run import TaskRow
 from .._generated.storage_turn import TurnResult
 from ..log import logger
 from ..storage.backends import Storage
@@ -423,9 +422,7 @@ class A2AService:
             )
         return continued
 
-    def _unknown_session(
-        self, message: StoredMessage, call: CallContext
-    ) -> tuple[TaskRow | TaskRecord, str]:
+    def _unknown_session(self, message: StoredMessage, call: CallContext) -> tuple[TaskRecord, str]:
         """Plan 5.12: an id the threads service does not know fails the task ``thread-not-found``."""
         context_id = str(message.get("contextId") or "")
         record = _failed_record(shortuuid("AST_"), self.lane, message, REASON_THREAD_NOT_FOUND)
@@ -433,7 +430,7 @@ class A2AService:
 
     def _unsaved(
         self, thread_id: str, message: StoredMessage, error: StorageError
-    ) -> tuple[TaskRow | TaskRecord, str]:
+    ) -> tuple[TaskRecord, str]:
         """The turn's save could not be written: the task fails ``storage-unavailable`` in the
         answer, unpersisted, and the client resends (docs/protocol/a2a.md)."""
         logger.warning(

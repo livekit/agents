@@ -353,3 +353,41 @@ impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::InboxRow {
         INBOX_ROW.import(py, "livekit.agents._generated.storage_class", "InboxRow")?.call((), Some(&kwargs))
     }
 }
+
+// Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
+static RUN_USAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::storage::RunUsage {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let obj = &*obj;
+        let py = obj.py();
+        if !obj.is_instance(RUN_USAGE.import(py, "livekit.agents._generated.storage_class", "RunUsage")?)? {
+            return Err(super::not_a(obj, "RunUsage"));
+        }
+        Ok(Self {
+            requests: ::lk_agents_abi::python::attr_with(obj, "RunUsage", "requests", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "RunUsage.requests"))?,
+            input_tokens: ::lk_agents_abi::python::attr_with(obj, "RunUsage", "input_tokens", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "RunUsage.input_tokens"))?,
+            output_tokens: ::lk_agents_abi::python::attr_with(obj, "RunUsage", "output_tokens", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "RunUsage.output_tokens"))?,
+            tool_calls: ::lk_agents_abi::python::attr_with(obj, "RunUsage", "tool_calls", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "RunUsage.tool_calls"))?,
+        })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::storage::RunUsage {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { requests, input_tokens, output_tokens, tool_calls } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("requests", ::pyo3::IntoPyObjectExt::into_bound_py_any(requests, py)?)?;
+        kwargs.set_item("input_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(input_tokens, py)?)?;
+        kwargs.set_item("output_tokens", ::pyo3::IntoPyObjectExt::into_bound_py_any(output_tokens, py)?)?;
+        kwargs.set_item("tool_calls", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_calls, py)?)?;
+        RUN_USAGE.import(py, "livekit.agents._generated.storage_class", "RunUsage")?.call((), Some(&kwargs))
+    }
+}

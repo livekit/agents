@@ -1,13 +1,14 @@
 //! A thread database's rows as the host reads them (docs/internals/storage.md#thread-database).
 //! The storage core keeps its typed `#[table]` rows and converts them into these; chat items and
-//! A2A messages cross as their protobuf JSON. The turn records (`storage_turn`) still carry the
-//! core's own models until they move here with the turn bridge (I-16).
+//! A2A messages cross as their protobuf JSON.
 
 use serde_json::{Map, Value};
 
 /// A task's state: the storage core's `TaskState` as the host reads it.
 #[crate::host(record(module = "storage_class", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum TaskState {
     #[host(rename = "submitted")]
     Submitted,
@@ -26,6 +27,23 @@ pub enum TaskState {
 }
 
 impl TaskState {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "submitted" => Self::Submitted,
+            "working" => Self::Working,
+            "input-required" => Self::InputRequired,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "canceled" => Self::Canceled,
+            "rejected" => Self::Rejected,
+            _ => return None,
+        })
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::Rejected)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             TaskState::Submitted => "submitted",
@@ -42,13 +60,20 @@ impl TaskState {
 /// What a task waiting on the person holds: the question and the call that takes the answer.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ask {
     pub question: String,
     /// The tool that asked.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[host(default = None)]
     pub tool: Option<String>,
     /// The asking call, whose output the answer becomes.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[host(default = None)]
     pub call_id: Option<String>,
     /// The tool that takes the answer before the model runs.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    #[host(default = None)]
     pub answer_tool: Option<String>,
 }
 
@@ -155,4 +180,28 @@ pub struct InboxRow {
     /// The A2A `Message`.
     pub message: Value,
     pub received_at: i64,
+}
+
+/// Token usage of a managed run, recorded in its journal.
+#[crate::host(record(module = "storage_class", extract, emit))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RunUsage {
+    #[host(default = 0)]
+    pub requests: i64,
+    #[host(default = 0)]
+    pub input_tokens: i64,
+    #[host(default = 0)]
+    pub output_tokens: i64,
+    #[host(default = 0)]
+    pub tool_calls: i64,
+}
+
+impl RunUsage {
+    pub fn add(&mut self, other: &Self) {
+        self.requests += other.requests;
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.tool_calls += other.tool_calls;
+    }
 }

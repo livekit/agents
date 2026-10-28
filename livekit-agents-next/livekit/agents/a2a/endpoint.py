@@ -30,7 +30,7 @@ from starlette.routing import Route
 from typing_extensions import Unpack
 
 from .._core import ServerConfig, endpoint_url_base
-from .._generated.storage_turn import Policy, TurnOptions
+from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
 from ..storage.context import Handler
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized

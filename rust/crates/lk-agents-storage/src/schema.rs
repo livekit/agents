@@ -13,17 +13,14 @@ use crate::sql::{FromCell, json_cell, statement};
 
 /// One history item of a lane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
 #[table("items")]
 pub struct ItemRow {
     pub id: String,
     /// The A2A `messageId` of the message this item came from, the idempotency key.
     #[serde(default)]
-    #[python(default = "None")]
     pub message_id: Option<String>,
     /// The `ChatContext.ChatItem`, as protobuf JSON.
     #[table(json)]
-    #[python(ty = "dict[str, Any]", import = "typing:Any")]
     pub payload: ChatItem,
 }
 
@@ -78,7 +75,6 @@ impl ItemRow {
 /// `id = task_id`, `contextId = the thread id`, `status = (status, data.statusMessage, updated_at)`,
 /// plus the fields of `data`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run", config = "frozen=True")]
 #[table("tasks")]
 pub struct TaskRow {
     pub task_id: String,
@@ -109,41 +105,20 @@ impl TaskRow {
 /// The `data` column: the A2A `Task` fields a row keeps, as v1 protobuf JSON; an absent field is
 /// left out.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage")]
+
 pub struct TaskData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[python(ty = "list[dict[str, Any]]", import = "typing:Any", default_factory = "list")]
     pub history: Vec<a2a::Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(ty = "list[dict[str, Any]]", import = "typing:Any", default = "None")]
     pub artifacts: Option<Vec<a2a::Artifact>>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
     pub metadata: Map<String, Value>,
     /// `Task.status.message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default = "None")]
     pub status_message: Option<a2a::Message>,
 }
 
-/// What a task waiting on the person holds: the question and the call that takes the answer.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage")]
-pub struct Ask {
-    pub question: String,
-    /// The tool that asked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(default = "None")]
-    pub tool: Option<String>,
-    /// The asking call, whose output the answer becomes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(default = "None")]
-    pub call_id: Option<String>,
-    /// The tool that takes the answer before the model runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[python(default = "None")]
-    pub answer_tool: Option<String>,
-}
+pub use lk_agents_abi::storage::Ask;
 
 /// One lane: a registered agent's state, lease and inbox cursor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]

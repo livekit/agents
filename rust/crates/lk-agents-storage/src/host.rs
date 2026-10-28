@@ -7,8 +7,7 @@ use serde_json::Value;
 
 use crate::StorageError;
 use crate::db::TaskPage;
-use crate::run::TaskState;
-use crate::schema::{Ask, EventRow, InboxRow, ItemRow, LaneRow, TaskData, TaskRow};
+use crate::schema::{EventRow, InboxRow, ItemRow, LaneRow, TaskData, TaskRow};
 
 fn json<T: Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or_default()
@@ -31,31 +30,6 @@ impl TryFrom<host::ItemRow> for ItemRow {
     }
 }
 
-impl From<TaskState> for host::TaskState {
-    fn from(state: TaskState) -> Self {
-        match state {
-            TaskState::Submitted => host::TaskState::Submitted,
-            TaskState::Working => host::TaskState::Working,
-            TaskState::InputRequired => host::TaskState::InputRequired,
-            TaskState::Completed => host::TaskState::Completed,
-            TaskState::Failed => host::TaskState::Failed,
-            TaskState::Canceled => host::TaskState::Canceled,
-            TaskState::Rejected => host::TaskState::Rejected,
-        }
-    }
-}
-
-impl From<Ask> for host::Ask {
-    fn from(ask: Ask) -> Self {
-        host::Ask {
-            question: ask.question,
-            tool: ask.tool,
-            call_id: ask.call_id,
-            answer_tool: ask.answer_tool,
-        }
-    }
-}
-
 impl From<TaskData> for host::TaskData {
     fn from(data: TaskData) -> Self {
         host::TaskData {
@@ -75,10 +49,10 @@ impl From<TaskRow> for host::TaskRecord {
             seq: row.seq,
             name: row.name,
             message_id: row.message_id,
-            status: row.status.into(),
+            status: row.status,
             updated_at: row.updated_at,
             data: row.data.into(),
-            internal: row.internal.map(Into::into),
+            internal: row.internal,
         }
     }
 }

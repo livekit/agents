@@ -30,6 +30,7 @@ from livekit.agents.delegation import A2ADelegate, DelegationFailed
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
 from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS
 from livekit.agents.storage import Storage
+from livekit.agents.storage.protocol import payload_to_item
 from livekit.agents.storage.resolve import Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -485,11 +486,11 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
 
     db = await clinic_storage.open(thread_id)
     try:
-        history = [row.payload for row in await db.history(AGENT)]
+        history = [payload_to_item(row.payload) for row in await db.history(AGENT)]
     finally:
         db.close()
-    calls = [i for i in history if i["type"] == "function_call" and i["name"] == "ask"]
-    assert [json.loads(c["arguments"])["request"] for c in calls] == [
+    calls = [i for i in history if i.type == "function_call" and i.name == "ask"]
+    assert [json.loads(c.arguments)["request"] for c in calls] == [
         "check coverage",
         "Aetna, member 12-345",  # the person's words, not the model's
     ]

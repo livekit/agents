@@ -17,16 +17,12 @@ pub mod auth;
 pub mod caller_history;
 pub mod client;
 pub mod delegation;
+mod host;
 pub mod outcome;
 pub mod policy;
 pub mod rpc;
 
-use std::time::Duration;
-
-use lk_agents_abi::StreamSink;
-use lk_agents_abi::StreamSource;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -35,90 +31,23 @@ use livekit_protocol::agent::ChatRole;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use lk_agents_storage::StorageError;
-use lk_agents_storage::run::{ItemRow, KIND_KEY, LEASE_WAIT_TIMEOUT, RunUsage, TaskRow};
+use lk_agents_storage::run::{ItemRow, KIND_KEY, RunUsage, TaskRow};
 use lk_agents_storage::timestamp;
 
 pub use outcome::*;
 pub use policy::*;
 
-/// A text door's turn options; a field left out is the default.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn")]
-pub struct TurnOptions {
-    /// `inbox`: one policy for every channel, or a map by channel over the
-    /// default map; `None` is the default map.
-    #[serde(default)]
-    #[python(ty = "Policy | dict[str, Policy] | None", default = "None")]
-    pub policy: PolicySpec,
-    /// The wait before a turn starts, in seconds: one for every channel, or a map by channel;
-    /// `None` is the defaults.
-    #[serde(default)]
-    #[python(ty = "float | dict[str, float] | None", default = "None")]
-    pub debounce: DebounceSpec,
-    /// How long a waiter polls for the lane before its task fails `lease-timeout`, in seconds;
-    /// `None` is a minute.
-    #[serde(default, with = "opt_seconds")]
-    #[python(ty = "float | None", default = "None")]
-    pub wait_timeout: Option<Duration>,
-}
-
-impl TurnOptions {
-    /// `wait_timeout`, or the crate default.
-    pub fn wait_timeout(&self) -> Duration {
-        self.wait_timeout.unwrap_or(LEASE_WAIT_TIMEOUT)
-    }
-}
-
-/// `Option<Duration>` as seconds, `null` for none.
-mod opt_seconds {
-    use std::time::Duration;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
-        d.map(|d| d.as_secs_f64()).serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-        Option::<f64>::deserialize(d)?
-            .map(|s| crate::policy::duration_from_secs(s).map_err(serde::de::Error::custom))
-            .transpose()
-    }
-}
-
-/// A message during a run: one of the five policies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
-#[serde(rename_all = "lowercase")]
-#[python(literal, module = "storage_turn")]
-pub enum Policy {
-    #[host(rename = "batch")]
-    Batch,
-    #[host(rename = "interrupt")]
-    Interrupt,
-    #[host(rename = "queue")]
-    Queue,
-    #[host(rename = "concurrent")]
-    Concurrent,
-    #[host(rename = "reject")]
-    Reject,
-}
-
-impl Policy {
-    /// `None` for a string no policy spells.
-    pub fn parse(s: &str) -> Option<Policy> {
-        Policy::from_wire(s)
-    }
-}
+pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
+pub use lk_agents_abi::a2a::turn::{TurnEvent, TurnHost, Verdict};
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn", config = "frozen=True")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+
 pub struct Message {
     pub message_id: String,
     /// v1 parts, as protobuf JSON.
-    #[python(ty = "list[dict[str, Any]]", import = "typing:Any")]
     pub parts: Vec<a2a::Part>,
-    #[python(ty = "dict[str, Any]", import = "typing:Any")]
+
     pub metadata: Map<String, Value>,
     pub channel: String,
     /// Unix seconds.
@@ -126,7 +55,6 @@ pub struct Message {
     pub task_id: Option<String>,
     pub context_id: Option<String>,
     /// The A2A message as received, less a delegation's `chat_ctx` part.
-    #[python(ty = "dict[str, Any]", import = "typing:Any")]
     pub raw: a2a::Message,
 }
 
@@ -231,50 +159,6 @@ pub fn caller_history_of(message: &a2a::Message) -> Option<Value> {
     })
 }
 
-/// The host's handler, the `a2a_session` handler or `Agent.run()`.
-#[lk_agents_abi::host(proxy(host = "livekit.agents.storage.context.TurnHost", clock))]
-pub trait TurnHost: Send + Sync {
-    /// Opens the handler on one turn (`ctx` is the [`TurnContext`] as JSON): its events, and where
-    /// each checkpoint's verdict goes.
-    #[allow(clippy::type_complexity)]
-    fn handle(
-        &self,
-        ctx: Value,
-    ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>;
-}
-
-/// The turn's answer to a [`Checkpoint`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Host)]
-#[serde(rename_all = "lowercase")]
-#[python(literal, module = "storage_turn")]
-pub enum Verdict {
-    #[host(rename = "continue")]
-    Continue,
-    /// Stop here with what ran so far, no reply.
-    #[host(rename = "yield")]
-    Yield,
-}
-
-/// A place the handler can stop safely: before each model call and before the answer streams.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "checkpoint")]
-pub struct Checkpoint {}
-
-/// The handler's end: its [`HandlerOutput`], as JSON.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract, from_items, tag = "kind", tag_value = "output")]
-pub struct Output {
-    pub output: Value,
-}
-
-/// What the handler's stream carries, told apart by `kind`.
-#[derive(Debug, Clone, PartialEq, Host)]
-#[binding(extract)]
-pub enum TurnEvent {
-    Checkpoint(Checkpoint),
-    Output(Output),
-}
-
 /// A failure the host's stream raised: a cancellation ends the run `canceled`, a storage error
 /// the handler met fails it as that error.
 pub fn host_error(e: ProviderError) -> StorageError {
@@ -291,15 +175,14 @@ pub fn host_error(e: ProviderError) -> StorageError {
 }
 
 /// What the handler is opened on: the message, the batch, the history, the state, the task.
-#[derive(Debug, Clone, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn", config = "frozen=True")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct TurnContext {
     /// The database id of the session this turn runs in.
     pub thread_id: String,
     /// The lane: the registered agent this turn belongs to.
     pub lane: String,
     /// The batch as one user chat message (`batch_to_chat_message`).
-    #[python(ty = "dict[str, Any]", import = "typing:Any")]
     pub message: ChatItem,
     /// The individual messages with their channel and time; `batch.last()` is the one answered.
     pub batch: Vec<Message>,
@@ -309,7 +192,6 @@ pub struct TurnContext {
     pub state: Option<Value>,
     /// Context field writes require the lane's exclusive lease.
     #[serde(default)]
-    #[python(default = "False")]
     pub read_only: bool,
     /// The task that carries the reply.
     pub task_id: String,
@@ -324,78 +206,66 @@ pub struct TurnContext {
 }
 
 /// A conversation tool's pending call, the one an `InputRequired` came from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn", config = "frozen=True")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+
 pub struct PendingCall {
     pub name: String,
     pub call_id: String,
     /// The tool that takes the answer, when the `InputRequired` named one.
     #[serde(default)]
-    #[python(default = "None")]
     pub answer_tool: Option<String>,
 }
 
 /// A journal event the handler recorded (docs/internals/storage.md#journal): `tool_execution_updated` for a
 /// call's start, its progress and its end.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn", config = "frozen=True")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+
 pub struct HostEvent {
     #[serde(rename = "type")]
-    #[host(rename = "type")]
     pub r#type: String,
     pub payload: Value,
 }
 
 /// What the turn reads from the handler's results: the `RunResult` fields and the context's
 /// metadata, as JSON. Every field has a default: a handler reports only what it has.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+
 pub struct HandlerOutput {
     /// The answer: text, or a typed value as JSON.
     #[serde(default)]
-    #[python(default = "None")]
     pub output: Option<Value>,
     /// The chat items the runs produced, in order, each with its `id` and `type`; empty when no
     /// run was made, in which case the turn stores the message and a text answer itself.
     #[serde(default)]
-    #[python(ty = "list[dict[str, Any]]", import = "typing:Any", default_factory = "list")]
     pub new_items: Vec<ChatItem>,
     /// The state after the handler; written at commit when it differs from what was loaded.
     #[serde(default)]
-    #[python(default = "None")]
     pub state: Option<Value>,
     #[serde(default)]
-    #[python(default_factory = "RunUsage")]
     pub usage: RunUsage,
     /// A conversation tool's `InputRequired(question)`.
     #[serde(default)]
-    #[python(default = "None")]
     pub input_required: Option<String>,
     /// The call that asked, when `input_required` is set.
     #[serde(default)]
-    #[python(default = "None")]
     pub pending_call: Option<PendingCall>,
     /// The handler yielded at a checkpoint.
     #[serde(default)]
-    #[python(default = "False")]
     pub interrupted: bool,
     /// What the handler put on the task's terminal row, under short keys.
     #[serde(default)]
-    #[python(ty = "dict[str, Any]", import = "typing:Any", default_factory = "dict")]
     pub metadata: Map<String, Value>,
     /// The handler raised: `"<TypeName>: <text>"`; the task fails with it.
     #[serde(default)]
-    #[python(default = "None")]
     pub error: Option<String>,
     /// Journal events the handler recorded, in order, written with the commit.
     #[serde(default)]
-    #[python(default_factory = "list")]
     pub events: Vec<HostEvent>,
 }
 
 /// What `Turn::run` returns: the message's task after the turn, and the reply.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_turn", config = "frozen=True")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+
 pub struct TurnResult {
     pub task: TaskRow,
     /// The answer, as the artifact holds it: text, or the data of a typed value.

@@ -733,14 +733,14 @@ impl Turn {
         interrupt: bool,
     ) -> Result<(HandlerOutput, Option<Stop>), StorageError> {
         let task_id = ctx.task_id.as_str();
-        let ctx = serde_json::to_value(ctx).map_err(|e| StorageError::Invalid(e.to_string()))?;
-        let (verdicts, mut events) = self.host.handle(ctx).map_err(host_error)?;
+        let (verdicts, mut events) =
+            self.host.handle(ctx.clone().into()).await.map_err(host_error)?;
         let lane = self.thread.lane(&self.lane);
         let mut stop = None;
         let read = async {
             loop {
                 match events.next().await.map_err(host_error)? {
-                    Some(TurnEvent::Checkpoint(_)) => {
+                    Some(TurnEvent::Checkpoint) => {
                         // a lost lease cannot commit anyway: nothing yields to anyone
                         if stop.is_none() && !run.lease().is_some_and(Lease::is_lost) {
                             let (waiter, status) = lane.db().checkpoint(task_id).await?;
@@ -760,9 +760,8 @@ impl Turn {
                             if stop.is_some() { Verdict::Yield } else { Verdict::Continue };
                         verdicts.push(verdict).map_err(host_error)?;
                     }
-                    Some(TurnEvent::Output(o)) => {
-                        let out = serde_json::from_value(o.output)
-                            .map_err(|e| StorageError::Decode(format!("handler output: {e}")))?;
+                    Some(TurnEvent::Output { output }) => {
+                        let out = HandlerOutput::try_from(output)?;
                         return Ok(out);
                     }
                     None => {

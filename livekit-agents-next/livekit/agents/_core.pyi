@@ -32,9 +32,9 @@ from ._generated._core_telemetry import (
 )
 from ._generated._core_storage import *  # noqa: F401, F403
 from ._generated._core_worker import *  # noqa: F401, F403
-from ._generated.storage import EventRow, InboxRow, StreamInfo
-from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
-from ._generated.storage_turn import Policy, TurnOptions, TurnResult
+from ._generated.storage_class import EventRow, InboxRow, StreamInfo, ItemRow, LaneRow, TaskPage, TaskRecord
+from ._generated.storage_options import Policy, TurnOptions
+from ._generated.storage_turn import TurnContext, TurnResult
 from ._generated.worker_options import ServerOptions
 
 # --- runtime.rs ----------------------------------------------------------------------------------
@@ -330,10 +330,10 @@ class Thread:
     def history(self, lane: str) -> Awaitable[list[ItemRow]]:
         """A lane's history as stored, in order."""
 
-    def tasks(self, lane: str, limit: int = 50) -> Awaitable[list[TaskRow]]:
+    def tasks(self, lane: str, limit: int = 50) -> Awaitable[list[TaskRecord]]:
         """A lane's task rows as records, newest first."""
 
-    def task(self, task_id: str) -> Awaitable[TaskRow | None]:
+    def task(self, task_id: str) -> Awaitable[TaskRecord | None]:
         """One task, whichever lane it is on; ``None`` when the thread has none of that id."""
 
     def list_tasks(
@@ -353,7 +353,7 @@ class Thread:
 
     def cancel_task(
         self, lane: str, task_id: str, metadata: dict[str, Any]
-    ) -> Awaitable[TaskRow | None]:
+    ) -> Awaitable[TaskRecord | None]:
         """``tasks/cancel`` (plan 5.5): the row ``canceled`` with ``metadata`` merged in;
         ``None`` when the task is not the lane's."""
 
@@ -397,7 +397,7 @@ class TurnHostProtocol(Protocol):
     """What ``Turn`` calls back into: ``_core_handle`` receives a ``storage_turn.TurnContext``
     dict and returns the turn's event stream (``storage.context.TurnStream``)."""
 
-    def _core_handle(self, ctx: dict[str, Any]) -> Any: ...
+    async def _core_handle(self, ctx: TurnContext) -> Any: ...
 
 class Turn:
     """One text door's turns (``TurnRunner``); ``options`` left out or ``None`` is the Rust

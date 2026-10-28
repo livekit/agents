@@ -4,110 +4,13 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use lk_agents_storage::run::{CHANNEL_KEY, KIND_KEY};
 
 use crate::Policy;
 
-/// `inbox` as a door declares it: nothing (the default map), one policy for every
-/// channel, or a map that overrides the default map channel by channel. On the wire `null`, a
-/// policy string, or an object of them by channel.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum PolicySpec {
-    #[default]
-    Default,
-    All(Policy),
-    ByChannel(BTreeMap<String, Policy>),
-}
-
-/// `PolicySpec` as JSON carries it: the policy strings, read by name so an unknown one is named
-/// in the error rather than reported as "no variant matched".
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum PolicyWire {
-    All(String),
-    ByChannel(BTreeMap<String, String>),
-}
-
-impl Serialize for PolicySpec {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let wire = match self {
-            PolicySpec::Default => None,
-            PolicySpec::All(p) => Some(PolicyWire::All(p.as_str().to_owned())),
-            PolicySpec::ByChannel(m) => Some(PolicyWire::ByChannel(
-                m.iter().map(|(k, v)| (k.clone(), v.as_str().to_owned())).collect(),
-            )),
-        };
-        wire.serialize(s)
-    }
-}
-
-impl<'de> Deserialize<'de> for PolicySpec {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let named = |s: &str| {
-            Policy::parse(s)
-                .ok_or_else(|| serde::de::Error::custom(format!("unknown policy {s:?}")))
-        };
-        Ok(match Option::<PolicyWire>::deserialize(d)? {
-            None => PolicySpec::Default,
-            Some(PolicyWire::All(s)) => PolicySpec::All(named(&s)?),
-            Some(PolicyWire::ByChannel(m)) => PolicySpec::ByChannel(
-                m.into_iter().map(|(k, v)| named(&v).map(|p| (k, p))).collect::<Result<_, _>>()?,
-            ),
-        })
-    }
-}
-
-/// The debounce as a door declares it: nothing (the defaults), one wait for every channel, or a
-/// map per channel. On the wire `null`, seconds, or an object of seconds by channel.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum DebounceSpec {
-    #[default]
-    Default,
-    All(Duration),
-    ByChannel(BTreeMap<String, Duration>),
-}
-
-/// `DebounceSpec` as JSON carries it: seconds as a number.
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum DebounceWire {
-    All(f64),
-    ByChannel(BTreeMap<String, f64>),
-}
-
-/// Seconds as a `Duration`; negative, infinite or NaN is the caller's error.
-pub(crate) fn duration_from_secs(secs: f64) -> Result<Duration, String> {
-    Duration::try_from_secs_f64(secs).map_err(|e| e.to_string())
-}
-
-impl Serialize for DebounceSpec {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let wire = match self {
-            DebounceSpec::Default => None,
-            DebounceSpec::All(d) => Some(DebounceWire::All(d.as_secs_f64())),
-            DebounceSpec::ByChannel(m) => Some(DebounceWire::ByChannel(
-                m.iter().map(|(k, v)| (k.clone(), v.as_secs_f64())).collect(),
-            )),
-        };
-        wire.serialize(s)
-    }
-}
-
-impl<'de> Deserialize<'de> for DebounceSpec {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let secs = |s: f64| duration_from_secs(s).map_err(serde::de::Error::custom);
-        Ok(match Option::<DebounceWire>::deserialize(d)? {
-            None => DebounceSpec::Default,
-            Some(DebounceWire::All(s)) => DebounceSpec::All(secs(s)?),
-            Some(DebounceWire::ByChannel(m)) => DebounceSpec::ByChannel(
-                m.into_iter().map(|(k, v)| secs(v).map(|d| (k, d))).collect::<Result<_, _>>()?,
-            ),
-        })
-    }
-}
+pub use lk_agents_abi::a2a::options::{DebounceSpec, PolicySpec};
 
 /// the default map, keyed by `livekit/channel`.
 pub const DEFAULT_POLICY_MAP: [(&str, Policy); 5] = [

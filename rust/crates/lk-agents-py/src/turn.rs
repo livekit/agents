@@ -21,7 +21,7 @@ use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::storage::{model, parse_request, to_py_err};
+use crate::storage::{parse_request, to_py_err};
 
 /// Core rows as their host records, the classes of `livekit.agents._generated.storage_class`.
 fn records<T, H: From<T>>(rows: Vec<T>) -> Vec<H> {
@@ -353,7 +353,7 @@ impl PyTurn {
         let turn = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let out = turn.run(message, task_id).await.map_err(to_py_err)?;
-            Python::attach(|py| model(py, "storage_turn", "TurnResult", &out))
+            Python::attach(|py| lk_agents_abi::a2a::turn::TurnResult::from(out).into_py_any(py))
         })
     }
 }

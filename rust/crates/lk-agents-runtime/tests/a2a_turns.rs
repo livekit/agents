@@ -9,9 +9,10 @@ use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
 use lk_agents_a2a::{
-    Checkpoint, DebounceSpec, HandlerOutput, Output, PendingCall, Policy, PolicySpec, TurnContext,
-    TurnEvent, TurnHost, TurnOptions, TurnResult, Verdict,
+    DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnEvent, TurnHost, TurnOptions,
+    TurnResult, Verdict,
 };
+use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
 use lk_agents_runtime::a2a::Turn;
@@ -260,31 +261,46 @@ struct Checkpoints {
 
 impl Checkpoints {
     async fn check(&mut self) -> bool {
-        let _ = self.events.send(Ok(TurnEvent::Checkpoint(Checkpoint {})));
+        let _ = self.events.send(Ok(TurnEvent::Checkpoint));
         self.verdicts.recv().await == Some(Verdict::Yield)
     }
 }
 
+#[async_trait::async_trait]
 impl TurnHost for Fake {
     #[allow(clippy::type_complexity)]
-    fn handle(
+    async fn handle(
         &self,
-        ctx: Value,
+        ctx: TurnContext,
     ) -> Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>
     {
-        let ctx: TurnContext = serde_json::from_value(ctx).expect("a turn context");
         let (verdicts, verdicts_rx) = mpsc::unbounded_channel();
         let (events, events_rx) = mpsc::unbounded_channel();
         let fake = self.clone();
         tokio::spawn(async move {
             let mut checkpoints = Checkpoints { events: events.clone(), verdicts: verdicts_rx };
-            let out = fake.run(ctx, &mut checkpoints).await.map(|out| {
-                TurnEvent::Output(Output { output: serde_json::to_value(out).expect("json") })
-            });
+            let out = fake
+                .run(ctx, &mut checkpoints)
+                .await
+                .map(|out| TurnEvent::Output { output: out.into() });
             let _ = events.send(out);
         });
         Ok((Box::new(Verdicts(verdicts)), Box::new(Events(events_rx))))
     }
+}
+
+fn batch_message_text(message: &lk_agents_abi::a2a::turn::Message) -> String {
+    message
+        .parts
+        .iter()
+        .filter_map(|part| {
+            serde_json::from_value::<a2a::Part>(part.clone())
+                .expect("A2A part")
+                .as_text()
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl Fake {
@@ -293,11 +309,18 @@ impl Fake {
         ctx: TurnContext,
         checkpoints: &mut Checkpoints,
     ) -> Result<HandlerOutput, ProviderError> {
-        let message_text = ctx.batch.last().map(|m| m.text()).unwrap_or_default();
+        let message_text = ctx.batch.last().map(batch_message_text).unwrap_or_default();
         self.calls.lock().unwrap().push(Call {
-            batch: ctx.batch.iter().map(|m| m.text()).collect(),
-            history: ctx.history.iter().map(|i| text_of(&i.payload)).collect(),
-            message: text_of(&ctx.message).split('\n').map(str::to_owned).collect(),
+            batch: ctx.batch.iter().map(batch_message_text).collect(),
+            history: ctx
+                .history
+                .iter()
+                .map(|i| text_of(&serde_json::from_value(i.payload.clone()).expect("chat item")))
+                .collect(),
+            message: text_of(&serde_json::from_value(ctx.message.clone()).expect("chat item"))
+                .split('\n')
+                .map(str::to_owned)
+                .collect(),
         });
         match &self.behavior {
             Behavior::Echo => Ok(text(&format!("reply to: {message_text}"))),

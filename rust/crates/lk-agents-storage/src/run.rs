@@ -3,7 +3,6 @@
 //! items, the journal entries, the task rows, the snapshot that changed and `run_ended`.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
@@ -16,31 +15,9 @@ pub use crate::schema::{ItemRow, LaneRow, TaskRow};
 use livekit_protocol::agent::chat_context::ChatItem;
 
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
-pub const LEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 
-/// Token usage of one run; written as a `usage` event when the run
-/// made a request or a tool call.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Host)]
-#[python(pydantic, module = "storage_run")]
-pub struct RunUsage {
-    #[python(default = "0")]
-    pub requests: i64,
-    #[python(default = "0")]
-    pub input_tokens: i64,
-    #[python(default = "0")]
-    pub output_tokens: i64,
-    #[python(default = "0")]
-    pub tool_calls: i64,
-}
-
-impl RunUsage {
-    pub fn add(&mut self, other: &RunUsage) {
-        self.requests += other.requests;
-        self.input_tokens += other.input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.tool_calls += other.tool_calls;
-    }
-}
+pub use lk_agents_abi::storage::{RunUsage, TaskState};
 
 /// Everything a run commits, as staged by its owner.
 pub struct RunWrites<'a> {
@@ -170,43 +147,6 @@ pub const REASON_INVALID_ARGUMENTS: &str = "invalid-arguments";
 
 /// The channel of the append-only run that writes a task's `submitted` row before the lease.
 pub const SUBMIT_CHANNEL: &str = "submit";
-
-/// The framework's task states; the terminal ones are immutable. The A2A edge maps them to its
-/// own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]
-#[serde(rename_all = "kebab-case")]
-#[python(literal, module = "storage_run")]
-pub enum TaskState {
-    #[host(rename = "submitted")]
-    Submitted,
-    #[host(rename = "working")]
-    Working,
-    #[host(rename = "input-required")]
-    InputRequired,
-    #[host(rename = "completed")]
-    Completed,
-    #[host(rename = "failed")]
-    Failed,
-    #[host(rename = "canceled")]
-    Canceled,
-    #[host(rename = "rejected")]
-    Rejected,
-}
-
-impl TaskState {
-    /// `None` for a status no state spells (the derive's `from_wire`).
-    pub fn parse(s: &str) -> Option<TaskState> {
-        TaskState::from_wire(s)
-    }
-
-    /// Completed, failed, canceled or rejected: immutable once written.
-    pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected
-        )
-    }
-}
 
 /// What `run_ended` records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Host)]

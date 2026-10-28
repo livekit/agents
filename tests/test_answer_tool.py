@@ -4,6 +4,8 @@ and the model goes on from that tool's output."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from a2a.types import a2a_pb2 as pb
 
@@ -11,6 +13,7 @@ from livekit.agents import Agent, InputRequired, RunContext, RunResult
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.storage import Storage
+from livekit.agents.storage.protocol import payload_to_item
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message
@@ -75,15 +78,15 @@ async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -
 
     assert done.state == pb.TaskState.TASK_STATE_COMPLETED
     artifacts = [p for p in second if hasattr(p, "artifact")]
-    assert artifacts and artifacts[-1].artifact.parts[0].text == "All set."
+    assert "".join(part.text for event in artifacts for part in event.artifact.parts) == "All set."
 
     db = await thread_storage.open(ctx_id)
     try:
-        history = [row.payload for row in await db.history("front-desk")]
+        history = [payload_to_item(row.payload) for row in await db.history("front-desk")]
     finally:
         db.close()
-    calls = [i for i in history if i["type"] == "function_call" and i["name"] == "ask"]
-    outputs = {i["call_id"]: i["output"] for i in history if i["type"] == "function_call_output"}
+    calls = [i for i in history if i.type == "function_call" and i.name == "ask"]
+    outputs = {i.call_id: i.output for i in history if i.type == "function_call_output"}
     assert outputs["c1"] == answer, "the answer is the pending call's output"
-    assert len(calls) == 2 and calls[1]["arguments"] == f'{{"request": "{answer}"}}'
-    assert outputs[calls[1]["call_id"]] == f"booked for {answer}"
+    assert len(calls) == 2 and json.loads(calls[1].arguments) == {"request": answer}
+    assert outputs[calls[1].call_id] == f"booked for {answer}"

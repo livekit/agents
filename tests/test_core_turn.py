@@ -13,8 +13,9 @@ from typing import Any
 import pytest
 
 from livekit.agents import _core
-from livekit.agents._generated.storage_run import ItemRow
-from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext, TurnOptions
+from livekit.agents._generated.storage_class import ItemRow, RunUsage
+from livekit.agents._generated.storage_options import TurnOptions
+from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
 from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
@@ -49,9 +50,8 @@ class Host:
         self.contexts: list[TurnContext] = []
         self.yielded: list[bool] = []
 
-    def _core_handle(self, ctx: dict[str, Any]) -> TurnStream:
-        turn = TurnContext.model_validate(ctx)
-        return TurnStream(lambda checkpoint: self.run(turn, checkpoint))
+    async def _core_handle(self, ctx: TurnContext) -> TurnStream:
+        return TurnStream(lambda checkpoint: self.run(ctx, checkpoint))
 
     async def run(
         self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
@@ -63,11 +63,29 @@ class Host:
             await self.gate.wait()
             self.yielded.append(await checkpoint())
             if self.yielded[-1]:
-                return HandlerOutput(new_items=[ctx.message], interrupted=True)
+                return HandlerOutput(
+                    output=None,
+                    new_items=[ctx.message],
+                    state=None,
+                    usage=RunUsage(),
+                    input_required=None,
+                    pending_call=None,
+                    interrupted=True,
+                    metadata={},
+                    error=None,
+                    events=[],
+                )
         return HandlerOutput(
             output="reply to: " + text,
             new_items=[ctx.message, assistant_item("reply to: " + text)],
-            usage={"requests": 1, "input_tokens": 3, "output_tokens": 4, "tool_calls": 0},
+            usage=RunUsage(requests=1, input_tokens=3, output_tokens=4, tool_calls=0),
+            state=None,
+            input_required=None,
+            pending_call=None,
+            interrupted=False,
+            metadata={},
+            error=None,
+            events=[],
         )
 
 

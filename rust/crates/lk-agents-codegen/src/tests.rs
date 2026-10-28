@@ -723,35 +723,6 @@ fn a_file_default_fills_module_and_path_where_the_record_says_nothing() {
     assert!(parse::file("test.rs", bad).unwrap_err().contains("not `file.kind`"));
 }
 
-// --- the session schema ------------------------------------------------------------------------
-
-// Catches: a `#[table]` record of `lk-agents-storage` that the generator cannot read (the derive's
-// own `#[table]` beside `#[python(..)]`), a JSON column rendered as something narrower than `Any`,
-// or a row model the turn records (`storage_turn`) still reference missing.
-#[test]
-fn the_session_schema_renders_the_turn_records_pydantic_rows() {
-    let src = include_str!("../../lk-agents-storage/src/schema.rs");
-    let decls = parse::file("schema.rs", src).expect("the schema parses");
-    let outs = python::emit_with(&decls, &[], &[]).expect("the schema generates");
-    let module = |name: &str| {
-        let file = format!("{name}.py");
-        let found = outs.iter().find(|o| o.path.rsplit('/').next() == Some(file.as_str()));
-        found.unwrap_or_else(|| panic!("no {name} module"))
-    };
-    let (storage, run) = (module("storage"), module("storage_run"));
-    for (out, model) in
-        [(storage, "TaskData"), (storage, "Ask"), (run, "ItemRow"), (run, "TaskRow")]
-    {
-        assert!(
-            out.text.contains(&format!("class {model}(BaseModel):")),
-            "{model} missing:\n{}",
-            out.text
-        );
-    }
-    assert!(run.text.contains("    payload: dict[str, Any]"), "{}", run.text);
-    assert!(run.text.contains("    internal: Ask | None"), "{}", run.text);
-}
-
 // Catches: a host-only field's `default_factory` dropped, or written as pydantic's shared
 // `Field` in a dataclass, or its module left unimported.
 #[test]

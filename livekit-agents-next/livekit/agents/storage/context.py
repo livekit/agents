@@ -11,13 +11,21 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import Any, cast
+from typing import cast
 
 from pydantic import JsonValue
 
-from .._generated.storage_class import TaskRecord
-from .._generated.storage_run import RunUsage, TaskRow
-from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
+from .._generated.storage_class import RunUsage, TaskRecord
+from .._generated.storage_turn import (
+    Checkpoint,
+    HandlerOutput,
+    HostEvent,
+    Message,
+    Output,
+    PendingCall,
+    TurnContext,
+    TurnEvent,
+)
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
 from ..llm.tool_context import WAITING_PREFIX
 from ..log import logger
@@ -65,7 +73,7 @@ class A2ASessionContext:
         self.store = ContextStore(turn.state, read_only=turn.read_only)
         self.thread = thread
         self.task_id = turn.task_id
-        self.tasks: list[TaskRow] = list(turn.tasks)
+        self.tasks: list[TaskRecord] = list(turn.tasks)
         self.caller_history: ChatContext | None = (
             ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
         )
@@ -130,10 +138,9 @@ class TurnHost:
         self._on_update = on_update
         self._on_token = on_token
 
-    def _core_handle(self, ctx: dict[str, Any]) -> TurnStream:
+    async def _core_handle(self, ctx: TurnContext) -> TurnStream:
         """The handler opened on one turn, as the stream of its events."""
-        turn = TurnContext.model_validate(ctx)
-        return TurnStream(lambda checkpoint: self._run(turn, checkpoint))
+        return TurnStream(lambda checkpoint: self._run(ctx, checkpoint))
 
     async def _run(
         self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]
@@ -179,7 +186,13 @@ class TurnHost:
                 "the a2a_session handler raised; the task fails",
                 extra={"lane": ctx.lane, "taskId": ctx.task_id},
             )
-            return HandlerOutput(error=f"{type(e).__name__}: {e}")
+            return self._output(
+                context,
+                None,
+                results,
+                interrupted=hooks.interrupted,
+                error=f"{type(e).__name__}: {e}",
+            )
         finally:
             reset_run_hooks(token)
             context.store.close()
@@ -193,6 +206,7 @@ class TurnHost:
         results: list[RunResult[object]],
         *,
         interrupted: bool,
+        error: str | None = None,
     ) -> HandlerOutput:
         """The answer, new history, explicitly saved fields and any pending question."""
         # a run returned as is answers with its question while it waits, else its output
@@ -230,6 +244,7 @@ class TurnHost:
             interrupted=ctx.interrupted or interrupted,
             metadata=metadata,
             events=[*_tool_events(results), *ctx.events],
+            error=error,
         )
 
 
@@ -242,17 +257,21 @@ class TurnStream:
         self, run: Callable[[Callable[[], Awaitable[bool]]], Awaitable[HandlerOutput]]
     ) -> None:
         self._run = run
-        self._events: asyncio.Queue[dict[str, Any] | BaseException | None] = asyncio.Queue()
+        self._events: asyncio.Queue[TurnEvent | BaseException | None] = asyncio.Queue()
         self._verdict: asyncio.Future[str] | None = None
         self._task: asyncio.Task[None] | None = None
 
     def __aiter__(self) -> TurnStream:
         return self
 
-    async def __anext__(self) -> dict[str, Any]:
+    async def __anext__(self) -> TurnEvent:
         if self._task is None:
             self._task = asyncio.ensure_future(self._drive())
-        event = await self._events.get()
+        try:
+            event = await self._events.get()
+        except asyncio.CancelledError:
+            await self.aclose()
+            raise
         if event is None:
             raise StopAsyncIteration
         if isinstance(event, BaseException):
@@ -271,7 +290,7 @@ class TurnStream:
 
     async def _checkpoint(self) -> bool:
         self._verdict = asyncio.get_running_loop().create_future()
-        self._events.put_nowait({"kind": "checkpoint"})
+        self._events.put_nowait(Checkpoint())
         return await self._verdict == "yield"
 
     async def _drive(self) -> None:
@@ -284,7 +303,7 @@ class TurnStream:
             # a storage error the handler met; its own errors are already the output's
             self._events.put_nowait(e)
             return
-        self._events.put_nowait({"kind": "output", "output": output.model_dump(mode="json")})
+        self._events.put_nowait(Output(output=output))
         self._events.put_nowait(None)
 
 
@@ -320,14 +339,12 @@ def _tool_event(phase: str, **fields: JsonValue) -> HostEvent:
 
 
 def _usage(results: list[RunResult[object]]) -> RunUsage:
-    usage = RunUsage()
-    for result in results:
-        usage.requests += result.usage.requests
-        usage.input_tokens += result.usage.input_tokens
-        usage.output_tokens += result.usage.output_tokens
-        usage.tool_calls += result.usage.tool_calls
-
-    return usage
+    return RunUsage(
+        requests=sum(r.usage.requests for r in results),
+        input_tokens=sum(r.usage.input_tokens for r in results),
+        output_tokens=sum(r.usage.output_tokens for r in results),
+        tool_calls=sum(r.usage.tool_calls for r in results),
+    )
 
 
 __all__ = ["A2ASessionContext", "Handler", "TokenHook", "TurnHost", "TurnStream", "UpdateHook"]

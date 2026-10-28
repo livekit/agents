@@ -14,7 +14,6 @@ from typing import Any
 from google.protobuf import json_format, timestamp_pb2
 
 from .._generated.storage_class import TaskRecord
-from .._generated.storage_run import TaskRow
 from ..llm.chat_context import ChatContext
 from ..utils import shortuuid
 from .extension import (
@@ -154,7 +153,7 @@ def _artifact_to_pb(artifact: Mapping[str, Any], exts: Extensions | None) -> pb.
 
 
 def _status_message_to_pb(
-    record: TaskRow | TaskRecord, context_id: str, exts: Extensions | None
+    record: TaskRecord, context_id: str, exts: Extensions | None
 ) -> pb.Message | None:
     if record.data.status_message is None:
         return None
@@ -163,9 +162,7 @@ def _status_message_to_pb(
     )
 
 
-def _history_window(
-    record: TaskRow | TaskRecord, history_length: int | None
-) -> list[StoredMessage]:
+def _history_window(record: TaskRecord, history_length: int | None) -> list[StoredMessage]:
     """The last ``history_length`` messages, all of them when it is ``None``."""
     history = record.data.history
     if history_length is None or history_length < 0:
@@ -176,7 +173,7 @@ def _history_window(
 
 
 def task_to_pb(
-    record: TaskRow | TaskRecord,
+    record: TaskRecord,
     context_id: str,
     *,
     exts: Extensions | None = None,
@@ -268,7 +265,7 @@ def artifact_event(
 
 
 def final_event(
-    record: TaskRow | TaskRecord, context_id: str, *, exts: Extensions
+    record: TaskRecord, context_id: str, *, exts: Extensions
 ) -> pb.TaskStatusUpdateEvent:
     """The terminal status event, built from the committed row so a replay says the same."""
     event = pb.TaskStatusUpdateEvent(

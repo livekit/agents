@@ -5,15 +5,13 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py, value_to_py};
+use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py};
 use lk_agents_runtime::storage::{QueuedStreams, StreamRead};
 use pyo3::IntoPyObjectExt;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
 
 /// A storage failure as the `livekit.agents.storage` exception the ABI declares for it.
 pub(crate) use lk_agents_abi::storage::storage_error_to_py as to_py_err;
@@ -35,27 +33,6 @@ pub(crate) fn parse_request<T: DeserializeOwned>(
     };
     let v = value_from_py(obj, what)?;
     serde_json::from_value(v).map_err(|e| PyValueError::new_err(format!("{what}: {e}")))
-}
-
-/// The generated pydantic class `livekit.agents._generated.<module>.<name>`.
-fn model_class<'py>(py: Python<'py>, module: &str, name: &str) -> PyResult<Bound<'py, PyAny>> {
-    py.import(format!("livekit.agents._generated.{module}"))?.getattr(name)
-}
-
-/// `class.model_validate(value)`: the JSON the crate serialised, as an instance of its model.
-pub(crate) fn validate(py: Python<'_>, class: &Bound<'_, PyAny>, v: &Value) -> PyResult<Py<PyAny>> {
-    Ok(class.call_method1("model_validate", (value_to_py(py, v)?,))?.unbind())
-}
-
-/// A record as an instance of its generated model.
-pub(crate) fn model<T: Serialize>(
-    py: Python<'_>,
-    module: &str,
-    name: &str,
-    v: &T,
-) -> PyResult<Py<PyAny>> {
-    let v = serde_json::to_value(v).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    validate(py, &model_class(py, module, name)?, &v)
 }
 
 /// The response streams of one storage (`Storage.streams()`): a task's frames, kept for its
@@ -156,44 +133,4 @@ lk_agents_abi::register_host!(class PyStreamReader);
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Catches: a request that does not deserialize raising the storage error instead of a
-    // `ValueError` that names the field, a model crossing as its object rather than its dump, or
-    // a result handed to the class under the wrong name.
-    #[test]
-    fn requests_and_results_cross_as_models() {
-        Python::initialize();
-        Python::attach(|py| {
-            let d = py.eval(c"{'id': 'i'}", None, None).unwrap();
-            let e = parse_request::<lk_agents_storage::run::ItemRow>(&d, "item").unwrap_err();
-            assert!(e.is_instance_of::<PyValueError>(py), "{e}");
-            assert!(e.to_string().contains("payload"), "{e}");
-
-            // a pydantic model is whatever `model_dump(mode="json")` says it is
-            let ns = PyDict::new(py);
-            py.run(
-                c"class M:\n    def model_dump(self, mode):\n        assert mode == 'json'\n        return {'id': 'i', 'payload': {'message': {'id': 'i'}}}\n",
-                None,
-                Some(&ns),
-            )
-            .unwrap();
-            let m = ns.get_item("M").unwrap().unwrap().call0().unwrap();
-            let item: lk_agents_storage::run::ItemRow = parse_request(&m, "item").unwrap();
-            assert_eq!((item.id.as_str(), item.message_id.as_deref()), ("i", None));
-
-            // a result reaches `model_validate` as the crate's JSON
-            py.run(
-                c"class Row:\n    @classmethod\n    def model_validate(cls, d):\n        return ('validated', d)\n",
-                None,
-                Some(&ns),
-            )
-            .unwrap();
-            let class = ns.get_item("Row").unwrap().unwrap();
-            let out = validate(py, &class, &serde_json::to_value(&item).unwrap()).unwrap();
-            let (tag, d): (String, Bound<'_, PyDict>) = out.extract(py).unwrap();
-            assert_eq!(tag, "validated");
-            assert_eq!(d.get_item("id").unwrap().unwrap().extract::<String>().unwrap(), "i");
-            assert!(d.get_item("message_id").unwrap().unwrap().is_none());
-        });
-    }
 }

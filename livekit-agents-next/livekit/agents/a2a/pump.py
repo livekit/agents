@@ -15,9 +15,10 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from .._core import Streams
+from .._generated.storage_turn import TurnContext
 from ..log import logger
 from ..storage.context import TokenHook, TurnHost, TurnStream, UpdateHook
 from ..utils import shortuuid
@@ -127,9 +128,9 @@ class WireHost:
         self._started = time.monotonic()
         self._marks: dict[str, int] = {}
 
-    def _core_handle(self, ctx: dict[str, Any]) -> TurnStream:
+    async def _core_handle(self, ctx: TurnContext) -> TurnStream:
         self._ack(self._task_id, self._context_id)
-        return self._host._core_handle(ctx)
+        return await self._host._core_handle(ctx)
 
     async def on_update(self, task_id: str, text: str) -> None:
         if task_id != self._task_id:

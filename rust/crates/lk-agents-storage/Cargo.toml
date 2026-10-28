@@ -18,7 +18,7 @@ doctest = false
 # `COLUMNS`/`SELECT` from `#[table]` (host-derive `table.rs`).
 lk-agents-host-derive = { path = "../lk-agents-host-derive" }
 # `StorageError`, declared with the host vocabulary where every exported type lives.
-lk-agents-abi = { path = "../lk-agents-abi" }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # The chat items and the thread schema: `livekit.agent` records only.
 livekit-protocol.workspace = true
 pbjson-types.workspace = true
