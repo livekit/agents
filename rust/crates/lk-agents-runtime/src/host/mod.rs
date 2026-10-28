@@ -2,7 +2,11 @@
 //! An operation's [`Invocation`] is captured once, at its entry; each callback gets its own copy
 //! with the scopes it declares (tool call, approval) and a fresh operation id, runs as a task this
 //! invoker owns, is cancelled through the host (its call still settles), and releases its captured
-//! context when it settles. Entering the host context is the generated adapter's job.
+//! context when it settles. Entering the captured host context is [`python::call_in`]'s, which the
+//! generated proxies call per method.
+
+#[cfg(feature = "python")]
+pub mod python;
 
 use std::collections::BTreeMap;
 
