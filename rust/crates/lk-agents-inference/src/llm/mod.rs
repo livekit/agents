@@ -2,6 +2,7 @@
 //! ([`models`]), kwargs composition ([`request`]), streaming decode ([`parse`]), the request
 //! exchange and the request's lifecycle ([`lifecycle`]), and the client executing it ([`gateway`]).
 
+pub mod algorithms;
 pub mod gateway;
 pub mod lifecycle;
 pub mod models;

@@ -46,7 +46,7 @@ impl generated::Implementations for Selected {
     type VoiceSessionExecution = Selected;
     type ExpFilter = lk_agents_runtime::filters::ExpFilter;
     type MovingAverage = lk_agents_runtime::filters::MovingAverage;
-    type LlmAlgorithms = lk_agents_runtime::llm_algorithms::LlmAlgorithms;
+    type LlmAlgorithms = lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms<lk_agents_runtime::process::Process>;
     type ProviderAttempts = lk_agents_runtime::cores::ProviderAttempts;
     type A2ADoor = lk_agents_runtime::a2a::door::Door;
     type A2AResponse = lk_agents_runtime::a2a::door::Response;

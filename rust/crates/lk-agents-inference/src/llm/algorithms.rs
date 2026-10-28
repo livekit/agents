@@ -1,4 +1,6 @@
-//! Binding implementations for shared LLM algorithms, with admitted formatting work.
+//! The shared LLM algorithms plugins call (`llm.utils`, `_provider_format`): the core's
+//! formatting, schemas and tool-argument rules, with provider formatting run on an admitted
+//! media worker of the hosting process.
 use lk_agents_abi::llm::provider_format::host::LlmAlgorithmError;
 use lk_agents_abi::llm::provider_format::tools::{DuplicateKey, DuplicateMode, DuplicateScope};
 use lk_agents_abi::llm::provider_format::{SerializedImage, StrictError};
@@ -7,9 +9,13 @@ use lk_agents_abi::{ChatItem, Role};
 use lk_agents_core::llm::{provider_format, schema, tool_arguments};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 
-pub struct LlmAlgorithms;
-impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms {
+use crate::env::Env;
+
+pub struct LlmAlgorithms<E: Env = crate::env::Standalone>(PhantomData<fn() -> E>);
+
+impl<E: Env> lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms<E> {
     async fn prepare_provider_format(
         format: String,
         items: Vec<ChatItem>,
@@ -18,8 +24,8 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
     ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
-        crate::process::workers()
-            .map_err(|error| LlmAlgorithmError(error.to_string()))?
+        E::workers()
+            .map_err(LlmAlgorithmError)?
             .try_spawn(lk_agents_media::workers::MediaWorkerClass::Formatting, move || {
                 provider_format::host::to_provider_format(
                     &format,
@@ -154,7 +160,7 @@ mod tests {
         let keys: &'static Keys = Box::leak(Box::new(Keys(Default::default())));
         log::set_logger(keys).unwrap();
         log::set_max_level(log::LevelFilter::Warn);
-        LlmAlgorithms::parse_function_arguments("{'x':1}").unwrap();
+        <LlmAlgorithms>::parse_function_arguments("{'x':1}").unwrap();
         let seen = keys.0.lock().unwrap().clone();
         let get = |k: &str| seen.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
         assert_eq!(get("lk.pii.raw_arguments"), Some("{'x':1}"));
