@@ -9,14 +9,14 @@
 //! nothing: a reply queued behind a speech paused for good, as c6881abb9's realtime onset left one.
 use std::collections::BTreeMap;
 
-use lk_agents_abi::voice::events::UserState;
+use lk_agents_abi::{RealtimeCommandKind, voice::events::UserState};
 use lk_agents_voice::{
     agent_activity::scheduling::SpeechId,
     agent_session::effects::{GateCause, GateOp, Timer},
     events::{SessionEvent, SpeechOutcome},
     trace::{
         CoreStep, GenerationStep, InterruptCause, InterruptStep, RealtimeStep, PlayoutStep, RoomEventKind, RoomStep, SinkCall,
-        SpeechStep, Step, TimerName,
+        SpeechStep, Step, TimerName, TurnStep,
     },
 };
 
@@ -58,6 +58,8 @@ impl Rule for SpeechIsHeard {
         let mut cut: BTreeMap<u64, InterruptCause> = BTreeMap::new();
         // When the scheduler first let each speech go.
         let mut authorized: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        // When a preemptive reply's turn ended and the driver took or dropped the guess.
+        let mut reconciled: BTreeMap<u64, Observed> = BTreeMap::new();
         // When the person was heard to start speaking.
         let mut cancelled: std::collections::BTreeSet<u64> = Default::default();
         // In occurrence order: an end and a start at one instant (the realtime server's
@@ -85,6 +87,9 @@ impl Rule for SpeechIsHeard {
                 Step::Speech(SpeechStep::Authorized { speech }) => {
                     authorized.entry(speech.0).or_default().push(at.at_ms);
                 }
+                Step::Turn(TurnStep::PreemptiveReconciled { speech, .. }) => {
+                    reconciled.entry(speech.0).or_insert(*at);
+                }
                 // A realtime reply whose response the server cancelled ends `Completed` with
                 // nothing said: as cut as an interrupted one.
                 Step::Realtime(RealtimeStep::GenerationStatus { speech, status })
@@ -104,10 +109,16 @@ impl Rule for SpeechIsHeard {
         }
         for speech in r.host_view().speeches().into_iter().filter(SpeechView::is_known) {
             let Some(created) = speech.created_at() else { continue };
-            // A preemptive reply waits on the turn it guessed, which may never end.
-            if speech.is_speculative() && !speech.is_scheduled() {
-                continue;
-            }
+            // A preemptive reply waits on the turn it guessed, which may never end: its bound runs
+            // from the turn's end, when the driver took the guess.
+            let created = if speech.is_speculative() {
+                match reconciled.get(&speech.id) {
+                    Some(at) if speech.is_scheduled() => *at,
+                    _ => continue,
+                }
+            } else {
+                created
+            };
             // The bound runs from the creation, and again from when the scheduler let it go: a
             // speech that waited its turn (the floor, the gap, authorization, the person) has the
             // whole bound once it may play.
@@ -143,6 +154,7 @@ impl Rule for SpeechIsHeard {
                         speaking_at(&onsets, &offsets, created)
                             || person_acted(r, created.at_ms, at)
                             || onset_cancel(r, created.at_ms, at)
+                            || client_cancel(r, created.at_ms, at)
                             || host_cut(r, created.at_ms, at)
                             || closing.is_some_and(|c| c <= at)
                     }
@@ -214,6 +226,21 @@ fn onset_cancel(r: &Recording, created: u64, to: u64) -> bool {
     let from = created.saturating_sub(ANNOUNCE_MS);
     r.applied().iter().filter(|a| a.accepted && from <= a.at.at_ms && a.at.at_ms <= to).any(|a| {
         matches!(a.input, Input::RealtimeEvent { event: RtEvent::SpeechStarted, .. })
+    })
+}
+
+/// Whether the client sent the realtime server a `response.cancel` around a reply's life: one
+/// aimed at a request the server had not answered yet names no response, and stops whichever one
+/// is active, a reply the server made of its own accord included.
+fn client_cancel(r: &Recording, created: u64, to: u64) -> bool {
+    let from = created.saturating_sub(ANNOUNCE_MS);
+    r.journal().iter().any(|(at, step)| {
+        from <= at.at_ms
+            && at.at_ms <= to
+            && matches!(
+                step,
+                Step::Realtime(RealtimeStep::Sent { kind: RealtimeCommandKind::CancelReply, .. })
+            )
     })
 }
 

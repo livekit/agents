@@ -62,6 +62,11 @@ impl Rule for SpeechSettles {
             {
                 continue;
             }
+            // A speech whose tool is still running once every tool was answered is in
+            // `ctx.foreground()`, waiting for idle, which the same unheard end holds off.
+            if tool_running(r, speech.id, answered) && end_unheard(r, answered) {
+                continue;
+            }
             let done = speech.done_at().is_some_and(|done| done <= answered);
             check.expect(&speech, done, format!("still running after everything was answered ({speech:?})"));
         }
@@ -160,6 +165,26 @@ fn end_unheard(r: &Recording, answered: Observed) -> bool {
     restarted.is_some_and(|start| {
         accepted.clone().any(|a| a.at > start.at && matches!(a.input, Input::SttEnd { .. }))
     })
+}
+
+/// One of the speech's tool calls started by `answered` and had not ended.
+fn tool_running(r: &Recording, speech: u64, answered: Observed) -> bool {
+    let mut running = std::collections::BTreeSet::new();
+    for (at, step) in r.internal_view().steps() {
+        if *at > answered {
+            break;
+        }
+        match step {
+            Step::Tool(ToolStep::CallStarted { speech: s, call_id, .. }) if s.0 == speech => {
+                running.insert(call_id.clone());
+            }
+            Step::Tool(ToolStep::CallEnded { speech: s, call_id, .. }) if s.0 == speech => {
+                running.remove(call_id);
+            }
+            _ => {}
+        }
+    }
+    !running.is_empty()
 }
 
 /// A turn ended after the speech was created and before everything was answered.

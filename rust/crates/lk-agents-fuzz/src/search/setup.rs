@@ -10,6 +10,9 @@ use crate::{
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
+/// How often, in a hundred sessions, the pipeline has a recogniser, and has a voice.
+const VOICED: u8 = 90;
+
 /// Sample a session to run the case against from the seed's generator alone: every switch a coin,
 /// every three-way switch a die. Nothing carries over from one seed to the next, so a seed
 /// reproduces its run on its own.
@@ -23,8 +26,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         1 => TurnMode::Stt,
         _ => TurnMode::Manual,
     };
+    // A voice agent hears and speaks: a session without a recogniser or a voice is the rare one.
     let mut setup = Setup {
-        stt: rng.bool(),
+        stt: rng.u8(0..100) < VOICED,
         vad: rng.bool(),
         eot: rng.bool(),
         interruption: rng.bool(),
@@ -54,7 +58,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             close_on_disconnect: rng.bool(),
             delete_room_on_close: rng.bool(),
         }),
-        tts: rng.bool(),
+        tts: rng.u8(0..100) < VOICED,
         connect_ms: rng.bool().then(|| ms(rng)),
         video: rng.bool(),
         room_camera: false,
@@ -110,9 +114,10 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             ivr_detection: rng.bool(),
             wait_until_finished: rng.bool(),
             own_stt: rng.bool(),
-            answer: match rng.usize(0..4) {
-                0 | 1 => AmdAnswer::Track,
-                2 => AmdAnswer::Sip,
+            // Most callees pick up; one call in eight rings out with nobody joining.
+            answer: match rng.usize(0..8) {
+                0..=4 => AmdAnswer::Track,
+                5 | 6 => AmdAnswer::Sip,
                 _ => AmdAnswer::Missing,
             },
         };

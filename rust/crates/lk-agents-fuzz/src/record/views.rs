@@ -1130,13 +1130,17 @@ impl StreamView<'_, '_> {
 
     /// Whether this stream heard the microphone frame after it was pushed.
     pub fn heard_after(&self, mic: u32, chunk: u16, pushed: Observed) -> bool {
+        self.heard_at(mic, chunk).is_some_and(|last| last > pushed)
+    }
+
+    /// When this stream last heard the microphone frame.
+    pub fn heard_at(&self, mic: u32, chunk: u16) -> Option<Observed> {
         self.view
             .r
             .index
             .heard
             .get(&(self.opened.kind, self.opened.nth, mic))
             .and_then(|chunks| chunks.get(usize::from(chunk)).copied().flatten())
-            .is_some_and(|last| last > pushed)
     }
 }
 

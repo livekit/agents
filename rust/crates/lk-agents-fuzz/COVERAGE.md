@@ -141,9 +141,12 @@ next agent's own models, options or history; a tool that hands off or calls the 
 (fake tools only return values, errors, stops, or ask `wait_for_idle`); two people speaking to
 the agent; text-only sessions.
 
-**Only a quarter of seeds can speak.** The agent's audio plays only under a pipeline with TTS
-(TTS on and no realtime model: about one seed in four), so every "speak" and "overlap" cell is
-capped near a quarter of the seeds.
+**About half the seeds are heard.** The person heard the agent (a segment started playing, on any
+output) in 17,759 of 32,768 runs (the survey's "runs where the person heard the agent", at
+2026-10-27). The rest are mostly runs a uniform sampler closes early, realtime runs that end
+early, the one AMD call in eight that rings out, and voice outages; a pipeline almost always has
+a recogniser and a voice (nine in ten each), outages end, and a leg the program turns off comes
+back.
 
 ## 3. Promises and the rules that check them
 
@@ -207,8 +210,7 @@ never. Exact numbers are in the appendix.
 **Reading it.** For the 40 developer API inputs (480 cells): 427 well covered, 53 rare, none
 never. The start column is gone (section 2.2); with it the table had 8 never at `edc90fe24`, all
 at start, 24 with the earlier two separate modes, and 98 to 136 with conversations alone.
-Most rare cells are in the turn hook column. "Speak" and "overlap" counts stay in the tens of
-seeds because only a quarter of seeds can speak (section 2.3).
+Most rare cells are in the turn hook column.
 
 **The person, as the models hear them**
 
@@ -666,8 +668,9 @@ Each is a choice the search makes for every run that a real call does not.
   gets more moves (the developer has about 45 rows, the room one).
 - **The setup is fixed where section 2.3 says so**: batch end-of-turn, explicit detection modes,
   AMD and interruption options, close reasons.
-- **Run length**: every run has the same budget (1,500 inputs); short calls only happen when the
-  call ends early. A per-seed budget would cover both.
+- **Run length**: every run has the same budget (3,000 inputs, about the first minute and a half
+  of a call whose median is five minutes); short calls only happen when the call ends early. A
+  per-seed budget would cover both.
 - **One end for runs that outlast their budget**: those all end with the same release and close.
 - **One person, one microphone**, and the person always starts the conversation.
 - **The person is content-blind**: whether they barge in or backchannel does not depend on what
@@ -861,8 +864,8 @@ those samples per seed. Re-recording needs LiveKit Inference credentials: run `r
 |---|---|---|
 | Realtime (`fakes/realtime/`) | The production native session (`lk-agents-inference`: its wire machine, pump and reconnects) over a socket whose far end is a stateful simulation of the OpenAI Realtime server (section 13.4), held to the real server's answers to the protocol's edge cases (`corpus/probes/`, `corpus/probe_realtime.py`) and, where the probes are silent, the docs. Recorded on `gpt-realtime` (turns, barge-in, backchannel, silence, client cancel, tool call, manual turns; server and semantic VAD; two takes each): speech start and stop lag, response creation after the stop and after `response.create`, item and first-audio latency, delta sizes, done after the last audio, input transcription after commit and its deltas per word, cancel lag, audio per character, the share of responses with function calls and rate limits, error latency; from the probes, the end of a cancelled reply after the cancel and the refusal latency | Other dialects (Gemini, xAI, Azure differences); images; the server's VAD does not judge the audio (it needs some, and the case says when it fires); what a reply says does not depend on what it read (only its usage does); session expiry |
 | Recogniser (`search/conversation.rs`) | Per seed one of Deepgram nova-3, Deepgram Flux, AssemblyAI universal streaming: first words late, start of speech with them, usage before each final, Deepgram's cuts and empty finals, AssemblyAI's second final, Flux's preflights | Confidences and word timings from data; language detection; diarization; the real sockets' reconnects |
-| LLM (`fakes/llm.rs`) | `gpt-4.1-mini` streaming: the role on the first chunk, token chunks, a finish chunk, a usage chunk | Other providers' chunk shapes; refusals and content filters; malformed tool arguments as providers send them |
-| TTS (`fakes/tts.rs`) | Cartesia `sonic-3`: time to first audio | Audio per character; alignment; failures shaped like a real provider's (they are injected uniformly) |
+| LLM (`fakes/llm.rs`, `search/conversation.rs`) | `gpt-4.1-mini` streaming: the role on the first chunk, token chunks, a finish chunk, a usage chunk; each request answered on the model's own clock, the first chunk after the recorded delay, then pieces of the recorded size at the recorded gaps, failing anywhere in the answer | Other providers' chunk shapes; refusals and content filters; parallel tool calls, a preamble before a call, streamed arguments, real usage numbers |
+| TTS (`fakes/tts.rs`) | Cartesia `sonic-3`: time to first audio; audio as long as the text takes at the recorded milliseconds a word (drawn per stream), in frames of at most 100 ms | The recorded chunking and gaps; failures shaped like a real provider's (they are injected uniformly) |
 | VAD, room | Not calibrated: VAD probabilities are synthetic, the room is `FakeRtc` | Silero's real output; network loss and jitter |
 
 Every provider event the core consumes (`SpeechEventType`, `VadEventType`, the realtime wire and

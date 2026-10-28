@@ -23,8 +23,15 @@ use crate::{
     record::{Detail, Kind, Tag},
 };
 
-/// The recorded voice the latency is drawn from.
+/// The recorded voice the latency and the pace are drawn from.
 const TTS_MODEL: &str = "cartesia/sonic-3";
+
+/// The longest frame the voice sends, as a streaming voice sends audio in short frames.
+const FRAME_MS: usize = 100;
+const FRAME_SAMPLES: usize = FRAME_MS * SAMPLE_RATE as usize / 1000;
+
+/// Characters a word of the agent's lines takes, its space included (`input::AGENT_TURNS`).
+const CHARS_PER_WORD: f64 = 5.3;
 
 pub struct FakeTts {
     registry: Arc<Registry>,
@@ -68,6 +75,8 @@ struct SynthesisState {
     chunks: u16,
     /// Seconds of audio produced so far: where the next chunk's words start.
     spoken: f64,
+    /// How long this voice takes over a character of text, in samples.
+    samples_per_char: f64,
 }
 
 impl Synthesis {
@@ -75,25 +84,35 @@ impl Synthesis {
         self.slot.get().expect("registered before use").nth
     }
 
+    /// The audio for one push of text, as long as the text takes to say at the voice's pace, in
+    /// frames of at most [`FRAME_MS`]: each frame a chunk of its own, the text and its word
+    /// timings on the first.
     fn emit(&self, state: &mut SynthesisState, text: String) {
-        let Some(sender) = &state.sender else { return };
-        let chunk = state.chunks;
-        let sample = Tag::synthesized(self.nth(), chunk);
-        // as long as the text takes to say: about 10 ms a character, as a voice speaks
-        let samples = SAMPLES_PER_CHUNK * text.chars().count().clamp(1, 12);
-        let frame = AudioFrame::new(sample.to_le_bytes().repeat(samples), SAMPLE_RATE, 1, samples as u32);
-        let span = samples as f64 / f64::from(SAMPLE_RATE);
-        let timed_transcript =
+        let total = ((text.chars().count() as f64 * state.samples_per_char) as usize).max(SAMPLES_PER_CHUNK);
+        let span = total as f64 / f64::from(SAMPLE_RATE);
+        let mut timed_transcript =
             if self.stamps { stamps(&text, state.spoken, span) } else { Vec::new() };
-        let stamped = timed_transcript
-            .iter()
-            .map(|w| (w.text.clone(), w.start_time.unwrap_or_default()))
-            .collect();
-        let audio = SynthesizedAudio { timed_transcript, ..SynthesizedAudio::new(frame, "synthesis") };
-        if sender.send(Ok(audio)).is_ok() {
-            state.spoken += span;
-            self.registry.record_produced(self.nth(), chunk, text, stamped);
+        let mut text = Some(text);
+        let mut left = total;
+        while left > 0 {
+            let Some(sender) = &state.sender else { return };
+            let samples = left.min(FRAME_SAMPLES);
+            let chunk = state.chunks;
+            let sample = Tag::synthesized(self.nth(), chunk);
+            let frame = AudioFrame::new(sample.to_le_bytes().repeat(samples), SAMPLE_RATE, 1, samples as u32);
+            let words = std::mem::take(&mut timed_transcript);
+            let stamped = words
+                .iter()
+                .map(|w| (w.text.clone(), w.start_time.unwrap_or_default()))
+                .collect();
+            let audio = SynthesizedAudio { timed_transcript: words, ..SynthesizedAudio::new(frame, "synthesis") };
+            if sender.send(Ok(audio)).is_err() {
+                return;
+            }
+            state.spoken += samples as f64 / f64::from(SAMPLE_RATE);
+            self.registry.record_produced(self.nth(), chunk, text.take().unwrap_or_default(), stamped);
             state.chunks += 1;
+            left -= samples;
         }
     }
 
@@ -187,11 +206,18 @@ impl Tts for FakeTts {
                 queued: vec![],
                 chunks: 0,
                 spoken: 0.0,
+                samples_per_char: 0.0,
             }),
             stamps: self.alignment == TtsAlignment::Words,
         });
         let slot = self.registry.register(Kind::Tts, Detail::None, Control::Tts(synthesis.clone()));
         let _ = synthesis.slot.set(slot);
+        // Each stream speaks at a pace the recorded voice had: its milliseconds a word, over the
+        // characters a word of the agent's lines takes.
+        let mut pace = fastrand::Rng::with_seed(u64::from(slot.nth) ^ 0x7061_6365);
+        let ms_per_word = crate::corpus::draw(&mut pace, &["tts", TTS_MODEL, "ms_per_word"]);
+        synthesis.state.lock().unwrap().samples_per_char =
+            ms_per_word / CHARS_PER_WORD * f64::from(SAMPLE_RATE) / 1000.0;
         let first_audio = self.latency.as_ref().map(|rng| {
             let ms = crate::corpus::draw_ms(&mut rng.lock().unwrap(), &["tts", TTS_MODEL, "first_audio"]);
             tokio::time::Instant::now() + std::time::Duration::from_millis(ms)

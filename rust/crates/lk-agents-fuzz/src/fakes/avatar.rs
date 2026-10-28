@@ -208,7 +208,9 @@ impl AvatarAudioReceiver for Receiver {
 #[derive(Clone, Copy, Debug)]
 enum Buffered {
     Audio { segment: u32, from: Observed, samples: u32, rate: u32 },
-    End,
+    /// The end of the segment whose audio was pushed last when it came: a segment's end can come
+    /// out after the next segment's audio went in.
+    End(Option<u32>),
 }
 
 #[derive(Default)]
@@ -216,6 +218,8 @@ struct GenState {
     buffer: VecDeque<Buffered>,
     /// What the last tick generated and the runner has not taken yet.
     ready: VecDeque<(Option<AvatarFrame>, Option<AvatarFrameLabel>, Option<u32>)>,
+    /// Clears so far: a tick in flight across one generated for audio the clear dropped.
+    clears: u64,
     next_tick_ms: Option<u64>,
     tick: u64,
     /// The segment of the last audio pushed: what a segment end ends.
@@ -277,9 +281,9 @@ impl Generator {
             let frame = self.frames.audio(Entry::Generated { label: audio, ms }, ms as u32, 1000);
             out.push((Some(AvatarFrame::Audio(frame)), Some(audio), None));
         }
-        if matches!(state.buffer.front(), Some(Buffered::End)) {
+        if let Some(&Buffered::End(ends)) = state.buffer.front() {
             state.buffer.pop_front();
-            if let Some(segment) = state.last_segment {
+            if let Some(segment) = ends {
                 out.push((None, None, Some(segment)));
             }
         }
@@ -296,7 +300,7 @@ impl Generator {
                 Buffered::Audio { samples, rate, .. } => {
                     u64::from(*samples) * 1000 / u64::from((*rate).max(1))
                 }
-                Buffered::End => self.period_ms,
+                Buffered::End(_) => self.period_ms,
             })
             .sum();
         (ms > 0 || !state.ready.is_empty())
@@ -314,13 +318,22 @@ impl AvatarVideoGenerator for Generator {
                 state.buffer.push_back(Buffered::Audio { segment, from, samples, rate });
             }
             Some(Entry::Generated { .. }) => {}
-            None => state.buffer.push_back(Buffered::End),
+            None => {
+                let ends = state.last_segment;
+                state.buffer.push_back(Buffered::End(ends));
+            }
         }
         Ok(())
     }
 
     async fn clear_buffer(&self) -> Result<(), ProviderError> {
-        self.state.lock().unwrap().buffer.clear();
+        // Nothing generated before the clear is yielded after it, as the reference's generators
+        // make each frame from their audio queue as it is pulled.
+        let mut state = self.state.lock().unwrap();
+        state.buffer.clear();
+        state.ready.clear();
+        state.clears += 1;
+        drop(state);
         record(&self.log, &self.stamps, AvatarStep::GeneratorCleared);
         Ok(())
     }
@@ -357,9 +370,15 @@ impl AvatarVideoGenerator for Generator {
             };
             until_ms(&*self.clock, at).await;
             // taken from the buffer now: in flight for the generation's latency
-            let made = self.tick(&mut self.state.lock().unwrap());
+            let (made, clears) = {
+                let mut state = self.state.lock().unwrap();
+                (self.tick(&mut state), state.clears)
+            };
             until_ms(&*self.clock, at + self.latency_ms).await;
-            self.state.lock().unwrap().ready.extend(made);
+            let mut state = self.state.lock().unwrap();
+            if state.clears == clears {
+                state.ready.extend(made);
+            }
         }
     }
 }

@@ -96,6 +96,13 @@ impl Check {
 /// `session_settles` is the release phase's own verdict, not a rule.
 pub const KNOWN_FINDINGS: &[&str] = &[
     "tool_lifecycle",
+    // The synchroniser takes the next turn's first frame or text, arriving while the last
+    // segment still plays out, for a lost `playback_finished` and rotates: the playing segment's
+    // pacer is closed (its transcript cut where it stood) and its later progress moves the new
+    // segment's pacer (words shown before their audio). Reached once audio plays at its recorded
+    // length (seeds 1750, 2815, 21650).
+    "shown_transcript_is_conserved",
+    "transcript_follows_audio",
 ];
 
 /// One guarantee the driver must keep.

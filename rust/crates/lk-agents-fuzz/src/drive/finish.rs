@@ -182,6 +182,19 @@ impl Run {
             .count()
     }
 
+    /// Speech steps spoken and speeches created so far: a round that spoke a step and created no
+    /// speech works down the live speeches' tool steps, a backlog `max_tool_steps` bounds, rather
+    /// than producing new work.
+    fn speech_progress(&self) -> (usize, usize) {
+        let count = |want: fn(&Step) -> bool| {
+            self.record.journal_where(|step| want(step).then_some(())).count()
+        };
+        (
+            count(|s| matches!(s, Step::Speech(SpeechStep::StepSpoken { .. }))),
+            count(|s| matches!(s, Step::Emitted(SessionEvent::SpeechCreated { .. }))),
+        )
+    }
+
     /// Whether the IVR navigator has acted since the case last closed it: the navigator's own
     /// triggers, against the case's closes, in order.
     fn ivr_navigating(&self) -> bool {
@@ -397,14 +410,16 @@ async fn run_in(case: Case) -> Outcome {
 pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     let mut quiet = 0;
     let mut rounds = 0;
+    let mut backlog = 0;
     while quiet < QUIET_ROUNDS {
-        if rounds >= MAX_RELEASE_ROUNDS {
+        // The backlogs are bounded too: a driver that never ran out of steps or audio is a finding.
+        if rounds >= MAX_RELEASE_ROUNDS || backlog >= 10 * MAX_RELEASE_ROUNDS {
             let never_quiet = Failure {
                 contract: "session_settles".into(),
                 subject: Subject::Session,
                 detail: format!(
-                    "still producing work to release after {MAX_RELEASE_ROUNDS} rounds and \
-                     {} inputs: the run never went quiet",
+                    "still producing work to release after {rounds} rounds ({backlog} more \
+                     working down steps or audio) and {} inputs: the run never went quiet",
                     outcome.case.inputs.len()
                 ),
             };
@@ -415,6 +430,10 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
             return outcome;
         }
         let grants_before = run.hold_grants();
+        let (spoken_before, created_before) = run.speech_progress();
+        // Audio already handed to the room plays out in real time, at most a release's advance
+        // a round: a finite backlog too.
+        let draining = !run.room_audio_queued().is_zero();
         // The avatar worker's playout reports are releases the run makes as they come due.
         let avatar_before = run.avatar.as_ref().map(|w| w.progress());
         let mut offered = run.releases();
@@ -441,7 +460,13 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         } else {
             quiet = 0;
         }
-        if !run.granted_queued_hold(grants_before) {
+        let (spoken, created) = run.speech_progress();
+        let stepped = (spoken > spoken_before || draining) && created == created_before;
+        if run.granted_queued_hold(grants_before) {
+            // The case's own asks, as many as it made.
+        } else if stepped {
+            backlog += 1;
+        } else {
             rounds += 1;
         }
     }

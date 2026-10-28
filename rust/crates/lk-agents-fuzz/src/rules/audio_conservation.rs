@@ -61,8 +61,11 @@ impl Rule for AudioConservation {
                 let subject = Subject::Resource(source.0, source.1);
 
                 // One source's chunks reach the sink in production order: no gap, repeat or reorder.
+                // A tag holds chunk numbers up to `Tag::MAX_CHUNK`; past it every chunk reads as
+                // that one, so a long stream's tail is checked for its source only.
                 let next = expected.entry(source).or_default();
-                check.expect_with(subject.clone(), chunk == *next, || {
+                let saturated = chunk == Tag::MAX_CHUNK && *next >= Tag::MAX_CHUNK;
+                check.expect_with(subject.clone(), chunk == *next || saturated, || {
                     format!("{tag:?} arrived, expected chunk {next} of that source (seq {})", at.seq)
                 });
 

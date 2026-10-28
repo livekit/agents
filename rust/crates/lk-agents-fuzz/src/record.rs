@@ -288,10 +288,12 @@ pub enum Sink {
         output: u32,
         tags: Vec<Tag>,
     },
-    /// A segment flushed on an output, awaiting its playout report.
+    /// A segment flushed on an output, awaiting its playout report, and how long the audio
+    /// captured for it plays.
     Flush {
         output: u32,
         segment: u32,
+        ms: u64,
     },
     /// The product cleared an output's buffer; these pending segments were reported interrupted.
     Clear {

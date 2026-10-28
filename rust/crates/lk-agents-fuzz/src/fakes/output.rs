@@ -238,14 +238,14 @@ impl Playout {
     /// The open segment is closed to new frames and carries what was captured for it. `None`
     /// when nothing was captured since the last flush: the tracker opened no segment for that
     /// flush either, so there is nothing to report on.
-    fn flushed(&self) -> Option<u32> {
+    fn flushed(&self) -> Option<(u32, Duration)> {
         let mut state = self.state.lock().unwrap();
         let segment = state.open.take()?;
         let position = std::mem::take(&mut state.duration);
         state.flushed.insert(segment, position);
         let frames = std::mem::take(&mut state.frames);
         state.flushed_frames.insert(segment, frames);
-        Some(segment)
+        Some((segment, position))
     }
 
     /// The speaker began emitting this segment. True when the segment is outstanding and had not
@@ -305,13 +305,11 @@ impl Playout {
     pub(super) fn report(&self, segment: u32) -> bool {
         let (position, frames) = {
             let mut state = self.state.lock().unwrap();
+            let Some(position) = state.flushed.remove(&segment) else { return false };
             state.started.remove(&segment);
             state.played.remove(&segment);
             let frames = state.flushed_frames.remove(&segment).unwrap_or_default();
-            match state.flushed.remove(&segment) {
-                Some(position) => (position, frames),
-                None => return false,
-            }
+            (position, frames)
         };
         self.heard(frames, position);
         self.tracker.playback_finished(PlaybackFinished {
@@ -443,8 +441,9 @@ impl AudioOutput for FakeAudioOutput {
 
     fn flush_segment(&self) {
         // A flush with nothing captured owes nothing: the tracker opened no segment for it.
-        if let Some(segment) = self.playout.flushed() {
-            self.registry.record_sink(Sink::Flush { output: self.id, segment });
+        if let Some((segment, captured)) = self.playout.flushed() {
+            let ms = captured.as_millis() as u64;
+            self.registry.record_sink(Sink::Flush { output: self.id, segment, ms });
         }
     }
 

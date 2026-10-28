@@ -15,9 +15,11 @@
 //! each decade reaches, what only it reaches, and what it costs, so the distribution is
 //! measured rather than chosen.
 //!
-//! - `VOICE_SEEDS` (32) and `VOICE_BUDGET` (1500 inputs) size a campaign. A beat of conversation
+//! - `VOICE_SEEDS` (32) and `VOICE_BUDGET` (3000 inputs) size a campaign. A beat of conversation
 //!   is three inputs and a reply takes seconds of beats; at 450 most runs ended before the agent
 //!   finished speaking, and 1500 took findings from 37 to 101 for thirteen seconds (2026-10-22).
+//!   At 1500 half the runs still ended on the budget, about forty seconds into a call whose median
+//!   is five minutes; 3000 found seven findings 1500 never reached, at twice the time (2026-10-27).
 //! - `VOICE_FIRST_SEED` moves the seed window, which is how the noise floor is measured.
 //! - `VOICE_SEED=4372` runs that one seed and prints its setup, every failure in full and the
 //!   journal variants it reached. A seed is the whole of a run: nothing carries over from the
@@ -55,7 +57,7 @@ fn survey() {
     campaign(&window);
 }
 
-const BUDGET: usize = 1500;
+const BUDGET: usize = 3000;
 
 /// The one line that reruns a seed alone.
 fn rerun(seed: u64, budget: usize) -> String {
@@ -220,6 +222,7 @@ fn campaign(window: &Window) {
     let mut policies: BTreeMap<String, Band> = BTreeMap::new();
     // Runs in which both observers closed a speech: the precondition of a decided turn.
     let mut both_closed = 0;
+    let mut heard = 0;
     // What each input was declared to open, and what it was seen to open.
     let mut declared: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
     let mut observed: BTreeMap<&'static str, BTreeSet<Kind>> = BTreeMap::new();
@@ -248,6 +251,7 @@ fn campaign(window: &Window) {
         }
         let sent = |name: &str| outcome.case.inputs.iter().any(|i| i.name() == name);
         both_closed += usize::from(sent("VadEnd") && sent("SttFinal"));
+        heard += usize::from(outcome.reached.iter().any(|v| v == "Playout::PlaybackStarted"));
         if !outcome.ok() {
             let mut here: BTreeSet<&str> = BTreeSet::new();
             for failure in &outcome.failures {
@@ -295,7 +299,9 @@ fn campaign(window: &Window) {
         println!("  {}  {contract}", rates.join("  "));
     }
     println!();
-    println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal\n");
+    println!("{both_closed} of {seeds} runs with both a VadEnd and an SttFinal");
+    // A call where the agent was never heard reaches nothing that happens while it speaks.
+    println!("{heard} of {seeds} runs where the person heard the agent\n");
 
     // Per family, because the two ways to miss a variant have different fixes: a family at zero
     // is a leg no setup built, and a family part-reached is a search that has not got there yet.

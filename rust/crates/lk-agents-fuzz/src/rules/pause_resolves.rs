@@ -106,7 +106,8 @@ fn resolves(step: &Step, speech: u64) -> bool {
 }
 
 /// How long after the person goes quiet a pause at `at_ms` may hold: [`BOUND_MS`] beyond the
-/// ceiling of the endpointing delay in effect, the turn decision the pause waits on.
+/// ceiling of the endpointing delay in effect, the turn decision the pause waits on: the larger
+/// of its bounds, since a fixed delay serves `min_delay` even above `max_delay`.
 pub(crate) fn allowance_ms(journal: &[(Observed, Step)], at_ms: u64) -> u64 {
     let endpointing = journal
         .iter()

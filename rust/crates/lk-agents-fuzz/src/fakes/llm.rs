@@ -97,10 +97,11 @@ impl StreamSource<LlmChunk> for Response {
 pub const COMPLETION_TOKENS: u32 = 10;
 
 /// One model delivery onto a registered chat request's stream, in the chunk shapes the corpus
-/// recorded from the inference gateway: words stream as token-sized chunks each naming the
-/// assistant role, a tool call comes whole in one chunk, and the end is an empty chunk (the
-/// finish) followed by one carrying only the usage. True when the stream still had a reader.
-/// `End` and `Fail` close the stream; the registry drops the control afterwards.
+/// recorded from the inference gateway: each `LlmText` is one wire chunk naming the assistant role
+/// (the case cuts a reply into the token-sized pieces the model streams, at the model's pace), a
+/// tool call comes whole in one chunk, and the end is an empty chunk (the finish) followed by one
+/// carrying only the usage. True when the stream still had a reader. `End` and `Fail` close the
+/// stream; the registry drops the control afterwards.
 pub(super) fn deliver(
     sender: &mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>,
     nth: u32,
@@ -113,23 +114,16 @@ pub(super) fn deliver(
         ..Default::default()
     };
     match what {
-        // A word and its trailing space is about a token: what the gateway streams.
-        Input::LlmText { text: AgentText(text), .. } => {
-            let mut sent = true;
-            for piece in text.split_inclusive(' ') {
-                sent &= sender
-                    .send(Ok(LlmChunk {
-                        id: response_id.clone(),
-                        delta: Some(lk_agents_abi::ChoiceDelta {
-                            content: Some(piece.to_owned()),
-                            ..assistant()
-                        }),
-                        ..Default::default()
-                    }))
-                    .is_ok();
-            }
-            sent
-        }
+        Input::LlmText { text: AgentText(text), .. } => sender
+            .send(Ok(LlmChunk {
+                id: response_id,
+                delta: Some(lk_agents_abi::ChoiceDelta {
+                    content: Some(text.clone()),
+                    ..assistant()
+                }),
+                ..Default::default()
+            }))
+            .is_ok(),
         Input::LlmToolCall { name, args, .. } => sender
             .send(Ok(LlmChunk {
                 id: response_id,

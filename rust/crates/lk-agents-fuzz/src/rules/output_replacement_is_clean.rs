@@ -119,9 +119,9 @@ impl Rule for OutputReplacementIsClean {
     }
 }
 
-/// Every step the journal shows, from the reply task that began it (the speech's creation, or a
-/// tool step's start), which is where the reference reads the outputs, to the step's or the
-/// speech's end (`None` while it had not ended).
+/// Every reply task the journal shows, from where the reference reads the outputs (the speech's
+/// creation, or a tool step's start) to the task's end, which drains what its step still had to
+/// write (`None` while it had not ended).
 fn step_windows(r: &Recording) -> Vec<(Observed, Option<Observed>)> {
     let mut open: std::collections::BTreeMap<u64, Observed> = Default::default();
     let mut windows = Vec::new();
@@ -131,7 +131,7 @@ fn step_windows(r: &Recording) -> Vec<(Observed, Option<Observed>)> {
             | Step::Tool(ToolStep::StepStarted { speech, .. }) => {
                 open.entry(speech.0).or_insert(*at);
             }
-            Step::Speech(SpeechStep::StepSpoken { speech, .. })
+            Step::Speech(SpeechStep::ReplyFinished { speech, .. })
             | Step::Emitted(SessionEvent::SpeechDone { speech, .. }) => {
                 if let Some(from) = open.remove(&speech.0) {
                     windows.push((from, Some(*at)));
@@ -148,9 +148,9 @@ fn step_windows(r: &Recording) -> Vec<(Observed, Option<Observed>)> {
 fn calls_stop_at_replacement() -> Recording {
     Authored::new()
         .output(true)
-        .sink(Sink::Flush { output: 0, segment: 0 })
+        .sink(Sink::Flush { output: 0, segment: 0, ms: 10 })
         .output(true)
-        .sink(Sink::Flush { output: 1, segment: 1 })
+        .sink(Sink::Flush { output: 1, segment: 1, ms: 10 })
         .done()
 }
 

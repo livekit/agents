@@ -42,7 +42,6 @@ use serde_json::{Value, json};
 
 use crate::{
     corpus::{draw_ms, share},
-    fakes::SAMPLES_PER_CHUNK,
     input::{AGENT_TURNS, USER_TURNS},
     record::{Breach, Tag},
 };
@@ -71,8 +70,11 @@ pub const REFUSALS: &[&str] = &[
 /// The nominal length of a full audio delta, as the corpus has nearly all of them.
 const DELTA_MS: u64 = 400;
 
-/// What a delta's PCM is long: the client plays this much of it.
-const PCM_MS: u64 = (SAMPLES_PER_CHUNK as u64 * 1000) / super::super::SAMPLE_RATE as u64;
+/// What a delta's PCM is long: the client plays all of it, as long as the server counts it.
+const PCM_MS: u64 = DELTA_MS;
+
+/// The samples a delta carries.
+const DELTA_SAMPLES: usize = (DELTA_MS * super::super::SAMPLE_RATE as u64 / 1000) as usize;
 
 /// What the server is told to do of its own accord: the person's speech as its VAD hears it, and
 /// the ways a real server goes wrong. Mirrors `RtEvent`, which is how a case says it.
@@ -368,7 +370,7 @@ impl Server {
                 }
                 self.voiced = true;
                 hooks.produced(source, chunk);
-                let pcm = Tag::generated(source, chunk).to_le_bytes().repeat(SAMPLES_PER_CHUNK);
+                let pcm = Tag::generated(source, chunk).to_le_bytes().repeat(DELTA_SAMPLES);
                 let resp_id = resp.map(|r| self.responses[r as usize].id.clone());
                 json!({
                     "type": "response.output_audio.delta",

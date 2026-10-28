@@ -162,6 +162,21 @@ impl Rule for ForwardedWhileEnabled {
 /// Whether the path's last switch before a frame was pushed had not yet reached the driver: the
 /// switch waits on the command queue for the driver's next turn while the frame goes straight to
 /// the pump, so the two land in the same turn in either order.
+/// Until when a frame pushed at `pushed` was on its way to the streams: until one heard it, or,
+/// never heard, until its microphone forwarded anything after it. That can be past the pump's
+/// turn: a room microphone holds its frames while it waits for the pre-connect buffer.
+fn on_its_way(inference: &InferenceView, (mic, chunk): (u32, u16), pushed: Observed) -> Observed {
+    let streams = || LISTENERS.iter().flat_map(|kind| inference.streams(*kind));
+    let after = |at: Option<Observed>| at.filter(|at| *at > pushed);
+    let arrived = streams().filter_map(|s| after(s.heard_at(mic, chunk))).min();
+    let forwarding = || {
+        streams()
+            .flat_map(|s| (0..=Tag::MAX_CHUNK).filter_map(move |c| after(s.heard_at(mic, c))))
+            .min()
+    };
+    arrived.or_else(forwarding).unwrap_or(Observed::END)
+}
+
 fn switching(inputs: &InputsView, audio_input: &Switch, pushed: Observed) -> bool {
     audio_input
         .last_change(pushed)
@@ -197,12 +212,14 @@ fn expect_reached(
     // moved the frame and nothing can be said about where it went.
     let Some(turn) = inputs.driver_turn_after(pushed) else { return };
     let end = turn.ended.unwrap_or(Observed::END);
+    let way = std::cell::OnceCell::new();
+    let on_its_way = || *way.get_or_init(|| on_its_way(inference, (mic, chunk), pushed).max(end));
     // A switch landing in the same turn races the pump for the frame, and so does replacing the
-    // microphone it was pushed to (the reference cancels the old stream's reader with whatever it
-    // had not read); either outcome is right.
+    // microphone it was pushed to while the frame was on its way (the reference cancels the old
+    // stream's reader with whatever it had not read); either outcome is right.
     if audio_input.off_within(pushed, end)
         || switching(inputs, audio_input, pushed)
-        || replaced.is_some_and(|at| at <= end)
+        || replaced.is_some_and(|at| at <= on_its_way())
     {
         return;
     }
@@ -215,9 +232,10 @@ fn expect_reached(
         if kind == Kind::Stt && gate_closed.iter().any(|window| window.overlaps(pushed, moved_by)) {
             continue;
         }
-        // A provider swapped while the frame was on its way, up to the turn that moves it, may
-        // hear it on either stream (seed 47240).
-        if reopened.iter().any(|(at, leg)| *leg == kind && pushed < *at && *at <= moved_by) {
+        // A provider swapped while the frame was on its way, up to the turn that moves it or
+        // its arrival, may hear it on either stream (seed 47240).
+        let way = on_its_way().max(moved_by);
+        if reopened.iter().any(|(at, leg)| *leg == kind && pushed < *at && *at <= way) {
             continue;
         }
         for stream in inference.streams(kind) {
