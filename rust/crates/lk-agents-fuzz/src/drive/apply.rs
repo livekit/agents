@@ -323,11 +323,11 @@ impl Run {
                     }
                 })
                 .is_ok(),
-            Input::InterruptSpeech { speech, force } => self
-                .host_speech(*speech)
-                .is_some_and(|speech| {
+            Input::InterruptSpeech { speech, force } => {
+                self.host_speech(*speech).is_some_and(|speech| {
                     speech.interrupt_for_host(*force, self.tasks.clone()).is_ok()
-                }),
+                })
+            }
             Input::SetAllowInterruptions { speech, allow } => self
                 .host_speech(*speech)
                 .is_some_and(|speech| speech.set_allow_interruptions_for_host(*allow).is_ok()),
@@ -509,9 +509,11 @@ impl Run {
             }
             Input::SetAudioOutput { attach } => {
                 let (pausable, lagging) = (self.setup.pausable_output, self.setup.lagging_output);
-                api.set_audio_output(attach.then(|| {
-                    fakes::FakeAudioOutput::new(registry.clone(), pausable, lagging) as _
-                }))
+                api.set_audio_output(
+                    attach.then(|| {
+                        fakes::FakeAudioOutput::new(registry.clone(), pausable, lagging) as _
+                    }),
+                )
                 .is_ok()
             }
             Input::SetTranscriptionOutput { attach } => api
@@ -559,16 +561,7 @@ impl Run {
                 if let Maybe::Given(new) = &stt {
                     self.legs.stt = new.clone();
                 }
-                api.update_models(
-                    llm,
-                    tts,
-                    stt,
-                    Maybe::NotGiven,
-                    None,
-                    None,
-                    None,
-                )
-                .is_ok()
+                api.update_models(llm, tts, stt, Maybe::NotGiven, None, None, None).is_ok()
             }
             // `drain()` always returns its future; `wait` is whether the case awaits it.
             Input::Drain { wait: awaited } => api
@@ -893,7 +886,10 @@ impl Run {
             ConsoleAsk::Usage => Request::GetSessionUsage(rq::GetSessionUsage {}),
             ConsoleAsk::Framework => Request::GetFrameworkInfo(rq::GetFrameworkInfo {}),
             ConsoleAsk::Mute => Request::UpdateIo(rq::UpdateIo {
-                input: Some(rq::update_io::Input { audio_enabled: Some(false), video_enabled: None }),
+                input: Some(rq::update_io::Input {
+                    audio_enabled: Some(false),
+                    video_enabled: None,
+                }),
                 output: None,
             }),
             ConsoleAsk::Finalize => Request::FinalizeSimulation(rq::FinalizeSimulation {
@@ -919,7 +915,11 @@ impl Run {
 
     /// The person's microphones in the room, which leave the room with them.
     fn room_mics(&self) -> Vec<u32> {
-        self.mics.iter().filter(|(_, (leg, _))| matches!(leg, Mic::Room { .. })).map(|(n, _)| *n).collect()
+        self.mics
+            .iter()
+            .filter(|(_, (leg, _))| matches!(leg, Mic::Room { .. }))
+            .map(|(n, _)| *n)
+            .collect()
     }
 
     /// Push one piece of a `say`'s input stream. Each audio chunk carries its stream and its index
@@ -965,8 +965,7 @@ impl Run {
     }
 
     /// Hand one answer to the fake waiting for it. An utterance is reached through the recognition
-    /// stream it was opened on, which is the only indirection here: the recogniser is the thing
-    /// with a channel, and an utterance is a span of what the case sent down it.
+    /// stream it was opened on: the recogniser has the channel, an utterance spans what it carried.
     fn deliver(&mut self, at: Observed, input: &Input) -> bool {
         let (slot, utterance) = match input {
             Input::LlmText { chat, .. }
@@ -1002,6 +1001,7 @@ impl Run {
             }
             Input::PlayoutStarted { segment }
             | Input::PlayoutFinished { segment }
+            | Input::PlayoutFinishLost { segment }
             | Input::PlayoutProgressed { segment, .. } => {
                 (Slot { kind: Kind::Segment, nth: segment.nth }, None)
             }

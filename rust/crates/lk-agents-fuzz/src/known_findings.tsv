@@ -3,6 +3,5 @@
 # contract, subject kind (`Subject::kind`), the regression test in tests/regressions/ that fixes it
 # or `-`, and why it is open.
 tool_lifecycle	Tool	-	listed since 6420a8baa with no cause recorded; not reached by the recent gate windows
-shown_transcript_is_conserved	Speech	-	the synchroniser takes the next turn's first frame or text, arriving while the last segment still plays out, for a lost playback_finished and rotates: the playing segment's pacer is closed (its transcript cut where it stood) and its later progress moves the new segment's pacer (words shown before their audio); reached once audio plays at its recorded length (seeds 1750, 2815, 21650)
-transcript_follows_audio	Speech	-	the same rotation as shown_transcript_is_conserved, seen as words shown before their audio
+transcript_follows_audio	Speech	-	the synchroniser, for a lost playback_finished, rotates to the next turn's first frame or text while the last segment still plays out: that segment's later progress moves the new segment's pacer, so words show before their audio (seeds 1906 3322 17865 22545 22658)
 message_executes_once	Continuation	-	continuing a pending question by its taskId cannot commit: settle stamps the continuation's messageId on the continued task while answer_pending stamps it on the receipt row, and the unique (lane, message_id) task index fails the commit (A2A_SEED=8)

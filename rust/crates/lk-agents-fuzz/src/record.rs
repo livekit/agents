@@ -305,6 +305,11 @@ pub enum Sink {
         segment: u32,
         accepted: bool,
     },
+    /// The case had a segment finish with its report lost: accepted when the output owed it.
+    FinishLost {
+        segment: u32,
+        accepted: bool,
+    },
     /// The case reported a segment's first audio leaving the speaker; refused for a segment gone
     /// or already started.
     Started {
@@ -440,9 +445,15 @@ pub enum Breach {
 pub enum AvatarStep {
     /// The worker started: its generator's frame period and latency, and its synchronizer's
     /// audio queue.
-    Started { period_ms: u64, latency_ms: u64, queue_ms: u64 },
+    Started {
+        period_ms: u64,
+        latency_ms: u64,
+        queue_ms: u64,
+    },
     /// The runner pulled an audio frame of this segment from the receiver.
-    Received { segment: u32 },
+    Received {
+        segment: u32,
+    },
     /// The runner pulled a segment end from the receiver.
     ReceivedEnd,
     /// The agent's `lk.clear_buffer` reached the runner.
@@ -452,12 +463,19 @@ pub enum AvatarStep {
     /// The generator yielded a frame to the runner.
     Generated(AvatarFrameLabel),
     /// The generator yielded the end of this segment.
-    GeneratedEnd { segment: u32 },
+    GeneratedEnd {
+        segment: u32,
+    },
     /// The runner pushed a frame into the synchronizer, which plays it at `plays_ms`.
-    Pushed { frame: AvatarFrameLabel, plays_ms: u64 },
+    Pushed {
+        frame: AvatarFrameLabel,
+        plays_ms: u64,
+    },
     /// The runner reported a segment's playback.
     ReportedStarted,
-    ReportedFinished { interrupted: bool },
+    ReportedFinished {
+        interrupted: bool,
+    },
     /// The run asked the worker to close.
     CloseAsked,
     /// The worker closed: what was still held or running.

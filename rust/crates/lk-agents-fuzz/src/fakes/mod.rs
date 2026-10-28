@@ -38,11 +38,11 @@ mod llm;
 mod nodes;
 mod output;
 pub mod realtime;
-pub mod vocabulary;
 mod stt;
 pub(crate) mod tools;
 mod tts;
 mod vad;
+pub mod vocabulary;
 
 pub use avatar::FakeAvatarWorker;
 pub use eot::{FakeEot, THRESHOLD as EOT_THRESHOLD};
@@ -50,10 +50,8 @@ pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
 pub use nodes::FakeNodes;
 pub use output::{
-    room_camera,
     FakeAudioInput, FakeAudioOutput, FakeCli, FakeConsolePort, FakeRecorder, FakeSoundStream,
-    FakeTextOutput, Half,
-    FakeVideoInput,
+    FakeTextOutput, FakeVideoInput, Half, room_camera,
 };
 pub use realtime::{FakeRealtime, ServerSetup, Vad as RealtimeVad};
 pub use stt::FakeStt;
@@ -229,6 +227,7 @@ pub fn boundary_of(input: &Input) -> Option<Kind> {
         Input::ToolAnswered { .. } => Kind::Tool,
         Input::PlayoutStarted { .. }
         | Input::PlayoutFinished { .. }
+        | Input::PlayoutFinishLost { .. }
         | Input::PlayoutProgressed { .. } => Kind::Segment,
         Input::SinkReset { .. } => Kind::Output,
         Input::VideoFrames { .. } => Kind::Video,
@@ -521,6 +520,11 @@ impl Registry {
                     let accepted = playout.progressed(slot.nth, played, self.stamps.ts());
                     self.record_sink(Sink::Progressed { segment: slot.nth, accepted });
                     return (accepted, Some(Control::Segment(playout)));
+                }
+                if let Input::PlayoutFinishLost { .. } = input {
+                    let accepted = playout.lose(slot.nth, self.stamps.ts());
+                    self.record_sink(Sink::FinishLost { segment: slot.nth, accepted });
+                    return (accepted, (!accepted).then_some(Control::Segment(playout)));
                 }
                 let accepted = playout.report(slot.nth);
                 self.record_sink(Sink::Played { segment: slot.nth, accepted });

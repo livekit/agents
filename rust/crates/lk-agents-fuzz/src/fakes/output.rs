@@ -9,14 +9,14 @@ use std::{
     time::Duration,
 };
 
+use lk_agents_abi::errors::HostError;
+use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, PlaybackFinished, PlaybackTracker,
     TextOutput, VideoInput,
 };
 use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
-use lk_agents_abi::errors::HostError;
-use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_voice::remote_session::{self, FrameDecoder, console::ConsoleIo, proto};
 use prost::Message as _;
 use proto::agent_session_message::{Message, console_io};
@@ -305,19 +305,45 @@ impl Playout {
     /// This segment finished playing. True when it was flushed and still owed; a segment still
     /// taking frames cannot have finished, and one already reported is not reported twice.
     pub(super) fn report(&self, segment: u32) -> bool {
+        let Some(position) = self.finished(segment) else { return false };
+        self.tracker.playback_finished(PlaybackFinished {
+            playback_position: position,
+            ..Default::default()
+        })
+    }
+
+    /// This segment finished playing and the report of it was lost: the speaker's progress
+    /// reports came through to the end, its finish never does. True when it was flushed and
+    /// still owed.
+    pub(super) fn lose(&self, segment: u32, at: Ts) -> bool {
+        let (start, rest) = {
+            let state = self.state.lock().unwrap();
+            let Some(position) = state.flushed.get(&segment).copied() else { return false };
+            let played = state.played.get(&segment).copied().unwrap_or_default();
+            (!state.started.contains(&segment), position.saturating_sub(played))
+        };
+        if start && !self.started(segment, at) {
+            return false;
+        }
+        if !rest.is_zero() {
+            self.progressed(segment, rest, at);
+        }
+        self.finished(segment).is_some()
+    }
+
+    /// The segment leaves the outstanding ones, heard whole; its length, or `None` when it was
+    /// not flushed and owed.
+    fn finished(&self, segment: u32) -> Option<Duration> {
         let (position, frames) = {
             let mut state = self.state.lock().unwrap();
-            let Some(position) = state.flushed.remove(&segment) else { return false };
+            let position = state.flushed.remove(&segment)?;
             state.started.remove(&segment);
             state.played.remove(&segment);
             let frames = state.flushed_frames.remove(&segment).unwrap_or_default();
             (position, frames)
         };
         self.heard(frames, position);
-        self.tracker.playback_finished(PlaybackFinished {
-            playback_position: position,
-            ..Default::default()
-        })
+        Some(position)
     }
 
     /// The product threw away the buffer: every segment still outstanding, open or flushed, is
@@ -326,10 +352,11 @@ impl Playout {
     fn cleared(&self) -> Vec<u32> {
         let cut: Vec<(u32, Duration)> = {
             let mut state = self.state.lock().unwrap();
-            let mut outstanding: Vec<(u32, Vec<(Option<u32>, Duration)>)> = std::mem::take(&mut state.flushed)
-                .into_keys()
-                .map(|s| (s, state.flushed_frames.remove(&s).unwrap_or_default()))
-                .collect();
+            let mut outstanding: Vec<(u32, Vec<(Option<u32>, Duration)>)> =
+                std::mem::take(&mut state.flushed)
+                    .into_keys()
+                    .map(|s| (s, state.flushed_frames.remove(&s).unwrap_or_default()))
+                    .collect();
             if let Some(open) = state.open.take() {
                 state.duration = Duration::ZERO;
                 outstanding.push((open, std::mem::take(&mut state.frames)));
@@ -420,9 +447,11 @@ impl AudioOutput for FakeAudioOutput {
     async fn capture(&self, frame: &AudioFrame) -> io::Result<()> {
         // The first frame after a flush opens a segment, as the driver's tracker counts them;
         // the case reports on it from here on, so it needs its identity now, not at the flush.
-        let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| match Tag::decode(i16::from_le_bytes(*s)) {
-            Tag::Generated { generation, .. } => Some(generation),
-            _ => None,
+        let generation = frame.data.as_chunks::<2>().0.iter().find_map(|s| {
+            match Tag::decode(i16::from_le_bytes(*s)) {
+                Tag::Generated { generation, .. } => Some(generation),
+                _ => None,
+            }
         });
         if self.playout.captured(Duration::from_secs_f64(frame.duration()), generation) {
             let control = Control::Segment(self.playout.clone());
@@ -556,14 +585,18 @@ impl FakeCli {
             let played = Arc::new(std::sync::atomic::AtomicU64::new(0));
             loop {
                 while let Ok(Some(body)) = decoder.next_frame() {
-                    match proto::AgentSessionMessage::decode(body.as_slice()).ok().and_then(|m| m.message) {
+                    match proto::AgentSessionMessage::decode(body.as_slice())
+                        .ok()
+                        .and_then(|m| m.message)
+                    {
                         Some(Message::AudioOutput(f)) => {
                             pending += Duration::from_secs_f64(
                                 f64::from(f.samples_per_channel) / f64::from(f.sample_rate.max(1)),
                             );
                         }
                         Some(Message::AudioPlaybackFlush(_)) => {
-                            let (speaker, played, this) = (speaker.clone(), played.clone(), segment);
+                            let (speaker, played, this) =
+                                (speaker.clone(), played.clone(), segment);
                             let audio = std::mem::take(&mut pending);
                             let until = tokio::time::Instant::now() + audio;
                             let mut playing = speaker.playing_until.lock().unwrap();
@@ -622,7 +655,11 @@ impl remote_session::SessionPort for FakeConsolePort {
         Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
     }
     async fn run_input(&self, text: &str) -> Result<remote_session::RunOutcome, HostError> {
-        Ok(if text.is_empty() { (None, Some("empty run_input text".into())) } else { (Some(Vec::new()), None) })
+        Ok(if text.is_empty() {
+            (None, Some("empty run_input text".into()))
+        } else {
+            (Some(Vec::new()), None)
+        })
     }
     async fn session_state(&self) -> Result<remote_session::SessionState, HostError> {
         let options = remote_session::STATE_OPTION_FIELDS
@@ -675,7 +712,12 @@ impl lk_agents_voice::background_audio::FrameStream for FakeSoundStream {
         }
         *left -= 1;
         let samples = super::SAMPLE_RATE / 50;
-        Ok(Some(AudioFrame::new(1000i16.to_le_bytes().repeat(samples as usize), super::SAMPLE_RATE, 1, samples)))
+        Ok(Some(AudioFrame::new(
+            1000i16.to_le_bytes().repeat(samples as usize),
+            super::SAMPLE_RATE,
+            1,
+            samples,
+        )))
     }
     fn cancel_pending(&self) {}
     async fn close(&self) {

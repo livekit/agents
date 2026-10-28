@@ -29,6 +29,11 @@ const CUT_REPORT_HOPS: usize = 16;
 /// How long a cut segment then waits on the clock for a host output's report of the cut.
 const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
 
+/// How late a sink's finish may be, once it reported all the audio played, before the playout
+/// takes it as lost. The reference's `DataStreamAudioOutput(clear_buffer_timeout=2.0)`: its one
+/// sink whose reports cross a transport marks the playout done after this "to avoid deadlock".
+const LOST_FINISH_MARGIN: Duration = Duration::from_secs(2);
+
 #[derive(Debug)]
 pub(crate) enum Next {
     Frame(AudioFrame),
@@ -113,6 +118,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         batch: 0,
         first_segment: None,
         cut_below: false,
+        dropped: Dropped::default(),
     };
     let mut ended = loop {
         if handle.interrupted() {
@@ -171,7 +177,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             let mut synchronized = None;
             if playing.pushed > 0 {
                 playing.flush_batch();
-                match playing.watched(out.wait_for_playout()).await {
+                match playing.played_out_report().await {
                     Some(ev) => {
                         playing.played_out(segment, &ev);
                         synchronized = ev.synchronized_transcript.map(|t| Visible::of(&t).text);
@@ -187,7 +193,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         Ended::Audio if playing.pushed == 0 => Ok(silent(text, true)),
         Ended::Audio => {
             playing.flush_batch();
-            let Some(ev) = playing.watched(out.wait_for_playout()).await else {
+            let Some(ev) = playing.played_out_report().await else {
                 return Ok(playing.cut(segment, text).await);
             };
             playing.played_out(segment, &ev);
@@ -377,6 +383,16 @@ struct Playing<'a> {
     /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
     /// it played, whatever the last segment reports.
     cut_below: bool,
+    /// Where the sink last dropped what it held: the audio pushed before is no longer owed.
+    dropped: Dropped,
+}
+
+/// The pushed and played totals when the sink last dropped what it held (a reset, a segment
+/// reported cut): what it owes is what was pushed since, against what it played since.
+#[derive(Default, Clone, Copy)]
+struct Dropped {
+    pushed: Duration,
+    played: Duration,
 }
 
 impl Playing<'_> {
@@ -428,7 +444,10 @@ impl Playing<'_> {
                 end: word.end_time.unwrap_or_default(),
                 played: self.played,
             }),
-            SinkReport::Reset => self.trace(PlayoutStep::SinkReset { speech }),
+            SinkReport::Reset => {
+                self.drop_owed();
+                self.trace(PlayoutStep::SinkReset { speech });
+            }
             SinkReport::Playback(PlaybackEvent::Started(s)) => {
                 let time = &self.shared.time;
                 let at = time.wall_secs()
@@ -452,12 +471,19 @@ impl Playing<'_> {
                     self.start(self.shared.time.wall_secs());
                 }
                 self.played = self.played.max(f.playback_position);
-                if !f.interrupted {
+                if f.interrupted {
+                    self.drop_owed();
+                } else {
                     self.completed += f.playback_position;
                 }
                 self.report_played();
             }
         }
+    }
+
+    /// The sink dropped what it held: nothing pushed so far is owed any more.
+    fn drop_owed(&mut self) {
+        self.dropped = Dropped { pushed: self.pushed_len, played: self.played };
     }
 
     fn start(&mut self, at: f64) {
@@ -509,6 +535,53 @@ impl Playing<'_> {
                 v = &mut fut => return Some(v),
             }
         }
+    }
+
+    /// The sink's finish for what was pushed; `None` when interrupted. A finish lost on its way
+    /// would hold the speech until the close: once the sink reported all it owes played, the finish
+    /// gets [`LOST_FINISH_MARGIN`], then it is reported for the sink. Before that nothing bounds it:
+    /// a pause, or a sink slower than the clock, holds audio for as long as it likes.
+    async fn played_out_report(&mut self) -> Option<PlaybackFinished> {
+        let out = self.out;
+        let mut wait = std::pin::pin!(out.wait_for_playout());
+        let time = self.shared.time.clone();
+        loop {
+            // Not all played yet: looked at again a margin later. Audio pushed before the sink
+            // last dropped what it held is owed no more.
+            let owed = self.pushed_len.saturating_sub(self.dropped.pushed);
+            let played_all = self.played.saturating_sub(self.dropped.played) >= owed;
+            if played_all {
+                let at = time.now().saturating_add(LOST_FINISH_MARGIN);
+                self.trace(PlayoutStep::FinishDue { speech: self.handle.id(), at });
+            }
+            match self.watched(time.timeout(LOST_FINISH_MARGIN, wait.as_mut())).await? {
+                Ok(ev) => return Some(ev),
+                Err(_) if played_all => break,
+                Err(_) => {}
+            }
+        }
+        let lost = self.report_lost_finish();
+        // The chain settles on the report at once; a count it no longer owes takes it as is.
+        Some(time.timeout(Duration::ZERO, wait).await.unwrap_or(lost))
+    }
+
+    /// The finish the sink lost, reported where the sink would have: at the end of the chain, so
+    /// every node above settles its segment as if the report had come.
+    fn report_lost_finish(&mut self) -> PlaybackFinished {
+        let position = self.played.saturating_sub(self.completed);
+        self.trace(PlayoutStep::FinishLost { speech: self.handle.id(), position });
+        let finished = PlaybackFinished { playback_position: position, ..Default::default() };
+        let mut leaf = None;
+        let mut next = self.out.next_in_chain();
+        while let Some(node) = next {
+            next = node.next_in_chain();
+            leaf = Some(node);
+        }
+        let reported = leaf.is_some_and(|leaf| leaf.tracker().playback_finished(finished.clone()));
+        if !reported {
+            self.out.tracker().playback_finished(finished.clone());
+        }
+        finished
     }
 
     async fn push<S: Segment>(

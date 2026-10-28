@@ -37,6 +37,7 @@ mod ordinary_completed_replies;
 mod path_needs_both_switches;
 mod pause_outlives_its_speech;
 mod paused_sink_released_when_done;
+mod playout_finish_lost;
 mod preemptive_parked;
 mod preemptive_reply_latency;
 mod filler_refused_on_realtime;

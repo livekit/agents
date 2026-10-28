@@ -223,7 +223,14 @@ impl Run {
         let voice = now + self.registry.voice_due_in().map_or(0, |d| d.as_millis() as u64);
         // The avatar plays what it holds in real time before it reports it played.
         let avatar = now + self.avatar_due_in().map_or(0, |d| d.as_millis() as u64);
-        let furthest = self.deadlines().map(|(_, at)| at).max().unwrap_or(now).max(playing).max(voice).max(avatar);
+        let furthest = self
+            .deadlines()
+            .map(|(_, at)| at)
+            .max()
+            .unwrap_or(now)
+            .max(playing)
+            .max(voice)
+            .max(avatar);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
@@ -242,7 +249,11 @@ impl Run {
     /// The avatar's playout still to come, or the agent's sink waiting out its give-up timer.
     fn avatar_due_in(&self) -> Option<Duration> {
         let now = self.time.now();
-        let timer = self.avatar_sink.as_ref().and_then(|sink| sink.wake_at()).map(|at| at.saturating_duration_since(now));
+        let timer = self
+            .avatar_sink
+            .as_ref()
+            .and_then(|sink| sink.wake_at())
+            .map(|at| at.saturating_duration_since(now));
         let playout = self.avatar.as_ref().and_then(|worker| worker.due_in());
         playout.into_iter().chain(timer).max()
     }
@@ -266,6 +277,8 @@ impl Run {
                     Some((*timer == TimerName::Session(Timer::RecorderFlush), *at))
                 }
                 Step::Generation(GenerationStep::RetryArmed { at, .. }) => Some((false, *at)),
+                // A playout taking a missing finish as lost once its margin passes.
+                Step::Playout(PlayoutStep::FinishDue { at, .. }) => Some((false, *at)),
                 _ => None,
             })
             .map(|(_, (periodic, at))| {
@@ -762,12 +775,18 @@ fn dump_journal(record: &crate::record::Recording) {
         .iter()
         .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms   {step:?}", at.seq, at.at_ms)))
         .collect();
-    lines.extend(record.host().iter().map(|(at, h)| {
-        (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))
-    }));
-    lines.extend(record.avatar().iter().map(|(at, step)| {
-        (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))
-    }));
+    lines.extend(
+        record
+            .host()
+            .iter()
+            .map(|(at, h)| (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))),
+    );
+    lines.extend(
+        record
+            .avatar()
+            .iter()
+            .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))),
+    );
     lines.extend(record.applied().iter().map(|a| {
         let mark = if a.accepted { ">" } else { "x" };
         (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))

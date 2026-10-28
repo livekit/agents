@@ -206,7 +206,8 @@ impl<'a> InputsView<'a> {
                 Some((a.at, *taken.get(kind)?.get(*n - 1)?))
             })
             .collect();
-        let changes = switch.changes.into_iter().map(|(at, on)| (moved.get(&at).copied().unwrap_or(at), on));
+        let changes =
+            switch.changes.into_iter().map(|(at, on)| (moved.get(&at).copied().unwrap_or(at), on));
         Switch { changes: changes.collect() }
     }
 
@@ -767,6 +768,7 @@ fn sink_output(sink: &Sink) -> Option<u32> {
         | Sink::Paused { output }
         | Sink::Resumed { output } => Some(*output),
         Sink::Played { .. }
+        | Sink::FinishLost { .. }
         | Sink::Started { .. }
         | Sink::Progressed { .. }
         | Sink::Reset { .. }
@@ -989,10 +991,7 @@ impl<'a> SpeechTrace<'a> {
     /// Whether any of its transcript was the voice's aligned words.
     pub fn transcript_aligned(&self) -> bool {
         self.first(|s| {
-            matches!(
-                s,
-                Step::Playout(PlayoutStep::TranscriptForwarded { start_time: Some(_), .. })
-            )
+            matches!(s, Step::Playout(PlayoutStep::TranscriptForwarded { start_time: Some(_), .. }))
         })
         .is_some()
     }
@@ -1001,9 +1000,9 @@ impl<'a> SpeechTrace<'a> {
     pub fn transcript_shown(&self) -> Vec<Shown<'a>> {
         self.steps()
             .filter_map(|(at, step)| match step {
-                Step::Playout(PlayoutStep::TranscriptShown { text, start, end, played, .. }) => {
-                    Some(Shown { at, text, start: *start, end: *end, played: *played })
-                }
+                Step::Playout(PlayoutStep::TranscriptShown {
+                    text, start, end, played, ..
+                }) => Some(Shown { at, text, start: *start, end: *end, played: *played }),
                 _ => None,
             })
             .collect()

@@ -411,6 +411,18 @@ pub enum PlayoutStep {
     SinkReset {
         speech: SpeechId,
     },
+    /// The sink reported all of `speech`'s audio played: its finish is taken as lost at `at`
+    /// unless it comes first.
+    FinishDue {
+        speech: SpeechId,
+        at: Ts,
+    },
+    /// The sink never reported `speech`'s playout finished: it was reported for it, whole at
+    /// `position`, once the audio it owed was over by the lost-finish margin.
+    FinishLost {
+        speech: SpeechId,
+        position: std::time::Duration,
+    },
     OutputReplaced {
         audio: bool,
         transcription: bool,
@@ -918,6 +930,8 @@ impl Step {
                 | PlayoutStep::PlaybackFinished { speech, .. }
                 | PlayoutStep::AudioPlayed { speech, .. }
                 | PlayoutStep::SinkReset { speech }
+                | PlayoutStep::FinishDue { speech, .. }
+                | PlayoutStep::FinishLost { speech, .. }
                 | PlayoutStep::TranscriptForwarded { speech, .. }
                 | PlayoutStep::TranscriptShown { speech, .. } => Some(*speech),
                 PlayoutStep::SinkCalled { speech, .. } => *speech,

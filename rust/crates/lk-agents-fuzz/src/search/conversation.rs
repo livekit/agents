@@ -34,8 +34,8 @@ use lk_agents_voice::{
         classifier::MAX_EXTENSION_SECS,
         detector::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL},
     },
-    keyterm_detection::RECORD_KEYTERMS_TOOL,
     events::SessionEvent,
+    keyterm_detection::RECORD_KEYTERMS_TOOL,
     trace::{RealtimeStep, Step},
 };
 
@@ -64,6 +64,10 @@ use crate::{
 /// that every caller is still a caller: a run whose every stretch is noise, or whose every reply
 /// is talked over, reaches nothing the driver does with a conversation, and a run is the unit
 /// the search pays for.
+mod speaker;
+
+use speaker::Playing;
+
 #[derive(Clone, Copy, Debug)]
 struct Persona {
     /// How often the person pauses before speaking rather than starting straight away.
@@ -422,7 +426,6 @@ const LLM_FIRST_CHUNK: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "first_chunk"]
 const LLM_CHUNK_GAP: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "chunk_gap"];
 const LLM_CHARS_PER_CHUNK: [&str; 3] = ["llm", "openai/gpt-4.1-mini", "chars_per_chunk"];
 
-
 /// Rounds of answering what the agent's reply owes: the model, then synthesis, then playout.
 const REPLY_ROUNDS: usize = 3;
 
@@ -579,12 +582,6 @@ struct Talk {
     tasks: Rng,
 }
 
-/// A segment the speaker started: when, and how much of it the speaker has reported played.
-struct Playing {
-    at: u64,
-    reported: u64,
-}
-
 /// Plumbing: how an input reaches the driver, and the small draws.
 impl Talk {
     /// Record, apply, check: the one way an input reaches the driver in this mode. Recorded before
@@ -613,8 +610,23 @@ impl Talk {
     }
 
     /// One input to the driver, with no handlers run on what it did: what `send` and the
-    /// handlers themselves go through.
+    /// handlers themselves go through. Before an input that lets time pass, the speaker finishes
+    /// what it played to the end.
     async fn apply(&mut self, input: Input) -> Result<(), Halt> {
+        if matches!(
+            input,
+            Input::Advance { .. }
+                | Input::AwaitAnswer { .. }
+                | Input::AwaitSpeech { .. }
+                | Input::AwaitExit {}
+        ) {
+            self.finish_drained().await?;
+        }
+        self.apply_now(input).await
+    }
+
+    /// One input to the driver, as it is.
+    async fn apply_now(&mut self, input: Input) -> Result<(), Halt> {
         if self.outcome.case.inputs.len() >= self.budget {
             return Err(Halt::Spent);
         }
@@ -764,7 +776,11 @@ impl Talk {
             match &applied.input {
                 Input::SetAudioOutput { attach } => {
                     let restore = Input::SetAudioOutput { attach: true };
-                    if *attach { off.remove("voice") } else { off.insert("voice", restore) };
+                    if *attach {
+                        off.remove("voice")
+                    } else {
+                        off.insert("voice", restore)
+                    };
                 }
                 Input::SetIoEnabled { leg, enabled } => {
                     let restore = Input::SetIoEnabled { leg: *leg, enabled: true };
@@ -773,7 +789,11 @@ impl Talk {
                         IoKind::AudioOutput => "speaker",
                         IoKind::Transcription => "transcript",
                     };
-                    if *enabled { off.remove(key) } else { off.insert(key, restore) };
+                    if *enabled {
+                        off.remove(key)
+                    } else {
+                        off.insert(key, restore)
+                    };
                 }
                 _ => {}
             }
@@ -1042,8 +1062,10 @@ impl Talk {
         if let Some(semantic) = self.server_vad() {
             let kind = if semantic { "semantic" } else { "server" };
             let rng = &mut self.rng;
-            let started = corpus::draw_ms(rng, &["realtime", &format!("speech_started_lag_{kind}")]);
-            let stopped = corpus::draw_ms(rng, &["realtime", &format!("speech_stopped_lag_{kind}")]);
+            let started =
+                corpus::draw_ms(rng, &["realtime", &format!("speech_started_lag_{kind}")]);
+            let stopped =
+                corpus::draw_ms(rng, &["realtime", &format!("speech_stopped_lag_{kind}")]);
             out.push(Verdict { at_ms: started, word: Word::RtStart });
             out.push(Verdict { at_ms: dur + stopped.max(1), word: Word::RtStop });
         }
@@ -1224,12 +1246,14 @@ impl Talk {
             }),
             Word::SttEnd => utterance.map(|utterance| Input::SttEnd { utterance }),
             Word::SttUsage => utterance.map(|utterance| Input::SttUsage { utterance }),
-            Word::RtStart => self
-                .first(Kind::Realtime)
-                .map(|n| Input::RealtimeEvent { socket: Ref::new(n), event: RtEvent::SpeechStarted }),
-            Word::RtStop => self
-                .first(Kind::Realtime)
-                .map(|n| Input::RealtimeEvent { socket: Ref::new(n), event: RtEvent::SpeechStopped }),
+            Word::RtStart => self.first(Kind::Realtime).map(|n| Input::RealtimeEvent {
+                socket: Ref::new(n),
+                event: RtEvent::SpeechStarted,
+            }),
+            Word::RtStop => self.first(Kind::Realtime).map(|n| Input::RealtimeEvent {
+                socket: Ref::new(n),
+                event: RtEvent::SpeechStopped,
+            }),
         };
         match input {
             Some(input) => self.send(input).await,
@@ -1275,72 +1299,9 @@ impl Talk {
     }
 }
 
-/// The listener's side: hearing the agent, judging an overlap, answering the predictor.
+/// The listener's side: judging an overlap, answering the predictor (hearing the agent is the
+/// speaker's, in `speaker`).
 impl Talk {
-    /// Whether the person is hearing the agent right now: a segment the speaker reported started
-    /// and has not finished.
-    fn hearing(&self) -> bool {
-        self.run.record.live().of(Kind::Segment).iter().any(|s| self.heard.contains_key(s))
-    }
-
-    /// The speaker starts the oldest segment it was handed and has not started, once nothing is
-    /// playing: one segment at a time, in order, as a speaker plays them. The moment a listener
-    /// hears it begin, and the moment the driver marks the agent speaking.
-    async fn hear(&mut self) -> Result<(), Halt> {
-        if self.hearing() {
-            return Ok(());
-        }
-        let next = self.run.record.live().of(Kind::Segment).into_iter().find(|s| !self.heard.contains_key(s));
-        if let Some(segment) = next {
-            let at = self.now_ms();
-            self.heard.insert(segment, Playing { at, reported: 0 });
-            self.send(Input::PlayoutStarted { segment: Ref::new(segment) }).await?;
-        }
-        Ok(())
-    }
-
-    /// The speaker reports how much of every segment it is playing has played by now, as a real
-    /// output does at a discontinuity: the stretch since its last report, never past the segment.
-    async fn report_progress(&mut self) -> Result<(), Halt> {
-        let now = self.now_ms();
-        for segment in self.run.record.live().of(Kind::Segment) {
-            let Some(length) = self.segment_ms(segment) else { continue };
-            let Some(playing) = self.heard.get_mut(&segment) else { continue };
-            let played = now.saturating_sub(playing.at).min(length);
-            if played > playing.reported {
-                let ms = Millis(played - playing.reported);
-                playing.reported = played;
-                self.send(Input::PlayoutProgressed { segment: Ref::new(segment), ms }).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// The speaker finishes every segment that has played its length: what played since the last
-    /// report, then the end. A segment still taking frames cannot have finished, and the output
-    /// refuses the end; it is asked again on a later beat.
-    async fn finish_played(&mut self) -> Result<(), Halt> {
-        let now = self.now_ms();
-        for segment in self.run.record.live().of(Kind::Segment) {
-            let Some(length) = self.segment_ms(segment) else { continue };
-            if self.heard.get(&segment).is_none_or(|p| now < p.at + length) {
-                continue;
-            }
-            self.report_progress().await?;
-            self.send(Input::PlayoutFinished { segment: Ref::new(segment) }).await?;
-        }
-        Ok(())
-    }
-
-    /// How long a segment plays: the audio captured for it, once flushed. A segment still taking
-    /// frames has no length yet, and the speaker says nothing of it.
-    fn segment_ms(&self, segment: u32) -> Option<u64> {
-        self.run.record.sink().iter().rev().find_map(|(_, sink)| match sink {
-            Sink::Flush { segment: flushed, ms, .. } if *flushed == segment => Some(*ms),
-            _ => None,
-        })
-    }
-
     /// The interruption detector's verdict on the overlap in progress, if there is a detector.
     async fn judge(&mut self, is_interruption: bool) -> Result<(), Halt> {
         let Some(port) = self.first(Kind::Interruption) else { return Ok(()) };
@@ -1420,7 +1381,10 @@ impl Talk {
                 if self.run.setup.realtime.is_some_and(|r| r.fallback)
                     && self.rng.u8(0..100) < self.providers.socket_drops
                 {
-                    rows.push(Input::RealtimeEvent { socket: socket_ref, event: RtEvent::FatalError });
+                    rows.push(Input::RealtimeEvent {
+                        socket: socket_ref,
+                        event: RtEvent::FatalError,
+                    });
                 }
                 // The server drops the socket mid-reply and comes back.
                 if self.rng.u8(0..100) < self.providers.socket_drops {
@@ -1570,11 +1534,8 @@ impl Talk {
     /// to answer: the next round's job). A silence the driver had no right to leave is for a rule
     /// to catch, not for the person to avoid.
     async fn await_playout(&mut self) -> Result<(), Halt> {
-        let owed_by_case = |t: &Self| {
-            [Kind::Chat, Kind::Tool, Kind::Hook]
-                .iter()
-                .any(|k| t.first(*k).is_some())
-        };
+        let owed_by_case =
+            |t: &Self| [Kind::Chat, Kind::Tool, Kind::Hook].iter().any(|k| t.first(*k).is_some());
         let mut waited = 0;
         while waited < self.persona.gives_up_ms
             && self.first(Kind::Segment).is_none()
@@ -1609,7 +1570,8 @@ impl Talk {
         for chat in opened {
             self.planned.insert(chat);
             let deliveries = self.answer(chat);
-            let mut at = self.now_ms() + corpus::draw_ms(&mut self.rng, &LLM_FIRST_CHUNK) * latency / 100;
+            let mut at =
+                self.now_ms() + corpus::draw_ms(&mut self.rng, &LLM_FIRST_CHUNK) * latency / 100;
             let mut due = VecDeque::new();
             for (n, input) in deliveries.into_iter().enumerate() {
                 if n > 0 {
@@ -1659,10 +1621,7 @@ impl Talk {
                 ),
                 i if i == AmdCategory::ALL.len() => (
                     POSTPONE_TERMINATION_TOOL,
-                    format!(
-                        r#"{{"seconds":{}}}"#,
-                        self.rng.u64(0..=MAX_EXTENSION_SECS as u64 + 2)
-                    ),
+                    format!(r#"{{"seconds":{}}}"#, self.rng.u64(0..=MAX_EXTENSION_SECS as u64 + 2)),
                 ),
                 _ => (SAVE_PREDICTION_TOOL, "{}".to_owned()),
             };
@@ -1678,7 +1637,8 @@ impl Talk {
             // A tool call comes whole, in one chunk.
             Some((name, args)) => vec![Input::LlmToolCall { chat: at, name, args }],
             None => {
-                let lines: Vec<String> = (0..self.rng.usize(1..=3)).map(|_| self.line().0).collect();
+                let lines: Vec<String> =
+                    (0..self.rng.usize(1..=3)).map(|_| self.line().0).collect();
                 let text = lines.join(" ");
                 self.turn_words += text.split_whitespace().count() as u64;
                 self.pieces(&text)
@@ -1794,8 +1754,8 @@ fn recogniser(model: &str, text: &str, dur: u64, rng: &mut Rng, knobs: SttKnobs)
         } else {
             slow(corpus::draw_ms(rng, &q("final_after_end")))
         };
-        let first_at = (spoken_from + slow(corpus::draw_ms(rng, &q("first_after_onset"))))
-            .max(last_end + 1);
+        let first_at =
+            (spoken_from + slow(corpus::draw_ms(rng, &q("first_after_onset")))).max(last_end + 1);
         // No words before the recogniser has any: a short piece's final waits for its first.
         let final_at = (spoken_to + tail).max(last_end + 1).max(first_at);
         // Its start of speech comes with its first words, never before.
@@ -1837,7 +1797,8 @@ fn recogniser(model: &str, text: &str, dur: u64, rng: &mut Rng, knobs: SttKnobs)
                 let count = if p + 1 == pieces { preflights } else { 1 };
                 for k in 0..count {
                     let at_ms = first_at + (last - first_at) * (k as u64 + 1) / count as u64;
-                    let said = if k + 1 == count { piece.clone() } else { heard_by(at_ms).join(" ") };
+                    let said =
+                        if k + 1 == count { piece.clone() } else { heard_by(at_ms).join(" ") };
                     out.push(Verdict { at_ms, word: Word::SttPreflight(said) });
                 }
             }

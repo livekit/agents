@@ -733,6 +733,10 @@ inputs! {
     /// The speaker finished this segment. Refused by the output while the segment is still taking
     /// frames: nothing has finished playing before it was flushed.
     PlayoutFinished { segment: Ref<Segment> };
+    /// The speaker finished this segment and its report was lost on the way, as a transport
+    /// drops one: the output owes nothing more of it and the driver hears nothing. Refused like
+    /// `PlayoutFinished` while the segment is still taking frames.
+    PlayoutFinishLost { segment: Ref<Segment> };
     /// The speaker reports a stretch of this segment as played: what a real output says at a
     /// discontinuity, and what the driver's played position moves on. Refused before the start.
     PlayoutProgressed { segment: Ref<Segment>, ms: Millis };
