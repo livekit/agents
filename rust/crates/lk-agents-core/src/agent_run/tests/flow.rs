@@ -55,7 +55,7 @@ fn identical_inputs_replay_identically() {
     let play = || {
         let mut d = Driver::new(text_agent(vec![string_tool("a", "x"), string_tool("b", "y")]), "go", vec![]);
         d.reply("", &[("b", json!({"y": "2"})), ("a", json!({"x": "1"}))]);
-        d.run_tools(|name| value(name));
+        d.run_tools(value);
         d.reply("done", &[]);
         d.effects
     };

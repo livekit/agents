@@ -3,8 +3,12 @@
 //!
 //! - `mod.rs`: the driver and builders the tests share.
 //! - `flow.rs`: model steps, tools, outputs and questions.
+//! - `approval.rs`: the approval gate across invocations.
+//! - `lifecycle.rs`: sibling calls, duplicates, cancellation, deadlines and arrival orders.
 
+mod approval;
 mod flow;
+mod lifecycle;
 
 use std::time::Duration;
 
@@ -107,6 +111,10 @@ impl Driver {
         let fx = self.run.handle(event, self.now);
         self.effects.extend(fx.iter().cloned());
         fx
+    }
+
+    pub(super) fn advance(&mut self, by: Duration) {
+        self.now = self.now.saturating_add(by);
     }
 
     /// The last model request: its id, history and tools.
