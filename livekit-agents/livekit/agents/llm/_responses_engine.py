@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, cast
 
@@ -40,6 +41,12 @@ OPENAI_RESPONSES_WS_URL = f"wss://{_OPENAI_HOST}/v1/responses"
 _WS_HEARTBEAT = 30.0
 # max connections to try when a reused socket is stale, before the outer retry takes over
 _WS_SEND_MAX_ATTEMPTS = 6
+
+
+def check_idle_timeout(timeout: float | None) -> float | None:
+    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError("stream_idle_timeout must be a finite number greater than 0")
+    return timeout
 
 
 class ResponsesWebsocket:
@@ -127,9 +134,7 @@ class ResponsesWebsocket:
         except TypeError as e:
             raise APIConnectionError(f"failed to serialize request: {e}") from e
 
-        ws = await self._acquire_and_send(
-            data, self._timeout if connect_timeout is None else connect_timeout
-        )
+        ws = await self._acquire_and_send(data, connect_timeout)
         completed = False
         try:
             while True:
@@ -176,12 +181,14 @@ class ResponsesWebsocket:
                 self._pool.remove(ws)
 
     async def _acquire_and_send(
-        self, data: str, connect_timeout: float
+        self, data: str, connect_timeout: float | None = None
     ) -> aiohttp.ClientWebSocketResponse:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(timeout=connect_timeout)
+            ws = await self._pool.get(
+                timeout=self._timeout if connect_timeout is None else connect_timeout
+            )
             reused = self._pool.last_connection_reused
             try:
                 await ws.send_str(data)
@@ -213,6 +220,7 @@ class ResponsesLLMHost(Protocol):
     _prev_resp_id: str
     _prev_chat_ctx: ChatContext | None
     _pending_tool_calls: set[str]
+    _stream_idle_timeout: float | None
 
 
 class ResponsesLLMStream(llm.LLMStream):
@@ -244,6 +252,12 @@ class ResponsesLLMStream(llm.LLMStream):
         self._llm = cast(ResponsesLLMHost, llm)
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
+
+    def _idle_timeout(self) -> float:
+        # pings never reach receive(), so only Responses events reset this
+        if self._llm._stream_idle_timeout is not None:
+            return self._llm._stream_idle_timeout
+        return self._conn_options.timeout
 
     async def _run(self) -> None:
         if self._llm._active_streams > 0:
@@ -295,10 +309,7 @@ class ResponsesLLMStream(llm.LLMStream):
                 }
                 async for raw_event in self._llm._ws.generate_response(
                     payload,
-                    # conn_options.timeout also bounds the gap between events, as
-                    # httpx's read timeout does on the REST path; raise it for
-                    # models that go quiet longer while reasoning or using tools
-                    receive_timeout=self._conn_options.timeout,
+                    receive_timeout=self._idle_timeout(),
                     connect_timeout=self._conn_options.timeout,
                 ):
                     parsed_ev = self._parse_ws_event(raw_event)
@@ -324,7 +335,9 @@ class ResponsesLLMStream(llm.LLMStream):
                         tools=tool_schemas,
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
-                        timeout=httpx.Timeout(self._conn_options.timeout),
+                        timeout=httpx.Timeout(
+                            self._conn_options.timeout, read=self._idle_timeout()
+                        ),
                         **self._extra_kwargs,
                     ),
                 )

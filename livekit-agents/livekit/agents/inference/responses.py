@@ -26,7 +26,12 @@ from yarl import URL
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError
 from ..llm import ToolChoice
-from ..llm._responses_engine import _WS_HEARTBEAT, ResponsesLLMStream, ResponsesWebsocket
+from ..llm._responses_engine import (
+    _WS_HEARTBEAT,
+    ResponsesLLMStream,
+    ResponsesWebsocket,
+    check_idle_timeout,
+)
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
@@ -105,6 +110,10 @@ class LLM(llm.LLM):
 
     With ``use_websocket=True`` turns stream over ``/v1/responses`` on pooled sockets, so
     ``inference_class`` and the other upgrade headers are fixed per connection.
+
+    ``stream_idle_timeout`` bounds the silence between Responses events once a request is
+    sent, over both WebSocket and HTTP. ``None`` uses ``conn_options.timeout``; raise it for
+    models that reason or run hosted tools for long stretches without emitting events.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
@@ -121,6 +130,7 @@ class LLM(llm.LLM):
         extra_kwargs: ResponsesOptions | dict[str, Any] | None = None,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
         use_websocket: bool = False,
+        stream_idle_timeout: float | None = None,
     ) -> None:
         super().__init__()
 
@@ -137,6 +147,7 @@ class LLM(llm.LLM):
             use_websocket=use_websocket,
         )
         self._ws: ResponsesWebsocket | None = None
+        self._stream_idle_timeout = check_idle_timeout(stream_idle_timeout)
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
