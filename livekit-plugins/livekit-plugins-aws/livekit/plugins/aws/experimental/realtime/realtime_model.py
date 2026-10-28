@@ -45,6 +45,7 @@ from aws_sdk_bedrock_runtime.models import (
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
+from smithy_core.aio.retries import StandardRetryStrategy
 from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
@@ -669,6 +670,7 @@ class RealtimeSession(  # noqa: F811
             "aws_credentials_identity_resolver": _get_credentials_resolver(),
             "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
             "transport": AWSCRTHTTPClient(),
+            "retry_strategy": StandardRetryStrategy(max_attempts=1),
         }
         if _BEDROCK_CONFIG_USES_RESOLVE:
             config = await _BedrockRuntimeConfig.resolve(**kwargs)

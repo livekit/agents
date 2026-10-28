@@ -22,7 +22,7 @@ from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
 from botocore.exceptions import ClientError  # type: ignore
 
-from livekit.agents import APIConnectionError, APIStatusError, llm
+from livekit.agents import APIConnectionError, APIError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -324,8 +324,22 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        if (
+            self._conn_options.pool_timeout is not None
+            or self._conn_options.write_timeout is not None
+            or self._conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "AWS botocore cannot enforce pool_timeout, write_timeout or total_timeout",
+                retryable=False,
+            )
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+            config = Config(
+                user_agent_extra="x-client-framework:livekit-plugins-aws",
+                connect_timeout=self._conn_options.connect_timeout,
+                read_timeout=self._conn_options.read_timeout,
+                retries={"mode": "standard", "total_max_attempts": 1},
+            )
             async with self._session.create_client("bedrock-runtime", config=config) as client:
                 try:
                     response = await client.converse_stream(**self._opts)

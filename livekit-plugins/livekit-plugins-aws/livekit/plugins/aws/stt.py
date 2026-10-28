@@ -59,6 +59,7 @@ try:
     )
     from smithy_core.aio.identity import ChainedIdentityResolver
     from smithy_core.aio.interfaces.eventstream import EventPublisher, EventReceiver
+    from smithy_core.aio.retries import StandardRetryStrategy
     from smithy_http.aio.crt import AWSCRTHTTPClient
 
     _AWS_SDK_AVAILABLE = True
@@ -272,7 +273,11 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
-                config=await Config.resolve(transport=self._http_client, **config_kwargs)
+                config=await Config.resolve(
+                    transport=self._http_client,
+                    retry_strategy=StandardRetryStrategy(max_attempts=1),
+                    **config_kwargs,
+                )
             )
 
             live_config = {
