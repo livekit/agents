@@ -244,8 +244,12 @@ pub struct SessionUsageUpdated {
     pub created_at: f64,
 }
 
-#[derive(Host)]
-#[python(pydantic, name = "_TypeDiscriminator", tag = "type", tag_value = "unknown")]
+#[crate::host(record(
+    module = "events",
+    name = "_TypeDiscriminator",
+    emit,
+    constant(type = "unknown")
+))]
 pub struct TypeDiscriminator {}
 
 #[derive(Host)]

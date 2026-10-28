@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -38,6 +39,15 @@ from .language import LanguageCode
 
 if TYPE_CHECKING:
     from ..voice.speech_handle import SpeechHandle
+
+
+# The declared records.
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _TypeDiscriminator:
+    type: Literal["unknown"] = "unknown"
+
 
 # --- the two state vocabularies ---------------------------------------------------------------
 
@@ -169,10 +179,6 @@ class SessionUsageUpdatedEvent(BaseModel):
     type: Literal["session_usage_updated"] = "session_usage_updated"
     usage: AgentSessionUsage
     created_at: float = Field(default_factory=time.time)
-
-
-class _TypeDiscriminator(BaseModel):
-    type: Literal["unknown"] = "unknown"
 
 
 class ConversationItemAddedEvent(BaseModel):
@@ -336,7 +342,6 @@ _AgentBackchannelOpportunityEvent.__module__ = "livekit.agents.voice.events"
 AgentFalseInterruptionEvent.__module__ = "livekit.agents.voice.events"
 FunctionToolsExecutedEvent.__module__ = "livekit.agents.voice.events"
 SessionUsageUpdatedEvent.__module__ = "livekit.agents.voice.events"
-_TypeDiscriminator.__module__ = "livekit.agents.voice.events"
 ConversationItemAddedEvent.__module__ = "livekit.agents.voice.events"
 SpeechCreatedEvent.__module__ = "livekit.agents.voice.events"
 ToolCallStarted.__module__ = "livekit.agents.voice.events"
