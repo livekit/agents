@@ -1,6 +1,5 @@
 use super::*;
 
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 // `HalvingResampler`, `Factory` and `Counting` are gone with the trait pair (PLAN.md F1).
 // Most of the tests below never touched them: they run at the recording rate, where
 // `Track::resample` short-circuits before the resampler exists. The two that DID are

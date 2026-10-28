@@ -620,7 +620,6 @@ impl SttSinkHandle {
     }
 }
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
 #[lk_agents_abi::host(stream(name = "InferenceSttStream", doc = "One live recognition session.", sink = crate::stt::SttSinkHandle,
     input = AudioFrame, input_py = "rtc.AudioFrame",
