@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, TypeVar, cast
 
 from livekit import rtc
 
 from .. import _core
+from ..log import logger
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .io import TextOutput
@@ -227,7 +228,7 @@ class RoomOptions:
 
 
 _CONNECTION, _DISCONNECT, _KINDS, _SOURCES, _FEATURES = _core.rtc_wire_names()
-_Chunk = TypeVar("_Chunk", bytes, str)
+_Chunk = TypeVar("_Chunk")
 
 
 def _name(names: list[str], value: int, unknown: str) -> str:
@@ -244,7 +245,7 @@ class Room:
         if adapter is None:
             adapter = cls(room)
             room._lk_core_room = adapter  # type: ignore[attr-defined]
-        return adapter  # type: ignore[no-any-return]
+        return adapter
 
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
@@ -345,31 +346,53 @@ class Room:
         reader: AsyncIterator[_Chunk],
         push: Callable[[_Chunk], bool],
         close_sink: Callable[[], None],
-        close_reader: Callable[[], None],
+        close_reader: Callable[[], Coroutine[Any, Any, None]],
     ) -> None:
-        closed = False
+        cleanup: asyncio.Task[None] | None = None
+        cleanup_observed = False
 
-        def close() -> None:
-            nonlocal closed
-            if closed:
-                return
-            closed = True
+        async def release() -> None:
             try:
                 close_sink()
             finally:
-                close_reader()
+                await close_reader()
+
+        def close() -> asyncio.Task[None]:
+            nonlocal cleanup
+            if cleanup is None:
+                cleanup = self._spawn(release())
+            return cleanup
 
         async def pump() -> None:
+            nonlocal cleanup_observed
+            failure: BaseException | None = None
             try:
                 async for chunk in reader:
                     if not push(chunk):
                         break
+            except BaseException as error:
+                failure = error
+                raise
             finally:
-                close()
+                try:
+                    await asyncio.shield(close())
+                except BaseException as cleanup_error:
+                    cleanup_observed = not isinstance(cleanup_error, asyncio.CancelledError)
+                    if failure is None:
+                        raise
+                    if cleanup_observed:
+                        failure.add_note(f"Room stream cleanup failed: {cleanup_error!r}")
+
+        def report_cleanup(task: asyncio.Task[None]) -> None:
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None and not cleanup_observed:
+                    logger.error("Room stream cleanup failed", exc_info=error)
 
         task = self._spawn(pump())
-        # Cancellation before the first poll never enters pump's finally block.
-        task.add_done_callback(lambda _: close())
+        # Cancellation before the first poll never enters pump's finally block. A cleanup
+        # failure after the reader ended has no caller left to observe it.
+        task.add_done_callback(lambda _: close().add_done_callback(report_cleanup))
 
     def _core_register_byte_stream_handler(
         self, topic: str, streams: _core.ByteStreamSender
@@ -378,7 +401,7 @@ class Room:
             if (chunks := streams.open(reader.info, sender)) is None:
                 reader.close()
                 return
-            self._forward_stream(reader, chunks.push, chunks.close, reader.close)
+            self._forward_stream(reader, chunks.push, chunks.close, reader.aclose)
 
         self._room.register_byte_stream_handler(topic, opened)
 
@@ -392,12 +415,16 @@ class Room:
             if (chunks := streams.open(reader.info, sender)) is None:
                 reader.close()
                 return
-            self._forward_stream(reader, chunks.push, chunks.close, reader.close)
+            self._forward_stream(reader, chunks.push, chunks.close, reader.aclose)
 
         self._room.register_text_stream_handler(topic, opened)
 
     def _core_unregister_text_stream_handler(self, topic: str) -> None:
         self._room.unregister_text_stream_handler(topic)
+
+
+class _TextStreamSender(TypedDict, total=False):
+    sender_identity: str
 
 
 class LocalParticipant:
@@ -423,9 +450,18 @@ class LocalParticipant:
         source = rtc.AudioSource(
             opts.sample_rate, opts.num_channels, queue_size_ms=opts.queue_size_ms
         )
-        track = rtc.LocalAudioTrack.create_audio_track(opts.name, source)
-        options = rtc.TrackPublishOptions(source=_SOURCES.index(opts.source))
-        publication = await self._participant.publish_track(track, options)
+        try:
+            track = rtc.LocalAudioTrack.create_audio_track(opts.name, source)
+            options = rtc.TrackPublishOptions(
+                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
+            )
+            publication = await self._participant.publish_track(track, options)
+        except BaseException as error:
+            try:
+                await source.aclose()
+            except BaseException as cleanup_error:
+                error.add_note(f"Unpublished audio source cleanup failed: {cleanup_error!r}")
+            raise
         return AudioSource(source), self._room._publication(publication)
 
     async def _core_unpublish_track(self, sid: str) -> None:
@@ -444,7 +480,9 @@ class LocalParticipant:
         )
 
     async def _core_stream_text(self, opts: _core.StreamTextOptions) -> TextStreamWriter:
-        sender = {} if opts.sender_identity is None else {"sender_identity": opts.sender_identity}
+        sender: _TextStreamSender = {}
+        if opts.sender_identity is not None:
+            sender["sender_identity"] = opts.sender_identity
         writer = await self._participant.stream_text(
             topic=opts.topic, attributes=opts.attributes, **sender
         )
@@ -598,13 +636,15 @@ class TrackPublication:
 
     def _core_open_audio_stream(self, opts: _core.AudioStreamOptions, frames: Any) -> None:
         track = self._publication.track
+        if track is None:
+            frames.close()
+            raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")
         sid = self._publication.sid
         noise_cancellation = opts.noise_cancellation
         # a selector picks per track; what it returns lives as long as this stream
-        owned = callable(noise_cancellation) and not isinstance(
-            noise_cancellation, rtc.FrameProcessor
-        )
-        if owned:
+        owned = False
+        if callable(noise_cancellation) and not isinstance(noise_cancellation, rtc.FrameProcessor):
+            owned = True
             participant = next(
                 p
                 for p in self._room._room.remote_participants.values()
@@ -627,33 +667,29 @@ class TrackPublication:
         processing = (processor, apm)
         self._room._processors[sid] = processing
 
-        async def _pump() -> None:
+        def push(event: rtc.AudioFrameEvent) -> bool:
+            if apm is not None:
+                apm.process_stream(event.frame)
+            return bool(frames.push(event.frame))
+
+        def close() -> None:
             try:
-                async for ev in stream:
-                    if apm is not None:
-                        apm.process_stream(ev.frame)
-                    if not frames.push(ev.frame):
-                        break
-            finally:
                 frames.close()
+            finally:
                 if self._room._processors.get(sid) is processing:
                     self._room._processors.pop(sid, None)
-                await stream.aclose()
 
-        self._room._spawn(_pump())
+        self._room._forward_stream(stream, push, close, stream.aclose)
 
     def _core_open_video_stream(self, frames: Any) -> None:
-        async def _pump() -> None:
-            stream = rtc.VideoStream.from_track(
-                track=self._publication.track, capacity=_core.video_queue_frames()
-            )
-            try:
-                async for ev in stream:
-                    frame = ev.frame
-                    if not frames.push(frame, frame.width, frame.height, ev.timestamp_us):
-                        break
-            finally:
-                frames.close()
-                await stream.aclose()
+        track = self._publication.track
+        if track is None:
+            frames.close()
+            raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")
+        stream = rtc.VideoStream.from_track(track=track, capacity=_core.video_queue_frames())
 
-        self._room._spawn(_pump())
+        def push(event: rtc.VideoFrameEvent) -> bool:
+            frame = event.frame
+            return bool(frames.push(frame, frame.width, frame.height, event.timestamp_us))
+
+        self._room._forward_stream(stream, push, frames.close, stream.aclose)
