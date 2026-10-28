@@ -34,7 +34,6 @@ from .._generated.agent_run import (
     EventExpectationMessage,
     ObservedEvent,
 )
-from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -622,7 +621,7 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
         raise AssertionError(self._parent._core.failure(message, self._index))
 
     @tracer.start_as_current_span("judge_evaluation")
-    async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
+    async def judge(self, llm_v: llm.LLM[Any], *, intent: str) -> ChatMessageAssert:
         """
         Evaluate whether the message fulfills the given intent.
 
@@ -649,96 +648,32 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
             json.dumps({"intent": intent, "message": msg_content}),
         )
 
-        if not msg_content:
-            self._fail("The chat message is empty.")
+        from ..evals import _judge_intent
 
-        if not intent:
-            self._fail("Intent is required to judge the message.")
+        try:
+            judged = await _judge_intent(llm_v, intent, msg_content or "")
+        except AssertionError as e:
+            self._fail(str(e))
 
-        @function_tool
-        async def check_intent(success: bool, reason: str) -> tuple[bool, str]:
-            """
-            Determines whether the message correctly fulfills the given intent.
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, not judged.success)
+        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, judged.reason)
 
-            Args:
-                success: Whether the message satisfies the intent.
-                reason: A concise explanation justifying the result.
-            """
-            return success, reason
-
-        chat_ctx = llm.ChatContext()
-        chat_ctx.add_message(
-            role="system",
-            content=(
-                "You are a test evaluator for conversational agents.\n"
-                "You will be shown a message and a target intent. Determine whether the message accomplishes the intent.\n"
-                "Only respond by calling the `check_intent(success: bool, reason: str)` function with your final judgment.\n"
-                "Be strict: if the message does not clearly fulfill the intent, return `success = False` and explain why."
-            ),
-        )
-        chat_ctx.add_message(
-            role="user",
-            content=(
-                "Check if the following message fulfills the given intent.\n\n"
-                f"Intent:\n{intent}\n\n"
-                f"Message:\n{msg_content}"
-            ),
-        )
-
-        arguments: str | None = None
-        usage: llm.CompletionUsage | None = None
-
-        extra_kwargs = {}
-        excluded_models_temperature = ["gpt-5"]  # Add model names here to exclude temperature
-
-        if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
-            extra_kwargs["temperature"] = 0.0
-
-        from ..evals import _judge_chat_kwargs
-
-        # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
-        async for chunk in llm_v.chat(
-            chat_ctx=chat_ctx,
-            tools=[check_intent],
-            tool_choice="required",
-            extra_kwargs=extra_kwargs,
-            **_judge_chat_kwargs(llm_v),
-        ):
-            if chunk.usage is not None:
-                usage = chunk.usage
-
-            if not chunk.delta:
-                continue
-
-            if chunk.delta.tool_calls:
-                tool = chunk.delta.tool_calls[0]
-                arguments = tool.arguments
-
-        if not arguments:
-            self._fail("LLM did not return any arguments for evaluation.")
-
-        fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-            fnc=check_intent, json_arguments=arguments
-        )
-
-        success, reason = await check_intent(*fnc_args, **fnc_kwargs)
-
-        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, not success)
-        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, reason)
-
-        if usage:
+        if judged.usage is not None:
+            usage = cast("dict[str, int]", judged.usage)
             current_span.set_attributes(
                 {
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.prompt_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.completion_tokens,
-                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.prompt_cached_tokens,
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage["prompt_tokens"],
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage["completion_tokens"],
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage["prompt_tokens"],
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage["completion_tokens"],
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage[
+                        "prompt_cached_tokens"
+                    ],
                 }
             )
 
-        if not success:
-            self._fail(f"Judgement failed: {reason}")
+        if not judged.success:
+            self._fail(f"Judgement failed: {judged.reason}")
         return self
 
 

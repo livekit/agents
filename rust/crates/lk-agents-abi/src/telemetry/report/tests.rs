@@ -1,6 +1,5 @@
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::evals::{EvaluationResult, JudgmentResult, Verdict};
 use lk_agents_abi::metrics::{LlmModelUsage, ModelUsage, TtsModelUsage};
 use lk_agents_abi::{ChatItem, ChatMessage, Role, VirtualClock};
 use serde_json::{Value, json};
@@ -80,9 +79,7 @@ fn denied_content_never_reaches_session_projection_or_report_records() {
     let mut t = tagger();
     t.add("customer-tag", Some(json!({"private": "customer metadata"})));
     t.fail(Some("customer outcome reason"));
-    let mut evaluation = EvaluationResult::new();
-    evaluation.insert("booking", JudgmentResult::new(Verdict::Fail, "customer reasoning"));
-    t.record_evaluation(&evaluation);
+    t.record_judgment("booking", "fail", "customer reasoning", "");
     let at = SystemTime::UNIX_EPOCH;
     let items = [ChatItem::Message(ChatMessage::text("i", Role::User, "customer transcript", at))];
     for (capture_content, redaction) in [(false, false), (true, true)] {
@@ -120,11 +117,9 @@ fn denied_content_never_reaches_session_projection_or_report_records() {
 #[test]
 fn a_failing_verdict_bumps_the_evaluation_severity() {
     let mut t = tagger();
-    let mut r = EvaluationResult::new();
-    r.insert("politeness", JudgmentResult::new(Verdict::Pass, "fine"));
-    r.insert("booked", JudgmentResult::new(Verdict::Fail, "never booked"));
-    r.insert("unsure", JudgmentResult::new(Verdict::Maybe, "hmm"));
-    t.record_evaluation(&r);
+    t.record_judgment("politeness", "pass", "fine", "");
+    t.record_judgment("booked", "fail", "never booked", "");
+    t.record_judgment("unsure", "maybe", "hmm", "");
 
     let recs =
         session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}), true);
@@ -292,9 +287,7 @@ fn re_adding_a_tag_keeps_its_position() {
 #[test]
 fn recording_an_evaluation_writes_both_a_tag_and_a_record() {
     let mut t = tagger();
-    let mut r = EvaluationResult::new();
-    r.insert("booked", JudgmentResult::new(Verdict::Fail, "no"));
-    t.record_evaluation(&r);
+    t.record_judgment("booked", "fail", "no", "");
     assert_eq!(t.sorted_tags(), vec!["lk.judge.booked:fail"]);
     assert_eq!(t.evaluations().len(), 1);
     assert_eq!(t.evaluations()[0].name, "booked");

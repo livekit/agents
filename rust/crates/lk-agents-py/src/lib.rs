@@ -47,6 +47,8 @@ impl generated::Implementations for Selected {
     type RemoteConfiguration = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
+    type JudgeRunner = lk_agents_runtime::evals::Judges;
+    type Evaluations = lk_agents_runtime::evals::Rules;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;

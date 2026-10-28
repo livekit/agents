@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 pub mod a2a;
 pub mod agent;
+pub mod evals;
 pub mod inference;
 pub mod llm;
 pub mod recorder;
@@ -31,6 +32,8 @@ pub trait Implementations: 'static {
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
+    type JudgeRunner: ::lk_agents_abi::evals::JudgeRunner;
+    type Evaluations: ::lk_agents_abi::evals::Evaluations;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
@@ -64,6 +67,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
+    m.add_class::<evals::_core_JudgeRunner>()?;
+    m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
+    m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;

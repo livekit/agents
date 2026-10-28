@@ -44,22 +44,27 @@ def test_content_capture_requires_explicit_opt_in(setting: str | None, enabled: 
             textwrap.dedent("""
                 import asyncio
                 import json
-                from unittest.mock import AsyncMock
                 from opentelemetry.sdk.trace import TracerProvider
                 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
                 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
                 from livekit.agents import evals
+                from livekit.agents.llm import ChatContext
                 from livekit.agents.telemetry import trace_types
+
+                class Private(evals.Judge):
+                    def __init__(self):
+                        super().__init__(name="private")
+
+                    async def evaluate(self, **kwargs):
+                        return evals.JudgmentResult(verdict="pass", reasoning="private content")
 
                 exporter = InMemorySpanExporter()
                 provider = TracerProvider(shutdown_on_exit=False)
                 provider.add_span_processor(SimpleSpanProcessor(exporter))
                 evals.tracer = provider.get_tracer("capture-policy-test")
-                evals._judge_with_llm = AsyncMock(
-                    return_value=evals.JudgmentResult(verdict="pass", reasoning="private content")
-                )
-                asyncio.run(evals._evaluate_with_llm(None, "prompt", name="test"))
-                attrs = exporter.get_finished_spans()[0].attributes
+                asyncio.run(evals._evaluate([Private()], ChatContext.empty(), None, None))
+                (result,) = exporter.get_finished_spans()[0].events
+                attrs = result.attributes
                 assert attrs[trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL] == "pass"
                 print(json.dumps(trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION in attrs))
                 provider.shutdown()

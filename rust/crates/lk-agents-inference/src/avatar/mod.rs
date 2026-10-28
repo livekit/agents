@@ -23,7 +23,7 @@ pub fn parse_model(model: &str) -> Result<(String, Option<String>), AvatarError>
     let provider = provider.trim_matches(lk_agents_abi::tokenize::is_py_space);
     let id = id.trim_matches(lk_agents_abi::tokenize::is_py_space);
     if provider.is_empty() {
-        return Err(AvatarError::InvalidModel(lk_agents_abi::evals::transcript::py_repr(model)));
+        return Err(AvatarError::InvalidModel(lk_agents_abi::utils::strings::py_repr(model)));
     }
     Ok((provider.to_owned(), (!id.is_empty()).then(|| id.to_owned())))
 }

@@ -7,6 +7,7 @@
 
 mod a2a;
 mod agent;
+mod evals;
 mod llm;
 mod recorder;
 mod storage;

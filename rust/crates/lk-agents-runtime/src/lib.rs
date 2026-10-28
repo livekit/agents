@@ -11,11 +11,13 @@
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
+//! - [`evals`]: conversation judges, run concurrently on one conversation.
 //! - [`storage`]: thread storage I/O over AgentDB and local SQLite.
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
 pub mod agent_run;
 pub mod codecs;
+pub mod evals;
 pub mod media_workers;
 pub mod recording;
 pub mod avatar;

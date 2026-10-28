@@ -123,8 +123,10 @@ LLM. Reference conversations are optional and interpreted by each evaluator.
 
 The aggregate score gives `pass` a value of 1, `maybe` 0.5 and `fail` 0.
 `all_passed` requires passing judgments; `none_failed` also accepts uncertain
-judgments. Check that all requested judgments are present before interpreting
-the aggregate: a missing judgment or an empty group is not evidence of success.
+judgments. A judge that raises, or whose model or evaluator gives no `pass`,
+`fail` or `maybe` verdict, is logged and absent from `judgments`. Check that all
+requested judgments are present before interpreting the aggregate: a missing
+judgment or an empty group is not evidence of success.
 
 A transcript judge cannot establish that an external write actually committed.
 Verify bookings, payments and other effects against application records.

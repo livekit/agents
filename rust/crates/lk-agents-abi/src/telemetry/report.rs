@@ -3,7 +3,6 @@
 
 use crate::ChatItem;
 use crate::Clock;
-use crate::evals::EvaluationResult;
 use crate::metrics::ModelUsage;
 use lk_agents_host_derive::Host;
 use serde_json::{Map, Value, json};
@@ -941,13 +940,6 @@ impl Tagger {
     #[host(getter)]
     pub fn outcome_reason(&self) -> Option<&str> {
         self.outcome_reason.as_deref()
-    }
-
-    /// `_evaluation(result)` (`observability.py:115`): one tag and one record per judgment.
-    pub fn record_evaluation(&mut self, result: &EvaluationResult) {
-        for (name, j) in result.judgments() {
-            self.record_judgment(name, j.verdict.as_str(), &j.reasoning, &j.instructions);
-        }
     }
 
     /// One judgment of a judge group's result: its `lk.judge.<name>:<verdict>` tag and record.

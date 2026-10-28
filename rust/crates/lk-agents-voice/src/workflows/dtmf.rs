@@ -123,7 +123,7 @@ impl DtmfResult {
     pub fn host_repr(&self) -> String {
         format!(
             "GetDtmfResult(user_input={})",
-            lk_agents_abi::evals::transcript::py_repr(&self.0.user_input)
+            lk_agents_abi::utils::strings::py_repr(&self.0.user_input)
         )
     }
 
@@ -559,7 +559,7 @@ pub async fn receive_dtmf(
     stop_event: String,
     #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> Result<DtmfResult, ReceiveDtmfError> {
-    use lk_agents_abi::evals::transcript::py_repr;
+    use lk_agents_abi::utils::strings::py_repr;
     if num_digits == 0 {
         return Err(ReceiveDtmfError::NoDigits);
     }

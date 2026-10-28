@@ -31,6 +31,11 @@ from ._generated._core_classes import (
     StartJobFields,
     _core_session_chat_record as _core_session_chat_record,
 )
+from ._generated._core_evals import (
+    _core_evaluation_score as _core_evaluation_score,
+    _core_judge_tool_schemas as _core_judge_tool_schemas,
+    _core_JudgeRunner as _core_JudgeRunner,
+)
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
 from ._generated._core_recorder import *  # noqa: F401, F403
