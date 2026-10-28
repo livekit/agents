@@ -233,8 +233,8 @@ A thread of another scope is refused.
 
 Through LiveKit Cloud, the node verifies and strips bearer credentials,
 and passes the authorization verdict to the worker. A worker reached
-directly verifies the token itself, from `Authorization: Bearer`, an
-or an `X-LiveKit-Thread-Grant` header. A browser streams with `fetch`, a
+directly verifies the token itself, from an `Authorization: Bearer` or an
+`X-LiveKit-Thread-Grant` header. A browser streams with `fetch`, a
 JSON-RPC `POST` carrying the bearer header.
 
 A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
