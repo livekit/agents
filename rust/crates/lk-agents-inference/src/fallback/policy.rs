@@ -14,18 +14,10 @@ pub fn bound_views<T: ?Sized>(
 ) -> (Arc<T>, Arc<T>) {
     let caller = caller_default();
     let view = |conn: ApiConnectOptions| bind(&conn).unwrap_or_else(|| Arc::clone(provider));
-    (view(conn_options_for_attempt(&caller, policy)), view(conn_options_for_recovery(&caller, policy)))
-}
-
-/// What the chain does when a backend fails after it already produced output:
-/// LLM default re-raises ([`AfterOutput::Abort`], `llm/fallback_adapter.py:300-306`); LLM with
-/// `retry_on_chunk_sent` and STT try the next entry ([`AfterOutput::Retry`]); TTS returns success
-/// with truncated audio ([`AfterOutput::Stop`], `tts/fallback_adapter.py:293-297,479-483`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AfterOutput {
-    Retry,
-    Abort,
-    Stop,
+    (
+        view(conn_options_for_attempt(&caller, policy)),
+        view(conn_options_for_recovery(&caller, policy)),
+    )
 }
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child, plus
@@ -39,7 +31,6 @@ pub struct ChainPolicy {
     pub attempt_timeout: Option<f64>,
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,
-    pub after_output: AfterOutput,
     /// LLM only: keep the entry that last served until it fails, even once a preferred one
     /// recovers; on failure the rest are tried in order (`llm/fallback_adapter.py:96-105`).
     pub sticky: bool,
@@ -53,19 +44,17 @@ impl ChainPolicy {
             max_retry_per_backend: 0,
             attempt_timeout: Some(5.0),
             retry_interval: Some(0.5),
-            after_output: AfterOutput::Abort,
             sticky: false,
         }
     }
 
     /// `stt/fallback_adapter.py:57-59`: `attempt_timeout=10.0`, `max_retry_per_stt=1`,
-    /// `retry_interval=5`. No progress guard exists on either STT path.
+    /// `retry_interval=5`. Visible transcripts forbid replay.
     pub fn stt_defaults() -> Self {
         ChainPolicy {
             max_retry_per_backend: 1,
             attempt_timeout: Some(10.0),
             retry_interval: Some(5.0),
-            after_output: AfterOutput::Retry,
             sticky: false,
         }
     }
@@ -77,14 +66,12 @@ impl ChainPolicy {
             max_retry_per_backend: 2,
             attempt_timeout: None,
             retry_interval: None,
-            after_output: AfterOutput::Stop,
             sticky: false,
         }
     }
 
-    /// LLM only.
-    pub fn with_retry_on_chunk_sent(mut self, retry: bool) -> Self {
-        self.after_output = if retry { AfterOutput::Retry } else { AfterOutput::Abort };
+    /// A legacy flag cannot establish a deduplication protocol; visible output still forbids replay.
+    pub fn with_retry_on_chunk_sent(self, _retry: bool) -> Self {
         self
     }
 }
@@ -103,9 +90,12 @@ pub fn conn_options_for_attempt(
     policy: &ChainPolicy,
 ) -> ApiConnectOptions {
     ApiConnectOptions {
-        max_retry: policy.max_retry_per_backend,
+        max_retry: 0,
         timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
-        total_timeout: policy.attempt_timeout.or(caller.total_timeout),
+        total_timeout: match (policy.attempt_timeout, caller.total_timeout) {
+            (Some(attempt), Some(total)) => Some(attempt.min(total)),
+            (attempt, total) => attempt.or(total),
+        },
         retry_interval: policy.retry_interval.unwrap_or(caller.retry_interval),
         ..*caller
     }
@@ -120,7 +110,10 @@ pub fn conn_options_for_recovery(
     ApiConnectOptions {
         max_retry: 0,
         timeout: policy.attempt_timeout.unwrap_or(caller.timeout),
-        total_timeout: policy.attempt_timeout.or(caller.total_timeout),
+        total_timeout: match (policy.attempt_timeout, caller.total_timeout) {
+            (Some(attempt), Some(total)) => Some(attempt.min(total)),
+            (attempt, total) => attempt.or(total),
+        },
         retry_interval: policy.retry_interval.unwrap_or(caller.retry_interval),
         ..*caller
     }

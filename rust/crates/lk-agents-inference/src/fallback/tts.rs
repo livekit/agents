@@ -1,19 +1,21 @@
 //! `tts/fallback_adapter.py`. The output rate is chosen for the whole list and per-entry
 //! resampling rides on the chain (`tts:86-118,262-282`). [`TokenLog`] replays pushed tokens into a
 //! fresh input on failover (`tts:428-434`) and into the streaming probe (`tts:504-531`). A failure
-//! after output returns success ([`crate::fallback::policy::AfterOutput`], `tts:293-297`).
+//! after output remains a failure and cannot replay delivered audio.
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lk_agents_abi::{StreamAdapter, StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
-use lk_agents_media::blingfire::SentenceBuffer;
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{
+    StreamAdapter, StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
+};
+use lk_agents_media::blingfire::SentenceBuffer;
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
-use lk_agents_abi::ApiConnectOptions;
 use tokio::sync::{mpsc, watch};
 
 use crate::fallback::chain::{
@@ -202,7 +204,6 @@ pub enum TtsReq {
     Stream { log: Arc<TokenLog> },
 }
 
-
 pub struct TtsBackend {
     label: String,
     inner: Arc<dyn Tts>,
@@ -231,6 +232,10 @@ impl TtsBackend {
 #[async_trait]
 impl Backend for TtsBackend {
     type Req = TtsReq;
+
+    fn modality(&self) -> super::machine::Modality {
+        super::machine::Modality::Tts
+    }
     type Session = TtsSource;
 
     fn label(&self) -> String {
@@ -339,7 +344,8 @@ impl FallbackTts {
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
     ) -> Result<Self, TtsChainError> {
-        let capabilities = merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
+        let capabilities =
+            merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
             ttss.iter().map(|t| TtsBackend::new(t, &policy, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
@@ -395,112 +401,119 @@ impl FallbackTts {
             let _finish = FinishOnDrop(log.clone());
             let mut tx = tx;
             let result = chain
-                .run(&req, &caller_conn, slot, &mut tx, move |index, _b, session, tx| {
-                    let chain = Arc::clone(&drain_chain);
-                    let needs = Arc::clone(&needs);
-                    let rates = Arc::clone(&rates);
-                    let log = log.clone();
-                    let started = Arc::clone(&started);
-                    let mut stop = stop_rx.clone();
-                    Box::pin(async move {
-                        let mut source = session;
-                        let streamed = log.is_some();
-                        let capture = |source: &TtsSource| -> Option<f64> {
-                            let mut anchor = started.lock().expect("tts started time");
-                            if streamed && anchor.is_none() {
-                                *anchor = source.started_time();
-                            }
-                            *anchor
-                        };
-                        // One resampler per attempt (`tts:262-269`): no history crosses a failover.
-                        // Built from the entry's declared rate, which every frame is read as.
-                        let mut resampler = if needs.get(index).copied().unwrap_or(false) {
-                            let from = rates.get(index).copied().unwrap_or(target);
-                            match FrameResampler::fixed(
-                                AudioFormat::new(from, channels),
-                                target,
-                                Quality::Medium,
-                            ) {
-                                Ok(r) => Some(r),
-                                Err(e) => {
-                                    source.close(chain.teardown_deadline()).await;
-                                    return Attempt::Failed {
-                                        error: ProviderError::Local(ApiError::new(format!(
-                                            "resampler: {e}"
-                                        ))),
-                                        produced_output: false,
-                                    };
+                .run_cancellable(
+                    &req,
+                    &caller_conn,
+                    slot,
+                    &mut tx,
+                    stop_rx,
+                    move |index, _b, session, tx, mut stop| {
+                        let chain = Arc::clone(&drain_chain);
+                        let needs = Arc::clone(&needs);
+                        let rates = Arc::clone(&rates);
+                        let log = log.clone();
+                        let started = Arc::clone(&started);
+                        Box::pin(async move {
+                            let mut source = session;
+                            let streamed = log.is_some();
+                            let capture = |source: &TtsSource| -> Option<f64> {
+                                let mut anchor = started.lock().expect("tts started time");
+                                if streamed && anchor.is_none() {
+                                    *anchor = source.started_time();
                                 }
-                            }
-                        } else {
-                            None
-                        };
+                                *anchor
+                            };
+                            // One resampler per attempt (`tts:262-269`): no history crosses a failover.
+                            // Built from the entry's declared rate, which every frame is read as.
+                            let mut resampler = if needs.get(index).copied().unwrap_or(false) {
+                                let from = rates.get(index).copied().unwrap_or(target);
+                                match FrameResampler::fixed(
+                                    AudioFormat::new(from, channels),
+                                    target,
+                                    Quality::Medium,
+                                ) {
+                                    Ok(r) => Some(r),
+                                    Err(e) => {
+                                        source.close(chain.teardown_deadline()).await;
+                                        return Attempt::Failed {
+                                            error: ProviderError::Local(ApiError::new(format!(
+                                                "resampler: {e}"
+                                            ))),
+                                            produced_output: false,
+                                        };
+                                    }
+                                }
+                            } else {
+                                None
+                            };
 
-                        let mut produced = false;
-                        let outcome = loop {
-                            match next_or_stop(source.as_mut(), &mut stop).await {
-                                Ok(None) => break Attempt::Served(()),
-                                Ok(Some(mut audio)) => {
-                                    if !produced {
-                                        produced = true;
-                                        chain.mark_serving(index);
-                                    }
-                                    if let Some(at) = capture(&source) {
-                                        audio.started_time = Some(at);
-                                    }
-                                    let out = match resampler.as_mut() {
-                                        None => Some(audio.clone()),
-                                        Some(r) => match r.push(&audio.frame) {
-                                            Ok(ready) => ready.into_iter().next().map(|frame| {
-                                                let mut a = audio.clone();
-                                                a.frame = frame;
-                                                a
-                                            }),
-                                            Err(e) => {
-                                                break Attempt::Failed {
-                                                    error: ProviderError::Local(ApiError::new(
-                                                        format!("resample: {e}"),
-                                                    )),
-                                                    produced_output: produced,
-                                                };
-                                            }
-                                        },
-                                    };
-                                    // `tts:464-466`: drain the filter tail at every `is_final`.
-                                    let is_final = audio.is_final;
-                                    if let Some(a) = out
-                                        && tx.send(Ok(a)).await.is_err()
-                                    {
-                                        break Attempt::Served(());
-                                    }
-                                    if is_final
-                                        && let Some(r) = resampler.as_mut()
-                                        && let Ok(Some(tail)) = r.flush()
-                                    {
-                                        let mut a = audio.clone();
-                                        a.frame = tail;
-                                        if tx.send(Ok(a)).await.is_err() {
+                            let mut produced = false;
+                            let outcome = loop {
+                                match next_or_stop(source.as_mut(), &mut stop).await {
+                                    Ok(None) => break Attempt::Served(()),
+                                    Ok(Some(mut audio)) => {
+                                        if !produced {
+                                            produced = true;
+                                            chain.mark_serving(index);
+                                        }
+                                        if let Some(at) = capture(&source) {
+                                            audio.started_time = Some(at);
+                                        }
+                                        let out = match resampler.as_mut() {
+                                            None => Some(audio.clone()),
+                                            Some(r) => match r.push(&audio.frame) {
+                                                Ok(ready) => {
+                                                    ready.into_iter().next().map(|frame| {
+                                                        let mut a = audio.clone();
+                                                        a.frame = frame;
+                                                        a
+                                                    })
+                                                }
+                                                Err(e) => {
+                                                    break Attempt::Failed {
+                                                        error: ProviderError::Local(ApiError::new(
+                                                            format!("resample: {e}"),
+                                                        )),
+                                                        produced_output: produced,
+                                                    };
+                                                }
+                                            },
+                                        };
+                                        // `tts:464-466`: drain the filter tail at every `is_final`.
+                                        let is_final = audio.is_final;
+                                        if let Some(a) = out
+                                            && tx.send(Ok(a)).await.is_err()
+                                        {
                                             break Attempt::Served(());
                                         }
+                                        if is_final
+                                            && let Some(r) = resampler.as_mut()
+                                            && let Ok(Some(tail)) = r.flush()
+                                        {
+                                            let mut a = audio.clone();
+                                            a.frame = tail;
+                                            if tx.send(Ok(a)).await.is_err() {
+                                                break Attempt::Served(());
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        break Attempt::Failed { error, produced_output: produced };
                                     }
                                 }
-                                Err(error) => {
-                                    break Attempt::Failed { error, produced_output: produced };
-                                }
+                            };
+                            if let Some(log) = log.as_ref() {
+                                log.clear_main();
                             }
-                        };
-                        if let Some(log) = log.as_ref() {
-                            log.clear_main();
-                        }
-                        // An attempt that failed before any audio still anchors the request.
-                        capture(&source);
-                        source.close(chain.teardown_deadline()).await;
-                        outcome
-                    }) as BoxFuture<'_, Attempt<()>>
-                })
+                            // An attempt that failed before any audio still anchors the request.
+                            capture(&source);
+                            source.close(chain.teardown_deadline()).await;
+                            outcome
+                        }) as BoxFuture<'_, Attempt<()>>
+                    },
+                )
                 .await;
             match result {
-                // Truncated is a success: the audio already sent plays out (`tts:293-297`).
                 Ok(_) => {}
                 Err(e) => {
                     let _ = tx.send(Err(e)).await;
@@ -527,7 +540,8 @@ impl FallbackTts {
         #[host(ambient)] clock: Arc<dyn Clock>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, TtsChainError> {
-        let policy = ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
+        let policy =
+            ChainPolicy { max_retry_per_backend: max_retry_per_tts, ..ChainPolicy::tts_defaults() };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer)
     }

@@ -3,27 +3,30 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::voice::events::{DetectorErrorWire, DetectorOverlapWire};
-use lk_agents_abi::metrics::base::InterruptionMetricsModel;
-use lk_agents_abi::turn::interruption::InterruptionSource;
-use lk_agents_abi::python::{Ambient, check_pid, extract_generated, intern_host, provider_error_to_py};
 use lk_agents_abi::SpawnerExt as _;
+use lk_agents_abi::metrics::base::InterruptionMetricsModel;
+use lk_agents_abi::python::{
+    Ambient, check_pid, extract_generated, intern_host, provider_error_to_py,
+};
 use lk_agents_abi::telemetry::report::{SpanUpdateAttrsWire, SpanUpdateWire};
+use lk_agents_abi::turn::interruption::InterruptionSource;
+use lk_agents_abi::voice::events::{DetectorErrorWire, DetectorOverlapWire};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use super::{
-    AdaptiveInterruptionDetector, ConnectionConfig, DetectorEvent, InputEvent, InterruptionDetectionError,
-    InterruptionOptions, InterruptionStream, OverlapEnd, OverlapStart, OverlappingSpeechEvent, StreamEvent,
-};
-use crate::python::{conn_options, header_provider, register_class, register_fn};
-use crate::creds::resolve_credential;
-use crate::headers::default_inference_url_from_env;
 use super::options::{
     AUDIO_PREFIX_DURATION, DETECTION_INTERVAL, MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION,
     REMOTE_INFERENCE_TIMEOUT,
 };
+use super::{
+    AdaptiveInterruptionDetector, ConnectionConfig, DetectorEvent, InputEvent,
+    InterruptionDetectionError, InterruptionOptions, InterruptionStream, OverlapEnd, OverlapStart,
+    OverlappingSpeechEvent, StreamEvent,
+};
+use crate::creds::resolve_credential;
+use crate::headers::default_inference_url_from_env;
+use crate::python::{conn_options, header_provider, register_class, register_fn};
 use crate::transport::{TransportError, WsMessage, WsReceiver, WsSender, WsTransport};
 use lk_agents_abi::python::{CancellingHandle, HostBridge as _};
 
@@ -138,7 +141,11 @@ impl InterruptionDetector {
 
     /// `update_options`. The options are shared with live streams, which reconnect to pick them up.
     #[pyo3(signature = (*, threshold = None, min_interruption_duration = None))]
-    fn update_options(&self, threshold: Option<f64>, min_interruption_duration: Option<f64>) -> PyResult<()> {
+    fn update_options(
+        &self,
+        threshold: Option<f64>,
+        min_interruption_duration: Option<f64>,
+    ) -> PyResult<()> {
         check_pid()?;
         self.inner.update_options(threshold, min_interruption_duration);
         Ok(())
@@ -194,8 +201,12 @@ fn detector_event_to_py<'py>(py: Python<'py>, ev: &DetectorEvent) -> PyResult<Bo
 
 fn stream_event_to_py<'py>(py: Python<'py>, ev: &StreamEvent) -> PyResult<Bound<'py, PyDict>> {
     match ev {
-        StreamEvent::Overlap(event) => overlap_to_py(py, event),
-        StreamEvent::Error(err) => stream_error_to_py(py, err),
+        StreamEvent::Overlap(event) | StreamEvent::CorrelatedOverlap { event, .. } => {
+            overlap_to_py(py, event)
+        }
+        StreamEvent::Error(err) | StreamEvent::CorrelatedError { error: err, .. } => {
+            stream_error_to_py(py, err)
+        }
         StreamEvent::SpanUpdate { span, attrs } => SpanUpdateWire {
             span: span.id(),
             attrs: SpanUpdateAttrsWire {
@@ -210,13 +221,20 @@ fn stream_event_to_py<'py>(py: Python<'py>, ev: &StreamEvent) -> PyResult<Bound<
     }
 }
 
-fn error_to_py<'py>(py: Python<'py>, err: &InterruptionDetectionError) -> PyResult<Bound<'py, PyDict>> {
-    DetectorErrorWire { message: err.error.to_string(), recoverable: err.recoverable }.into_pyobject(py)
+fn error_to_py<'py>(
+    py: Python<'py>,
+    err: &InterruptionDetectionError,
+) -> PyResult<Bound<'py, PyDict>> {
+    DetectorErrorWire { message: err.error.to_string(), recoverable: err.recoverable }
+        .into_pyobject(py)
 }
 
 /// A stream's failure also carries the error itself (`APIStatusError(status_code=500,
 /// retryable=False)`, ...), which the host's `_run` raises into its retry ladder.
-fn stream_error_to_py<'py>(py: Python<'py>, err: &InterruptionDetectionError) -> PyResult<Bound<'py, PyDict>> {
+fn stream_error_to_py<'py>(
+    py: Python<'py>,
+    err: &InterruptionDetectionError,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = error_to_py(py, err)?;
     let exc = provider_error_to_py(lk_agents_abi::errors::ProviderError::Local(err.error.clone()));
     d.set_item("error", exc.value(py))?;
@@ -225,7 +243,10 @@ fn stream_error_to_py<'py>(py: Python<'py>, err: &InterruptionDetectionError) ->
 
 /// `{"type": "overlapping_speech", "event": ..}`. The arrays travel as lists (the host wraps them
 /// in numpy). `None` stays `None`: "no prediction" is not an empty window.
-fn overlap_to_py<'py>(py: Python<'py>, ev: &OverlappingSpeechEvent) -> PyResult<Bound<'py, PyDict>> {
+fn overlap_to_py<'py>(
+    py: Python<'py>,
+    ev: &OverlappingSpeechEvent,
+) -> PyResult<Bound<'py, PyDict>> {
     DetectorOverlapWire { event: () }.host_dict(py, ev.into_pyobject(py)?.into_any())
 }
 
@@ -284,9 +305,13 @@ impl InterruptionDetectorStream {
                 // Interned so the crate can hand it back on `span_update` untouched.
                 user_speaking_span: user_speaking_span.map(intern_host),
             }),
-            "overlap_speech_ended" => InputEvent::OverlapSpeechEnded(OverlapEnd { ended_at, agent_ended }),
+            "overlap_speech_ended" => {
+                InputEvent::OverlapSpeechEnded(OverlapEnd { ended_at, agent_ended })
+            }
             other => {
-                return Err(PyValueError::new_err(format!("unknown interruption input event {other:?}")));
+                return Err(PyValueError::new_err(format!(
+                    "unknown interruption input event {other:?}"
+                )));
             }
         };
         self.send(ev)
@@ -342,10 +367,9 @@ impl InterruptionDetectorStream {
         lk_agents_abi::python::future_into_py(py, async move {
             let _ = self_sender.lock().unwrap_or_else(|p| p.into_inner()).take();
             if let Some(stream) = inner.lock().await.take() {
-                stream
-                    .aclose()
-                    .await
-                    .map_err(|e| provider_error_to_py(lk_agents_abi::errors::ProviderError::Local(e)))?;
+                stream.aclose().await.map_err(|e| {
+                    provider_error_to_py(lk_agents_abi::errors::ProviderError::Local(e))
+                })?;
             }
             Ok(())
         })
@@ -358,7 +382,9 @@ impl InterruptionDetectorStream {
         let guard = self.sender.lock().unwrap_or_else(|p| p.into_inner());
         match guard.as_ref() {
             None => Err(PyRuntimeError::new_err("this interruption stream has ended its input")),
-            Some(sender) => sender.send(ev).map_err(|_| PyRuntimeError::new_err("this interruption stream is closed")),
+            Some(sender) => sender
+                .send(ev)
+                .map_err(|_| PyRuntimeError::new_err("this interruption stream is closed")),
         }
     }
 }
@@ -406,8 +432,11 @@ fn connect_failure(py: Python<'_>, err: &PyErr) -> TransportError {
         .and_then(|m| m.getattr("ClientResponseError"))
         .and_then(|cls| value.is_instance(&cls))
         .unwrap_or(false);
-    if is_response_error && let Ok(status) = value.getattr("status").and_then(|s| s.extract::<i64>()) {
-        let message = value.getattr("message").and_then(|m| m.extract::<String>()).unwrap_or_default();
+    if is_response_error
+        && let Ok(status) = value.getattr("status").and_then(|s| s.extract::<i64>())
+    {
+        let message =
+            value.getattr("message").and_then(|m| m.extract::<String>()).unwrap_or_default();
         return TransportError::Status { status, message, headers: Vec::new(), body: None };
     }
     TransportError::Connect(err.to_string())
@@ -430,7 +459,10 @@ impl WsTransport for HostWs {
         let connect = self.session.await_call(move |session| {
             let py = session.py();
             let kwargs = PyDict::new(py);
-            kwargs.set_item("headers", headers.into_iter().collect::<std::collections::HashMap<_, _>>())?;
+            kwargs.set_item(
+                "headers",
+                headers.into_iter().collect::<std::collections::HashMap<_, _>>(),
+            )?;
             session.call_method("ws_connect", (url,), Some(&kwargs))
         });
         let ws = match connect.await {
@@ -461,7 +493,10 @@ async fn pump_receive(
             let msg = msg.bind(py);
             let kind: i64 = msg.getattr("type").and_then(|t| t.extract()).map_err(io)?;
             Ok(match kind {
-                WS_TEXT => (WsMessage::Text(msg.getattr("data").and_then(|d| d.extract()).map_err(io)?), None),
+                WS_TEXT => (
+                    WsMessage::Text(msg.getattr("data").and_then(|d| d.extract()).map_err(io)?),
+                    None,
+                ),
                 WS_CLOSE | WS_CLOSING | WS_CLOSED => {
                     let code = ws.read("close_code", |c| c.extract::<Option<u16>>()).ok().flatten();
                     (WsMessage::Closed, code)
@@ -484,7 +519,11 @@ struct HostWsSender {
 #[async_trait::async_trait]
 impl WsSender for HostWsSender {
     async fn send_text(&self, text: String) -> Result<(), TransportError> {
-        self.ws.await_call(move |ws| ws.call_method1("send_str", (text,))).await.map(drop).map_err(io)
+        self.ws
+            .await_call(move |ws| ws.call_method1("send_str", (text,)))
+            .await
+            .map(drop)
+            .map_err(io)
     }
 
     async fn send_binary(&self, data: Vec<u8>) -> Result<(), TransportError> {

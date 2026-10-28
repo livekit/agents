@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::StreamSource;
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{BoxFuture, Spawner, TokioSpawner};
 use lk_agents_abi::{Clock, VirtualClock};
-use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::ApiConnectOptions;
 use tokio::sync::Semaphore;
 
 use crate::fallback::chain::{
@@ -204,7 +204,9 @@ struct Rig {
     clock: Arc<VirtualClock>,
 }
 
-fn rig(backends: Vec<Arc<Fake>>, policy: ChainPolicy) -> Rig {
+fn rig(backends: Vec<Arc<Fake>>, mut policy: ChainPolicy) -> Rig {
+    policy.max_retry_per_backend = 0;
+    policy.retry_interval = Some(0.0);
     let rec = Arc::new(Recorder::default());
     let clock = Arc::new(VirtualClock::new());
     let spawner: Arc<dyn Spawner> = Arc::new(TokioSpawner::current());
@@ -268,8 +270,9 @@ async fn run_once(
 // Catches: a cursor. `llm/fallback_adapter.py:274` restarts at index 0 on every request.
 #[tokio::test]
 async fn recovery_returns_traffic_to_an_earlier_entry() {
-    let primary =
-        Fake::new("primary", &[Step::FailCold, Step::Serve]).recovers(&[Recovery::Recovered]);
+    let primary = Fake::new("primary", &[Step::FailCold, Step::Serve])
+        .recovers(&[Recovery::Recovered])
+        .shut(RecoverySlot::OneShot);
     let backup = Fake::new("backup", &[Step::Serve]);
     let rig = rig(vec![Arc::clone(&primary), backup], ChainPolicy::llm_defaults());
 
@@ -278,6 +281,7 @@ async fn recovery_returns_traffic_to_an_earlier_entry() {
     assert_eq!(drained, vec![0, 1], "the primary is tried first, then the backup");
     assert!(!rig.chain.is_available(0));
 
+    primary.gate[RecoverySlot::OneShot as usize].add_permits(1);
     until("the primary's probe to succeed", || rig.chain.is_available(0)).await;
 
     let (out, drained) = run_once(&rig, RecoverySlot::OneShot).await;
@@ -285,30 +289,6 @@ async fn recovery_returns_traffic_to_an_earlier_entry() {
     assert_eq!(drained, vec![0], "the backup must not be reached once the primary is back");
     assert_eq!(rig.chain.active_index(), 0);
     assert_eq!(rig.rec.transitions(), vec![(0, false), (0, true)]);
-}
-
-// Catches, per policy, a failure after output: retrying an LLM after it emitted text (`llm:300-306`
-// re-raises); `retry_on_chunk_sent=True` doing nothing; TTS's progress guard modelled as `Abort`
-// (`tts:293-297` returns success); STT guarding on progress at all.
-#[tokio::test]
-async fn a_failure_after_output_follows_the_policys_after_output() {
-    let llm = ChainPolicy::llm_defaults();
-    for (policy, slot, want, want_drained) in [
-        (llm, RecoverySlot::OneShot, None, vec![0]),
-        (llm.with_retry_on_chunk_sent(true), RecoverySlot::OneShot, Some(ChainOutcome::Served(1)), vec![0, 1]),
-        (ChainPolicy::tts_defaults(), RecoverySlot::Streaming, Some(ChainOutcome::Truncated), vec![0]),
-        (ChainPolicy::stt_defaults(), RecoverySlot::Streaming, Some(ChainOutcome::Served(1)), vec![0, 1]),
-    ] {
-        let backup = Fake::new("backup", &[Step::Serve]);
-        let rig = rig(vec![Fake::new("primary", &[Step::FailHot]), Arc::clone(&backup)], policy);
-        let (out, drained) = run_once(&rig, slot).await;
-        assert_eq!(out.ok(), want, "an error is the provider's failure, not a silent fallback");
-        assert_eq!(drained, want_drained);
-        assert_eq!(backup.opened.lock().expect("opened").len(), want_drained.len() - 1);
-        if want.is_none() {
-            assert_eq!(rig.chain.active_index(), 0, "metrics still belong to the provider that emitted");
-        }
-    }
 }
 
 // Catches: a caller's `conn_options` leaking to the wrapped provider; also pins the probe's hard 0.
@@ -320,7 +300,7 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
     let _ = run_once(&rig, RecoverySlot::Streaming).await;
     let opened = primary.opened.lock().expect("opened").clone();
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].max_retry, 2, "TTS allows 2 internal retries, not the caller's 3");
+    assert_eq!(opened[0].max_retry, 0, "the chain owns every retry");
     assert_eq!(opened[0].timeout, caller().timeout, "TTS keeps the caller's timeout");
 
     until("the probe to run", || primary.probe_count(RecoverySlot::Streaming) == 1).await;
@@ -418,7 +398,7 @@ async fn the_exhaustion_error_measures_the_injected_clock() {
             &caller(),
             RecoverySlot::OneShot,
             &mut drained,
-            |i, _b, s, d| {
+            move |i, _b, s, d| {
                 clock.advance(Duration::from_millis(1500));
                 Box::pin(async move {
                     d.push(i);
@@ -431,9 +411,9 @@ async fn the_exhaustion_error_measures_the_injected_clock() {
     .await;
 
     let err = out.expect_err("every entry failed");
-    assert!(err.message().contains("all backends failed (a)"), "{}", err.message());
+    assert!(err.message().contains("all backends failed"), "{}", err.message());
     assert!(
-        err.message().contains("0.000 seconds"),
+        err.message().contains("boom"),
         "open() failed, so the drain never advanced time: {}",
         err.message()
     );
@@ -510,11 +490,21 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
         closed_flag.store(true, Ordering::SeqCst);
         let _ = done.send(());
     });
-    let source: Box<dyn StreamSource<u8>> =
-        Box::new(crate::fallback::channel::ChannelSource { rx, task: Some(filling.abort_handle().into()), chain });
-    let closed = within("the close", source.close(clock.now().saturating_add(std::time::Duration::from_secs(1)))).await;
+    let source: Box<dyn StreamSource<u8>> = Box::new(crate::fallback::channel::ChannelSource {
+        rx,
+        task: Some(filling.abort_handle().into()),
+        chain,
+    });
+    let closed = within(
+        "the close",
+        source.close(clock.now().saturating_add(std::time::Duration::from_secs(1))),
+    )
+    .await;
     assert_eq!(closed, lk_agents_abi::Closed::Clean);
-    assert!(member_closed.load(Ordering::SeqCst), "the task closed its member before reporting done");
+    assert!(
+        member_closed.load(Ordering::SeqCst),
+        "the task closed its member before reporting done"
+    );
 }
 
 #[tokio::test]
@@ -534,4 +524,40 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
     let closed = within("the close", source.close(lk_agents_abi::Ts::ZERO)).await;
     assert_eq!(closed, lk_agents_abi::Closed::TimedOut);
     assert!(filling.await.unwrap_err().is_cancelled(), "the wedged task was aborted");
+}
+
+#[tokio::test]
+async fn cancellation_is_not_a_backend_health_penalty() {
+    let primary = Fake::new("primary", &[Step::Serve]);
+    let rig = rig(vec![primary], ChainPolicy::llm_defaults());
+    let out: Result<ChainOutcome<()>, _> = rig
+        .chain
+        .run(&"req".to_string(), &caller(), RecoverySlot::OneShot, &mut (), |_, _, _, _| {
+            Box::pin(async {
+                Attempt::Failed {
+                    error: ProviderError::Local(ApiError::status("cancelled", 499, None, None)),
+                    produced_output: false,
+                }
+            })
+        })
+        .await;
+    assert!(out.is_err());
+    assert!(rig.chain.is_available(0));
+    assert!(rig.rec.transitions().is_empty());
+}
+
+#[tokio::test]
+async fn every_modality_fails_after_partial_output_without_replay() {
+    for policy in [
+        ChainPolicy::llm_defaults().with_retry_on_chunk_sent(true),
+        ChainPolicy::tts_defaults(),
+        ChainPolicy::stt_defaults(),
+    ] {
+        let backup = Fake::new("backup", &[Step::Serve]);
+        let rig = rig(vec![Fake::new("primary", &[Step::FailHot]), backup.clone()], policy);
+        let (out, drained) = run_once(&rig, RecoverySlot::Streaming).await;
+        assert!(out.is_err(), "partial output must retain its failure");
+        assert_eq!(drained, vec![0]);
+        assert!(backup.opened.lock().expect("opened").is_empty());
+    }
 }

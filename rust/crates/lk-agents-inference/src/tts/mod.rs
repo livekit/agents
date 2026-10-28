@@ -5,37 +5,37 @@
 //! Text is normalised, split into sentences and converted to the provider's markup here, as
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
+pub mod machine;
+mod pump;
 #[cfg(feature = "python")]
 mod python;
+#[cfg(test)]
+mod tests;
 pub mod wire;
 
 use crate::abi::{
-    StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink,
-    TtsSource,
+    StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
-use crate::transport::{
-    WsMessage, WsReceiver, WsSender, WsTransport, connect_error, next_terminal, open_ws,
-    stream_closed, to_ws_url, within,
-};
+use crate::transport::{WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url};
+use async_trait::async_trait;
+use futures_util::future::{Either, select};
+use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, sentence_tokenizer_of};
 use lk_agents_abi::utils::connection_pool::ConnectionPool;
+use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
+use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_media::blingfire::{SentenceBuffer, SentenceBufferOptions};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
-use crate::vad::machine::mono;
-use async_trait::async_trait;
-use base64::Engine as _;
-use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig, drop_bracket_cues, sentence_tokenizer_of};
-use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, TimedString};
-use lk_agents_media::blingfire::{SentenceBuffer, SentenceBufferOptions};
+use std::pin::pin;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 use wire::FallbackModel;
 
 const WHAT: &str = "LiveKit Inference TTS";
@@ -99,9 +99,8 @@ impl std::ops::Deref for NativeTts {
 /// What every session's view of one client shares: its options and its pooled connections.
 pub struct TtsShared {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    opts: Mutex<TtsOptions>,
+    opts: Arc<Mutex<TtsOptions>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    /// `_expressive`: the framework sets it before a synthesis opens.
     expressive: AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
@@ -116,6 +115,7 @@ struct Connection {
     sender: Arc<dyn WsSender>,
     receiver: Box<dyn WsReceiver>,
     session_id: Option<String>,
+    configuration: String,
 }
 
 /// `utils.ConnectionPool(max_session_duration=300, mark_refreshed_on_get=True)`.
@@ -129,7 +129,11 @@ struct Connections {
 impl Default for Connections {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn default() -> Self {
-        Connections { pool: ConnectionPool::new(Some(300.0), true), idle: HashMap::new(), next_id: 0 }
+        Connections {
+            pool: ConnectionPool::new(Some(300.0), true),
+            idle: HashMap::new(),
+            next_id: 0,
+        }
     }
 }
 
@@ -194,7 +198,7 @@ impl NativeTts {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let shared = TtsShared {
-            opts: Mutex::new(opts),
+            opts: Arc::new(Mutex::new(opts)),
             expressive: AtomicBool::new(false),
             ws,
             spawner,
@@ -212,8 +216,17 @@ impl NativeTts {
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
     ) -> NativeTts {
-        let view =
-            NativeTts { shared: Arc::clone(&self.shared), identity: BoundIdentity::default(), reporter };
+        let mut view = NativeTts::new(
+            self.opts.lock().unwrap().clone(),
+            self.ws.clone(),
+            self.spawner.clone(),
+        );
+        let shared = Arc::get_mut(&mut view.shared).expect("a newly constructed view is unshared");
+        shared.opts = self.opts.clone();
+        shared.connections = self.connections.clone();
+        shared.clock = self.clock.clone();
+        view.set_expressive(self.expressive.load(Ordering::SeqCst));
+        view.reporter = reporter;
         view.identity.bind(headers);
         view
     }
@@ -233,13 +246,15 @@ impl NativeTts {
         let url = format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model);
         let timeout = Duration::from_secs_f64(opts.conn_options.timeout.max(0.0));
         let create_frame = wire::session_create(&opts);
+        let headers = headers.into_vec();
+        let configuration = connection_configuration(&create_frame, &headers);
         self.spawner.spawn_unboxed(async move {
-            let opened =
-                open_ws(ws.as_ref(), &url, headers.into_vec(), &*clock, timeout, WHAT, &create_frame);
+            let opened = open_ws(ws.as_ref(), &url, headers, &*clock, timeout, WHAT, &create_frame);
             if let Ok((sender, receiver)) = opened.await {
                 let mut connections = connections.lock().unwrap();
                 let id = connections.opened(pool_secs(&*clock));
-                connections.give_back(id, Connection { sender, receiver, session_id });
+                connections
+                    .give_back(id, Connection { sender, receiver, session_id, configuration });
             }
         });
     }
@@ -287,7 +302,6 @@ impl NativeTts {
         self.expressive.store(expressive, Ordering::SeqCst);
     }
 
-
     pub fn model(&self) -> String {
         self.opts.lock().unwrap().model.clone()
     }
@@ -321,8 +335,9 @@ impl NativeTts {
             opts.voice = Some(voice.to_owned());
         }
         if let Some(language) = language {
-            opts.language =
-                Some(lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned());
+            opts.language = Some(
+                lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned(),
+            );
         }
         if let Some(extra) = extra {
             for (k, v) in extra.iter() {
@@ -335,8 +350,12 @@ impl NativeTts {
     /// one push and `end_input`. `headers` is `get_inference_headers()`, read by the host in the
     /// synthesis's job context; each sentence pushed goes out as it arrives.
     #[host(method(name = "stream", stream = lk_agents_abi::InferenceTtsStream, kw_only))]
-    pub async fn stream_for_host(&self, headers: Option<Vec<(String, String)>>) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let (sink, source) = self.stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
+    pub async fn stream_for_host(
+        &self,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<(TtsSink, TtsSource), ProviderError> {
+        let (sink, source) =
+            self.stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
         Ok((Box::new(sink), Box::new(source)))
     }
 
@@ -355,11 +374,17 @@ impl NativeTts {
         };
         let identification = identification.as_ref();
 
-        let (text_tx, text_rx) = mpsc::unbounded_channel::<TextCmd>();
-        let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Result<SynthesizedAudio, ApiError>>();
+        opts.conn_options.validate().map_err(|error| ApiError::new(error.to_string()))?;
+        let (text_tx, text_rx) = mpsc::channel::<TextCmd>(TEXT_QUEUE_CAPACITY);
+        let (audio_tx, audio_rx) =
+            mpsc::channel::<Result<SynthesizedAudio, ApiError>>(AUDIO_QUEUE_CAPACITY);
+        let (stop, stopped) = watch::channel(false);
+        let (done, settled) = oneshot::channel();
+        let (failure, failed) = watch::channel(None);
+        let clock = self.clock.clone() as Arc<dyn Clock>;
+        let accepted_at = clock.now();
 
-        let headers =
-            gateway_headers(identification, None, None, &opts.api_key, &opts.api_secret)?;
+        let headers = gateway_headers(identification, None, None, &opts.api_key, &opts.api_secret)?;
         let session_id = headers.get(HEADER_SESSION_ID).map(str::to_owned);
 
         let pump = Pump {
@@ -369,7 +394,11 @@ impl NativeTts {
             url: format!("{}/tts?model={}", to_ws_url(&opts.base_url), opts.model),
             headers: headers.into_vec(),
             timeout: Duration::from_secs_f64(opts.conn_options.timeout.max(0.0)),
-            clock: self.clock.clone() as Arc<dyn Clock>,
+            clock: clock.clone(),
+            accepted_at,
+            stopped,
+            done: Some(done),
+            failure,
             create_frame: wire::session_create(&opts),
             sample_rate: opts.sample_rate,
             opts,
@@ -378,7 +407,8 @@ impl NativeTts {
             text_rx,
             audio_tx,
         };
-        let (max_token_len, min_token_len, xml_aware) = sentence_tokenizer_of(&pump.provider, expressive);
+        let (max_token_len, min_token_len, xml_aware) =
+            sentence_tokenizer_of(&pump.provider, expressive);
         let sentences = SentenceBuffer::with_options(SentenceBufferOptions {
             retain_format: false,
             ..SentenceBufferOptions::from_config(SentenceTokenizerConfig {
@@ -388,6 +418,7 @@ impl NativeTts {
             })
         });
         let prep = TextPrep {
+            pending_bytes: 0,
             markup: Markup::from_provider_key(wire::markup_provider_key(&pump.opts.model)),
             sentences: Box::new(sentences),
         };
@@ -395,7 +426,14 @@ impl NativeTts {
 
         Ok((
             TtsSinkHandle { text: text_tx, prep: Mutex::new(prep) },
-            TtsSourceHandle { audio: audio_rx, done: false },
+            TtsSourceHandle {
+                audio: audio_rx,
+                done: false,
+                stop,
+                settled: Some(settled),
+                failed,
+                clock,
+            },
         ))
     }
 }
@@ -414,7 +452,11 @@ impl Tts for NativeTts {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId { label: Tts::label(self), model: self.model(), provider: "livekit".into() }
+        lk_agents_abi::ProviderId {
+            label: Tts::label(self),
+            model: self.model(),
+            provider: "livekit".into(),
+        }
     }
 
     /// `streaming` is always `True`; `aligned_transcript` reads the live extra kwargs.
@@ -468,13 +510,12 @@ impl Tts for NativeTts {
 #[derive(Debug, Clone, PartialEq)]
 enum TextCmd {
     Push(String),
-    Flush,
     End,
+    Failed,
 }
 
 pub struct TtsSinkHandle {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    text: mpsc::UnboundedSender<TextCmd>,
+    text: mpsc::Sender<TextCmd>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     prep: Mutex<TextPrep>,
 }
@@ -482,6 +523,7 @@ pub struct TtsSinkHandle {
 /// `SynthesizeStream`'s input side: the markup normalised, the text split into the provider's
 /// sentences, each converted to its markup.
 struct TextPrep {
+    pending_bytes: usize,
     markup: Markup,
     sentences: Box<dyn SentenceSplitter>,
 }
@@ -491,7 +533,11 @@ impl TtsSinkHandle {
         let markup = self.prep.lock().unwrap().markup;
         for sentence in sentences {
             let converted = markup.convert(&markup.normalize(&sentence));
-            self.text.send(TextCmd::Push(converted)).map_err(|_| stream_closed(WHAT))?;
+            let permit = self.text.try_reserve().map_err(|_| stream_closed(WHAT))?;
+            if self.text.capacity() == 0 {
+                return Err(ApiError::new("TTS pending text queue is full").into());
+            }
+            permit.send(TextCmd::Push(converted));
         }
         Ok(())
     }
@@ -499,631 +545,151 @@ impl TtsSinkHandle {
 
 impl StreamSink<String> for TtsSinkHandle {
     fn push(&self, item: String) -> Result<(), ProviderError> {
+        if item.len() > MAX_PENDING_TEXT_BYTES {
+            return Err(ApiError::new("TTS text exceeds the pending text limit").into());
+        }
         let sentences = {
             let mut prep = self.prep.lock().unwrap();
+            if prep.pending_bytes.saturating_add(item.len()) > MAX_PENDING_TEXT_BYTES {
+                return Err(ApiError::new("TTS pending text exceeds its limit").into());
+            }
+            prep.pending_bytes += item.len();
             let normalized = prep.markup.normalize(&item);
-            prep.sentences.push(&normalized)
+            let sentences = prep.sentences.push(&normalized);
+            prep.pending_bytes =
+                prep.pending_bytes.saturating_sub(sentences.iter().map(String::len).sum());
+            sentences
         };
         self.send(sentences)
     }
 
     /// The `_FlushSentinel`: whatever the tokenizer holds goes out as a sentence.
     fn flush(&self) -> Result<(), ProviderError> {
-        let sentences = self.prep.lock().unwrap().sentences.flush();
-        self.send(sentences)?;
-        self.text.send(TextCmd::Flush).map_err(|_| stream_closed(WHAT))
+        let sentences = {
+            let mut prep = self.prep.lock().unwrap();
+            prep.pending_bytes = 0;
+            prep.sentences.flush()
+        };
+        self.send(sentences)
     }
 
     fn end_input(&self) {
-        let sentences = self.prep.lock().unwrap().sentences.flush();
-        let _ = self.send(sentences);
-        let _ = self.text.send(TextCmd::End);
+        let sentences = {
+            let mut prep = self.prep.lock().unwrap();
+            prep.pending_bytes = 0;
+            prep.sentences.flush()
+        };
+        let command = match self.send(sentences) {
+            Ok(()) => TextCmd::End,
+            Err(_) => TextCmd::Failed,
+        };
+        let _ = self.text.try_send(command);
     }
 }
 
 pub struct TtsSourceHandle {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    audio: mpsc::UnboundedReceiver<Result<SynthesizedAudio, ApiError>>,
+    audio: mpsc::Receiver<Result<SynthesizedAudio, ApiError>>,
     done: bool,
+    stop: watch::Sender<bool>,
+    settled: Option<oneshot::Receiver<Result<(), ApiError>>>,
+    failed: watch::Receiver<Option<ApiError>>,
+    clock: Arc<dyn Clock>,
 }
 
 #[async_trait]
 impl StreamSource<SynthesizedAudio> for TtsSourceHandle {
     async fn next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
-        next_terminal(&mut self.audio, &mut self.done).await
+        if self.done {
+            return Ok(None);
+        }
+        let next = if let Ok(item) = self.audio.try_recv() {
+            Some(item)
+        } else {
+            let received = {
+                match select(pin!(self.audio.recv()), pin!(self.failed.changed())).await {
+                    Either::Left((next, _)) => Ok(next),
+                    Either::Right(_) => Err(()),
+                }
+            };
+            match received {
+                Ok(next) => next,
+                Err(()) => self.failed.borrow().clone().map(Err),
+            }
+        };
+        match next {
+            Some(Ok(audio)) => Ok(Some(audio)),
+            Some(Err(error)) => {
+                self.done = true;
+                Err(error.into())
+            }
+            None => {
+                self.done = true;
+                match self.settled.take() {
+                    Some(settled) => match settled.await {
+                        Ok(Ok(())) => Ok(None),
+                        Ok(Err(error)) => Err(error.into()),
+                        Err(_) => {
+                            Err(ApiError::new("TTS pump ended without a terminal outcome").into())
+                        }
+                    },
+                    None => Ok(None),
+                }
+            }
+        }
     }
 
-    /// Nothing here awaits the network, so the deadline is not consulted.
-    async fn close(mut self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
+    fn cancel_safe(&self) -> bool {
+        true
+    }
+
+    async fn close(mut self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
+        let _ = self.stop.send(true);
         self.done = true;
         self.audio.close();
-        lk_agents_abi::Closed::Clean
+        let settled = self.settled.take();
+        lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async move {
+            if let Some(settled) = settled {
+                let _ = settled.await;
+            }
+        })
+        .await
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The pump
-// ---------------------------------------------------------------------------------------------
+impl Drop for TtsSourceHandle {
+    fn drop(&mut self) {
+        let _ = self.stop.send(true);
+    }
+}
+
+const TEXT_QUEUE_CAPACITY: usize = 64;
+const AUDIO_QUEUE_CAPACITY: usize = 8;
+const MAX_PENDING_TEXT_BYTES: usize = 64 * 1024;
 
 struct Pump {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     connections: Arc<Mutex<Connections>>,
-    /// Of a socket this synthesis opens; a reused one keeps its own.
     session_id: Option<String>,
     ws: Arc<dyn WsTransport>,
     url: String,
     headers: Vec<(String, String)>,
-    /// `conn_options.timeout`: bounds the handshake and the first message once text is sent, not
-    /// later reads (between segments the gateway waits on us).
     timeout: Duration,
     clock: Arc<dyn Clock>,
+    accepted_at: Ts,
+    stopped: watch::Receiver<bool>,
+    done: Option<oneshot::Sender<Result<(), ApiError>>>,
+    failure: watch::Sender<Option<ApiError>>,
     create_frame: serde_json::Value,
     opts: TtsOptions,
     provider: String,
     sample_rate: u32,
-    /// Bracket cues are dropped from the alignment: the provider aligned the converted text.
     expressive: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    text_rx: mpsc::UnboundedReceiver<TextCmd>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    audio_tx: mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
+    text_rx: mpsc::Receiver<TextCmd>,
+    audio_tx: mpsc::Sender<Result<SynthesizedAudio, ApiError>>,
 }
 
-impl Pump {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    async fn run(self) {
-        let Pump {
-            connections,
-            session_id,
-            ws,
-            url,
-            headers,
-            timeout,
-            clock,
-            create_frame,
-            opts,
-            provider,
-            sample_rate,
-            expressive,
-            text_rx,
-            audio_tx,
-        } = self;
-
-        let (reused, expired) = connections.lock().unwrap().take(pool_secs(&*clock));
-        for connection in expired {
-            connection.sender.close().await;
-        }
-        let (id, mut connection) = match reused {
-            Some(reused) => reused,
-            None => {
-                let opened =
-                    open_ws(ws.as_ref(), &url, headers, &*clock, timeout, WHAT, &create_frame);
-                match opened.await {
-                    Ok((sender, receiver)) => {
-                        let id = connections.lock().unwrap().opened(pool_secs(&*clock));
-                        (id, Connection { sender, receiver, session_id })
-                    }
-                    Err(err) => {
-                        let _ = audio_tx.send(Err(err));
-                        return;
-                    }
-                }
-            }
-        };
-        // `create_inference_request_id(connection.session_id, "tts")`: no session id yields a
-        // bare shortuuid.
-        let request_id =
-            create_inference_request_id(connection.session_id.as_deref(), RequestKind::Tts, "");
-        let sender = connection.sender.clone();
-
-        // `input_sent_event`: nothing is read back until the session is configured and text (or
-        // the flush) is on the wire. It carries `_mark_started()`'s instant, the frames' anchor.
-        let (input_sent_tx, input_sent_rx) = tokio::sync::watch::channel(None);
-
-        let send = Self::send_loop(sender.clone(), text_rx, &opts, &*clock, input_sent_tx);
-        let recv = Self::recv_loop(
-            connection.receiver.as_mut(),
-            &audio_tx,
-            RecvCtx {
-                provider: &provider,
-                request_id,
-                sample_rate,
-                expressive,
-                input_sent: input_sent_rx,
-                clock: clock.as_ref(),
-                first_message_timeout: timeout,
-            },
-        );
-
-        let outcome = tokio::select! {
-            r = send => r.map(|()| false),
-            r = recv => r,
-        };
-        match outcome {
-            // The gateway said `done`: the socket is configured and free for the next synthesis.
-            Ok(true) => connections.lock().unwrap().give_back(id, connection),
-            outcome => {
-                if let Err(err) = outcome {
-                    let _ = audio_tx.send(Err(err));
-                }
-                connections.lock().unwrap().forget(id);
-                sender.close().await;
-            }
-        }
-    }
-
-    /// `_sentence_stream_task` over host-split sentences: each push is one `input_transcript`,
-    /// sent as it arrives; end of input is the one `session.flush`.
-    async fn send_loop(
-        sender: Arc<dyn WsSender>,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-        mut text_rx: mpsc::UnboundedReceiver<TextCmd>,
-        opts: &TtsOptions,
-        clock: &dyn Clock,
-        input_sent: tokio::sync::watch::Sender<Option<f64>>,
-    ) -> Result<(), ApiError> {
-        let mark_started = || {
-            let now = clock.wall().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-            input_sent.send_if_modified(|at| at.is_none() && at.replace(now).is_none());
-        };
-        loop {
-            match text_rx.recv().await {
-                Some(TextCmd::Push(sentence)) => {
-                    let frame = wire::input_transcript(&sentence, opts);
-                    sender
-                        .send_text(frame.to_string())
-                        .await
-                        .map_err(|e| ApiError::connection(Some(e.to_string())))?;
-                    mark_started();
-                }
-                // The `_FlushSentinel` only flushes the host's tokenizer; nothing goes on the wire.
-                Some(TextCmd::Flush) => {}
-                Some(TextCmd::End) | None => break,
-            }
-        }
-
-        // Sent even for empty input, so the gateway still sends `done`.
-        sender
-            .send_text(wire::session_flush().to_string())
-            .await
-            .map_err(|e| ApiError::connection(Some(e.to_string())))?;
-        // "needed in case empty input is sent" -- the flush itself releases the receive half.
-        mark_started();
-        std::future::pending::<()>().await;
-        Ok(())
-    }
-
-    async fn recv_loop(
-        receiver: &mut dyn crate::transport::WsReceiver,
-        #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-        audio_tx: &mpsc::UnboundedSender<Result<SynthesizedAudio, ApiError>>,
-        ctx: RecvCtx<'_>,
-    ) -> Result<bool, ApiError> {
-        let RecvCtx {
-            provider,
-            request_id,
-            sample_rate,
-            expressive,
-            mut input_sent,
-            clock,
-            first_message_timeout,
-        } = ctx;
-        let _ = input_sent.wait_for(Option::is_some).await;
-        let started_time = *input_sent.borrow();
-        // Only the first read after text is on the wire is bounded; see `Pump::timeout`.
-        let mut awaiting_first = true;
-        let mut segment_id: Option<String> = None;
-        // Alignment arrives on its own message and rides out on the next audio frame.
-        let mut pending_transcript: Vec<TimedString> = Vec::new();
-        // An unclosed bracket cue, held across alignment messages.
-        let mut held: Vec<TimedString> = Vec::new();
-
-        loop {
-            let recv = receiver.recv();
-            let received = if awaiting_first {
-                awaiting_first = false;
-                within(clock, first_message_timeout, recv).await
-            } else {
-                recv.await
-            };
-            let msg = match received {
-                Ok(msg) => msg,
-                Err(err) => return Err(connect_error(WHAT, err)),
-            };
-            match msg {
-                WsMessage::Closed => {
-                    return Err(ApiError::status(
-                        "Gateway connection closed unexpectedly",
-                        -1,
-                        Some(request_id.clone()),
-                        None,
-                    ));
-                }
-                WsMessage::Other => continue,
-                WsMessage::Text(raw) => {
-                    let Some(incoming) = wire::decode(&raw, provider) else { continue };
-                    // The *first* message carrying a session id names the segment.
-                    if segment_id.is_none()
-                        && let Some(id) = incoming.session_id()
-                    {
-                        segment_id = Some(id.to_owned());
-                    }
-                    match incoming {
-                        wire::Incoming::OutputAudio { audio, .. } => {
-                            let Ok(data) = base64::engine::general_purpose::STANDARD.decode(&audio)
-                            else {
-                                continue;
-                            };
-                            let out = SynthesizedAudio {
-                                timed_transcript: std::mem::take(&mut pending_transcript),
-                                segment_id: segment_id.clone().unwrap_or_default(),
-                                started_time,
-                                ..SynthesizedAudio::new(
-                                    mono(data, sample_rate),
-                                    request_id.clone(),
-                                )
-                            };
-                            if audio_tx.send(Ok(out)).is_err() {
-                                return Ok(false);
-                            }
-                        }
-                        wire::Incoming::OutputAlignment { tokens, .. } => {
-                            pending_transcript.extend(if expressive {
-                                drop_bracket_cues(tokens, &mut held, false)
-                            } else {
-                                tokens
-                            });
-                        }
-                        wire::Incoming::Done { .. } => {
-                            if !held.is_empty() {
-                                pending_transcript.extend(drop_bracket_cues(Vec::new(), &mut held, true));
-                            }
-                            // `output_emitter.end_input()` flushes a final, possibly empty frame;
-                            // the driver keys on `is_final`.
-                            let out = SynthesizedAudio {
-                                is_final: true,
-                                timed_transcript: std::mem::take(&mut pending_transcript),
-                                segment_id: segment_id.clone().unwrap_or_default(),
-                                ..SynthesizedAudio::new(
-                                    mono(Vec::new(), sample_rate),
-                                    request_id.clone(),
-                                )
-                            };
-                            let _ = audio_tx.send(Ok(out));
-                            return Ok(true);
-                        }
-                        wire::Incoming::Error { raw } => {
-                            // `APIError(f"...: {msg.data}")` -- the whole frame; the detail is in
-                            // sibling keys.
-                            return Err(ApiError::new(format!(
-                                "LiveKit Inference TTS returned error: {raw}"
-                            )));
-                        }
-                        _ => continue,
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct RecvCtx<'a> {
-    provider: &'a str,
-    request_id: String,
-    sample_rate: u32,
-    expressive: bool,
-    input_sent: tokio::sync::watch::Receiver<Option<f64>>,
-    clock: &'a dyn Clock,
-    first_message_timeout: Duration,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testkit::{FakeWs, text};
-    use lk_agents_abi::TokioSpawner;
-    use serde_json::json;
-
-    fn opts() -> TtsOptions {
-        TtsOptions {
-            model: "cartesia/sonic-3".into(),
-            base_url: "https://gw/v1".into(),
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            ..Default::default()
-        }
-    }
-
-    fn tts(ws: Arc<FakeWs>) -> NativeTts {
-        NativeTts::new(opts(), ws, Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())))
-    }
-
-    fn map(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
-        pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
-    }
-
-    // Catches: an unbounded handshake, or one bounded on tokio's clock rather than the session's.
-    #[tokio::test]
-    async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_clock() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::hanging());
-        let tts = tts(ws.clone()).with_clock(clock.clone());
-        let mut source = tts.synthesize("hi").await.unwrap();
-
-        crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
-        let err = source.next().await.expect_err("the handshake never completed");
-        assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
-        assert!(err.retryable());
-        assert!(err.message().contains("connection timed out"), "{}", err.message());
-        assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
-    }
-
-    // Catches: bounding the handshake but not the first reply after text; later pauses stay legal.
-    #[tokio::test]
-    async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let tts = tts(ws.clone()).with_clock(clock.clone());
-        let mut source = tts.synthesize("hi").await.unwrap();
-
-        crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
-        let err = source.next().await.expect_err("the gateway never answered");
-        assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
-        assert!(err.retryable());
-        let sent = ws.sent_json();
-        assert_eq!(sent[0]["type"], json!("session.create"), "the socket did open");
-        assert_eq!(sent[1]["type"], json!("input_transcript"), "and the text went out");
-    }
-
-    fn pcm(n: usize) -> String {
-        base64::engine::general_purpose::STANDARD.encode(vec![1u8; n])
-    }
-
-    // Catches: `synthesize()` growing a second, one-shot implementation.
-    #[tokio::test]
-    async fn synthesize_is_the_duplex_path_with_one_push_and_an_end() {
-        let ws = Arc::new(FakeWs::new(vec![
-            text(json!({"type": "session.created", "session_id": "sess_1"})),
-            text(json!({"type": "output_audio", "audio": pcm(4)})),
-            text(json!({"type": "done"})),
-        ]));
-        let tts = tts(ws.clone());
-        let mut source = tts.synthesize("Hello there.").await.unwrap();
-        let first = source.next().await.unwrap().unwrap();
-        assert_eq!(&*first.frame.data, &[1u8; 4]);
-        assert_eq!(first.segment_id, "sess_1");
-        assert!(!first.is_final);
-        let last = source.next().await.unwrap().unwrap();
-        assert!(last.is_final);
-        assert!(source.next().await.unwrap().is_none());
-
-        let sent = ws.sent_json();
-        assert_eq!(sent[0]["type"], json!("session.create"));
-        assert_eq!(sent[1]["type"], json!("input_transcript"));
-        assert_eq!(sent[1]["transcript"], json!("Hello there. "));
-        assert_eq!(sent[2]["type"], json!("session.flush"));
-    }
-
-    // Catches: a socket opened, configured and closed per synthesis, which put the gateway's
-    // handshake and `session.create` before every reply's first audio. The reference's
-    // `ConnectionPool` hands a finished synthesis's socket to the next one.
-    #[tokio::test]
-    async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let tts = tts(ws.clone());
-        for _ in 0..2 {
-            ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
-            ws.feed(text(json!({"type": "done"})));
-            let mut source = tts.synthesize("Hello there.").await.unwrap();
-            while source.next().await.unwrap().is_some() {}
-            for _ in 0..16 {
-                tokio::task::yield_now().await;
-            }
-        }
-        assert_eq!(ws.connect_count(), 1, "one socket");
-        let creates = ws.sent_json().iter().filter(|f| f["type"] == json!("session.create")).count();
-        assert_eq!(creates, 1, "configured once: {:?}", ws.sent_json());
-    }
-
-    // Catches: frames without `USERDATA_TTS_STARTED_TIME`, so the session measured TTFB from the
-    // first token it pushed, sentence buffering included, and had no time to first sentence.
-    // `_mark_started()` stamps the first sentence sent.
-    #[tokio::test]
-    async fn frames_carry_the_instant_the_first_sentence_went_out() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let tts = tts(ws.clone()).with_clock(clock.clone());
-        let (sink, mut source) = tts.stream().await.unwrap();
-        sink.push("Hello there, this is".to_owned()).unwrap();
-        clock.advance(Duration::from_millis(300));
-        let sent_at = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-        sink.push(" the first sentence. And".to_owned()).unwrap();
-        until_sent(&ws, 2).await;
-        ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
-        let frame = source.next().await.unwrap().unwrap();
-        let started = frame.started_time.expect("the frame carries the stamp");
-        assert!((started - sent_at).abs() < 1e-3, "{started} != {sent_at}");
-    }
-
-    /// Yield until `ws` has recorded `n` frames (or give up), for send-side ordering tests.
-    async fn until_sent(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
-        for _ in 0..256 {
-            if ws.sent().len() >= n {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        ws.sent_json()
-    }
-
-    // Catches: holding sentences until `end_input` (or a flush), which makes time-to-first-audio
-    // carry the whole LLM generation. `_sentence_stream_task` sends each sentence as it arrives.
-    #[tokio::test]
-    async fn the_first_sentence_goes_out_before_end_input() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let tts = tts(ws.clone());
-        let (sink, _source) = tts.stream().await.unwrap();
-        for token in ["Hello there, this is", " the first sentence.", " And here comes", " the second"] {
-            sink.push(token.to_owned()).unwrap();
-        }
-
-        let sent = until_sent(&ws, 2).await;
-        assert_eq!(sent.len(), 2, "session.create, then the sentence, with the input open: {sent:?}");
-        assert_eq!(sent[0]["type"], json!("session.create"));
-        assert_eq!(sent[1]["type"], json!("input_transcript"));
-        assert_eq!(sent[1]["transcript"], json!("Hello there, this is the first sentence. "));
-
-        // A flush sends what the tokenizer holds; the wire's own flush waits for the end.
-        sink.flush().unwrap();
-        let sent = until_sent(&ws, 3).await;
-        assert_eq!(sent.len(), 3, "{sent:?}");
-        assert_eq!(sent[2]["transcript"], json!("And here comes the second "));
-
-        sink.end_input();
-        let sent = until_sent(&ws, 4).await;
-        assert_eq!(sent.len(), 4, "{sent:?}");
-        assert_eq!(sent[3], json!({"type": "session.flush"}), "one flush, at the end of input");
-    }
-
-    // Catches: the trailing space added twice, or short sentences sent alone instead of batched
-    // up to the tokenizer's floor.
-    #[tokio::test]
-    async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let tts = tts(ws.clone());
-        let (sink, _source) = tts.stream().await.unwrap();
-        for sentence in ["One. ", "Two! ", "Three? "] {
-            sink.push(sentence.to_owned()).unwrap();
-        }
-        sink.end_input();
-
-        let sent = until_sent(&ws, 3).await;
-        let transcripts: Vec<&str> = sent
-            .iter()
-            .filter(|v| v["type"] == json!("input_transcript"))
-            .map(|v| v["transcript"].as_str().unwrap())
-            .collect();
-        assert_eq!(transcripts, ["One. Two! Three? "]);
-    }
-
-    // Catches: an expressive synthesis sending standard markup instead of the provider's, or its
-    // bracket cues left in the alignment the transcript is synchronised against.
-    #[tokio::test]
-    async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignment() {
-        let ws = Arc::new(FakeWs::new(vec![
-            text(json!({"type": "session.created", "session_id": "sess_1"})),
-            text(json!({"type": "output_alignment", "words": [
-                {"word": "[laughs]", "start": 0.0, "end": 0.2},
-                {"word": "hi", "start": 0.2, "end": 0.4},
-            ]})),
-            text(json!({"type": "output_audio", "audio": pcm(4)})),
-            text(json!({"type": "done"})),
-        ]));
-        let mut opts = opts();
-        opts.model = "inworld/inworld-tts-2".into();
-        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-        let tts = NativeTts::new(opts, ws.clone(), spawner);
-        tts.set_expressive(true);
-        let mut source = tts
-            .synthesize("say <expr type=\"prosody\" label=\"whisper\">this</expr> now")
-            .await
-            .unwrap();
-        let mut words = Vec::new();
-        while let Some(audio) = source.next().await.unwrap() {
-            words.extend(audio.timed_transcript.into_iter().map(|t| t.text));
-        }
-        assert!(words.iter().all(|w| !w.contains('[')), "{words:?}");
-        let transcript = ws.sent_json()[1]["transcript"].as_str().unwrap().to_owned();
-        assert_eq!(transcript, "say [whisper]this now ", "converted to the provider's markup");
-    }
-
-    // Catches: the host's identification headers (the job's `X-LiveKit-*` identity) not reaching
-    // the socket, or the request id not derived from the host's session id.
-    #[tokio::test]
-    async fn a_stream_opened_with_identification_connects_with_those_headers() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let client = tts(ws.clone());
-        let ident: Headers = [
-            ("User-Agent", "LiveKit Agents/1 (python 3)"),
-            ("X-LiveKit-Room-ID", "RM_1"),
-            ("X-LiveKit-Job-ID", "AJ_1"),
-            ("X-LiveKit-Session-ID", "inference_abc"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-        .collect();
-        let (_sink, _source) = client.stream_identified(Some(ident)).unwrap();
-        until_sent(&ws, 1).await;
-        let (_, headers) = ws.last_connect().expect("connected");
-        let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
-        assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
-        assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
-        assert_eq!(get("X-LiveKit-Session-ID"), Some("inference_abc"));
-        assert_eq!(get("User-Agent"), Some("LiveKit Agents/1 (python 3)"), "the host's, not ours");
-        assert!(get("Authorization").is_some_and(|v| v.starts_with("Bearer ")));
-
-        // Without identification (no job): no `X-LiveKit-*` header at all.
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let (_sink, _source) = tts(ws.clone()).stream().await.unwrap();
-        until_sent(&ws, 1).await;
-        let (_, headers) = ws.last_connect().expect("connected");
-        let livekit: Vec<_> = headers.iter().filter(|(k, _)| k.starts_with("X-LiveKit-")).collect();
-        assert!(livekit.is_empty(), "{livekit:?}");
-    }
-
-    // Catches: never sending `session.flush` for an empty synthesis.
-    #[tokio::test]
-    async fn an_empty_synthesis_still_flushes_and_terminates() {
-        let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "done"}))]));
-        let tts = tts(ws.clone());
-        let mut source = tts.synthesize("").await.unwrap();
-        let last = source.next().await.unwrap().unwrap();
-        assert!(last.is_final);
-        let sent = ws.sent_json();
-        assert!(sent.iter().any(|v| v["type"] == json!("session.flush")));
-        assert!(
-            !sent.iter().any(|v| v["type"] == json!("input_transcript")),
-            "nothing to synthesise"
-        );
-    }
-
-    // Catches: dropping alignment that arrived before its audio.
-    #[tokio::test]
-    async fn alignment_rides_out_on_the_next_audio_frame() {
-        let ws = Arc::new(FakeWs::new(vec![
-            text(json!({"type": "output_alignment", "session_id": "s",
-                        "words": [{"word": "hi", "start": 0.0, "end": 0.2}]})),
-            text(json!({"type": "output_audio", "audio": pcm(2)})),
-            text(json!({"type": "done"})),
-        ]));
-        let tts = tts(ws);
-        let mut source = tts.synthesize("hi").await.unwrap();
-        let frame = source.next().await.unwrap().unwrap();
-        assert_eq!(frame.timed_transcript.len(), 1);
-        assert_eq!(frame.timed_transcript[0].text, "hi ", "cartesia re-adds the space");
-        let last = source.next().await.unwrap().unwrap();
-        assert!(last.timed_transcript.is_empty(), "already delivered");
-    }
-
-    // Catches: reporting a gateway `error` frame as a clean end of stream.
-    #[tokio::test]
-    async fn a_gateway_error_frame_fails_the_stream() {
-        let ws = Arc::new(FakeWs::new(vec![text(
-            json!({"type": "error", "message": "voice not found"}),
-        )]));
-        let tts = tts(ws);
-        let mut source = tts.synthesize("hi").await.unwrap();
-        let err = source.next().await.expect_err("the gateway said error");
-        assert!(err.message().contains("voice not found"), "{}", err.message());
-    }
-
-    // Catches: `update_options(extra_kwargs=...)` replacing rather than merging.
-    #[tokio::test]
-    async fn tts_update_options_merges_the_extra_kwargs() {
-        let tts = tts(Arc::new(FakeWs::new(vec![])));
-        tts.update_options(None, None, None, Some(&map(&[("add_timestamps", json!(true))]).into()));
-        assert!(tts.aligned_transcript());
-        tts.update_options(None, Some("bob"), None, Some(&map(&[("speed", json!(1.2))]).into()));
-        assert!(tts.aligned_transcript(), "the earlier flag survived the merge");
-    }
+fn connection_configuration(frame: &serde_json::Value, headers: &[(String, String)]) -> String {
+    let identity: Vec<_> =
+        headers.iter().filter(|(name, _)| !name.eq_ignore_ascii_case("authorization")).collect();
+    format!("{frame}|{}", serde_json::to_string(&identity).expect("string headers serialize"))
 }

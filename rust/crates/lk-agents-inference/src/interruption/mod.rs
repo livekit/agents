@@ -16,15 +16,15 @@ mod retry;
 pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
-pub use leg::InterruptionLeg;
 pub use core::{
-    InputEvent, InputOutcome, InterruptionCore, OverlapEnd, OverlapStart, RecvOutcome,
-    SpanAttributes, StreamError,
+    InputEvent, InputOutcome, InterruptionCore, InterruptionEffect, InterruptionEvent, OverlapEnd,
+    OverlapStart, RecvOutcome, RequestIdentity, SpanAttributes, StreamError,
 };
 pub use event::{
-    CacheEntry, InterruptionDetectionError, OverlappingSpeechEvent,
-    estimate_probability, interruption_metrics, overlapping_speech_from_cache_entry,
+    CacheEntry, InterruptionDetectionError, OverlappingSpeechEvent, estimate_probability,
+    interruption_metrics, overlapping_speech_from_cache_entry,
 };
+pub use leg::InterruptionLeg;
 pub use options::{
     AUDIO_PREFIX_DURATION, DETECTION_INTERVAL, FRAMES_PER_SECOND, InterruptionOptions,
     MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION, OptionsError, REMOTE_INFERENCE_TIMEOUT,
@@ -32,8 +32,8 @@ pub use options::{
 };
 pub use retry::{ConnectFailure, connect_error};
 pub use transport::{
-    AdaptiveInterruptionDetector, ConnectionConfig, DetectorEvent, InterruptionStream, StreamClosed,
-    StreamEvent,
+    AdaptiveInterruptionDetector, ConnectionConfig, DetectorEvent, InterruptionStream,
+    StreamClosed, StreamEvent,
 };
 
 /// `type(self).__module__ + "." + type(self).__name__` (`inference/interruption.py:342`), stamped

@@ -7,6 +7,7 @@
 mod chain;
 mod channel;
 mod llm;
+pub mod machine;
 pub mod policy;
 pub mod realtime;
 /// The realtime adapter's decisions, for a host that owns the model objects.
@@ -20,18 +21,21 @@ pub use chain::{
 };
 pub use llm::{FallbackLlm, LlmBackend};
 pub use policy::{
-    AfterOutput, ChainPolicy, bound_views, caller_default, conn_options_for_attempt,
-    conn_options_for_recovery, resampling_plan,
+    ChainPolicy, bound_views, caller_default, conn_options_for_attempt, conn_options_for_recovery,
+    resampling_plan,
 };
 pub use realtime::{
-    CapabilityMismatch, FallbackSession, RealtimeChild, RealtimeFallbackModel, merge_capabilities_of,
+    CapabilityMismatch, FallbackSession, RealtimeChild, RealtimeFallbackModel,
+    merge_capabilities_of,
 };
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};
 pub use stt::{
-    FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession, merge_capabilities as merge_stt_capabilities, stt_capabilities_for_host,
+    FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession,
+    merge_capabilities as merge_stt_capabilities, stt_capabilities_for_host,
 };
 pub use tts::{
-    FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq, merge_capabilities as merge_tts_capabilities, tts_capabilities_for_host,
+    FallbackTts, Token, TokenLog, TtsBackend, TtsChainError, TtsReq,
+    merge_capabilities as merge_tts_capabilities, tts_capabilities_for_host,
 };
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::metrics::base::InterruptionMetrics;
+use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{self, RequestKind, RetryDecision};
 use lk_agents_abi::{Clock, HostRef};
 use tokio::sync::{Notify, mpsc};
@@ -19,7 +20,8 @@ use tokio::task::JoinHandle;
 
 use crate::headers::HeaderProvider;
 use crate::interruption::core::{
-    InputEvent, InputOutcome, InterruptionCore, RecvOutcome, SpanAttributes, StreamError,
+    InputEvent, InterruptionCore, InterruptionEffect, InterruptionEvent, RequestIdentity,
+    SpanAttributes, StreamError,
 };
 use crate::interruption::event::{
     InterruptionDetectionError, OverlappingSpeechEvent, interruption_metrics,
@@ -182,7 +184,9 @@ impl AdaptiveInterruptionDetector {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Overlap(Box<OverlappingSpeechEvent>),
+    CorrelatedOverlap { request: ReqId, event: Box<OverlappingSpeechEvent> },
     Error(Box<InterruptionDetectionError>),
+    CorrelatedError { request: ReqId, error: Box<InterruptionDetectionError> },
     SpanUpdate { span: HostRef, attrs: SpanAttributes },
 }
 
@@ -208,24 +212,50 @@ impl StreamContext {
     }
 
     /// `self.send(ev)` plus `_metrics_monitor_task`'s fold, inline.
-    fn emit_overlap(&self, ev: OverlappingSpeechEvent) {
+    fn emit_overlap(&self, request: Option<ReqId>, ev: OverlappingSpeechEvent) {
         let metrics = interruption_metrics(&ev, self.wall(), MODEL, PROVIDER);
-        let _ = self.stream_events.send(StreamEvent::Overlap(Box::new(ev.clone())));
+        let event = match request {
+            Some(request) => {
+                StreamEvent::CorrelatedOverlap { request, event: Box::new(ev.clone()) }
+            }
+            None => StreamEvent::Overlap(Box::new(ev.clone())),
+        };
+        let _ = self.stream_events.send(event);
         if let Some(detector) = &self.detector_events {
             let _ = detector.send(DetectorEvent::OverlappingSpeech(Box::new(ev)));
             let _ = detector.send(DetectorEvent::MetricsCollected(Box::new(metrics)));
         }
     }
 
+    fn emit_effect(&self, effect: InterruptionEffect) -> Option<(RequestIdentity, Vec<i16>)> {
+        match effect {
+            InterruptionEffect::InterruptionInference { identity, samples } => {
+                Some((identity, samples))
+            }
+            InterruptionEffect::Overlap { request, event } => {
+                self.emit_overlap(request, *event);
+                None
+            }
+            InterruptionEffect::SpanUpdate { span, attrs } => {
+                let _ = self.stream_events.send(StreamEvent::SpanUpdate { span, attrs });
+                None
+            }
+        }
+    }
+
     /// The `"error"` channel, and the same failure on the stream's own channel.
-    fn emit_error(&self, error: ApiError, recoverable: bool) {
+    fn emit_error(&self, request: Option<ReqId>, error: ApiError, recoverable: bool) {
         let err = Box::new(InterruptionDetectionError {
             timestamp: self.wall(),
             label: LABEL.to_owned(),
             error,
             recoverable,
         });
-        let _ = self.stream_events.send(StreamEvent::Error(err.clone()));
+        let event = match request {
+            Some(request) => StreamEvent::CorrelatedError { request, error: err.clone() },
+            None => StreamEvent::Error(err.clone()),
+        };
+        let _ = self.stream_events.send(event);
         if let Some(detector) = &self.detector_events {
             let _ = detector.send(DetectorEvent::Error(err));
         }
@@ -288,8 +318,11 @@ impl InterruptionStream {
     /// `async for ev in stream`); [`recv_event`](Self::recv_event) yields all three.
     pub async fn recv(&mut self) -> Option<OverlappingSpeechEvent> {
         loop {
-            if let StreamEvent::Overlap(ev) = self.event_rx.recv().await? {
-                return Some(*ev);
+            match self.event_rx.recv().await? {
+                StreamEvent::Overlap(event) | StreamEvent::CorrelatedOverlap { event, .. } => {
+                    return Some(*event);
+                }
+                _ => {}
             }
         }
     }
@@ -307,24 +340,26 @@ impl InterruptionStream {
     /// task's exception belongs to the caller.
     pub async fn finish(mut self) -> Result<(), ApiError> {
         self.input_tx = None;
-        join_task(self.task).await
+        join_task(self.task).await?
     }
 
     /// `aclose()` -- cancel immediately, without waiting for the gateway to close back.
     pub async fn aclose(mut self) -> Result<(), ApiError> {
         self.input_tx = None;
         self.task.abort();
-        join_task(self.task).await
+        join_task(self.task).await.map(|_| ())
     }
 }
 
-/// Shared by [`InterruptionStream::finish`] and [`InterruptionStream::aclose`]: a cancelled task
-/// is a *successful* close (that is what `aclose` asks for), and a panicked one is not.
-async fn join_task(task: JoinHandle<Result<(), ApiError>>) -> Result<(), ApiError> {
+/// Joining settles the task separately from the provider's operation result. `finish`
+/// retrieves that result; `aclose` only owns cancellation and settlement.
+async fn join_task(
+    task: JoinHandle<Result<(), ApiError>>,
+) -> Result<Result<(), ApiError>, ApiError> {
     match task.await {
-        Ok(res) => res,
-        Err(e) if e.is_cancelled() => Ok(()),
-        Err(e) => Err(ApiError::new(format!("interruption stream task panicked: {e}"))),
+        Ok(result) => Ok(result),
+        Err(error) if error.is_cancelled() => Ok(Ok(())),
+        Err(error) => Err(ApiError::new(format!("interruption stream task panicked: {error}"))),
     }
 }
 
@@ -341,6 +376,7 @@ async fn main_task(
     result
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 async fn main_task_inner(
     ctx: &StreamContext,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
@@ -363,15 +399,15 @@ async fn main_task_inner(
             false,
         ) {
             RetryDecision::Stop | RetryDecision::Raise => {
-                ctx.emit_error(err.error.clone(), false);
+                ctx.emit_error(err.request, err.error.clone(), false);
                 return Err(err.error);
             }
             RetryDecision::Exhausted(message) => {
-                ctx.emit_error(err.error, false);
+                ctx.emit_error(err.request, err.error, false);
                 return Err(ApiError::connection(Some(message)));
             }
             RetryDecision::Retry(after) => {
-                ctx.emit_error(err.error, true);
+                ctx.emit_error(err.request, err.error, true);
                 // On the session's clock.
                 let resume = ctx.clock.now().saturating_add(Duration::from_secs_f64(after));
                 ctx.clock.wait_until(resume).await;
@@ -413,38 +449,62 @@ async fn run_once(
     socket: Socket,
 ) -> Result<bool, StreamError> {
     let Socket { sender: sink, receiver: mut source } = socket;
+    let opened = core.lock().unwrap().handle(
+        InterruptionEvent::ConnectionOpened,
+        ctx.clock.now(),
+        ctx.wall(),
+    );
+    if let Err(error) = opened {
+        sink.close().await;
+        return Err(error);
+    }
+    let connection = core.lock().unwrap().connection();
     let (data_tx, data_rx) = mpsc::unbounded_channel();
     // `closing_ws`: per connection, reset on reconnect; tells an orderly shutdown from a hang-up.
     let closing = Arc::new(AtomicBool::new(false));
-    let mut send_task = tokio::spawn(send_task(
-        ctx.clone(),
-        core.clone(),
-        Arc::clone(&sink),
-        data_rx,
-        closing.clone(),
-    ));
+    let mut send_task =
+        tokio::spawn(send_task(core.clone(), Arc::clone(&sink), data_rx, closing.clone()));
+    let mut send_finished = false;
     let mut input_open = true;
     let mut data_tx = Some(data_tx);
 
     let outcome = loop {
+        let deadline = core.lock().unwrap().next_deadline();
+        let inference_deadline = async {
+            match deadline {
+                Some(deadline) => ctx.clock.wait_until(deadline).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         tokio::select! {
             // Biased: a verdict closes the overlap and must not be raced by audio that would open
             // another request.
             biased;
 
+            _ = inference_deadline => {
+                let outcome = core.lock().unwrap().handle(
+                    InterruptionEvent::Deadline, ctx.clock.now(), ctx.wall(),
+                );
+                if let Err(error) = outcome {
+                    break Err(error);
+                }
+            }
             msg = source.recv() => {
                 let code = source.close_code();
-                match handle_incoming(ctx, core, msg, code, &closing)? {
-                    Incoming::Continue => {}
+                match handle_incoming(ctx, core, connection, msg, code, &closing) {
+                    Err(error) => break Err(error),
+                    Ok(Incoming::Continue) => {}
                     // The gateway closed after we asked it to: this is the orderly end.
-                    Incoming::Closed => break Ok(false),
+                    Ok(Incoming::Closed) => break Ok(false),
                 }
             }
             joined = &mut send_task => {
+                send_finished = true;
                 break match joined {
                     Ok(Ok(())) => Ok(false),
                     Ok(Err(e)) => Err(e),
                     Err(e) => Err(StreamError {
+                        request: None,
                         error: ApiError::new(format!("interruption send task panicked: {e}")),
                         body: None,
                     }),
@@ -456,22 +516,18 @@ async fn run_once(
                     let wall = ctx.wall();
                     let outcome = {
                         let mut core = core.lock().unwrap();
-                        core.on_input(ev, wall)
+                        core.handle(InterruptionEvent::Input(ev), ctx.clock.now(), wall)
                     };
                     match outcome {
-                        Ok(Some(InputOutcome::Infer(samples))) => {
-                            if let Some(tx) = &data_tx {
-                                let _ = tx.send(samples);
+                        Ok(effects) => {
+                            for effect in effects {
+                                if let Some(request) = ctx.emit_effect(effect)
+                                    && let Some(tx) = &data_tx {
+                                    let _ = tx.send(request);
+                                }
                             }
                         }
-                        Ok(Some(InputOutcome::Overlap(ev))) => ctx.emit_overlap(*ev),
-                        Ok(None) => {}
-                        // `AudioArrayBuffer.push_frame` raises `ValueError`: non-recoverable, a
-                        // caller bug a reconnect cannot fix.
-                        Err(e) => break Err(StreamError {
-                            error: ApiError::new(e.to_string()).with_retryable(false),
-                            body: None,
-                        }),
+                        Err(error) => break Err(error),
                     }
                 }
                 // `output_ch.close()` at the end of `_forward_data`: the send task drains what is
@@ -485,8 +541,16 @@ async fn run_once(
     };
 
     send_task.abort();
+    if !send_finished {
+        let _ = send_task.await;
+    }
     sink.close().await;
-    outcome
+    outcome.map_err(|mut error| {
+        if error.request.is_none() {
+            error.request = core.lock().unwrap().overlap_request();
+        }
+        error
+    })
 }
 
 enum Incoming {
@@ -498,6 +562,7 @@ enum Incoming {
 fn handle_incoming(
     ctx: &StreamContext,
     core: &Arc<Mutex<InterruptionCore>>,
+    connection: u64,
     msg: Result<WsMessage, TransportError>,
     close_code: Option<u16>,
     closing: &AtomicBool,
@@ -516,6 +581,7 @@ fn handle_incoming(
         Ok(WsMessage::Other) => return Ok(Incoming::Continue),
         Err(e) => {
             return Err(StreamError {
+                request: None,
                 error: ApiError::connection(Some(format!(
                     "LiveKit Adaptive Interruption connection error: {e}"
                 ))),
@@ -526,6 +592,7 @@ fn handle_incoming(
 
     // An unknown `type` is a `ValidationError` in the reference and takes the connection down.
     let parsed: ServerMessage = serde_json::from_str(&msg).map_err(|e| StreamError {
+        request: None,
         error: ApiError::new(format!("failed to parse LiveKit Adaptive Interruption message: {e}"))
             .with_retryable(false),
         body: Some(msg.to_string()),
@@ -533,15 +600,13 @@ fn handle_incoming(
 
     let now = ctx.clock.now();
     let wall = ctx.wall();
-    let outcome = core.lock().unwrap().on_server_message(parsed, now, wall)?;
-    match outcome {
-        RecvOutcome::Detected { span_update, event } => {
-            if let Some((span, attrs)) = span_update {
-                let _ = ctx.stream_events.send(StreamEvent::SpanUpdate { span, attrs });
-            }
-            ctx.emit_overlap(*event);
-        }
-        RecvOutcome::Ignored => {}
+    let effects = core.lock().unwrap().handle(
+        InterruptionEvent::ServerMessage { connection, message: parsed },
+        now,
+        wall,
+    )?;
+    for effect in effects {
+        ctx.emit_effect(effect);
     }
     Ok(Incoming::Continue)
 }
@@ -549,21 +614,17 @@ fn handle_incoming(
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `send_task` (`inference/interruption.py:796`).
 async fn send_task(
-    ctx: StreamContext,
     core: Arc<Mutex<InterruptionCore>>,
     sink: Arc<dyn WsSender>,
-    mut data_rx: mpsc::UnboundedReceiver<Vec<i16>>,
+    mut data_rx: mpsc::UnboundedReceiver<(RequestIdentity, Vec<i16>)>,
     closing: Arc<AtomicBool>,
 ) -> Result<(), StreamError> {
-    while let Some(samples) = data_rx.recv().await {
-        let now = ctx.clock.now();
-        core.lock().unwrap().check_inflight_timeout(now)?;
-
-        // Stamped just before the write, so the round trip excludes queueing time.
-        let created_at = ctx.clock.now();
-        let payload = frame_request(created_at.as_nanos(), &samples);
+    while let Some((identity, samples)) = data_rx.recv().await {
+        if !core.lock().unwrap().request_eligible(identity) {
+            continue;
+        }
+        let payload = frame_request(identity.request_id, &samples);
         sink.send_binary(payload).await.map_err(send_failed)?;
-        core.lock().unwrap().record_request(created_at, samples);
     }
 
     closing.store(true, Ordering::Release);
@@ -575,6 +636,7 @@ async fn send_task(
 
 fn send_failed(e: TransportError) -> StreamError {
     StreamError {
+        request: None,
         error: ApiError::connection(Some(format!(
             "failed to send to LiveKit Adaptive Interruption: {e}"
         ))),
@@ -605,6 +667,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     let now_unix = ctx.clock.wall().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_secs();
     let token = create_access_token(&api_key, &api_secret, ctx.config.token_ttl_secs, now_unix)
         .map_err(|e| StreamError {
+            request: None,
             error: ApiError::new(format!("failed to mint an inference access token: {e}"))
                 .with_retryable(false),
             body: None,
@@ -615,6 +678,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
         if let Err(e) = url.as_str().into_client_request() {
             return Err(StreamError {
+                request: None,
                 error: ApiError::new(format!("invalid inference base_url {url:?}: {e}"))
                     .with_retryable(false),
                 body: None,
@@ -631,16 +695,22 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     let connect = ctx.config.transport.connect(&url, headers);
     let (sender, receiver) = match lk_agents_abi::timeout(&*ctx.clock, timeout, connect).await {
         Err(_) | Ok(Err(TransportError::Timeout)) => {
-            return Err(StreamError { error: connect_error(ConnectFailure::Timeout), body: None });
+            return Err(StreamError {
+                request: None,
+                error: connect_error(ConnectFailure::Timeout),
+                body: None,
+            });
         }
         Ok(Err(TransportError::Status { status, .. })) => {
             return Err(StreamError {
+                request: None,
                 error: connect_error(ConnectFailure::Http { status }),
                 body: None,
             });
         }
         Ok(Err(_other)) => {
             return Err(StreamError {
+                request: None,
                 error: connect_error(ConnectFailure::Transport),
                 body: None,
             });
@@ -654,7 +724,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     if sender.send_text(json).await.is_err() {
         // `await ws.close()` before raising, or the half-open socket lingers through the retries.
         sender.close().await;
-        return Err(StreamError { error: session_create_failed(), body: None });
+        return Err(StreamError { request: None, error: session_create_failed(), body: None });
     }
     Ok(Socket { sender, receiver })
 }

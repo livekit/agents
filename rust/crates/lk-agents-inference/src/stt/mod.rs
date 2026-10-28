@@ -1,7 +1,8 @@
-//! `inference/stt.py` -- the gateway STT, WebSocket + JSON (§1.4). `SpeechStream._run`'s three
-//! tasks (send, recv and the client-side VAD finalize) are independent loops; `select!` only
-//! decides whose termination tears the socket down.
+//! Gateway STT adapter. `lifecycle` owns synchronous completion decisions, `machine` builds
+//! speech observations, and `wire` validates gateway messages. This module executes socket and
+//! media work and owns stream cancellation, bounded queues and pump settlement.
 
+pub mod lifecycle;
 pub mod machine;
 pub mod options;
 #[cfg(feature = "python")]
@@ -11,30 +12,27 @@ pub mod wire;
 use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::transport::{
-    TransportError, WsMessage, WsSender, WsTransport, connect_error, next_terminal, open_ws,
-    stream_closed, to_ws_url, within,
+    TransportError, WsMessage, WsSender, WsTransport, connect_error, open_ws, stream_closed,
+    to_ws_url, within,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
-use lk_agents_abi::{Spawner, SpawnerExt};
+use lifecycle::{SttEffect, SttEvent, SttProtocol};
 use lk_agents_abi::AudioByteStream;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
-use machine::TranscriptMachine;
-use options::FallbackModel;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision, decide};
+use lk_agents_abi::{ApiConnectOptions, Clock, RealClock, SpeechEvent};
+use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
+use options::FallbackModel;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
 
-/// Once the input ended, how long the stream waits for the gateway's transcripts before it ends:
-/// `FINALIZATION_TIMEOUT` with none yet or after an interim, `FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT`
-/// after a final. The gateway does not close the socket on `session.finalize`.
-const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
-const FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(3);
+/// Maximum settlement time after audio EOF. Silence at expiry is a failure, never clean EOF.
+pub(super) const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.
 const MAX_AGENT_CONTEXT_CHARS: usize = 1750;
@@ -154,8 +152,11 @@ impl NativeStt {
         headers: Headers,
         reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
     ) -> NativeStt {
-        let view =
-            NativeStt { shared: Arc::clone(&self.shared), identity: BoundIdentity::default(), reporter };
+        let view = NativeStt {
+            shared: Arc::clone(&self.shared),
+            identity: BoundIdentity::default(),
+            reporter,
+        };
         view.identity.bind(headers);
         view
     }
@@ -166,7 +167,6 @@ impl NativeStt {
         self.identity.bind(headers);
         self
     }
-
 
     /// The client as the provider a session holds directly.
     pub fn as_stt(self: &Arc<Self>) -> Arc<dyn Stt> {
@@ -217,13 +217,17 @@ impl NativeStt {
             if let Some(parsed) = parsed_language
                 && language.is_none()
             {
-                opts.language =
-                    Some(lk_agents_abi::tokenize::language::LanguageCode::new(parsed).as_str().to_owned());
+                opts.language = Some(
+                    lk_agents_abi::tokenize::language::LanguageCode::new(parsed)
+                        .as_str()
+                        .to_owned(),
+                );
             }
         }
         if let Some(language) = language {
-            opts.language =
-                Some(lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned());
+            opts.language = Some(
+                lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned(),
+            );
         }
         if let Some(extra) = extra {
             for (k, v) in extra.iter() {
@@ -279,7 +283,8 @@ impl NativeStt {
     /// `agent_context` on a model that carries it.
     #[host(method)]
     pub fn push_conversation_item(&self, role: &str, text: &str) {
-        if role != "assistant" || text.is_empty() || !self.capabilities.lock().unwrap().chat_context {
+        if role != "assistant" || text.is_empty() || !self.capabilities.lock().unwrap().chat_context
+        {
             return;
         }
         let tail: String = {
@@ -318,8 +323,9 @@ impl NativeStt {
     fn sanitize(&self, language: Option<&str>) -> SttOptions {
         let mut opts = self.opts.lock().unwrap().clone();
         if let Some(language) = language {
-            opts.language =
-                Some(lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned());
+            opts.language = Some(
+                lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned(),
+            );
         }
         opts
     }
@@ -327,7 +333,11 @@ impl NativeStt {
     /// Open a stream. Synchronous: the pump task opens the socket. `start_time_offset` shifts its
     /// timestamps onto the caller's input timeline.
     #[host(method(name = "stream", stream = InferenceSttStream, kw_only))]
-    pub fn stream_for_host(&self, language: Option<&str>, start_time_offset: Option<f64>) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
+    pub fn stream_for_host(
+        &self,
+        language: Option<&str>,
+        start_time_offset: Option<f64>,
+    ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
         self.stream_native(language, start_time_offset.unwrap_or(0.0))
     }
 
@@ -338,12 +348,25 @@ impl NativeStt {
         start_time_offset: f64,
     ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
         let opts = self.sanitize(language);
+        opts.conn_options
+            .validate()
+            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         let keyterms = self.session_keyterms.lock().unwrap().clone();
 
-        let (audio_tx, audio_rx) = mpsc::unbounded_channel::<SinkCmd>();
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<Result<SpeechEvent, ApiError>>();
-        let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+        let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
+        let (event_tx, event_rx) =
+            mpsc::channel::<Result<SpeechEvent, ApiError>>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
+        let (update_tx, update_rx) =
+            mpsc::channel::<serde_json::Value>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let (ended, ended_rx) = tokio::sync::watch::channel(false);
+        let (failure, failure_rx) = tokio::sync::watch::channel(None);
+        let (done, done_rx) = tokio::sync::oneshot::channel();
         let control = Arc::new(StreamControl {
+            stop: stop.clone(),
+            ended,
+            failure,
+
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra::default()),
         });
@@ -362,12 +385,25 @@ impl NativeStt {
             deferred: control.deferred.clone(),
             update_tx,
             event_tx,
+            stop: stop_rx,
+            ended: ended_rx,
+            accepted: self.clock.now(),
         };
-        self.spawner.spawn_unboxed(pump.run());
+        self.spawner.spawn_unboxed(async move {
+            pump.run().await;
+            let _ = done.send(());
+        });
 
         Ok((
             SttSinkHandle { audio: audio_tx, control },
-            SttSourceHandle { events: event_rx, done: false },
+            SttSourceHandle {
+                events: event_rx,
+                done: false,
+                stop,
+                joined: done_rx,
+                failure: failure_rx,
+                clock: self.clock.clone(),
+            },
         ))
     }
 }
@@ -386,7 +422,11 @@ impl Stt for NativeStt {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId { label: Stt::label(self), model: self.model(), provider: "livekit".into() }
+        lk_agents_abi::ProviderId {
+            label: Stt::label(self),
+            model: self.model(),
+            provider: "livekit".into(),
+        }
     }
 
     fn update_keyterms(&self, keyterms: &[String]) {
@@ -435,7 +475,6 @@ enum SinkCmd {
     Frame(AudioFrame),
     /// The `_FlushSentinel`: emit whatever the re-framer is holding, without ending the session.
     Flush,
-    End,
 }
 
 /// A keyterm change that arrived mid-utterance, deferred to `END_OF_SPEECH`: "the gateway may
@@ -447,7 +486,7 @@ struct DeferredExtra {
 }
 
 pub struct SttSinkHandle {
-    audio: mpsc::UnboundedSender<SinkCmd>,
+    audio: mpsc::Sender<SinkCmd>,
     control: Arc<StreamControl>,
 }
 
@@ -468,7 +507,10 @@ impl SttSinkHandle {
 
 /// What reaches a live stream from its client: `session.update` frames and deferred keyterms.
 struct StreamControl {
-    updates: mpsc::UnboundedSender<serde_json::Value>,
+    stop: tokio::sync::watch::Sender<bool>,
+    ended: tokio::sync::watch::Sender<bool>,
+    failure: tokio::sync::watch::Sender<Option<ApiError>>,
+    updates: mpsc::Sender<serde_json::Value>,
     deferred: Arc<DeferredExtra>,
 }
 
@@ -484,9 +526,18 @@ impl StreamControl {
             // An explicit `extra` clears any deferred keyterm change (`_pending_extra = None`).
             *self.deferred.pending.lock().unwrap() = None;
         }
-        if let Some(frame) = wire::session_update(model, language, extra) {
-            let _ = self.updates.send(frame);
+        if let Some(frame) = wire::session_update(model, language, extra)
+            && self.updates.try_send(frame).is_err()
+        {
+            self.fail_overflow();
         }
+    }
+
+    fn fail_overflow(&self) {
+        self.failure.send_replace(Some(
+            ApiError::new("STT input queue capacity exceeded").with_retryable(false),
+        ));
+        self.stop.send_replace(true);
     }
 
     /// Now if the user is silent, at end of speech if not.
@@ -510,16 +561,23 @@ impl StreamSink<AudioFrame> for SttSinkHandle {
 
     fn end_input(&self) {
         // A stream that is already gone has already ended its input.
-        let _ = self.audio.send(SinkCmd::End);
+        self.control.ended.send_replace(true);
     }
 }
 
 impl SttSinkHandle {
     fn send(&self, cmd: SinkCmd) -> Result<(), ProviderError> {
-        self.audio.send(cmd).map_err(|_| stream_closed(WHAT))
+        if *self.control.ended.borrow() || *self.control.stop.borrow() {
+            return Err(stream_closed(WHAT));
+        }
+        self.audio.try_send(cmd).map_err(|error| {
+            if matches!(error, mpsc::error::TrySendError::Full(_)) {
+                self.control.fail_overflow();
+            }
+            stream_closed(WHAT)
+        })
     }
 }
-
 /// The gateway stream's drain half, handed to the host as `InferenceSttStream` beside its sink.
 #[lk_agents_abi::host(stream(name = "InferenceSttStream", doc = "One live recognition session.", sink = crate::stt::SttSinkHandle,
     input = AudioFrame, input_py = "rtc.AudioFrame",
@@ -528,21 +586,52 @@ impl SttSinkHandle {
     stub = "def apply_keyterms(self, extra: dict[str, Any]) -> None: ...",
     stub = "def update_options(\n    self,\n    *,\n    model: str | None = None,\n    language: str | None = None,\n    extra: dict[str, Any] | None = None,\n) -> None: ..."))]
 pub struct SttSourceHandle {
-    events: mpsc::UnboundedReceiver<Result<SpeechEvent, ApiError>>,
+    events: mpsc::Receiver<Result<SpeechEvent, ApiError>>,
     done: bool,
+    stop: tokio::sync::watch::Sender<bool>,
+    joined: tokio::sync::oneshot::Receiver<()>,
+    failure: tokio::sync::watch::Receiver<Option<ApiError>>,
+    clock: Arc<dyn Clock>,
 }
 
 #[async_trait]
 impl StreamSource<SpeechEvent> for SttSourceHandle {
     async fn next(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
-        next_terminal(&mut self.events, &mut self.done).await
+        if self.done {
+            return Ok(None);
+        }
+        match self.events.recv().await {
+            Some(Ok(event)) => Ok(Some(event)),
+            Some(Err(error)) => {
+                self.done = true;
+                Err(error.into())
+            }
+            None => {
+                self.done = true;
+                match self.failure.borrow().clone() {
+                    Some(error) => Err(error.into()),
+                    None => Ok(None),
+                }
+            }
+        }
     }
 
-    /// Nothing here awaits the network, so the deadline is not consulted.
-    async fn close(mut self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
+    async fn close(mut self: Box<Self>, deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
         self.done = true;
+        self.stop.send_replace(true);
         self.events.close();
-        lk_agents_abi::Closed::Clean
+        let mut settled = false;
+        let mut closed = lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async {
+            settled = (&mut self.joined).await.is_ok();
+        })
+        .await;
+        if !settled {
+            closed = lk_agents_abi::Closed::TimedOut;
+        }
+        if closed == lk_agents_abi::Closed::TimedOut {
+            log::error!("STT pump cleanup incomplete; pump remains owned until settlement");
+        }
+        closed
     }
 }
 
@@ -560,11 +649,14 @@ struct Pump {
     /// Seconds added to every timestamp: the caller's, plus the time spent on failed attempts, so
     /// transcripts stay on one linear timeline across reconnects.
     offset: f64,
-    audio_rx: mpsc::UnboundedReceiver<SinkCmd>,
-    update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
+    audio_rx: mpsc::Receiver<SinkCmd>,
+    update_rx: mpsc::Receiver<serde_json::Value>,
     deferred: Arc<DeferredExtra>,
-    update_tx: mpsc::UnboundedSender<serde_json::Value>,
-    event_tx: mpsc::UnboundedSender<Result<SpeechEvent, ApiError>>,
+    update_tx: mpsc::Sender<serde_json::Value>,
+    event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
+    stop: tokio::sync::watch::Receiver<bool>,
+    ended: tokio::sync::watch::Receiver<bool>,
+    accepted: lk_agents_abi::Ts,
 }
 
 impl Pump {
@@ -576,6 +668,9 @@ impl Pump {
         let mut retries = 0u32;
         let mut last_start = self.clock.now();
         loop {
+            if *self.stop.borrow() {
+                return;
+            }
             let started = self.clock.now();
             self.offset += started.saturating_duration_since(last_start).as_secs_f64();
             last_start = started;
@@ -598,30 +693,33 @@ impl Pump {
                         stt = "livekit.agents.inference.stt.STT", attempt = retries;
                         "failed to recognize speech: {err}, retrying in {delay}s"
                     );
-                    let at = self.clock.now().saturating_add(Duration::from_secs_f64(delay.max(0.0)));
+                    let at =
+                        self.clock.now().saturating_add(Duration::from_secs_f64(delay.max(0.0)));
                     self.clock.wait_until(at).await;
                     retries += 1;
                 }
                 RetryDecision::Exhausted(message) => {
-                    let _ = self.event_tx.send(Err(ApiError::connection(Some(message))));
+                    let _ = self.event_tx.send(Err(ApiError::connection(Some(message)))).await;
                     return;
                 }
                 RetryDecision::Stop | RetryDecision::Raise => {
-                    let _ = self.event_tx.send(Err(err));
+                    let _ = self.event_tx.send(Err(err)).await;
                     return;
                 }
             }
         }
     }
-
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self, timeout: Duration) -> Result<(), ApiError> {
         let headers = gateway_headers(
-            self.identification.as_ref().map(|h| {
-                let mut h = h.clone();
-                h.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
-                h
-            }).as_ref(),
+            self.identification
+                .as_ref()
+                .map(|h| {
+                    let mut h = h.clone();
+                    h.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
+                    h
+                })
+                .as_ref(),
             None,
             None,
             &self.opts.api_key,
@@ -638,6 +736,28 @@ impl Pump {
             to_ws_url(&self.opts.base_url),
             self.opts.model.as_deref().unwrap_or("")
         );
+        // `_speech_duration`: written by send, read by recv.
+        let machine = Arc::new(Mutex::new(SttProtocol::new(
+            0,
+            lk_agents_abi::resources::ResourceId(0),
+            request_id,
+            self.opts.language.as_deref(),
+            FINALIZATION_TIMEOUT,
+            self.opts
+                .conn_options
+                .total_timeout
+                .map(|seconds| self.accepted.saturating_add(Duration::from_secs_f64(seconds))),
+        )));
+        let opening = machine.lock().unwrap().handle(SttEvent::Start, self.clock.now());
+        if !opening.iter().any(|effect| matches!(effect, SttEffect::SttStreamOpen { .. })) {
+            return opening
+                .into_iter()
+                .find_map(|effect| match effect {
+                    SttEffect::Finished(result) => Some(result),
+                    _ => None,
+                })
+                .unwrap_or(Ok(()));
+        }
         let (sender, mut receiver) = open_ws(
             self.ws.as_ref(),
             &url,
@@ -654,75 +774,92 @@ impl Pump {
             Some(vad) => vad.stream().await.ok(),
             None => None,
         };
-        let (vad_sink, vad_source) = match vad_stream {
+        let (vad_sink, mut vad_source) = match vad_stream {
             Some((sink, source)) => (Some(sink), Some(source)),
             None => (None, None),
         };
-
-        // `_speech_duration`: written by send, read by recv.
-        let machine = Arc::new(Mutex::new(TranscriptMachine::new(
-            request_id,
-            self.opts.language.as_deref(),
-        )));
-        let closing = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (drain, drain_rx) =
-            tokio::sync::watch::channel(self.clock.now().saturating_add(FINALIZATION_TIMEOUT));
 
         let send = Self::send_loop(
             sender.clone(),
             &mut self.audio_rx,
             &mut self.update_rx,
+            &mut self.ended,
             vad_sink,
             self.opts.sample_rate,
             machine.clone(),
-            closing.clone(),
-            (drain_rx, self.clock.clone()),
+            self.clock.clone(),
         );
         let recv = Self::recv_loop(
             receiver.as_mut(),
-            machine,
+            machine.clone(),
             RecvCtx {
                 event_tx: self.event_tx.clone(),
-                closing: closing.clone(),
                 deferred: self.deferred.clone(),
                 update_tx: self.update_tx.clone(),
                 clock: self.clock.clone(),
                 first_message_timeout: timeout,
                 offset: self.offset,
-                drain,
             },
         );
-        let finalize = Self::vad_finalize_loop(sender.clone(), vad_source);
+        let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
 
-        // The reference gathers the tasks and cancels the rest when one finishes.
+        let deadline = machine.lock().unwrap().wake_at();
+        let total_timer = async {
+            match deadline {
+                Some(deadline) => self.clock.wait_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        };
         let outcome = tokio::select! {
+            _ = self.stop.wait_for(|stop| *stop) => Ok(()),
+            _ = total_timer => {
+                machine.lock().unwrap().handle(SttEvent::Wake, self.clock.now()).into_iter().find_map(|effect| match effect {
+                    SttEffect::Finished(result) => Some(result), _ => None
+                }).unwrap_or_else(|| Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).with_retryable(false)))
+            },
             r = send => r,
             r = recv => r,
             r = finalize => r,
         };
         sender.close().await;
-        outcome
+        if let Some(source) = vad_source {
+            let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+            if source.close(deadline).await == lk_agents_abi::Closed::TimedOut {
+                log::error!("STT VAD cleanup incomplete");
+            }
+        }
+        outcome.map_err(|error| {
+            if machine.lock().unwrap().replay_safe() { error } else { error.with_retryable(false) }
+        })
     }
-
     async fn send_loop(
         sender: Arc<dyn WsSender>,
-        audio_rx: &mut mpsc::UnboundedReceiver<SinkCmd>,
-        update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        audio_rx: &mut mpsc::Receiver<SinkCmd>,
+        update_rx: &mut mpsc::Receiver<serde_json::Value>,
+        ended: &mut tokio::sync::watch::Receiver<bool>,
         mut vad_sink: Option<crate::abi::VadSink>,
         sample_rate: u32,
-        machine: Arc<Mutex<TranscriptMachine>>,
-        closing: Arc<std::sync::atomic::AtomicBool>,
-        (mut drain, clock): (tokio::sync::watch::Receiver<lk_agents_abi::Ts>, Arc<dyn Clock>),
+        machine: Arc<Mutex<SttProtocol>>,
+        clock: Arc<dyn Clock>,
     ) -> Result<(), ApiError> {
         // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
         let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
         // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
         let mut resampler = FrameResampler::new(sample_rate, Quality::High, OnChange::Drain);
 
+        if *ended.borrow() {
+            audio_rx.close();
+        }
+        let mut ending = false;
+        let mut audio = String::new();
         loop {
             let item = tokio::select! {
                 // Biased so a pending `session.update` is not starved by continuous audio.
                 biased;
+                changed = ended.changed(), if !audio_rx.is_closed() => {
+                    if changed.is_err() || *ended.borrow() { audio_rx.close(); }
+                    continue;
+                }
                 Some(frame) = update_rx.recv() => {
                     // "failed to send session.update, ws may be closing" -- swallowed, as in the
                     // reference.
@@ -739,33 +876,59 @@ impl Pump {
                     if let Some(sink) = vad_sink.as_mut() {
                         let _ = sink.push(frame.clone());
                     }
-                    let resampled = resampler
-                        .push(&frame)
-                        .map_err(|e| ApiError::new(format!("{WHAT}: {e}")).with_retryable(false))?;
-                    resampled.iter().flat_map(|f| bstream.push(&f.data)).collect()
+                    let samples = usize::try_from(frame.sample_rate / 20).unwrap_or(0).max(1);
+                    let stride = usize::from(frame.num_channels) * 2;
+                    if stride == 0 || frame.sample_rate == 0 || frame.data.len() % stride != 0 {
+                        return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
+                    }
+                    let mut frames = Vec::new();
+                    for bytes in frame.data.chunks(samples * stride) {
+                        let chunk = AudioFrame::new(
+                            bytes,
+                            frame.sample_rate,
+                            frame.num_channels,
+                            (bytes.len() / stride) as u32,
+                        );
+                        let resampled = resampler.push(&chunk).map_err(|error| {
+                            ApiError::new(error.to_string()).with_retryable(false)
+                        })?;
+                        frames.extend(resampled.iter().flat_map(|frame| bstream.push(&frame.data)));
+                        tokio::task::yield_now().await;
+                    }
+                    frames
                 }
                 Some(SinkCmd::Flush) => {
-                    let tail = resampler.flush().ok().flatten();
-                    let mut frames: Vec<_> = tail.iter().flat_map(|f| bstream.push(&f.data)).collect();
+                    let tail = resampler
+                        .flush()
+                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                    let mut frames: Vec<_> =
+                        tail.iter().flat_map(|f| bstream.push(&f.data)).collect();
                     frames.extend(bstream.flush());
                     frames
                 }
                 // `end_input()` or a dropped sink: both end the send half.
-                Some(SinkCmd::End) | None => break,
+                None => {
+                    ending = true;
+                    let tail = resampler
+                        .flush()
+                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+                    let mut frames: Vec<_> =
+                        tail.iter().flat_map(|frame| bstream.push(&frame.data)).collect();
+                    frames.extend(bstream.flush());
+                    frames
+                }
             };
 
             for frame in frames {
-                machine
-                    .lock()
-                    .unwrap()
-                    .record_audio(f64::from(frame.samples_per_channel) / f64::from(sample_rate));
-                let audio = base64::engine::general_purpose::STANDARD.encode(&frame.data);
+                machine.lock().unwrap().handle(
+                    SttEvent::AudioWritten(
+                        f64::from(frame.samples_per_channel) / f64::from(sample_rate),
+                    ),
+                    clock.now(),
+                );
+                audio.clear();
+                base64::engine::general_purpose::STANDARD.encode_string(&frame.data, &mut audio);
                 if let Err(err) = sender.send_text(wire::input_audio(&audio).to_string()).await {
-                    // `if closing_ws or http_session.closed: return` -- a send failure during
-                    // teardown is normal.
-                    if closing.load(std::sync::atomic::Ordering::SeqCst) {
-                        return Ok(());
-                    }
                     return Err(match err {
                         TransportError::Closed => ApiError::connection(Some(format!(
                             "{WHAT} connection closed unexpectedly"
@@ -774,107 +937,121 @@ impl Pump {
                     });
                 }
             }
+            if ending {
+                break;
+            }
         }
 
         if let Some(sink) = vad_sink.as_mut() {
             sink.end_input();
         }
-        closing.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = sender.send_text(wire::session_finalize().to_string()).await;
-        // The gateway still owes transcripts for audio already sent: the stream ends once they
-        // stop coming (recv moves the deadline on each one).
-        loop {
-            let at = *drain.borrow_and_update();
-            if clock.now() >= at {
-                return Ok(());
-            }
-            tokio::select! {
-                () = clock.wait_until(at) => {}
-                // a moved deadline; recv gone means the stream is ending anyway
-                changed = drain.changed() => if changed.is_err() { return Ok(()) },
-            }
+        let effects = machine.lock().unwrap().handle(SttEvent::InputEof, clock.now());
+        if effects.iter().any(|effect| matches!(effect, SttEffect::SttFinalize { .. })) {
+            sender
+                .send_text(wire::session_finalize().to_string())
+                .await
+                .map_err(|error| connect_error(WHAT, error))?;
         }
+        let at = machine.lock().unwrap().wake_at().expect("input EOF arms settlement");
+        clock.wait_until(at).await;
+        let effects = machine.lock().unwrap().handle(SttEvent::Wake, clock.now());
+        if let Some(result) = effects.into_iter().find_map(|effect| match effect {
+            SttEffect::Finished(result) => Some(result),
+            _ => None,
+        }) {
+            return result;
+        }
+        // Completion may already be observed while its transcript is blocked on delivery.
+        std::future::pending().await
     }
-
     async fn recv_loop(
         receiver: &mut dyn crate::transport::WsReceiver,
-        machine: Arc<Mutex<TranscriptMachine>>,
+        machine: Arc<Mutex<SttProtocol>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {
-        let RecvCtx {
-            event_tx,
-            closing,
-            deferred,
-            update_tx,
-            clock,
-            first_message_timeout,
-            offset,
-            drain,
-        } = ctx;
+        let RecvCtx { event_tx, deferred, update_tx, clock, first_message_timeout, offset } = ctx;
         // Only the first read (the `session.create` ack) is bounded; later silence is the user's.
         let mut awaiting_first = true;
+        let mut produced_output = false;
+        let first_deadline = clock.now().saturating_add(first_message_timeout);
         loop {
             let recv = receiver.recv();
             let received = if awaiting_first {
-                awaiting_first = false;
-                within(&*clock, first_message_timeout, recv).await
+                within(&*clock, first_deadline.saturating_duration_since(clock.now()), recv).await
             } else {
                 recv.await
             };
             let msg = match received {
                 Ok(msg) => msg,
-                Err(err) => return Err(connect_error(WHAT, err)),
+                Err(err) => {
+                    let error = connect_error(WHAT, err);
+                    return Err(if produced_output { error.with_retryable(false) } else { error });
+                }
             };
             match msg {
                 WsMessage::Closed => {
-                    // The reference distinguishes "we asked for this" from "the gateway hung up".
-                    if closing.load(std::sync::atomic::Ordering::SeqCst) {
-                        return Ok(());
-                    }
-                    return Err(ApiError::status(
-                        format!("{WHAT} connection closed unexpectedly"),
-                        -1,
-                        None,
-                        None,
-                    ));
+                    let effects = machine.lock().unwrap().handle(SttEvent::ServerEof, clock.now());
+                    return effects
+                        .into_iter()
+                        .find_map(|effect| match effect {
+                            SttEffect::Finished(result) => Some(result),
+                            _ => None,
+                        })
+                        .unwrap_or(Ok(()));
                 }
                 // "unexpected LiveKit Inference STT message type" -- logged and skipped.
                 WsMessage::Other => continue,
                 WsMessage::Text(text) => {
-                    let Some(incoming) = wire::decode(&text) else { continue };
-                    let quiet_for = match incoming {
-                        wire::Incoming::FinalTranscript(_) => {
-                            Some(FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT)
-                        }
-                        wire::Incoming::InterimTranscript(_)
-                        | wire::Incoming::PreflightTranscript(_) => Some(FINALIZATION_TIMEOUT),
-                        _ => None,
-                    };
-                    if let Some(quiet_for) = quiet_for {
-                        drain.send_replace(clock.now().saturating_add(quiet_for));
+                    let incoming = wire::decode(&text).ok_or_else(|| {
+                        ApiError::new("Malformed STT gateway message").with_retryable(false)
+                    })?;
+                    if matches!(incoming, wire::Incoming::SessionCreated) {
+                        awaiting_first = false;
                     }
-                    let processed = {
+                    let effects = {
                         let mut machine = machine.lock().unwrap();
-                        let processed = machine.process(incoming);
+                        let effects = machine.handle(SttEvent::Message(incoming), clock.now());
                         deferred
                             .speaking
                             .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);
-                        processed
+                        effects
                     };
-                    // `_on_end_of_speech`: release a keyterm change that was parked mid-utterance.
-                    if processed.end_of_speech
-                        && let Some(extra) = deferred.pending.lock().unwrap().take()
-                        && let Some(frame) = wire::session_update(None, None, Some(&extra))
-                    {
-                        let _ = update_tx.send(frame);
-                    }
-                    for event in processed.events {
-                        if event_tx.send(Ok(shifted(event, offset))).is_err() {
-                            return Ok(());
+                    for effect in effects {
+                        match effect {
+                            SttEffect::Deliver(event) => {
+                                produced_output |= matches!(
+                                    event.kind,
+                                    lk_agents_abi::SpeechEventType::InterimTranscript
+                                        | lk_agents_abi::SpeechEventType::PreflightTranscript
+                                        | lk_agents_abi::SpeechEventType::FinalTranscript
+                                );
+                                if event_tx.send(Ok(shifted(event, offset))).await.is_err() {
+                                    return Ok(());
+                                }
+                            }
+                            SttEffect::EndOfSpeech => {
+                                let extra = deferred.pending.lock().unwrap().take();
+                                if let Some(extra) = extra
+                                    && let Some(frame) =
+                                        wire::session_update(None, None, Some(&extra))
+                                {
+                                    update_tx.try_send(frame).map_err(|_| {
+                                        ApiError::new("STT update queue capacity exceeded")
+                                            .with_retryable(false)
+                                    })?;
+                                }
+                            }
+                            SttEffect::Finished(result) => {
+                                return result.map_err(|error| {
+                                    if produced_output {
+                                        error.with_retryable(false)
+                                    } else {
+                                        error
+                                    }
+                                });
+                            }
+                            _ => {}
                         }
-                    }
-                    if let Some(err) = processed.error {
-                        return Err(err);
                     }
                 }
             }
@@ -884,10 +1061,10 @@ impl Pump {
     /// `vad_task`: every end of speech from the client-side VAD sends `session.finalize`.
     async fn vad_finalize_loop(
         sender: Arc<dyn WsSender>,
-        source: Option<crate::abi::VadSource>,
+        source: &mut Option<crate::abi::VadSource>,
     ) -> Result<(), ApiError> {
-        let Some(mut source) = source else {
-        // No VAD: this arm must never resolve, or `select!` tears the socket down at once.
+        let Some(source) = source.as_mut() else {
+            // No VAD: this arm must never resolve, or `select!` tears the socket down at once.
             std::future::pending::<()>().await;
             return Ok(());
         };
@@ -908,15 +1085,12 @@ impl Pump {
 }
 
 struct RecvCtx {
-    event_tx: mpsc::UnboundedSender<Result<SpeechEvent, ApiError>>,
-    closing: Arc<std::sync::atomic::AtomicBool>,
+    event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     deferred: Arc<DeferredExtra>,
-    update_tx: mpsc::UnboundedSender<serde_json::Value>,
+    update_tx: mpsc::Sender<serde_json::Value>,
     clock: Arc<dyn Clock>,
     first_message_timeout: Duration,
     offset: f64,
-    /// When the stream ends once the input did: moved by each transcript.
-    drain: tokio::sync::watch::Sender<lk_agents_abi::Ts>,
 }
 
 /// The event on the caller's timeline: every alternative's and word's times moved by `offset`.
@@ -934,535 +1108,4 @@ fn shifted(mut event: SpeechEvent, offset: f64) -> SpeechEvent {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testkit::{FakeWs, text};
-    use lk_agents_abi::TokioSpawner;
-    use lk_agents_abi::SpeechEventType;
-    use serde_json::json;
-
-    fn opts() -> SttOptions {
-        SttOptions {
-            model: Some("deepgram/nova-3".into()),
-            language: None,
-            encoding: options::DEFAULT_ENCODING.into(),
-            sample_rate: 16_000,
-            base_url: "https://gw/v1".into(),
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            extra_kwargs: Default::default(),
-            fallback: Vec::new(),
-            conn_options: lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
-        }
-    }
-
-    fn stt(ws: Arc<FakeWs>) -> NativeStt {
-        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-        NativeStt::new(opts(), ws, spawner)
-    }
-
-    /// A client whose streams do not retry, for tests about one connection's failure.
-    fn stt_once(ws: Arc<FakeWs>) -> NativeStt {
-        let mut opts = opts();
-        opts.conn_options.max_retry = 0;
-        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-        NativeStt::new(opts, ws, spawner)
-    }
-
-    // Catches: a failed connection ending the stream instead of reconnecting under
-    // `conn_options`, or the exhausted error not naming the attempts.
-    #[tokio::test]
-    async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
-        let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
-        let mut opts = opts();
-        opts.conn_options = ApiConnectOptions::new(2, 0.0, 10.0).unwrap();
-        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-        let stt = NativeStt::new(opts, ws.clone(), spawner);
-        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        let err = tokio::time::timeout(Duration::from_secs(5), source.next())
-            .await
-            .expect("the retries settle")
-            .expect_err("every attempt failed");
-        assert_eq!(ws.connect_count(), 3, "the first attempt and two retries");
-        assert!(err.message().contains("after 2 attempts"), "{}", err.message());
-    }
-
-    // Catches: an option change or a keyterm change reaching only streams opened after it.
-    #[tokio::test]
-    async fn option_and_keyterm_changes_reach_an_open_stream() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt(ws.clone());
-        let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
-        for _ in 0..32 {
-            tokio::task::yield_now().await;
-        }
-        let mut extra = serde_json::Map::new();
-        extra.insert("endpointing".into(), json!(300));
-        stt.update_options(None, Some("fr"), Some(&crate::extra::ExtraKwargs(extra)));
-        stt.update_keyterms(&["LiveKit".into()]);
-        for _ in 0..32 {
-            tokio::task::yield_now().await;
-        }
-        let updates: Vec<_> =
-            ws.sent_json().into_iter().filter(|f| f["type"] == json!("session.update")).collect();
-        assert_eq!(updates.len(), 2, "{updates:?}");
-        assert_eq!(updates[0]["settings"]["extra"]["endpointing"], json!(300), "{updates:?}");
-        assert_eq!(updates[1]["settings"]["extra"]["keyterm"], json!(["LiveKit"]), "{updates:?}");
-    }
-
-    // Catches: a user turn forwarded, a model without context carry-over sent one, or the
-    // context not cut to its tail.
-    #[tokio::test]
-    async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let mut opts = opts();
-        opts.model = Some("assemblyai/universal-3-6-pro".into());
-        let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-        let stt = NativeStt::new(opts, ws.clone(), spawner);
-        let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
-        for _ in 0..32 {
-            tokio::task::yield_now().await;
-        }
-        Stt::push_conversation_item(&stt, "user", "hello");
-        Stt::push_conversation_item(&stt, "assistant", &"x".repeat(2000));
-        for _ in 0..32 {
-            tokio::task::yield_now().await;
-        }
-        let updates: Vec<_> =
-            ws.sent_json().into_iter().filter(|f| f["type"] == json!("session.update")).collect();
-        assert_eq!(updates.len(), 1, "{updates:?}");
-        let context = updates[0]["settings"]["extra"]["agent_context"].as_str().unwrap();
-        assert_eq!(context.len(), MAX_AGENT_CONTEXT_CHARS);
-
-        let plain = stt_once(Arc::new(FakeWs::new(vec![]).keep_open()));
-        Stt::push_conversation_item(&plain, "assistant", "hi");
-        assert!(plain.opts.lock().unwrap().extra_kwargs.get("agent_context").is_none());
-    }
-
-    // Catches: transcripts of a stream opened mid-input left at zero on the caller's timeline.
-    #[test]
-    fn the_start_time_offset_moves_every_timestamp() {
-        let mut event = SpeechEvent::new(SpeechEventType::FinalTranscript);
-        event.alternatives.push(lk_agents_abi::SpeechData {
-            start_time: 1.0,
-            end_time: 2.0,
-            words: Some(vec![lk_agents_abi::TimedString {
-                start_time: Some(1.0),
-                end_time: Some(1.5),
-                ..lk_agents_abi::TimedString::new("hi")
-            }]),
-            ..lk_agents_abi::SpeechData::new("en", "hi")
-        });
-        let event = shifted(event, 10.0);
-        let alt = &event.alternatives[0];
-        assert_eq!((alt.start_time, alt.end_time), (11.0, 12.0));
-        let word = &alt.words.as_ref().unwrap()[0];
-        assert_eq!((word.start_time, word.end_time, word.start_time_offset), (Some(11.0), Some(11.5), Some(10.0)));
-    }
-
-    // Catches: an unbounded handshake, or one bounded on tokio's clock rather than the session's.
-    #[tokio::test]
-    async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_clock() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::hanging());
-        let stt = stt_once(ws.clone()).with_clock(clock.clone());
-        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-
-        crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
-        let err = source.next().await.expect_err("the handshake never completed");
-        assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
-        assert!(err.retryable());
-        assert!(err.message().contains("connection timed out"), "{}", err.message());
-        assert!(ws.sent().is_empty(), "nothing was sent on a socket that never opened");
-    }
-
-    // Catches: bounding the handshake but not the `session.create` acknowledgement.
-    #[tokio::test]
-    async fn a_gateway_that_connects_but_never_acknowledges_the_session_is_a_retryable_timeout() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt_once(ws.clone()).with_clock(clock.clone());
-        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-
-        crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
-        let err = source.next().await.expect_err("the gateway never answered session.create");
-        assert_eq!(err.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
-        assert!(err.retryable());
-        assert_eq!(ws.sent_json()[0]["type"], json!("session.create"), "the socket did open");
-    }
-
-    /// Drain events until `stop`, or fail; bounded so a bug fails rather than hangs.
-    async fn drain_until(
-        source: &mut dyn StreamSource<SpeechEvent>,
-        stop: SpeechEventType,
-    ) -> Vec<SpeechEvent> {
-        let mut out = Vec::new();
-        let drained = tokio::time::timeout(std::time::Duration::from_millis(500), async {
-            while let Some(event) = source.next().await.expect("no provider error") {
-                let kind = event.kind;
-                out.push(event);
-                if kind == stop {
-                    return;
-                }
-            }
-        })
-        .await;
-        assert!(
-            drained.is_ok(),
-            "never reached {stop:?}; got {:?}",
-            out.iter().map(|e| e.kind).collect::<Vec<_>>()
-        );
-        out
-    }
-
-    fn frame(samples: usize) -> AudioFrame {
-        AudioFrame::new(vec![0u8; samples * 2], 16_000, 1, samples as u32)
-    }
-
-    // Catches: opening the socket without `session.create`, or sending it after the first audio.
-    #[tokio::test]
-    async fn the_session_is_created_before_any_audio_is_sent() {
-        let ws = Arc::new(
-            FakeWs::new(vec![
-                text(json!({"type": "session.created"})),
-                text(json!({"type": "final_transcript", "transcript": "hello"})),
-            ])
-            .keep_open(),
-        );
-        let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        sink.push(frame(800)).unwrap();
-        let event = source.next().await.unwrap().unwrap();
-        assert_eq!(event.kind, SpeechEventType::StartOfSpeech);
-
-        let sent = ws.sent_json();
-        assert_eq!(sent[0]["type"], json!("session.create"));
-        assert_eq!(sent[1]["type"], json!("input_audio"));
-    }
-
-    // Catches: the model in the query string but not the auth header, or the reverse.
-    #[tokio::test]
-    async fn the_handshake_carries_the_model_in_the_url_and_a_bearer_token() {
-        let ws = Arc::new(FakeWs::new(vec![]));
-        let stt = stt(ws.clone());
-        let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
-        tokio::task::yield_now().await;
-        let (url, headers) = ws.last_connect().expect("connected");
-        assert_eq!(url, "wss://gw/v1/stt?model=deepgram/nova-3");
-        let auth = headers.iter().find(|(k, _)| k == "Authorization").unwrap();
-        assert!(auth.1.starts_with("Bearer ey"), "{}", auth.1);
-    }
-
-    // Catches: the host's identification headers not reaching the socket, or the transcript
-    // request id not taken from the host's session id.
-    #[tokio::test]
-    async fn the_hosts_identification_headers_ride_on_the_handshake() {
-        let ws = Arc::new(FakeWs::new(vec![]));
-        let ident: Headers = [
-            ("X-LiveKit-Room-ID", "RM_1"),
-            ("X-LiveKit-Job-ID", "AJ_1"),
-            ("X-LiveKit-Session-ID", "inference_abc"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-        .collect();
-        let client = stt(ws.clone()).with_identification(ident);
-        let (_sink, _source) = client.stream(None, None).await.unwrap().unwrap();
-        tokio::task::yield_now().await;
-        let (_, headers) = ws.last_connect().expect("connected");
-        let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
-        assert_eq!(get("X-LiveKit-Room-ID"), Some("RM_1"));
-        assert_eq!(get("X-LiveKit-Job-ID"), Some("AJ_1"));
-        // A fresh session id per connection, as the reference mints one per call.
-        let session = get("X-LiveKit-Session-ID").expect("a session id");
-        assert!(session.starts_with("inference_") && session != "inference_abc", "{session}");
-        assert!(get("Authorization").is_some());
-
-        // No job: no `X-LiveKit-*` header.
-        let ws = Arc::new(FakeWs::new(vec![]));
-        let (_sink, _source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap();
-        tokio::task::yield_now().await;
-        let (_, headers) = ws.last_connect().expect("connected");
-        assert!(!headers.iter().any(|(k, _)| k.starts_with("X-LiveKit-")), "{headers:?}");
-    }
-
-    // Catches: reporting a handshake rejection as a clean end of stream.
-    #[tokio::test]
-    async fn a_rejected_handshake_surfaces_as_an_error_not_an_empty_stream() {
-        let ws = Arc::new(FakeWs::failing(TransportError::Status {
-            status: 401,
-            message: "Unauthorized".into(),
-            headers: vec![],
-            body: None,
-        }));
-        let stt = stt(ws);
-        let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        let err = source.next().await.expect_err("401");
-        assert_eq!(err.status_code(), Some(401));
-        assert!(!err.retryable());
-    }
-
-    // Catches: forwarding audio unchunked instead of 50 ms frames (`sample_rate // 20`).
-    #[tokio::test]
-    async fn audio_is_reframed_to_fifty_millisecond_chunks() {
-        let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
-        let stt = stt(ws.clone());
-        let (sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
-        // 10 ms frames: five of them make exactly one 50 ms gateway frame.
-        for _ in 0..5 {
-            sink.push(frame(160)).unwrap();
-        }
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
-        let audio: Vec<_> =
-            ws.sent_json().into_iter().filter(|v| v["type"] == json!("input_audio")).collect();
-        assert_eq!(audio.len(), 1, "five 10ms frames make one 50ms frame");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(audio[0]["audio"].as_str().unwrap())
-            .unwrap();
-        assert_eq!(decoded.len(), 16_000 / 20 * 2);
-    }
-
-    // Catches: the send half ending the stream on `end_input`, losing the final transcript. The
-    // transcript is fed after the finalize, as in the real ordering.
-    #[tokio::test]
-    async fn closing_the_input_still_delivers_the_pending_final_transcript() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        sink.push(frame(800)).unwrap();
-        sink.end_input();
-
-        // Wait for the finalize to reach the socket, then answer it.
-        for _ in 0..50 {
-            if ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize")) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize")),
-            "end_input must finalize the session: {:?}",
-            ws.sent_json()
-        );
-        ws.feed(text(json!({"type": "final_transcript", "transcript": "bye"})));
-
-        let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
-        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&SpeechEventType::FinalTranscript), "got {kinds:?}");
-    }
-
-    // Catches: a stream whose input ended never ending, since the gateway keeps the socket open
-    // after `session.finalize` (a `stt.stream()` read to its end hung forever against the real
-    // gateway): it ends once no transcript came for the inactivity timeout after the last final.
-    #[tokio::test]
-    async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
-        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt_once(ws.clone()).with_clock(clock.clone());
-        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        sink.push(frame(800)).unwrap();
-        sink.end_input();
-        ws.feed(text(json!({"type": "final_transcript", "transcript": "bye"})));
-        let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
-        assert!(events.iter().any(|e| e.kind == SpeechEventType::FinalTranscript));
-
-        crate::testkit::arm_then_advance(&clock, FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT / 2).await;
-        let early = tokio::time::timeout(Duration::from_millis(50), source.next()).await;
-        assert!(early.is_err(), "ended before the inactivity timeout: {early:?}");
-        crate::testkit::arm_then_advance(&clock, FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT).await;
-        let end = tokio::time::timeout(Duration::from_secs(1), source.next())
-            .await
-            .expect("the stream never ended after its input did");
-        assert!(matches!(end, Ok(None)), "{end:?}");
-    }
-
-    // Catches: finalizing on the wrong VAD event (only END_OF_SPEECH), or on none.
-    #[tokio::test]
-    async fn only_the_vads_end_of_speech_finalizes_the_session() {
-        use crate::abi::{Vad, VadCapabilities, VadSink, VadSource};
-        use lk_agents_abi::{VadEvent, VadEventType};
-
-        struct ScriptedVad(Mutex<Option<Vec<VadEventType>>>);
-        #[async_trait]
-        impl Vad for ScriptedVad {
-            fn label(&self) -> String {
-                "test".into()
-            }
-            fn capabilities(&self) -> VadCapabilities {
-                VadCapabilities::default()
-            }
-            async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
-                let kinds = self.0.lock().unwrap().take().unwrap_or_default();
-                Ok((Box::new(NullSink), Box::new(ScriptedSource(kinds.into_iter().collect()))))
-            }
-        }
-        struct NullSink;
-        impl StreamSink<AudioFrame> for NullSink {
-            fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
-                Ok(())
-            }
-            fn flush(&self) -> Result<(), ProviderError> {
-                Ok(())
-            }
-            fn end_input(&self) {}
-        }
-        struct ScriptedSource(std::collections::VecDeque<VadEventType>);
-        #[async_trait]
-        impl StreamSource<VadEvent> for ScriptedSource {
-            async fn next(&mut self) -> Result<Option<VadEvent>, ProviderError> {
-                Ok(self.0.pop_front().map(|kind| VadEvent::new(kind, 0, 0.0, 0.0, 0.0)))
-            }
-            async fn close(self: Box<Self>, _deadline: lk_agents_abi::Ts) -> lk_agents_abi::Closed {
-                lk_agents_abi::Closed::Clean
-            }
-        }
-
-        // Three inference-done events and one end-of-speech: exactly one finalize.
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let vad = Arc::new(ScriptedVad(Mutex::new(Some(vec![
-            VadEventType::InferenceDone,
-            VadEventType::InferenceDone,
-            VadEventType::StartOfSpeech,
-            VadEventType::EndOfSpeech,
-            VadEventType::InferenceDone,
-        ]))));
-        let stt = stt(ws.clone()).with_vad(vad);
-        let (sink, _source) = stt.stream(None, None).await.unwrap().unwrap();
-        sink.push(frame(800)).unwrap();
-        for _ in 0..60 {
-            tokio::task::yield_now().await;
-        }
-        let finalizes =
-            ws.sent_json().iter().filter(|v| v["type"] == json!("session.finalize")).count();
-        assert_eq!(finalizes, 1, "sent {:?}", ws.sent_json());
-    }
-
-    // Catches: the billed audio duration computed wrong (0.05 s per 50 ms frame).
-    #[tokio::test]
-    async fn the_usage_record_reports_the_real_audio_duration() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
-        // Four 50 ms frames = 0.2 s.
-        for _ in 0..4 {
-            sink.push(frame(800)).unwrap();
-        }
-        for _ in 0..40 {
-            tokio::task::yield_now().await;
-        }
-        ws.feed(text(json!({"type": "final_transcript", "transcript": "hi"})));
-
-        let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
-        let usage = events
-            .iter()
-            .find(|e| e.kind == SpeechEventType::RecognitionUsage)
-            .and_then(|e| e.recognition_usage)
-            .expect("a usage record");
-        assert!((usage.audio_duration - 0.2).abs() < 1e-9, "got {}", usage.audio_duration);
-    }
-
-    // Catches: `model` returning "" when unset, or `capabilities()` returning the trait default.
-    #[test]
-    fn the_label_and_capabilities_come_from_the_configured_model() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        let _guard = rt.enter();
-        let stt = stt(Arc::new(FakeWs::new(vec![])));
-        assert_eq!(stt.model(), "deepgram/nova-3");
-        assert_eq!(stt.label(), "livekit.agents.inference.stt.STT");
-        assert_eq!((stt.id().model.as_str(), stt.id().provider.as_str()), ("deepgram/nova-3", "livekit"));
-        let caps = Stt::capabilities(&stt);
-        assert!(caps.streaming && caps.interim_results && caps.keyterms);
-        assert!(!caps.offline_recognize, "the default is true; this provider has no batch path");
-        assert_eq!(caps.aligned_transcript, crate::abi::AlignedTranscript::Word);
-
-        let mut opts = opts();
-        opts.model = None;
-        let unnamed = NativeStt::new(
-            opts,
-            Arc::new(FakeWs::new(vec![])),
-            Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
-        );
-        assert_eq!(unnamed.model(), "unknown");
-    }
-
-    // Catches: `recognize()` quietly returning an empty event.
-    #[tokio::test]
-    async fn batch_recognition_reports_that_it_is_unsupported() {
-        let stt = stt(Arc::new(FakeWs::new(vec![])));
-        let err = stt.recognize(&[], None).await.expect_err("no batch path");
-        assert!(err.message().contains("does not support batch recognition"), "{}", err.message());
-    }
-
-    // Catches: a mid-stream `session.update` starved by continuous audio.
-    #[tokio::test]
-    async fn a_session_update_is_not_starved_by_the_audio_stream() {
-        let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-        let stt = stt(ws.clone());
-        let (sink, _source) = stt.stream_native(None, 0.0).unwrap();
-        for _ in 0..50 {
-            sink.push(frame(800)).unwrap();
-        }
-        sink.update_options(Some("deepgram/nova-2"), None, None);
-        for _ in 0..200 {
-            tokio::task::yield_now().await;
-        }
-        let sent = ws.sent_json();
-        let update_at = sent.iter().position(|v| v["type"] == json!("session.update"));
-        let first_audio = sent.iter().position(|v| v["type"] == json!("input_audio"));
-        assert!(update_at.is_some(), "the update was never sent");
-        assert!(first_audio.is_some());
-        assert!(update_at < first_audio, "queued audio went out ahead of the update: {sent:?}");
-    }
-
-    // Catches: applying a keyterm change mid-utterance instead of at END_OF_SPEECH.
-    #[tokio::test]
-    async fn a_keyterm_change_mid_utterance_waits_for_the_end_of_speech() {
-        let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "start_of_speech"}))]).keep_open());
-        let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream_native(None, 0.0).unwrap();
-
-        // Let the start_of_speech land, then change the keyterms.
-        assert_eq!(source.next().await.unwrap().unwrap().kind, SpeechEventType::StartOfSpeech);
-        let extra = stt.update_session_keyterms(&["livekit".to_string()]).unwrap();
-        sink.apply_keyterms(extra);
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            !ws.sent_json().iter().any(|v| v["type"] == json!("session.update")),
-            "the update must not be sent while the user is speaking"
-        );
-
-        // Now end the turn; the parked update is released there.
-        ws.feed(text(json!({"type": "final_transcript", "transcript": "done"})));
-        drain_until(&mut source, SpeechEventType::EndOfSpeech).await;
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
-        let update = ws
-            .sent_json()
-            .into_iter()
-            .find(|v| v["type"] == json!("session.update"))
-            .expect("released at end of speech");
-        assert_eq!(update["settings"]["extra"]["keyterm"], json!(["livekit"]));
-    }
-
-    // Catches: re-sending an unchanged keyterm list, or sending one to a provider without keyterms.
-    #[test]
-    fn session_keyterms_are_only_applied_when_they_change() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        let _guard = rt.enter();
-        let stt = stt(Arc::new(FakeWs::new(vec![])));
-        let terms = vec!["livekit".to_string()];
-        assert!(stt.update_session_keyterms(&terms).is_some());
-        assert!(stt.update_session_keyterms(&terms).is_none(), "unchanged");
-
-        stt.update_options(Some("cartesia/ink-whisper"), None, None);
-        assert!(
-            stt.update_session_keyterms(&["other".to_string()]).is_none(),
-            "cartesia has no keyterm prompting"
-        );
-    }
-}
+mod tests;

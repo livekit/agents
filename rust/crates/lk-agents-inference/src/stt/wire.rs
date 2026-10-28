@@ -99,34 +99,84 @@ pub fn session_update(
     Some(json!({"type": "session.update", "settings": settings}))
 }
 
-/// One decoded message from the gateway. `Unknown` is ignored: the gateway adds types ahead of
-/// the SDKs.
-#[derive(Debug, Clone, PartialEq)]
+/// Known transcript fields are validated before the protocol sees a frame. `extra` remains
+/// provider-owned metadata.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Transcript {
+    pub transcript: String,
+    pub request_id: Option<String>,
+    pub language: Option<String>,
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub duration: f64,
+    #[serde(default = "utterance_confidence")]
+    pub confidence: f64,
+    pub speaker_id: Option<String>,
+    #[serde(default)]
+    pub words: Vec<Word>,
+    pub extra: Option<Map<String, Value>>,
+}
+
+fn utterance_confidence() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Word {
+    pub word: String,
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: f64,
+    #[serde(default)]
+    pub confidence: f64,
+    pub speaker_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(tag = "type")]
 pub enum Incoming {
+    #[serde(rename = "session.created")]
+    SessionCreated,
+    #[serde(rename = "session.finalized")]
+    SessionFinalized,
+    #[serde(rename = "session.closed")]
+    SessionClosed,
+    #[serde(rename = "start_of_speech")]
     StartOfSpeech,
-    InterimTranscript(Map<String, Value>),
-    PreflightTranscript(Map<String, Value>),
-    FinalTranscript(Map<String, Value>),
-    Error { message: Option<String>, code: i64 },
+    #[serde(rename = "interim_transcript")]
+    InterimTranscript(Transcript),
+    #[serde(rename = "preflight_transcript")]
+    PreflightTranscript(Transcript),
+    #[serde(rename = "final_transcript")]
+    FinalTranscript(Transcript),
+    #[serde(rename = "error")]
+    Error {
+        message: Option<String>,
+        #[serde(default = "missing_code")]
+        code: i64,
+    },
+    #[serde(other)]
     Unknown,
 }
 
-/// Decode one text frame. A frame that is not a JSON object is `None` (a stream-ending error).
+fn missing_code() -> i64 {
+    -1
+}
+
 pub fn decode(text: &str) -> Option<Incoming> {
-    let value: Value = serde_json::from_str(text).ok()?;
-    let obj = value.as_object()?.clone();
-    Some(match obj.get("type").and_then(Value::as_str) {
-        Some("start_of_speech") => Incoming::StartOfSpeech,
-        Some("interim_transcript") => Incoming::InterimTranscript(obj),
-        Some("preflight_transcript") => Incoming::PreflightTranscript(obj),
-        Some("final_transcript") => Incoming::FinalTranscript(obj),
-        Some("error") => Incoming::Error {
-            message: obj.get("message").and_then(Value::as_str).map(str::to_owned),
-            // `data.get("code", -1)` -- the reference's sentinel for "the gateway did not say".
-            code: obj.get("code").and_then(Value::as_i64).unwrap_or(-1),
-        },
-        _ => Incoming::Unknown,
-    })
+    // Missing types are forward-compatible control frames; malformed known fields are failures.
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+    }
+    let envelope: Envelope = serde_json::from_str(text).ok()?;
+    if envelope.kind.is_none() {
+        return Some(Incoming::Unknown);
+    }
+    serde_json::from_str(text).ok()
 }
 
 #[cfg(test)]
@@ -237,6 +287,20 @@ mod tests {
                 assert_eq!(code, -1);
             }
             other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod typed_decode_tests {
+    #[test]
+    fn stt_typed_decode_rejects_malformed_known_fields() {
+        for text in [
+            r#"{"type":"final_transcript","transcript":42}"#,
+            r#"{"type":"final_transcript","transcript":"hi","words":[{"word":"hi","start":"late"}]}"#,
+            r#"{"type":"error","code":"400"}"#,
+        ] {
+            assert!(super::decode(text).is_none(), "accepted malformed frame: {text}");
         }
     }
 }

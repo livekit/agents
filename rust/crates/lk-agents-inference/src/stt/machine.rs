@@ -2,9 +2,8 @@
 //! accumulator. `speaking` is written from three places, and its end-of-speech edge releases a
 //! deferred keyterm update.
 
-use super::wire::Incoming;
+use super::wire::{Incoming, Transcript};
 use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TimedString};
-use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Processed {
@@ -87,8 +86,8 @@ impl TranscriptMachine {
         events.push(SpeechEvent::new(SpeechEventType::StartOfSpeech));
     }
 
-    fn preflight(&mut self, data: &Map<String, Value>) -> Processed {
-        let text = data.get("transcript").and_then(Value::as_str).unwrap_or("");
+    fn preflight(&mut self, data: &Transcript) -> Processed {
+        let text = &data.transcript;
         // Drop an empty preflight, and any preflight outside a turn (a speculative final).
         if text.is_empty() || !self.speaking {
             return Processed::default();
@@ -103,9 +102,9 @@ impl TranscriptMachine {
         Processed { events: vec![event], ..Default::default() }
     }
 
-    fn transcript(&mut self, data: &Map<String, Value>, is_final: bool) -> Processed {
+    fn transcript(&mut self, data: &Transcript, is_final: bool) -> Processed {
         let request_id = self.request_id_of(data);
-        let text = data.get("transcript").and_then(Value::as_str).unwrap_or("");
+        let text = &data.transcript;
 
         // `if not text and not is_final: return`. An empty final still closes the turn.
         if text.is_empty() && !is_final {
@@ -164,50 +163,35 @@ impl TranscriptMachine {
         out
     }
 
-    fn request_id_of(&self, data: &Map<String, Value>) -> String {
-        data.get("request_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.request_id.clone())
+    fn request_id_of(&self, data: &Transcript) -> String {
+        data.request_id.clone().unwrap_or_else(|| self.request_id.clone())
     }
 
     /// `_build_speech_data`.
-    fn speech_data(&self, data: &Map<String, Value>) -> SpeechData {
-        let num = |key: &str| data.get(key).and_then(Value::as_f64);
-        let start = num("start").unwrap_or(0.0);
-        let duration = num("duration").unwrap_or(0.0);
-        let language =
-            data.get("language").and_then(Value::as_str).unwrap_or(&self.default_language);
-
-        let words: Vec<TimedString> = data
-            .get("words")
-            .and_then(Value::as_array)
-            .map(|words| {
-                words
-                    .iter()
-                    .map(|w| TimedString {
-                        text: w.get("word").and_then(Value::as_str).unwrap_or("").to_owned(),
-                        // `stt.SpeechStream.start_time_offset` is never set on this path: 0.
-                        start_time: Some(w.get("start").and_then(Value::as_f64).unwrap_or(0.0)),
-                        end_time: Some(w.get("end").and_then(Value::as_f64).unwrap_or(0.0)),
-                        // 0.0, unlike the utterance-level 1.0, as in the reference.
-                        confidence: Some(
-                            w.get("confidence").and_then(Value::as_f64).unwrap_or(0.0),
-                        ),
-                        start_time_offset: Some(0.0),
-                        speaker_id: w.get("speaker_id").and_then(Value::as_str).map(str::to_owned),
-                    })
-                    .collect()
+    fn speech_data(&self, data: &Transcript) -> SpeechData {
+        let start = data.start;
+        let duration = data.duration;
+        let language = data.language.as_deref().unwrap_or(&self.default_language);
+        let words = data
+            .words
+            .iter()
+            .map(|word| TimedString {
+                text: word.word.clone(),
+                start_time: Some(word.start),
+                end_time: Some(word.end),
+                confidence: Some(word.confidence),
+                start_time_offset: Some(0.0),
+                speaker_id: word.speaker_id.clone(),
             })
-            .unwrap_or_default();
+            .collect();
 
         SpeechData {
             language: lk_agents_abi::tokenize::language::LanguageCode::new(language),
-            text: data.get("transcript").and_then(Value::as_str).unwrap_or("").to_owned(),
+            text: data.transcript.clone(),
             start_time: start,
             end_time: start + duration,
-            confidence: num("confidence").unwrap_or(1.0),
-            speaker_id: data.get("speaker_id").and_then(Value::as_str).map(str::to_owned),
+            confidence: data.confidence,
+            speaker_id: data.speaker_id.clone(),
             // An absent `words` is an empty list, not `None`.
             words: Some(words),
             source_languages: None,
@@ -215,11 +199,7 @@ impl TranscriptMachine {
             target_languages: None,
             target_texts: None,
             // An empty `extra` object is `None`, not `Some({})`.
-            metadata: data
-                .get("extra")
-                .and_then(Value::as_object)
-                .filter(|m| !m.is_empty())
-                .cloned(),
+            metadata: data.extra.as_ref().filter(|extra| !extra.is_empty()).cloned(),
         }
     }
 }
@@ -227,7 +207,7 @@ impl TranscriptMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn msg(json: Value) -> Incoming {
         super::super::wire::decode(&json.to_string()).unwrap()

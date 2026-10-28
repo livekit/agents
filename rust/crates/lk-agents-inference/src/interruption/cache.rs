@@ -39,27 +39,8 @@ impl<K: PartialEq, V> BoundedCache<K, V> {
         }
     }
 
-    /// `BoundedDict.set_or_update` (`utils/bounded_dict.py:52`): create on miss, apply the update
-    /// either way, return the live entry.
-    pub fn set_or_update(
-        &mut self,
-        key: K,
-        factory: impl FnOnce() -> V,
-        apply: impl FnOnce(&mut V),
-    ) -> &mut V
-    where
-        K: Copy,
-    {
-        if !self.entries.iter().any(|(k, _)| *k == key) {
-            self.insert(key, factory());
-        }
-        let slot = self
-            .entries
-            .iter_mut()
-            .find(|(k, _)| *k == key)
-            .expect("just inserted, and maxsize >= 1 so it cannot have been evicted");
-        apply(&mut slot.1);
-        &mut slot.1
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries.iter_mut().find(|(candidate, _)| candidate == key).map(|(_, value)| value)
     }
 
     /// `BoundedDict.pop_if(predicate)` (`utils/bounded_dict.py:73`), newest first
@@ -99,19 +80,10 @@ mod tests {
         for k in 1..=3 {
             c.insert(k, 0);
         }
-        c.set_or_update(1, || 0, |v| *v = 99);
+        *c.get_mut(&1).unwrap() = 99;
         assert_eq!(keys(&c), vec![1, 2, 3], "an update must not reorder");
         c.insert(4, 0);
         assert_eq!(keys(&c), vec![2, 3, 4], "and the updated entry is still the one evicted");
-    }
-
-    // Catches: `set_or_update` skipping the update when it had to create the entry.
-    #[test]
-    fn set_or_update_applies_the_update_on_the_miss_path_too() {
-        let mut c = cache(2);
-        let created = *c.set_or_update(7, || 0, |v| *v = 42);
-        assert_eq!(created, 42);
-        assert_eq!(keys(&c), vec![7]);
     }
 
     // Catches: `pop_if` scanning forwards instead of taking the last match.

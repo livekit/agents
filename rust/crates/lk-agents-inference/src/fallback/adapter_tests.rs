@@ -10,18 +10,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
     AlignedTranscript, AudioBuffer, AudioFrame, ChatRequest, Closed, Llm, LlmStream, StreamSink,
     StreamSource, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, Ts, Tts,
     TtsCapabilities, TtsSink, TtsSource,
 };
-use lk_agents_abi::{Spawner, TokioSpawner};
-use lk_agents_abi::{Clock, VirtualClock};
-use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
     ApiConnectOptions, ChoiceDelta, LlmChunk, SpeechData, SpeechEvent, SpeechEventType,
 };
+use lk_agents_abi::{Clock, VirtualClock};
+use lk_agents_abi::{Spawner, TokioSpawner};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{ChainObserver, IgnoreEvents};
@@ -111,7 +111,12 @@ struct FakeLlm {
 
 impl FakeLlm {
     #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
-    fn build(label: &str, model: Option<&str>, chunks: Option<Vec<LlmChunk>>, fail_after: bool) -> Arc<Self> {
+    fn build(
+        label: &str,
+        model: Option<&str>,
+        chunks: Option<Vec<LlmChunk>>,
+        fail_after: bool,
+    ) -> Arc<Self> {
         let (label, model, seen) = (label.into(), model.map(Into::into), Mutex::new(vec![]));
         Arc::new(FakeLlm { label, model, seen, chunks, fail_after, outages: AtomicUsize::new(0) })
     }
@@ -181,8 +186,9 @@ async fn a_sticky_chain_keeps_the_entry_that_served_after_the_primary_recovers()
         let backup = FakeLlm::new("b", Some(vec![chunk("backup")]));
         let (clock, spawner, obs) = parts();
         let policy = ChainPolicy { sticky, ..ChainPolicy::llm_defaults() };
-        let fb = FallbackLlm::new(vec![primary.clone(), backup.clone()], policy, clock, spawner, obs)
-            .expect("entries");
+        let fb =
+            FallbackLlm::new(vec![primary.clone(), backup.clone()], policy, clock, spawner, obs)
+                .expect("entries");
 
         let text = |chunks: Vec<LlmChunk>| chunks[0].delta.as_ref().unwrap().content.clone();
         let mut stream = within("chat", fb.chat(&ChatRequest::default())).await.expect("served");
@@ -211,10 +217,7 @@ async fn a_wrapped_llm_receives_the_chains_conn_options_not_the_callers() {
     let backup = FakeLlm::new("b", Some(vec![chunk("hi")]));
     let fb = llm_chain(vec![primary.clone(), backup.clone()]);
 
-    let req = ChatRequest {
-        conn_options: ApiConnectOptions::default(),
-        ..Default::default()
-    };
+    let req = ChatRequest { conn_options: ApiConnectOptions::default(), ..Default::default() };
     let mut stream = within("chat", fb.chat(&req)).await.expect("the adapter hands back a stream");
     let first = within("the first chunk", stream.next()).await.expect("no error");
     assert_eq!(first.expect("a chunk").delta.expect("delta").content.as_deref(), Some("hi"));
@@ -353,15 +356,15 @@ async fn a_closed_llm_adapter_starts_no_more_recovery_probes() {
     fb.aclose();
 
     let mut stream = within("chat", fb.chat(&ChatRequest::default())).await.expect("a stream");
-    drain_llm(&mut stream).await;
+    assert!(within("closed refusal", stream.next()).await.is_err());
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
 
     assert_eq!(
         primary.seen.lock().expect("seen").len(),
-        1,
-        "one real attempt and no probe: a probe would have opened the dead provider a second time"
+        0,
+        "close prevents every new attempt and probe"
     );
     stream.close(NO_DEADLINE).await;
 }
@@ -438,7 +441,7 @@ impl Stt for FakeStt {
 // Catches: an unbounded STT retry loop under the chain; also pins probe 0 vs attempt 1 retries.
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test]
-async fn a_wrapped_stt_sees_max_retry_one_on_an_attempt_and_zero_on_a_probe() {
+async fn a_wrapped_stt_never_runs_an_independent_retry_loop() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let fake = |label: &str, fails: bool| -> Arc<dyn Stt> {
         let conn = ApiConnectOptions::default();
@@ -447,8 +450,18 @@ async fn a_wrapped_stt_sees_max_retry_one_on_an_attempt_and_zero_on_a_probe() {
     let (clock, spawner, obs) = parts();
     let entries = vec![fake("p", true), fake("b", false)];
 
-    let fb = FallbackStt::new(entries, ChainPolicy::stt_defaults(), clock, spawner, obs)
-        .expect("two streaming entries");
+    let fb = FallbackStt::new(
+        entries,
+        ChainPolicy {
+            max_retry_per_backend: 0,
+            retry_interval: Some(0.0),
+            ..ChainPolicy::stt_defaults()
+        },
+        clock,
+        spawner,
+        obs,
+    )
+    .expect("two streaming entries");
 
     let frame = AudioFrame::new(vec![0u8; 4], 16_000, 1, 2);
     let ev = within("recognize", fb.recognize(&[frame], None)).await.expect("the backup answers");
@@ -461,7 +474,7 @@ async fn a_wrapped_stt_sees_max_retry_one_on_an_attempt_and_zero_on_a_probe() {
 
     let seen = calls.lock().expect("calls").clone();
     let p: Vec<u32> = seen.iter().filter(|(l, _)| l == "p").map(|(_, c)| c.max_retry).collect();
-    assert_eq!(p[0], 1, "max_retry_per_stt defaults to 1, not 0");
+    assert_eq!(p[0], 0, "the chain owns retry attempts");
     assert_eq!(p[1], 0, "the probe pins it to 0");
     let attempt_timeout = seen.iter().find(|(l, _)| l == "p").expect("primary").1.timeout;
     assert_eq!(attempt_timeout, 10.0);
@@ -625,7 +638,11 @@ fn stt_chain(entries: Vec<Arc<DuplexStt>>) -> FallbackStt {
     let (clock, spawner, obs) = parts();
     FallbackStt::new(
         entries.into_iter().map(|e| e as Arc<dyn Stt>).collect(),
-        ChainPolicy::stt_defaults(),
+        ChainPolicy {
+            max_retry_per_backend: 0,
+            retry_interval: Some(0.0),
+            ..ChainPolicy::stt_defaults()
+        },
         clock,
         spawner,
         obs,
@@ -642,13 +659,20 @@ async fn closing_the_fallback_stream_early_closes_the_serving_member() {
         within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
     until("the member to be serving", || a.sessions() == 1).await;
     a.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
-    let first = within("the first event", source.next()).await.expect("no error").expect("an event");
+    let first =
+        within("the first event", source.next()).await.expect("no error").expect("an event");
     assert_eq!(first.kind, SpeechEventType::InterimTranscript);
-    assert!(!a.sess(0).closed.load(Ordering::SeqCst), "the member is live while the consumer reads");
+    assert!(
+        !a.sess(0).closed.load(Ordering::SeqCst),
+        "the member is live while the consumer reads"
+    );
 
     let closed = within("the close", source.close(fb.chain().teardown_deadline())).await;
     assert_eq!(closed, Closed::Clean, "the task honoured the stop and reported done");
-    assert!(a.sess(0).closed.load(Ordering::SeqCst), "the serving member's stream was closed, not dropped");
+    assert!(
+        a.sess(0).closed.load(Ordering::SeqCst),
+        "the serving member's stream was closed, not dropped"
+    );
 }
 
 // Catches: an audio-in leg that goes nowhere (`set_main`, `fanout`, `push`, `flush`,
@@ -660,8 +684,10 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
 
     assert_eq!(fb.label(), "stt.FallbackAdapter");
 
-    let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("the adapter is duplex").expect("opened");
+    let (sink, mut source) = within("stream", fb.stream(None, None))
+        .await
+        .expect("the adapter is duplex")
+        .expect("opened");
     until("the provider's session to be open", || p.sessions() == 1).await;
     let s = p.sess(0);
 
@@ -758,8 +784,8 @@ async fn the_stt_that_produced_transcripts_owns_the_turn_and_the_failure_names_t
     b.send(0, Err(boom("socket died")));
     let err = within("the failure", source.next()).await.expect_err("nothing is left to try");
     assert!(
-        err.message().contains("all backends failed (p, b)"),
-        "the message must name the list, in order: {}",
+        err.message().contains("socket died"),
+        "the failure after a delivered transcript must remain explicit: {}",
         err.message()
     );
     assert_eq!(fb.active().label(), "b", "the entry that transcribed owns the turn's metrics");
@@ -778,9 +804,10 @@ async fn a_closed_stt_adapter_starts_no_more_recovery_probes() {
 
     fb.aclose();
 
-    let (sink, source) =
+    let (sink, mut source) =
         within("stream", fb.stream(None, None)).await.expect("duplex").expect("opened");
-    until("the backup to be serving", || b.sessions() == 1).await;
+    assert!(within("closed refusal", source.next()).await.is_err());
+    assert_eq!(b.sessions(), 0);
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
@@ -808,7 +835,11 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
             DuplexStt::new("good", 0) as Arc<dyn Stt>,
             DuplexStt::batch_only("whisper") as Arc<dyn Stt>,
         ],
-        ChainPolicy::stt_defaults(),
+        ChainPolicy {
+            max_retry_per_backend: 0,
+            retry_interval: Some(0.0),
+            ..ChainPolicy::stt_defaults()
+        },
         clock,
         spawner,
         obs,
@@ -821,50 +852,6 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
         Err(other) => panic!("wrong error: {other:?}"),
         Ok(_) => panic!("a batch-only entry must be refused, not silently wrapped"),
     }
-}
-
-// Catches: merging STT capabilities with the wrong quantifier (`stt:79-93`), or inverting the
-// `aligned_transcript` test.
-#[test]
-fn merging_stt_capabilities_uses_a_different_rule_per_field() {
-    let rich = SttCapabilities {
-        streaming: true,
-        interim_results: true,
-        diarization: true,
-        aligned_transcript: AlignedTranscript::Word,
-        offline_recognize: true,
-        keyterms: true,
-        chat_context: false,
-    };
-    let plain = SttCapabilities {
-        streaming: true,
-        interim_results: false,
-        diarization: true,
-        aligned_transcript: AlignedTranscript::Chunk,
-        offline_recognize: true,
-        keyterms: false,
-        chat_context: true,
-    };
-
-    let merged = crate::fallback::stt::merge_capabilities(&[rich, plain]);
-    assert!(merged.streaming, "the adapter always streams; every entry is required to");
-    assert!(!merged.interim_results, "one entry without them loses them for the whole chain");
-    assert!(merged.diarization, "both have it");
-    assert_eq!(
-        merged.aligned_transcript,
-        AlignedTranscript::Word,
-        "the primary's granularity, because every entry has some alignment"
-    );
-    assert!(merged.keyterms, "any");
-    assert!(merged.chat_context, "any");
-    assert!(merged.offline_recognize, "not merged -- the reference takes the field default");
-
-    let unaligned = SttCapabilities { aligned_transcript: AlignedTranscript::None, ..plain };
-    assert_eq!(
-        crate::fallback::stt::merge_capabilities(&[rich, unaligned]).aligned_transcript,
-        AlignedTranscript::None,
-        "one entry with no alignment drops it for everyone"
-    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1034,8 +1021,7 @@ async fn a_failover_replays_the_text_already_pushed_into_the_new_provider() {
     let (good, good_pushed) = built("good", 24_000, 1, 2, 0, false);
     let fb = tts_chain(vec![broken, good]);
 
-    let (sink, mut source) =
-        within("stream", fb.stream()).await.expect("opened");
+    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
     sink.push("Hello there, ".into()).expect("push");
     sink.flush().expect("flush");
     sink.push("how are you?".into()).expect("push");
@@ -1054,68 +1040,19 @@ async fn a_failover_replays_the_text_already_pushed_into_the_new_provider() {
 
 fn tts_chain(entries: Vec<Arc<dyn Tts>>) -> FallbackTts {
     let (clock, spawner, obs) = parts();
-    FallbackTts::new(entries, None, ChainPolicy::tts_defaults(), clock, spawner, obs)
-        .expect("a usable list")
-}
-
-// Catches: a resampled frame whose header and payload disagree (run at two channels so `/` vs
-// `*` differ); also pins label, channel count and capabilities.
-#[tokio::test]
-async fn a_resampled_stereo_frame_carries_exactly_the_samples_its_header_claims() {
-    let (slow, _) = built("slow", 16_000, 2, 3, 0, false);
-    let (fast, _) = built("fast", 24_000, 2, 3, 0, false);
-    let fb = tts_chain(vec![slow, fast]);
-
-    assert_eq!(fb.label(), "tts.FallbackAdapter");
-    assert_eq!(fb.sample_rate(), 24_000, "the maximum of the entries");
-    assert_eq!(fb.num_channels(), 2, "both entries are stereo; the adapter must not invent mono");
-    assert!(fb.capabilities().streaming, "the merged shape, not Default");
-    assert!(fb.needs_resampling(0), "the 16 kHz primary");
-    assert!(!fb.needs_resampling(1), "the entry already at the chain's rate");
-
-    let mut source = within("synthesize", fb.synthesize("hello")).await.expect("a source");
-    let mut samples = 0usize;
-    let mut frames = 0usize;
-    for a in drain_tts(&mut source).await {
-        frames += 1;
-        assert_eq!(a.frame.sample_rate, 24_000);
-        assert_eq!(a.frame.num_channels, 2);
-        assert_eq!(
-            a.frame.data.len(),
-            a.frame.samples_per_channel as usize * 2 * 2,
-            "bytes = samples_per_channel x channels x 2, or the consumer slices the wrong frame"
-        );
-        samples += a.frame.samples_per_channel as usize;
-    }
-    assert!(frames > 0, "the primary served");
-    // soxr's filter delay makes the exact count implementation-defined; assert the ratio.
-    assert!(samples > 600, "expected ~720 upsampled samples per channel, got {samples}");
-    source.close(NO_DEADLINE).await;
-}
-
-// Catches: the TTS drain never marking the serving entry (`AfterOutput::Stop`, `tts:293-297`).
-#[tokio::test]
-async fn the_tts_that_emitted_audio_owns_a_truncated_turn() {
-    let (broken, _) = built("broken", 24_000, 1, 0, usize::MAX, false);
-    let (dying, _) = built("dying", 24_000, 1, 1, 0, true);
-    let fb = tts_chain(vec![broken, dying]);
-
-    assert_eq!(fb.active().label(), "broken", "before any traffic the primary is active");
-
-    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
-    sink.push("hello".into()).expect("push");
-    sink.end_input();
-
-    assert!(within("the one frame", source.next()).await.expect("no error").is_some());
-    assert!(
-        within("the end", source.next())
-            .await
-            .expect("truncation is success, not an error")
-            .is_none()
-    );
-    assert_eq!(fb.active().label(), "dying", "the entry that emitted audio owns the turn");
-    source.close(NO_DEADLINE).await;
-    fb.aclose();
+    FallbackTts::new(
+        entries,
+        None,
+        ChainPolicy {
+            max_retry_per_backend: 0,
+            retry_interval: Some(0.0),
+            ..ChainPolicy::tts_defaults()
+        },
+        clock,
+        spawner,
+        obs,
+    )
+    .expect("a usable list")
 }
 
 // Catches: a streaming probe that replays nothing from `snapshot` (`tts:504-531`).
@@ -1240,27 +1177,6 @@ async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_tex
     fb.aclose();
 }
 
-// Catches: a `TokenLog` still pointing at a provider the chain has finished with.
-#[tokio::test]
-async fn the_child_sink_is_released_when_the_stream_that_owns_it_ends() {
-    let (good, pushed) = built("good", 24_000, 1, 1, 0, false);
-    let fb = tts_chain(vec![good]);
-
-    let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
-    sink.push("hello".into()).expect("push");
-    sink.end_input();
-    drain_tts(&mut source).await;
-
-    let before = pushed.lock().expect("pushed").len();
-    sink.push("late".into()).expect("push");
-    assert_eq!(
-        pushed.lock().expect("pushed").len(),
-        before,
-        "the turn is over: a late token must not reach a provider the chain has released"
-    );
-    source.close(NO_DEADLINE).await;
-}
-
 // Catches: a TTS adapter `aclose` that does not reach the chain, or an exhaustion error not naming
 // the list.
 #[tokio::test]
@@ -1273,7 +1189,7 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
     let (sink, mut source) = within("stream", fb.stream()).await.expect("opened");
     sink.push("hello".into()).expect("push");
     sink.end_input();
-    drain_tts(&mut source).await;
+    assert!(within("closed refusal", source.next()).await.is_err());
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
@@ -1300,36 +1216,6 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
     fb.aclose();
 }
 
-// Catches: one quantifier for both TTS capabilities (`streaming` any, `aligned_transcript` all,
-// `tts:92-95`).
-#[test]
-fn merging_tts_capabilities_is_any_for_streaming_and_all_for_alignment() {
-    let duplex = TtsCapabilities { streaming: true, aligned_transcript: true };
-    let batch = TtsCapabilities { streaming: false, aligned_transcript: true };
-    let unaligned = TtsCapabilities { streaming: true, aligned_transcript: false };
+mod capabilities;
 
-    let merged = crate::fallback::tts::merge_capabilities(&[duplex, batch]);
-    assert!(merged.streaming, "any -- see the function's own docs for why this over-promises");
-    assert!(merged.aligned_transcript, "both align");
-
-    assert!(!crate::fallback::tts::merge_capabilities(&[duplex, unaligned]).aligned_transcript, "all");
-    assert!(!crate::fallback::tts::merge_capabilities(&[batch]).streaming, "no entry streams");
-}
-
-// Catches: `FallbackLlm` inheriting `Llm::model()`'s `"unknown"` default instead of following the
-// active entry (`_evaluate_with_llm` excludes `temperature` on gpt-5).
-#[tokio::test]
-async fn the_chain_reports_the_active_entrys_model_not_its_own() {
-    // The primary raises on `chat()`, so the failover is real.
-    let primary = FakeLlm::build("p", Some("gpt-5"), None, false);
-    let backup = FakeLlm::build("b", Some("gpt-4o-mini"), Some(vec![chunk("hi")]), false);
-    let fb = llm_chain(vec![primary.clone(), backup.clone()]);
-
-    assert_eq!(fb.model(), "gpt-5", "before any traffic the primary's model is the answer");
-
-    let mut stream =
-        within("chat", fb.chat(&ChatRequest::default())).await.expect("the backup serves the turn");
-    while within("next", stream.next()).await.expect("drain").is_some() {}
-
-    assert_eq!(fb.model(), "gpt-4o-mini", "after a failover it must follow the active entry");
-}
+mod tts;

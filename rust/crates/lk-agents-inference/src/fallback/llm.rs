@@ -5,19 +5,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lk_agents_abi::{ChatRequest, Extra, HostRef, Llm, LlmStream, ToolChoice, ToolSpec};
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::Clock;
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::LlmChunk;
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
+use lk_agents_abi::{ChatRequest, Extra, HostRef, Llm, LlmStream, ToolChoice, ToolSpec};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
     Attempt, Backend, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
-use crate::fallback::policy::ChainPolicy;
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
+use crate::fallback::policy::ChainPolicy;
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
@@ -106,7 +106,13 @@ impl FallbackLlm {
     /// and a plugin's own would multiply it (N×M attempts).
     #[host(new(
         kw_only = "attempt_timeout",
-        defaults(attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, retry_on_chunk_sent = false, sticky = false)
+        defaults(
+            attempt_timeout = 5.0,
+            max_retry_per_llm = 0,
+            retry_interval = 0.5,
+            retry_on_chunk_sent = false,
+            sticky = false
+        )
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn for_host(
@@ -121,13 +127,13 @@ impl FallbackLlm {
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, NoBackends> {
         let seam = lk_agents_abi::ApiConnectOptions { max_retry: 0, ..Default::default() };
-        let llms = llms.into_iter().map(|llm| llm.with_conn_options(&seam).unwrap_or(llm)).collect();
+        let llms =
+            llms.into_iter().map(|llm| llm.with_conn_options(&seam).unwrap_or(llm)).collect();
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
             attempt_timeout: Some(attempt_timeout),
             retry_interval: Some(retry_interval),
             sticky,
-            ..ChainPolicy::llm_defaults()
         }
         .with_retry_on_chunk_sent(retry_on_chunk_sent);
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
@@ -225,20 +231,26 @@ impl Llm for FallbackLlm {
         let handle = self.spawner.spawn_unboxed(async move {
             let mut tx = tx;
             let result = chain
-                .run(
+                .run_cancellable(
                     &req,
                     &caller_conn,
                     RecoverySlot::OneShot,
                     &mut tx,
-                    move |index, _backend, mut stream, tx| {
+                    stop_rx,
+                    move |index, _backend, mut stream, tx, mut stop| {
                         let chain = Arc::clone(&drain_chain);
-                        let mut stop = stop_rx.clone();
                         Box::pin(async move {
                             // Only `has_response()` chunks count as output (`llm:281-285`);
                             // usage-only chunks do not block a retry.
-                            let outcome =
-                                forward(&chain, index, stream.as_mut(), &mut stop, tx, LlmChunk::has_response)
-                                    .await;
+                            let outcome = forward(
+                                &chain,
+                                index,
+                                stream.as_mut(),
+                                &mut stop,
+                                tx,
+                                LlmChunk::has_response,
+                            )
+                            .await;
                             stream.close(chain.teardown_deadline()).await;
                             outcome
                         }) as BoxFuture<'_, Attempt<()>>
@@ -247,7 +259,7 @@ impl Llm for FallbackLlm {
                 .await;
 
             match result {
-                Ok(ChainOutcome::Served(())) | Ok(ChainOutcome::Truncated) => {}
+                Ok(ChainOutcome::Served(())) => {}
                 Err(e) => {
                     let _ = tx.send(Err(e)).await;
                 }
@@ -258,4 +270,3 @@ impl Llm for FallbackLlm {
         Ok(Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }))
     }
 }
-

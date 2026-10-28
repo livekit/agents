@@ -10,14 +10,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lk_agents_abi::{
-    AlignedTranscript, AudioFrame, StreamSink, Stt, SttCapabilities, SttSink, SttSource,
-};
-use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
+use lk_agents_abi::{
+    AlignedTranscript, AudioFrame, StreamSink, Stt, SttCapabilities, SttSink, SttSource,
+};
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
@@ -44,7 +44,7 @@ pub struct InputTee {
     ended: AtomicBool,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Replayed into the next serving stream.
-    preroll: Mutex<std::collections::VecDeque<PreFrame>>,
+    preroll: Mutex<Preroll>,
 }
 
 /// One buffered input. `Flush` keeps its position, or two utterances would merge.
@@ -52,6 +52,12 @@ pub struct InputTee {
 enum PreFrame {
     Audio(AudioFrame),
     Flush,
+}
+
+#[derive(Default)]
+struct Preroll {
+    pending: std::collections::VecDeque<PreFrame>,
+    dropped_frames: u64,
 }
 
 impl Default for InputTee {
@@ -62,7 +68,7 @@ impl Default for InputTee {
             probes: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(0),
             ended: AtomicBool::new(false),
-            preroll: Mutex::new(std::collections::VecDeque::new()),
+            preroll: Mutex::new(Preroll::default()),
         }
     }
 }
@@ -80,7 +86,7 @@ impl InputTee {
     fn set_main(&self, sink: SttSink) {
         // Drained before install, so a concurrent `push` cannot overtake a buffered frame.
         let pending: Vec<PreFrame> =
-            self.preroll.lock().expect("tee preroll").drain(..).collect();
+            self.preroll.lock().expect("tee preroll").pending.drain(..).collect();
         for item in pending {
             let _ = match item {
                 PreFrame::Audio(f) => sink.push(f),
@@ -95,13 +101,27 @@ impl InputTee {
         *self.main.lock().expect("tee main") = Some(sink);
     }
 
-    /// Oldest-first eviction past the cap.
-    fn buffer(&self, item: PreFrame) {
-        let mut q = self.preroll.lock().expect("tee preroll");
-        if q.len() >= Self::PREROLL_FRAMES {
-            q.pop_front();
+    /// Preserve utterance boundaries, accounting for each evicted audio frame. A full queue
+    /// of boundaries refuses more input rather than growing or merging distinct utterances.
+    fn buffer(&self, item: PreFrame) -> Result<(), ProviderError> {
+        let mut preroll = self.preroll.lock().expect("tee preroll");
+        if preroll.pending.len() >= Self::PREROLL_FRAMES {
+            let Some(index) =
+                preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
+            else {
+                return Err(ApiError::new("STT preroll is full of pending flush boundaries")
+                    .with_retryable(false)
+                    .into());
+            };
+            preroll.pending.remove(index);
+            preroll.dropped_frames += 1;
         }
-        q.push_back(item);
+        preroll.pending.push_back(item);
+        Ok(())
+    }
+
+    pub fn dropped_preroll_frames(&self) -> u64 {
+        self.preroll.lock().expect("tee preroll").dropped_frames
     }
 
     fn clear_main(&self) {
@@ -135,7 +155,7 @@ impl StreamSink<AudioFrame> for TeeSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         // Buffered when no stream is serving; probes still get it.
         if self.0.main.lock().expect("tee main").is_none() {
-            self.0.buffer(PreFrame::Audio(item.clone()));
+            self.0.buffer(PreFrame::Audio(item.clone()))?;
         }
         self.0.fanout(|s| {
             let _ = s.push(item.clone());
@@ -145,7 +165,7 @@ impl StreamSink<AudioFrame> for TeeSink {
 
     fn flush(&self) -> Result<(), ProviderError> {
         if self.0.main.lock().expect("tee main").is_none() {
-            self.0.buffer(PreFrame::Flush);
+            self.0.buffer(PreFrame::Flush)?;
         }
         self.0.fanout(|s| {
             let _ = s.flush();
@@ -217,6 +237,10 @@ fn no_duplex(label: &str) -> ProviderError {
 #[async_trait]
 impl Backend for SttBackend {
     type Req = SttReq;
+
+    fn modality(&self) -> super::machine::Modality {
+        super::machine::Modality::Stt
+    }
     type Session = SttSession;
 
     fn label(&self) -> String {
@@ -528,7 +552,6 @@ impl Stt for FallbackStt {
             .await?;
         match out {
             ChainOutcome::Served(ev) => Ok(ev),
-            ChainOutcome::Truncated => unreachable!("`AfterOutput::Stop` is not a policy STT uses"),
         }
     }
 
@@ -540,7 +563,8 @@ impl Stt for FallbackStt {
     ) -> Option<Result<(SttSink, SttSource), ProviderError>> {
         let tee = InputTee::new();
         let opened = self.chain.clock().now();
-        let offset = start_time_offset.map(|start_time_offset| LegOffset { start_time_offset, opened });
+        let offset =
+            start_time_offset.map(|start_time_offset| LegOffset { start_time_offset, opened });
         let (tx, rx) = mpsc::channel::<Result<SpeechEvent, ProviderError>>(32);
 
         let chain = Arc::clone(&self.chain);
@@ -553,21 +577,22 @@ impl Stt for FallbackStt {
         let handle = self.spawner.spawn_unboxed(async move {
             let mut tx = tx;
             let result = chain
-                .run(
+                .run_cancellable(
                     &req,
                     &caller_conn,
                     RecoverySlot::Streaming,
                     &mut tx,
-                    move |index, _b, session, tx| {
+                    stop_rx,
+                    move |index, _b, session, tx, mut stop| {
                         let chain = Arc::clone(&drain_chain);
                         let tee = Arc::clone(&tee_for_task);
-                        let mut stop = stop_rx.clone();
                         Box::pin(async move {
                             let SttSession::Stream(mut source) = session else {
                                 unreachable!("a Stream request opens Stream")
                             };
                             let outcome =
-                                forward(&chain, index, source.as_mut(), &mut stop, tx, |_| true).await;
+                                forward(&chain, index, source.as_mut(), &mut stop, tx, |_| true)
+                                    .await;
                             // The dead stream leaves the tee before the next entry installs its own.
                             tee.clear_main();
                             source.close(chain.teardown_deadline()).await;
@@ -680,6 +705,23 @@ mod preroll_tests {
         // The oldest ten went; the newest is still there.
         assert_eq!(got[0], "push:10");
         assert_eq!(got[got.len() - 1], format!("push:{}", InputTee::PREROLL_FRAMES + 9));
+    }
+
+    #[test]
+    fn stt_preroll_flush_conservation_under_audio_overflow() {
+        let tee = InputTee::new();
+        let sink = TeeSink(tee.clone());
+        sink.push(frame(1)).unwrap();
+        sink.flush().unwrap();
+        for i in 0..InputTee::PREROLL_FRAMES {
+            sink.push(frame(i as u32 + 2)).unwrap();
+        }
+        let rec = Arc::new(Log::default());
+        tee.set_main(Box::new(Recorder(rec.clone())));
+        let got = rec.got.lock().unwrap();
+        assert!(got.iter().any(|item| item == "flush"), "overflow discarded an utterance boundary");
+        assert_eq!(got.len(), InputTee::PREROLL_FRAMES);
+        assert_eq!(tee.dropped_preroll_frames(), 2);
     }
 
     /// Catches: buffering continuing after a stream is installed.

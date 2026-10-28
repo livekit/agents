@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::AbortHandle;
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{Clock, Closed, StreamSource, Ts};
 use tokio::sync::{mpsc, oneshot, watch};
-use lk_agents_abi::AbortHandle;
 
 use crate::fallback::chain::{Attempt, Backend, FallbackChain, Recovery};
 
@@ -18,7 +18,9 @@ pub(crate) struct ChainTask {
 }
 
 impl ChainTask {
-    pub(crate) fn pair(clock: Arc<dyn Clock>) -> (watch::Receiver<bool>, oneshot::Sender<()>, ChainTask) {
+    pub(crate) fn pair(
+        clock: Arc<dyn Clock>,
+    ) -> (watch::Receiver<bool>, oneshot::Sender<()>, ChainTask) {
         let (stop_tx, stop_rx) = watch::channel(false);
         let (done_tx, done_rx) = oneshot::channel();
         (stop_rx, done_tx, ChainTask { stop: stop_tx, done: Some(done_rx), clock })
@@ -33,13 +35,13 @@ pub(crate) async fn next_or_stop<T, S: StreamSource<T> + ?Sized>(
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<T>, ProviderError> {
     if *stop.borrow() {
-        return Ok(None);
+        return Err(ApiError::status("fallback cancelled", 499, None, None).into());
     }
     tokio::select! {
         biased;
         changed = stop.changed() => {
             let _ = changed;
-            Ok(None)
+            Err(ApiError::status("fallback cancelled", 499, None, None).into())
         }
         next = source.next() => next,
     }
@@ -64,13 +66,33 @@ pub(crate) async fn forward<T, B: Backend, S: StreamSource<T> + ?Sized>(
                     serving = true;
                     chain.mark_serving(index);
                 }
-                produced |= is_output(&item);
-                if tx.send(Ok(item)).await.is_err() {
-                    return Attempt::Served(());
+                let visible = is_output(&item);
+                if !send_or_stop(tx, Ok(item), stop).await {
+                    return Attempt::Failed {
+                        error: ApiError::status("fallback cancelled", 499, None, None).into(),
+                        produced_output: produced,
+                    };
                 }
+                produced |= visible;
             }
             Err(error) => return Attempt::Failed { error, produced_output: produced },
         }
+    }
+}
+
+/// Delivery waits belong to the consumer and remain cancellable while the channel is full.
+pub(crate) async fn send_or_stop<T>(
+    tx: &mpsc::Sender<T>,
+    item: T,
+    stop: &mut watch::Receiver<bool>,
+) -> bool {
+    use futures_util::future::{Either, select};
+    if *stop.borrow() {
+        return false;
+    }
+    match select(Box::pin(tx.send(item)), Box::pin(stop.changed())).await {
+        Either::Left((result, _)) => result.is_ok(),
+        Either::Right(_) => false,
     }
 }
 
@@ -121,6 +143,12 @@ pub(crate) struct ChannelSource<T> {
     pub(crate) rx: mpsc::Receiver<Result<T, ProviderError>>,
     pub(crate) task: Option<AbortHandle>,
     pub(crate) chain: ChainTask,
+}
+
+impl<T> Drop for ChannelSource<T> {
+    fn drop(&mut self) {
+        let _ = self.chain.stop.send(true);
+    }
 }
 
 #[async_trait]

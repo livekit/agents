@@ -140,6 +140,7 @@ pub enum Incoming {
     OutputAlignment { session_id: Option<String>, tokens: Vec<TimedString> },
     Done { session_id: Option<String> },
     Error { raw: String },
+    Malformed { detail: String },
     Unknown { session_id: Option<String> },
 }
 
@@ -152,7 +153,7 @@ impl Incoming {
             | Incoming::OutputAlignment { session_id, .. }
             | Incoming::Done { session_id }
             | Incoming::Unknown { session_id } => session_id.as_deref(),
-            Incoming::Error { .. } => None,
+            Incoming::Error { .. } | Incoming::Malformed { .. } => None,
         }
     }
 }
@@ -160,49 +161,75 @@ impl Incoming {
 /// Decode one text frame. `provider` selects Cartesia's re-added trailing space on word alignment
 /// (`f"{w['word']} "`).
 pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
+    if text.len() > 1024 * 1024 {
+        return Some(Incoming::Malformed { detail: "TTS gateway frame exceeds its limit".into() });
+    }
     let value: Value = serde_json::from_str(text).ok()?;
     let obj = value.as_object()?;
+    obj.get("type")?.as_str()?;
+    if obj.get("session_id").is_some_and(|id| !id.is_null() && !id.is_string()) {
+        return Some(Incoming::Malformed { detail: "TTS session_id must be a string".into() });
+    }
     let session_id = obj.get("session_id").and_then(Value::as_str).map(str::to_owned);
 
     Some(match obj.get("type").and_then(Value::as_str) {
         Some("session.created") => Incoming::SessionCreated { session_id },
         Some("output_audio") => Incoming::OutputAudio {
             session_id,
-            audio: obj.get("audio").and_then(Value::as_str).unwrap_or("").to_owned(),
+            audio: match obj.get("audio").and_then(Value::as_str) {
+                Some(audio) => audio.to_owned(),
+                None => {
+                    return Some(Incoming::Malformed {
+                        detail: "TTS output_audio requires an audio string".into(),
+                    });
+                }
+            },
         },
-        Some("output_alignment") => {
-            Incoming::OutputAlignment { session_id, tokens: alignment_tokens(obj, provider) }
-        }
+        Some("output_alignment") => match alignment_tokens(obj, provider) {
+            Some(tokens) => Incoming::OutputAlignment { session_id, tokens },
+            None => Incoming::Malformed { detail: "TTS returned malformed alignment".into() },
+        },
         Some("done") => Incoming::Done { session_id },
         Some("error") => Incoming::Error { raw: text.to_owned() },
         _ => Incoming::Unknown { session_id },
     })
 }
 
-fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Vec<TimedString> {
-    let token = |text: String, v: &Value| TimedString {
-        text,
-        start_time: v.get("start").and_then(Value::as_f64),
-        end_time: v.get("end").and_then(Value::as_f64),
-        confidence: None,
-        start_time_offset: None,
-        speaker_id: None,
+fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<TimedString>> {
+    let words = match obj.get("words") {
+        None => None,
+        Some(value) => Some(value.as_array()?),
     };
-    let str_of = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
-    // `if words := data.get("words")` -- an empty list falls through to `chars`.
-    let non_empty = |key: &str| obj.get(key).and_then(Value::as_array).filter(|a| !a.is_empty());
-    if let Some(words) = non_empty("words") {
-        return words
-            .iter()
-            .map(|w| {
-                let word = str_of(w, "word");
-                token(if provider == "cartesia" { format!("{word} ") } else { word }, w)
+    let chars = match obj.get("chars") {
+        None => None,
+        Some(value) => Some(value.as_array()?),
+    };
+    let (items, key, trailing_space) = match (words, chars) {
+        (Some(words), _) if !words.is_empty() => (words, "word", provider == "cartesia"),
+        (_, Some(chars)) => (chars, "char", false),
+        (Some(words), _) => (words, "word", false),
+        _ => return None,
+    };
+    items
+        .iter()
+        .map(|item| {
+            let text = item.get(key)?.as_str()?;
+            let time = |key| match item.get(key) {
+                None | Some(Value::Null) => Some(None),
+                Some(value) => {
+                    value.as_f64().filter(|time| time.is_finite() && *time >= 0.0).map(Some)
+                }
+            };
+            Some(TimedString {
+                text: if trailing_space { format!("{text} ") } else { text.to_owned() },
+                start_time: time("start")?,
+                end_time: time("end")?,
+                confidence: None,
+                start_time_offset: None,
+                speaker_id: None,
             })
-            .collect();
-    }
-    non_empty("chars")
-        .map(|chars| chars.iter().map(|c| token(str_of(c, "char"), c)).collect())
-        .unwrap_or_default()
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -41,6 +41,7 @@ pub fn closed_unexpectedly(close_code: Option<u16>, data: &str, extra: &str) -> 
         Some(code) => code as i64,
     };
     StreamError {
+        request: None,
         error: ApiError::status(
             format!("LiveKit Adaptive Interruption connection closed unexpectedly: {data}"),
             status,
