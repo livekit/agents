@@ -7,6 +7,7 @@
 //! core owes nothing, so a session created after its caller left is still terminated.
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -14,18 +15,19 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
-use lk_agents_inference::attempts::RequestPolicy;
-use lk_agents_inference::avatar::lifecycle::{
+use crate::attempts::RequestPolicy;
+use crate::avatar::lifecycle::{
     AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
     CreateFailure, ProviderSession,
 };
-use lk_agents_inference::avatar::{
+use crate::avatar::{
     AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request,
 };
-use lk_agents_inference::headers::Headers;
+use crate::headers::Headers;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::env::{Env, Standalone};
 use crate::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
@@ -64,15 +66,16 @@ enum Input {
 }
 
 /// `_core.InferenceAvatar`.
-pub struct GatewayAvatar {
+pub struct GatewayAvatar<E: Env = Standalone> {
     opts: Arc<AvatarOptions>,
     view: Arc<Mutex<View>>,
     /// One message per host call, so the queue is bounded by the calls in flight.
     inputs: mpsc::UnboundedSender<Input>,
     callers: AtomicU64,
+    env: PhantomData<fn() -> E>,
 }
 
-impl GatewayAvatar {
+impl<E: Env> GatewayAvatar<E> {
     pub fn new(
         opts: AvatarOptions,
         credentials: (String, String),
@@ -107,7 +110,7 @@ impl GatewayAvatar {
         };
         // Self-owned: see the module docs.
         runtime.spawn(driver.run(rx, observed));
-        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1) }
+        GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), env: PhantomData }
     }
 
     pub fn provider(&self) -> &str {
@@ -153,7 +156,7 @@ impl Drop for CancelOnDrop<'_> {
     }
 }
 
-impl InferenceAvatar for GatewayAvatar {
+impl<E: Env> InferenceAvatar for GatewayAvatar<E> {
     fn new(
         model: String,
         avatar_identity: Option<String>,
@@ -175,7 +178,7 @@ impl InferenceAvatar for GatewayAvatar {
             extra_kwargs.unwrap_or_default(),
             base_url,
         )?;
-        let runtime = crate::process::handle().map_err(|e| unavailable(e.to_string()))?;
+        let runtime = E::runtime().map_err(unavailable)?;
         let http = GatewayHttp::shared().map_err(unavailable)?;
         let policy = RequestPolicy::from_options(&conn_options);
         Ok(GatewayAvatar::new(
@@ -184,7 +187,7 @@ impl InferenceAvatar for GatewayAvatar {
             policy,
             http,
             &runtime,
-            crate::process::host_clock(),
+            E::clock(),
         ))
     }
 
@@ -505,7 +508,7 @@ impl Driver {
     }
 
     fn failed_launch(&mut self, request: AvatarRequestId, attempt: u32, error: ApiError) {
-        let failure = lk_agents_inference::attempts::AttemptFailure::Connection(error.message);
+        let failure = crate::attempts::AttemptFailure::Connection(error.message);
         self.queued.push(AvatarSessionEvent::Failed { request, attempt, failure });
         self.queued.push(AvatarSessionEvent::AttemptClosed { request, attempt });
     }

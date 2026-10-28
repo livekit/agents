@@ -17,8 +17,8 @@ use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Str
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
-use crate::http::GatewayHttp;
-use crate::http::exchange::{Exchange, HttpEvent};
+use lk_agents_inference::http::GatewayHttp;
+use lk_agents_inference::http::exchange::{Exchange, HttpEvent};
 use crate::source::{NativeSource, PullError, Pulled};
 use lk_agents_net::sse::SseDecoder;
 use lk_agents_net::task::{OwnedTask, TaskOutcome};

@@ -82,6 +82,29 @@ pub fn host_clock() -> Arc<dyn Clock> {
     Arc::new(lk_agents_abi::RealClock::new())
 }
 
+/// This process as the inference clients' [`Env`](lk_agents_inference::env::Env): what a class
+/// the host constructs runs on (decision 88).
+pub struct Process;
+
+impl lk_agents_inference::env::Env for Process {
+    fn runtime() -> Result<tokio::runtime::Handle, String> {
+        handle().map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "python")]
+    fn spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
+        Ok(<Arc<dyn lk_agents_abi::Spawner> as lk_agents_abi::python::Ambient>::ambient())
+    }
+
+    fn clock() -> Arc<dyn Clock> {
+        host_clock()
+    }
+
+    fn workers() -> Result<MediaWorkers, String> {
+        workers().map_err(|error| error.to_string())
+    }
+}
+
 lk_agents_abi::inventory::submit! {
     lk_agents_abi::utils::workers::WorkerService {
         try_spawn: |class, job| {

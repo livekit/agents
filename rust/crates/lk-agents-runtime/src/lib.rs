@@ -2,13 +2,9 @@
 //! the synchronous cores (docs/internals/rust-core.md "Cores and the runtime").
 //!
 //! - [`process`]: the process-wide Tokio runtime and its fork guard.
-//! - [`http`]: the gateway's HTTPS exchange, reporting transport observations.
-//! - [`llm`]: the gateway LLM, executing the LLM request core's effects.
-//! - [`avatar`]: the gateway avatar, executing the avatar session core's effects.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
 //! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
-//! - [`evals`]: conversation judges, run concurrently on one conversation.
 //! - [`storage`]: thread storage I/O over AgentDB and local SQLite.
 //! - [`a2a`]: the A2A text door's turns, driving the A2A core with the host's handler.
 
@@ -25,33 +21,29 @@ pub mod cores {
 // The cores' in-place `_core` registrations are linked with the extension only from a crate it
 // links that names them.
 #[cfg(feature = "python")]
-extern crate lk_agents_inference as _;
-#[cfg(feature = "python")]
 extern crate lk_agents_media as _;
+
+/// The provider clients, judges and detectors, wired to this process by [`process::Process`]
+/// (decision 88); the extension names their declared classes through this path.
+pub use lk_agents_inference as inference;
 
 pub mod a2a;
 pub mod a2a_auth;
 pub mod a2a_card;
 pub mod a2a_client;
 pub mod agent_run;
-pub mod avatar;
 pub mod avatar_output;
 pub mod codecs;
 pub mod duplex;
-pub mod evals;
-pub mod fallback;
 pub mod host;
-pub mod http;
 #[cfg(feature = "media-images")]
 pub mod images;
-pub mod llm;
 pub mod mcp;
 pub mod process;
 pub mod realtime;
 pub mod recording;
 pub mod source;
 pub mod storage;
-pub mod stt;
 pub mod telemetry;
 
 pub mod worker_cli;

@@ -121,7 +121,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
     }
 
     fn with_conn_options(&self, conn: &::lk_agents_abi::ApiConnectOptions) -> ::std::option::Option<::std::sync::Arc<dyn ::lk_agents_abi::Stt>> {
-        Some(::lk_agents_runtime::stt::RetryingStt::bound(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }), conn, ::lk_agents_runtime::process::host_clock()))
+        Some(::lk_agents_runtime::inference::stt::retrying::RetryingStt::bound(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }), conn, ::lk_agents_runtime::process::host_clock()))
     }
 
     async fn recognize(&self, buffer: &[::lk_agents_abi::AudioFrame], language: Option<&::lk_agents_abi::LanguageCode>) -> ::std::result::Result<::lk_agents_abi::SpeechEvent, ::lk_agents_abi::errors::ProviderError> {

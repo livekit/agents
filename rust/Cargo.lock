@@ -1497,6 +1497,7 @@ dependencies = [
  "jsonwebtoken 9.3.1",
  "livekit-protocol",
  "lk-agents-abi",
+ "lk-agents-core",
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-net",

@@ -9,6 +9,7 @@ pub mod transcript;
 #[cfg(test)]
 mod tests;
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -27,6 +28,8 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
+use crate::env::{Env, Standalone};
+
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =
     ApiConnectOptions { read_timeout: Some(90.0), ..DEFAULT_API_CONNECT_OPTIONS };
@@ -35,12 +38,13 @@ const JUDGE_CONN_OPTIONS: ApiConnectOptions =
 const INFERENCE_CLASS: &str = "low";
 
 /// The judges of evaluations on one model, and the host that runs the application's.
-pub struct Judges {
+pub struct Judges<E: Env = Standalone> {
     llm: Option<Arc<dyn Llm>>,
     /// The host's live judge tools, offered to a model the host implements.
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
+    env: PhantomData<fn() -> E>,
 }
 
 enum Judge {
@@ -48,9 +52,9 @@ enum Judge {
     Host { name: String, evaluator: HostRef },
 }
 
-impl JudgeRunner for Judges {
+impl<E: Env> JudgeRunner for Judges<E> {
     fn new(llm: Option<Arc<dyn Llm>>, tools: HostRef, host: Arc<dyn EvaluationHost>) -> Self {
-        Judges { llm, tools, host, clock: crate::process::host_clock() }
+        Judges { llm, tools, host, clock: E::clock(), env: PhantomData }
     }
 
     async fn evaluate(
@@ -106,7 +110,7 @@ impl JudgeRunner for Judges {
     }
 }
 
-impl Judges {
+impl<E: Env> Judges<E> {
     async fn judge(
         &self,
         judge: &Judge,

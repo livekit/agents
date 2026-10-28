@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use std::collections::{BTreeMap, VecDeque};
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,17 +16,18 @@ use lk_agents_abi::{
     LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
 use lk_agents_core::llm::provider_format::PreResolved;
-use lk_agents_inference::headers::{Headers, identification_headers};
-use lk_agents_inference::llm::lifecycle::{
+use crate::headers::{Headers, identification_headers};
+use crate::llm::lifecycle::{
     LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
 };
-use lk_agents_inference::llm::request::ChatArgs;
-use lk_agents_inference::llm::{LlmOptions, models};
+use crate::llm::request::ChatArgs;
+use crate::llm::{LlmOptions, models};
 mod request;
 use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
+use crate::env::{Env, Standalone};
 use crate::http::{GatewayHttp, Reporter, Stamped};
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
@@ -36,7 +38,7 @@ static NEXT_LLM: AtomicU64 = AtomicU64::new(1);
 
 /// One `inference.LLM` and its views per job identity: the options are shared, each view stamps
 /// its own job's headers on its requests.
-pub struct GatewayLlm {
+pub struct GatewayLlm<E: Env = Standalone> {
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
     runtime: tokio::runtime::Handle,
@@ -47,9 +49,10 @@ pub struct GatewayLlm {
     /// The host provider whose `error` events report the attempts this view retries.
     reporter: Option<Arc<dyn Llm>>,
     prewarm: Mutex<Option<OwnedTask>>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl GatewayLlm {
+impl<E: Env> GatewayLlm<E> {
     pub fn new(
         opts: LlmOptions,
         http: Arc<GatewayHttp>,
@@ -66,6 +69,7 @@ impl GatewayLlm {
             requests: Arc::new(AtomicU64::new(1)),
             reporter: None,
             prewarm: Mutex::new(None),
+            env: PhantomData,
         }
     }
 
@@ -81,6 +85,7 @@ impl GatewayLlm {
             requests: self.requests.clone(),
             reporter,
             prewarm: Mutex::new(None),
+            env: PhantomData,
         }
     }
 
@@ -137,7 +142,7 @@ impl GatewayLlm {
 }
 
 /// `_core.InferenceLlm`: the generated adapter calls this.
-impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
+impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
     type Chunks = LlmChunks;
 
     fn new(
@@ -150,7 +155,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         extra_kwargs: Option<Extra>,
     ) -> Result<Self, ApiError> {
         let unavailable = |e: String| ApiError::new(e).with_retryable(false);
-        let runtime = crate::process::handle().map_err(|e| unavailable(e.to_string()))?;
+        let runtime = E::runtime().map_err(unavailable)?;
         let http = GatewayHttp::shared().map_err(unavailable)?;
         let opts = LlmOptions {
             model,
@@ -161,7 +166,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             inference_class,
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
-        Ok(GatewayLlm::new(opts, http, runtime, crate::process::host_clock()))
+        Ok(GatewayLlm::new(opts, http, runtime, E::clock()))
     }
 
     fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Llm>>) -> Self {
@@ -220,7 +225,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
 }
 
 #[async_trait]
-impl Llm for GatewayLlm {
+impl<E: Env> Llm for GatewayLlm<E> {
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {
             reporter.failed(error, recoverable);

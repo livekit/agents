@@ -2,7 +2,7 @@
 //! observed (connection, request handed over, response bytes, decoded answer, end or failure) and
 //! decides nothing. The request's core owns every deadline and retry.
 
-pub(crate) mod exchange;
+pub mod exchange;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -10,9 +10,9 @@ use std::task::{Context, Poll};
 
 use futures_util::StreamExt;
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_inference::attempts::AttemptFailure;
-use lk_agents_inference::llm::lifecycle::LlmRequestEvent;
-use lk_agents_inference::llm::parse::WireChunk;
+use crate::attempts::AttemptFailure;
+use crate::llm::lifecycle::LlmRequestEvent;
+use crate::llm::parse::WireChunk;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{Notify, mpsc};
 
@@ -241,7 +241,7 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
         |name: &str| response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
     let request_id = header("x-request-id");
     if status == 429 {
-        let quota = lk_agents_inference::extract_quota_usage(|name| {
+        let quota = crate::extract_quota_usage(|name| {
             response.headers().get(name).and_then(|v| v.to_str().ok())
         });
         let quota: Vec<String> = quota.iter().map(|(k, v)| format!("{k}={v}")).collect();

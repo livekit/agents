@@ -2,6 +2,7 @@
 //! `chat()` returns at once and the chain runs as a task feeding an `mpsc`
 //! (`FallbackLLMStream._run`), so its failure surfaces on the first `next()`.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,7 +10,8 @@ use lk_agents_abi::Clock;
 use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
-use lk_agents_abi::{ChatRequest, Extra, HostRef, Llm, LlmStream, ToolChoice, ToolSpec};
+use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::{ChatRequest, Closed, Extra, HostRef, Llm, LlmStream, StreamSource, ToolChoice, ToolSpec, Ts};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
@@ -17,6 +19,7 @@ use crate::fallback::chain::{
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
+use crate::env::{Env, Standalone};
 use crate::fallback::policy::ChainPolicy;
 
 pub struct LlmBackend {
@@ -69,12 +72,14 @@ impl Backend for LlmBackend {
     }
 }
 
-pub struct FallbackLlm {
+/// `E` is the process a host-constructed chain runs in (decision 88).
+pub struct FallbackLlm<E: Env = Standalone> {
     chain: Arc<FallbackChain<LlmBackend>>,
     spawner: Arc<dyn Spawner>,
+    env: PhantomData<fn() -> E>,
 }
 
-impl FallbackLlm {
+impl<E: Env> FallbackLlm<E> {
     pub fn new(
         llms: Vec<Arc<dyn Llm>>,
         policy: ChainPolicy,
@@ -85,7 +90,7 @@ impl FallbackLlm {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, Arc::clone(&spawner), observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain), spawner })
+        Ok(FallbackLlm { chain: Arc::new(chain), spawner, env: PhantomData })
     }
 
     pub fn chain(&self) -> &Arc<FallbackChain<LlmBackend>> {
@@ -96,25 +101,29 @@ impl FallbackLlm {
     pub fn active(&self) -> Arc<dyn Llm> {
         Arc::clone(&self.chain.active().inner)
     }
+
+    /// Cancel every recovery probe in flight, idempotently. Dropping does not (§4.2 #7).
+    pub fn aclose(&self) {
+        self.chain.aclose();
+    }
 }
 
 /// `llm.FallbackAdapter`'s engine as the host builds it. The public class stays Python (users
-/// construct, subclass and call it standalone); its `chat()` calls [`chat_for_host`](Self::chat_for_host).
-impl FallbackLlm {
+/// construct, subclass and call it standalone); its `chat()` opens the chain over its own objects.
+impl<E: Env> lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm<E> {
+    type Chunks = FallbackLlmChunks;
+
     /// `llms` in order; the keywords are `FallbackAdapter.__init__`'s. Each entry is bound to
     /// `max_retry = 0`, distinct from the chain's `max_retry_per_llm`: the chain is the retry loop,
     /// and a plugin's own would multiply it (N×M attempts).
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_host(
+    fn new(
         llms: Vec<Arc<dyn Llm>>,
         attempt_timeout: f64,
         max_retry_per_llm: u32,
         retry_interval: f64,
         sticky: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
-        clock: Arc<dyn Clock>,
-        spawner: Arc<dyn Spawner>,
-    ) -> Result<Self, NoBackends> {
+    ) -> Result<Self, InvalidPayload> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
             attempt_timeout: Some(attempt_timeout),
@@ -122,34 +131,24 @@ impl FallbackLlm {
             sticky,
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        FallbackLlm::new(llms, policy, clock, spawner, observer)
-    }
-
-    /// The chain as the provider the session holds (a native `_core.FallbackLlm` is not proxied).
-    pub fn as_llm(self: &Arc<Self>) -> Arc<dyn Llm> {
-        Arc::clone(self) as Arc<dyn Llm>
+        FallbackLlm::new(llms, policy, E::clock(), E::spawner().map_err(InvalidPayload)?, observer)
+            .map_err(|error| InvalidPayload(error.to_string()))
     }
 
     /// Which entry most recently served, as a position in the host's list (the reference's
     /// `_active_instance`; 0 before any traffic).
-    pub fn active_index(&self) -> usize {
+    fn active_index(&self) -> usize {
         self.chain.active_index()
     }
 
-    /// Cancel every recovery probe in flight, idempotently. Dropping does not (§4.2 #7).
-    pub fn aclose(&self) {
-        self.chain.aclose();
-    }
-
-    /// `aclose()`: every recovery probe in flight closes its stream, awaited (bounded).
-    pub async fn aclose_for_host(&self) {
+    /// Every recovery probe in flight closes its stream, awaited (bounded).
+    async fn aclose(&self) {
         self.chain.close().await;
     }
 
-    /// Open a completion over the caller's own `ChatContext` and tools (the host objects every
-    /// entry is handed, §1.11); the chain picks an entry on the first `recv()`.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn chat_for_host(
+    /// A completion over the caller's own `ChatContext` and tools (the host objects every entry
+    /// is handed, §1.11); the chain picks an entry on the first `recv()`.
+    async fn chat(
         &self,
         chat_ctx_host: HostRef,
         tools: Vec<ToolSpec>,
@@ -158,7 +157,7 @@ impl FallbackLlm {
         tool_choice: Option<serde_json::Value>,
         extra_kwargs: Option<Extra>,
         conn_options: Option<lk_agents_abi::ApiConnectOptions>,
-    ) -> Result<LlmStream, ProviderError> {
+    ) -> Result<Self::Chunks, ProviderError> {
         let req = ChatRequest {
             chat_ctx_host: Some(chat_ctx_host),
             tools,
@@ -169,12 +168,29 @@ impl FallbackLlm {
             extra: extra_kwargs,
             ..ChatRequest::default()
         };
-        self.chat(&req).await
+        Llm::chat(self, &req).await.map(FallbackLlmChunks)
+    }
+}
+
+/// The chain's native source, consumed through the generated shared stream bridge.
+pub struct FallbackLlmChunks(LlmStream);
+
+impl StreamSource<LlmChunk> for FallbackLlmChunks {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        self.0.next()
+    }
+
+    fn cancel_safe(&self) -> bool {
+        self.0.cancel_safe()
+    }
+
+    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        self.0.close(deadline)
     }
 }
 
 #[async_trait]
-impl Llm for FallbackLlm {
+impl<E: Env> Llm for FallbackLlm<E> {
     fn label(&self) -> String {
         "llm.FallbackAdapter".into()
     }

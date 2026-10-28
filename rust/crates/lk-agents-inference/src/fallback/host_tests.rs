@@ -1,4 +1,4 @@
-//! The declared facade preserves native provider dispatch and stream cleanup.
+//! The declared class preserves native provider dispatch and stream cleanup.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -6,7 +6,12 @@ use std::time::Duration;
 use lk_agents_abi::ChoiceDelta;
 use lk_agents_abi::llm::fallback::FallbackLlm as DeclaredFallback;
 
-use super::*;
+use std::sync::Arc;
+
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, RealClock, StreamSource, Ts};
+
+use super::FallbackLlm;
 
 struct Provider(Arc<AtomicBool>);
 
@@ -81,7 +86,7 @@ async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {
     assert_eq!(chunk.delta.unwrap().content.as_deref(), Some("native response"));
     assert_eq!(DeclaredFallback::active_index(&fallback), 0);
 
-    let deadline = crate::process::host_clock().now().saturating_add(Duration::from_secs(5));
+    let deadline = RealClock::new().now().saturating_add(Duration::from_secs(5));
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), stream.close(deadline))
             .await

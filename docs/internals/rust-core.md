@@ -60,7 +60,7 @@ lk-agents-py -> lk-agents-runtime, lk-agents-abi
 lk-agents-runtime -> sans-I/O crates, async I/O crates
 lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
-lk-agents-inference -> lk-agents-media
+lk-agents-inference -> lk-agents-core, lk-agents-media
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 lk-agents-fuzz -> sans-I/O crates + lk-agents-abi
@@ -68,7 +68,9 @@ lk-agents-fuzz -> sans-I/O crates + lk-agents-abi
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
 `lk-agents-media`. `lk-agents-media` is a synchronous data-plane core with no
-async runtime, so voice and inference compose it like `lk-agents-core`.
+async runtime, so voice and inference compose it like `lk-agents-core`; inference
+also uses `lk-agents-core`'s chat formatting, strict tool schemas and JSON repair
+for the request bodies it sends.
 `lk-agents-core` has no dependency on `lk-agents-storage`: its A2A decisions
 emit storage effects over request/result records and error types declared in
 ABI, and the runtime's A2A door executes them by calling storage.
@@ -82,7 +84,11 @@ The runtime depends on the async I/O crates to wire voice and text sessions:
 providers, storage, the worker server, judges and the delegation client in
 `lk-agents-net`. `lk-agents-py` depends only on the runtime and ABI: it uses ABI for the declared types its generated conversions translate, and the
 runtime re-exports the implementations of declared classes that its generated
-adapters select. Async I/O crates depend on ABI and never on the runtime,
+adapters select. The runtime injects what its process lends (the Tokio runtime
+handle, the host's executor and clock, the media worker pool) into the async
+crates' constructors; a declared class the host constructs reads them through a
+type parameter the runtime binds to its process (`GatewayLlm<Process>`), never
+through a dependency on the runtime. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
 and HostInvoker's declared port.
 
@@ -946,7 +952,7 @@ closures must contain no runtime, executor, async transport or host SDK: no
 tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
-edges `voice -> core`, `voice -> media`, `inference -> media`, `py -> abi`,
+edges `voice -> core`, `voice -> media`, `inference -> core`, `inference -> media`, `py -> abi`,
 async I/O crates `-> net` and `fuzz -> sans-I/O crates + abi` described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz

@@ -13,6 +13,7 @@
 pub mod lifecycle;
 pub mod machine;
 pub mod options;
+pub mod retrying;
 #[cfg(feature = "python")]
 mod python;
 pub mod wire;

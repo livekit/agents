@@ -6,3 +6,6 @@ mod support;
 mod interruption_transport;
 mod interruption_websocket;
 mod live_gateway;
+mod avatar_peer;
+mod llm_live;
+mod llm_peer;

@@ -1,11 +1,11 @@
-//! The real LiveKit Inference gateway over the runtime's transport: the wire assumptions no
+//! The real LiveKit Inference gateway over its transport: the wire assumptions no
 //! controlled peer can check (claim set, auth scheme, path, `include_usage`, error bodies).
 //!
 //! `#[ignore]`d (credentials and network). Run with:
 //!
 //! ```sh
 //! set -a && . ~/livekit/.env && set +a
-//! cargo test -p lk-agents-runtime --test llm_live -- --ignored --nocapture
+//! cargo test -p lk-agents-inference --test inference llm_live -- --ignored --nocapture
 //! ```
 
 use std::sync::Arc;
@@ -14,8 +14,8 @@ use std::time::Duration;
 use lk_agents_abi::{ChatContext, RealClock, Role};
 use lk_agents_inference::llm::LlmOptions;
 use lk_agents_inference::llm::lifecycle::RequestPolicy;
-use lk_agents_runtime::http::GatewayHttp;
-use lk_agents_runtime::llm::GatewayLlm;
+use lk_agents_inference::http::GatewayHttp;
+use lk_agents_inference::llm::gateway::GatewayLlm;
 
 fn llm(model: &str) -> Option<GatewayLlm> {
     let api_key = lk_agents_inference::creds::resolve_api_key(None).ok()?;

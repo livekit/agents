@@ -22,6 +22,9 @@ license.workspace = true
 # one of them (§1.0's table); it defines none of its own.
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-net = { path = "../lk-agents-net" }
+# Chat formatting, strict tool schemas and JSON repair: the gateway LLM's, the realtime model's and
+# the judges' request bodies (sans-IO, no executor in its closure).
+lk-agents-core = { path = "../lk-agents-core" }
 # `build_strict_openai_schema`, which is what `ToolContext.parse_function_tools("openai",
 # strict=True)` returns and what the gateway's OpenAI-compatible body carries.
 # `AudioByteStream` (the 50 ms re-framing every STT send loop does) and nothing else. Reaching for
@@ -72,7 +75,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 # provider; `rustls-no-provider` plus this explicit `rustls` line keeps one.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 url = "2"
 log.workspace = true

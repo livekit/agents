@@ -142,8 +142,6 @@ async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
 #[tokio::test(start_paused = true)]
 async fn a_recognition_gives_up_after_its_budget() {
     // Exhausting it raises the host's chained connection error, so the interpreter must exist.
-    #[cfg(feature = "python")]
-    pyo3::Python::initialize();
     let inner = Arc::new(Flaky::default());
     let stt = retrying(Arc::clone(&inner), 1);
     let error = stt.recognize(&[], None).await.unwrap_err();
@@ -218,8 +216,6 @@ fn dropping(uptime_secs: u64, options: ApiConnectOptions) -> (RetryingStt, Arc<d
 // when nobody speaks, while attempts failing before the connect limit still give up.
 #[tokio::test(start_paused = true)]
 async fn an_idle_socket_that_keeps_dropping_never_exhausts_the_budget() {
-    #[cfg(feature = "python")]
-    pyo3::Python::initialize();
     let options = ApiConnectOptions::default();
     let (stt, clock) = dropping(180, options);
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();

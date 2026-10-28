@@ -19,7 +19,7 @@ use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamSink, StreamSource};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
-use lk_agents_inference::attempts::{AttemptStep, Attempts, RequestPolicy};
+use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 pub struct RetryingStt {
     inner: Arc<dyn Stt>,

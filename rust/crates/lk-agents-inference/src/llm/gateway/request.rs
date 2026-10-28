@@ -3,9 +3,9 @@
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ChatContext, ToolSpec};
-use lk_agents_inference::headers::{Headers, identification_headers};
-use lk_agents_inference::llm::request::ChatArgs;
-use lk_agents_inference::llm::{LlmOptions, models, request};
+use crate::headers::{Headers, identification_headers};
+use crate::llm::request::ChatArgs;
+use crate::llm::{LlmOptions, models, request};
 use lk_agents_net::transport::HttpRequest;
 use serde_json::Value;
 #[cfg(test)]
@@ -81,7 +81,7 @@ pub fn build_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_inference::testkit::NoImages;
+    use crate::testkit::NoImages;
 
     fn opts() -> LlmOptions {
         LlmOptions {

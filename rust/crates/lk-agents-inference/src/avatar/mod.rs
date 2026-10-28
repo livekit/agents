@@ -3,6 +3,7 @@
 //! to adoption or termination. The runtime performs the exchanges; the host keeps the room and
 //! the agent's audio sink.
 
+pub mod gateway;
 pub mod lifecycle;
 
 use lk_agents_abi::inference::avatar_session::AvatarError;

@@ -187,7 +187,7 @@ async fn a_sticky_chain_keeps_the_entry_that_served_after_the_primary_recovers()
         let backup = FakeLlm::new("b", Some(vec![chunk("backup")]));
         let (clock, spawner, obs) = parts();
         let policy = ChainPolicy { sticky, ..ChainPolicy::llm_defaults() };
-        let fb =
+        let fb: FallbackLlm =
             FallbackLlm::new(vec![primary.clone(), backup.clone()], policy, clock, spawner, obs)
                 .expect("entries");
 

@@ -59,8 +59,8 @@ impl generated::Implementations for Selected {
     type RemoteConfiguration = lk_agents_runtime::a2a_client::remote::RemoteInteraction;
     type ContextActivation = lk_agents_runtime::storage::context::ContextActivation;
     type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
-    type JudgeRunner = lk_agents_runtime::evals::Judges;
-    type Evaluations = lk_agents_runtime::evals::Rules;
+    type JudgeRunner = lk_agents_runtime::inference::evals::Judges<lk_agents_runtime::process::Process>;
+    type Evaluations = lk_agents_runtime::inference::evals::Rules;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
@@ -83,9 +83,9 @@ impl generated::Implementations for Selected {
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type RunEvents = lk_agents_runtime::agent_run::RunEvents;
     type DataStreamAudioOutput = crate::avatar_output::DataStreamAudioOutput;
-    type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;
-    type FallbackLlm = lk_agents_runtime::fallback::FallbackLlm;
-    type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;
+    type InferenceAvatar = lk_agents_runtime::inference::avatar::gateway::GatewayAvatar<lk_agents_runtime::process::Process>;
+    type FallbackLlm = lk_agents_runtime::inference::fallback::FallbackLlm<lk_agents_runtime::process::Process>;
+    type InferenceLlm = lk_agents_runtime::inference::llm::gateway::GatewayLlm<lk_agents_runtime::process::Process>;
     type ChoiceParser = lk_agents_runtime::cores::ChoiceParser;
     type CompletionWire = lk_agents_runtime::cores::CompletionWire;
     type Storage = lk_agents_runtime::storage::host::HostStorage;

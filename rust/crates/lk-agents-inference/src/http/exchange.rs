@@ -9,7 +9,7 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
-use lk_agents_inference::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
+use crate::attempts::{AttemptFailure, AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::mpsc;
 
@@ -18,7 +18,7 @@ use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 type Sending = Pin<Box<dyn Future<Output = Result<reqwest::Response, AttemptFailure>> + Send>>;
 type Body = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
 
-pub(crate) enum HttpEvent {
+pub enum HttpEvent {
     /// A retry discards response data that has not been delivered to the consumer.
     Started,
     Headers(reqwest::header::HeaderMap),
@@ -26,7 +26,7 @@ pub(crate) enum HttpEvent {
     End,
 }
 
-pub(crate) struct Exchange {
+pub struct Exchange {
     core: Attempts,
     http: Arc<GatewayHttp>,
     request: HttpRequest,
@@ -42,7 +42,7 @@ pub(crate) struct Exchange {
 }
 
 impl Exchange {
-    pub(crate) fn new(
+    pub fn new(
         http: Arc<GatewayHttp>,
         method: reqwest::Method,
         request: HttpRequest,
@@ -71,11 +71,11 @@ impl Exchange {
         exchange
     }
 
-    pub(crate) fn delivered(&mut self) {
+    pub fn delivered(&mut self) {
         self.core.delivered();
     }
 
-    pub(crate) async fn next(&mut self) -> Result<HttpEvent, ApiError> {
+    pub async fn next(&mut self) -> Result<HttpEvent, ApiError> {
         let expecting = self.reporter.clock.now();
         loop {
             // Observations already queued precede a wall-clock wake. This matters when a
@@ -149,7 +149,7 @@ impl Exchange {
 
     /// Consumer backpressure suspends remote read inactivity, while the operation's total
     /// deadline keeps running under the same request core.
-    pub(crate) async fn wait_for_consumer<T>(
+    pub async fn wait_for_consumer<T>(
         &mut self,
         delivery: impl Future<Output = T>,
     ) -> Result<T, ApiError> {
