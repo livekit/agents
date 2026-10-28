@@ -70,7 +70,6 @@ _UNCONFIGURED_TTL = 8.0
 _CONFIGURED_TTL = 25.0
 _KEEPALIVE_INTERVAL = 15.0
 _KEEPALIVE_TIMEOUT = 3.0
-_SESSION_DONE_TIMEOUT = 60.0
 
 
 @dataclass
@@ -487,6 +486,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                             continue
                         await ws.send_str(json.dumps({"type": "input.done"}))
                         state.flushes_sent += 1
+                        state.progress.set()
                         buffered = False
                         continue
                     self.mark_started()
@@ -523,8 +523,8 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
                     segment_bytes += len(msg.data)
                     # Audio counts as progress. The server only sends
                     # session.done once the whole utterance is synthesized, so
-                    # without this a turn longer than _SESSION_DONE_TIMEOUT is
-                    # aborted mid-sentence on a perfectly healthy socket — and
+                    # Progress extends the read window while synthesis is pending;
+                    # a long utterance must not expire on a healthy socket, and
                     # the framework won't retry once audio has been pushed.
                     state.progress.set()
                     continue
@@ -629,14 +629,18 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             try:
                 done, _ = await asyncio.wait(
                     {recv_task, waiter},
-                    timeout=_SESSION_DONE_TIMEOUT,
+                    timeout=(
+                        self._conn_options.read_timeout
+                        if state.flushes_sent > state.flushes_done
+                        else None
+                    ),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
             finally:
                 if not waiter.done():
                     waiter.cancel()
             if not done:
-                raise APITimeoutError()
+                raise APITimeoutError("Qwen3 synthesis read timed out", phase="read")
 
     def _emit_timestamps(
         self,
@@ -672,13 +676,18 @@ async def _control(model_endpoint: str, api_key: str | None, message: dict) -> d
     if not api_key:
         raise ValueError("Pass `api_key` or set BASETEN_API_KEY.")
     async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(
+        async with await utils.http_context.ws_connect(
+            session,
             model_endpoint,
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
             headers={"Authorization": f"Api-Key {api_key}"},
             max_msg_size=_WS_MAX_MSG_SIZE,
         ) as ws:
             await ws.send_str(json.dumps(message))
-            msg = await ws.receive()
+            try:
+                msg = await ws.receive(timeout=DEFAULT_API_CONNECT_OPTIONS.read_timeout)
+            except TimeoutError as e:
+                raise APITimeoutError("Qwen3 control read timed out", phase="read") from e
             if msg.type is not aiohttp.WSMsgType.TEXT:
                 # .data is None on CLOSED, the close code on CLOSE, an exception
                 # on ERROR — json.loads would raise a bare TypeError and hide
