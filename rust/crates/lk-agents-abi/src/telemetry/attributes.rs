@@ -50,7 +50,7 @@ pub const ATTRIBUTE_SIMULATOR: &str = "lk.simulator";
 
 /// The job attribute carrying the run's protojson ``SimulationDispatch``,
 /// delivered with the agent dispatch and read by
-/// ``JobContext.simulation_context()``.
+/// ``JobContext.simulation_context``.
 #[crate::host(constant)]
 pub const ATTRIBUTE_SIMULATOR_DISPATCH: &str = "lk.simulator.dispatch";
 

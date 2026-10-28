@@ -52,7 +52,7 @@ When set to "true", the agent will skip audio input/output processing.
 ATTRIBUTE_SIMULATOR_DISPATCH: Final = "lk.simulator.dispatch"
 """The job attribute carrying the run's protojson ``SimulationDispatch``,
 delivered with the agent dispatch and read by
-``JobContext.simulation_context()``.
+``JobContext.simulation_context``.
 """
 
 ATTRIBUTE_SIMULATION_ENABLED: Final = "lk.simulation.enabled"

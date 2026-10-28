@@ -368,15 +368,12 @@ class LLMStream(ABC):
 
         Example:
             ```python
-            from livekit.agents import llm
-
             response = await my_llm.chat(chat_ctx=ctx, tools=tools).collect()
-
-            for tc in response.tool_calls:
-                result = await llm.execute_function_call(tc, tool_ctx)
-                ctx.insert(result.fnc_call)
-                ctx.insert(result.fnc_call_out)
+            print(response.text)
             ```
+
+        Tool calls are available in ``response.tool_calls``. Use ``Agent.run()``
+        when the framework should execute tools and continue the conversation.
         """
         text_parts: list[str] = []
         tool_calls: list[FunctionToolCall] = []
