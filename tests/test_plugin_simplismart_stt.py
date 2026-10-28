@@ -203,11 +203,21 @@ def _stream(session: _FakeSession) -> simplismart_stt.SpeechStream:
         conn_options=DEFAULT_API_CONNECT_OPTIONS,
         api_key="sk_test",
         http_session=session,  # type: ignore[arg-type]
+        base_url=stt._base_url,
+        on_closed=stt._streams.discard,
     )
 
 
+@pytest.fixture
+def websocket_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def connect(session, *args, conn_options, **kwargs):
+        return await session.ws_connect(*args, **kwargs)
+
+    monkeypatch.setattr(simplismart_stt.utils.http_context, "ws_connect", connect)
+
+
 @pytest.mark.asyncio
-async def test_socket_is_opened_with_a_heartbeat() -> None:
+async def test_socket_is_opened_with_a_heartbeat(websocket_transport: None) -> None:
     """aiohttp defaults `heartbeat` to None, so without it the read side of a
     half-open socket parks forever and the reconnect in `_run`, which only fires
     when `recv_task` ends, never gets a turn."""
@@ -221,7 +231,7 @@ async def test_socket_is_opened_with_a_heartbeat() -> None:
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_timeout_reconnects_without_spinning() -> None:
+async def test_heartbeat_timeout_reconnects_without_spinning(websocket_transport: None) -> None:
     """The ERROR frame has to end the recv loop and request a reconnect. Logging it
     as an unexpected type and continuing only reconnected because aiohttp happened
     to report CLOSED next, and it threw away the one value that says why the socket

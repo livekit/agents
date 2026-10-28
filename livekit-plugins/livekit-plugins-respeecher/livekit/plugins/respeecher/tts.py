@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -215,7 +216,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            ensure_session=self._ensure_session,
+        )
 
     def prewarm(self) -> None:
         self._pool.prewarm()
@@ -223,7 +230,13 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            pool=self._pool,
+            sentence_tokenizer=self._sentence_tokenizer,
+        )
         self._streams.add(stream)
         return stream
 
@@ -238,10 +251,18 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize text using Respeecher HTTPS endpoint"""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._ensure_session = ensure_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the TTS synthesis"""
@@ -262,7 +283,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._ensure_session(),
                 "POST",
                 http_url,
                 headers={
@@ -300,10 +321,19 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streamed API using WebSocket for real-time synthesis"""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
+        self._sentence_tokenizer = sentence_tokenizer
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -319,7 +349,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=context_id)
 
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        sent_tokenizer_stream = self._sentence_tokenizer.stream()
         input_ended = False
 
         def _voice_payload() -> dict[str, object]:
@@ -412,7 +442,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
 
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

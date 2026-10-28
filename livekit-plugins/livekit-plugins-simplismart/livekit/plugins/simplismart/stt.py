@@ -23,6 +23,7 @@ import contextlib
 import json
 import os
 import traceback
+from collections.abc import Callable
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -302,6 +303,8 @@ class STT(stt.STT):
             conn_options=conn_options,
             api_key=self._api_key,
             http_session=stream_session,
+            base_url=self._base_url,
+            on_closed=self._streams.discard,
         )
         self._streams.add(stream)
         return stream
@@ -337,6 +340,8 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         api_key: str,
         http_session: aiohttp.ClientSession,
+        base_url: str,
+        on_closed: Callable[["SpeechStream"], None],
     ) -> None:
         self._opts = opts
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=self._SAMPLE_RATE)
@@ -344,7 +349,8 @@ class SpeechStream(stt.SpeechStream):
         self._session = http_session
         self._reconnect_event = asyncio.Event()
         self._request_id = str(id(self))
-        self.ws_url = stt._base_url
+        self.ws_url = base_url
+        self._on_closed = on_closed
 
     async def _run(self) -> None:
 
@@ -474,9 +480,8 @@ class SpeechStream(stt.SpeechStream):
         if self._session and not self._session.closed:
             await self._session.close()
         # Release the STT's strong ownership only after session cleanup succeeds.
-        stt = self._stt
-        if self._session.closed and isinstance(stt, STT):
-            stt._streams.discard(self)
+        if self._session.closed:
+            self._on_closed(self)
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with language for Simplismart models."""

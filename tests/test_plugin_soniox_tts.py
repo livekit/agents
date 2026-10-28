@@ -224,7 +224,7 @@ async def _synthesize(
 ) -> int:
     tts = soniox.TTS(api_key="fake-key", **tts_kwargs)
 
-    async def _fake_current_connection(*, conn_options: APIConnectOptions) -> _FakeConnection:
+    async def _fake_current_connection(conn_options: APIConnectOptions) -> _FakeConnection:
         return fake
 
     tts._current_connection = _fake_current_connection  # type: ignore[method-assign]

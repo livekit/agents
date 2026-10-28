@@ -9,6 +9,7 @@ import asyncio
 import json
 import struct
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -125,6 +126,8 @@ class STT(stt.STT):
             stt=self,
             conn_options=conn_options,
             language=resolved_language,
+            opts=self._opts,
+            ensure_session=self._session_manager.ensure_session,
         )
         self._streams.add(stream)
         return stream
@@ -170,9 +173,12 @@ class SpeechStream(stt.RecognizeStream):
         stt: STT,
         conn_options: APIConnectOptions,
         language: LanguageCode,
+        opts: _STTOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
-        self._stt: STT = stt
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._opts = opts
+        self._ensure_session = ensure_session
         self._language = language
         self._speaking = False
 
@@ -183,12 +189,12 @@ class SpeechStream(stt.RecognizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
-            wav_header = _create_streaming_wav_header(self._stt._opts.sample_rate, NUM_CHANNELS)
+            wav_header = _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
             await ws.send_bytes(wav_header)
 
-            samples_per_chunk = self._stt._opts.sample_rate // 20
+            samples_per_chunk = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._stt._opts.sample_rate,
+                sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=samples_per_chunk,
             )
@@ -259,7 +265,7 @@ class SpeechStream(stt.RecognizeStream):
                 await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        opts = self._stt._opts
+        opts = self._opts
         params = {
             "transcription_engine": opts.transcription_engine,
             "language": self._language,
@@ -271,7 +277,7 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             ws = await utils.http_context.ws_connect(
-                self._stt._session_manager.ensure_session(),
+                self._ensure_session(),
                 url,
                 headers=headers,
                 # Without this a silently dropped socket (half-open TCP, no FIN/RST)

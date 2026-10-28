@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -129,10 +130,11 @@ class TTS(tts.TTS):
                 max_tokens=max_tokens,
             )
 
-        self._api_key = api_key or os.environ.get("SIMPLISMART_API_KEY")
-        if not self._api_key:
+        resolved_key = api_key or os.environ.get("SIMPLISMART_API_KEY")
+        if not resolved_key:
             raise ValueError("SIMPLISMART_API_KEY is not set")
 
+        self._api_key = resolved_key
         self._session = http_session
 
     @property
@@ -154,14 +156,34 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            api_key=self._api_key,
+            base_url=self._base_url,
+            ensure_session=self._ensure_session,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        api_key: str,
+        base_url: str,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._api_key = api_key
+        self._base_url = base_url
+        self._ensure_session = ensure_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if self._opts.qwen_options is not None:
@@ -174,7 +196,7 @@ class ChunkedStream(tts.ChunkedStream):
                 "leading_silence": qwen_opts.leading_silence,
             }
             headers = {
-                "Authorization": f"Bearer {self._tts._api_key}",
+                "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
                 "Accept": "audio/L16",
             }
@@ -190,17 +212,17 @@ class ChunkedStream(tts.ChunkedStream):
                 "max_tokens": simplismart_opts.max_tokens,
             }
             headers = {
-                "Authorization": f"Bearer {self._tts._api_key}",
+                "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             }
 
-        logger.debug("TTS request to %s (model: %s)", self._tts._base_url, self._opts.model)
+        logger.debug("TTS request to %s (model: %s)", self._base_url, self._opts.model)
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._ensure_session(),
                 "POST",
-                self._tts._base_url,
+                self._base_url,
                 json=payload,
                 headers=headers,
                 conn_options=self._conn_options,

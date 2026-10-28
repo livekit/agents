@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -231,12 +232,24 @@ class TTS(tts.TTS):
                 " NEUPHONIC_API_KEY environment variable"
             )
 
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            ensure_session=self._ensure_session,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            pool=self._pool,
+            sentence_tokenizer=self._sentence_tokenizer,
+        )
         self._streams.add(stream)
         return stream
 
@@ -257,10 +270,12 @@ class ChunkedStream(tts.ChunkedStream):
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._ensure_session = ensure_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -270,7 +285,7 @@ class ChunkedStream(tts.ChunkedStream):
                 headers = None
 
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._ensure_session(),
                 "POST",
                 f"{self._opts.base_url}/sse/speak/{self._opts.lang_code.language}",
                 headers=headers,
@@ -363,10 +378,19 @@ def _parse_sse_message(message: str) -> _Response | None:
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
+        self._sentence_tokenizer = sentence_tokenizer
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
@@ -384,7 +408,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input in self.input:
                 if isinstance(input, str):
                     if chunks_stream is None:
-                        chunks_stream = self._tts._sentence_tokenizer.stream()
+                        chunks_stream = self._sentence_tokenizer.stream()
                         self._segments_ch.send_nowait(chunks_stream)
                     chunks_stream.push_text(input)
                 elif isinstance(input, self.Flush):
@@ -482,7 +506,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     logger.warning("Unexpected NeuPhonic message type: %s", msg.type)
 
-        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

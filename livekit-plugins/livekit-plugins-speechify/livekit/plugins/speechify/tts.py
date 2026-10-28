@@ -267,14 +267,26 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            client=self._client,
+        )
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        return SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            client=self._client,
+            tokenizer=self._tokenizer,
+        )
 
 
 class _Request(TypedDict):
@@ -477,10 +489,18 @@ def _check_deprecated_args(kwargs: dict[str, object]) -> None:
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        client: AsyncSpeechify,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._client = client
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         output_emitter.initialize(
@@ -491,7 +511,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         try:
             await _synthesize_text(
-                self._tts._client,
+                self._client,
                 self._input_text,
                 self._opts,
                 self._conn_options,
@@ -504,10 +524,19 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        client: AsyncSpeechify,
+        tokenizer: tokenize.SentenceTokenizer,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._client = client
+        self._tokenizer = tokenizer
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -520,7 +549,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=request_id)
 
-        sent_stream = self._tts._tokenizer.stream()
+        sent_stream = self._tokenizer.stream()
 
         async def _forward_input() -> None:
             async for data in self.input:
@@ -537,7 +566,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     continue
                 self.mark_started()
                 sentence_bytes = await _synthesize_text(
-                    self._tts._client,
+                    self._client,
                     text,
                     self._opts,
                     self._conn_options,

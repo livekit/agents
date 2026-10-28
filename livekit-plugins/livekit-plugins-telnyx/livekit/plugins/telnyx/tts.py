@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiohttp
@@ -76,7 +77,12 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=self._opts,
+            ensure_session=self._session_manager.ensure_session,
+        )
         self._streams.add(stream)
         return stream
 
@@ -89,10 +95,16 @@ class TTS(tts.TTS):
 
 class SynthesizeStream(tts.SynthesizeStream):
     def __init__(
-        self, *, tts: TTS, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+        self._opts = opts
+        self._ensure_session = ensure_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         self._segments_ch = utils.aio.Chan[str]()
@@ -145,8 +157,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
 
-        url = f"{self._tts._opts.base_url}?voice={self._tts._opts.voice}"
-        headers = {"Authorization": f"Bearer {self._tts._opts.api_key}"}
+        url = f"{self._opts.base_url}?voice={self._opts.voice}"
+        headers = {"Authorization": f"Bearer {self._opts.api_key}"}
 
         decoder = utils.codecs.AudioStreamDecoder(
             sample_rate=SAMPLE_RATE,
@@ -191,7 +203,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             ws = await utils.http_context.ws_connect(
-                self._tts._session_manager.ensure_session(),
+                self._ensure_session(),
                 url,
                 headers=headers,
                 conn_options=self._conn_options,

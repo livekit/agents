@@ -20,6 +20,7 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -191,7 +192,7 @@ class TTS(tts.TTS):
         return self._session
 
     async def _current_connection(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> _Connection:
         """Return the live connection, creating one if needed."""
         async with self.__conn_lock:
@@ -200,7 +201,7 @@ class TTS(tts.TTS):
                 conn is not None
                 and conn.is_current
                 and not conn.closed
-                and conn._conn_options == conn_options
+                and conn.conn_options == conn_options
             ):
                 return conn
 
@@ -256,9 +257,7 @@ class TTS(tts.TTS):
             if stream_idle_timeout <= 0:
                 raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
             self._opts.stream_idle_timeout = stream_idle_timeout
-            # _run re-reads this every loop iteration, so live streams pick it up
-            for stream in list(self._streams):
-                stream._opts.stream_idle_timeout = stream_idle_timeout
+            # Live streams read this setting when they wait for the next segment.
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -269,7 +268,14 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            conn_options=conn_options,
+            opts=replace(self._opts),
+            sentence_tokenizer=self._sentence_tokenizer,
+            current_connection=self._current_connection,
+            idle_timeout=lambda: self._opts.stream_idle_timeout,
+        )
         self._streams.add(stream)
         return stream
 
@@ -323,10 +329,21 @@ class _ActiveStream:
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS implementation on a shared _Connection."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+        opts: _TTSOptions,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        current_connection: Callable[[APIConnectOptions], Awaitable[_Connection]],
+        idle_timeout: Callable[[], float],
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._sentence_tokenizer = sentence_tokenizer
+        self._current_connection = current_connection
+        self._idle_timeout = idle_timeout
         self._stream_id: str = ""
         self._connection: _Connection | None = None
         self._cancelled = asyncio.Event()
@@ -372,7 +389,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
         output_emitter.start_segment(segment_id=utils.shortuuid())
 
-        sent_stream = self._tts._sentence_tokenizer.stream()
+        sent_stream = self._sentence_tokenizer.stream()
 
         async def _input_task() -> None:
             async for data in self.input:
@@ -402,7 +419,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     waiters.add(active.waiter)
                 await asyncio.wait(
                     waiters,
-                    timeout=self._opts.stream_idle_timeout if active is not None else None,
+                    timeout=self._idle_timeout() if active is not None else None,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
@@ -456,7 +473,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self, output_emitter: tts.AudioEmitter, request_id: str
     ) -> _ActiveStream:
         try:
-            connection = await self._tts._current_connection(conn_options=self._conn_options)
+            connection = await self._current_connection(self._conn_options)
         except APIError:
             raise
         except asyncio.TimeoutError as e:
@@ -560,7 +577,7 @@ class _Connection:
     ) -> None:
         self._opts = opts
         self._session = session
-        self._conn_options = conn_options
+        self.conn_options = conn_options
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._streams: dict[str, _StreamData] = {}
         self._input_queue = utils.aio.Chan[_OutboundMsg]()
@@ -612,7 +629,7 @@ class _Connection:
             self._ws = await utils.http_context.ws_connect(
                 self._session,
                 self._opts.websocket_url,
-                conn_options=self._conn_options,
+                conn_options=self.conn_options,
                 headers={"Authorization": f"Bearer {self._opts.api_key}"},
             )
         except Exception:

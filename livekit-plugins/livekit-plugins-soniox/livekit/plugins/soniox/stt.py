@@ -18,7 +18,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, NamedTuple
 
@@ -192,9 +192,10 @@ class STT(stt.STT):
             )
         )
 
-        self._api_key = api_key or os.getenv("SONIOX_API_KEY")
-        if not self._api_key:
+        resolved_key = api_key or os.getenv("SONIOX_API_KEY")
+        if not resolved_key:
             raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
+        self._api_key = resolved_key
         self._base_url = base_url
         self._http_session = http_session
         self._params = params
@@ -229,19 +230,38 @@ class STT(stt.STT):
         """Return a new LiveKit streaming speech-to-text session."""
         return SpeechStream(
             stt=self,
+            params=self._params,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            ensure_session=self._ensure_session,
             conn_options=conn_options,
         )
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp ClientSession for WebSocket connections."""
+        if not self._http_session:
+            self._http_session = utils.http_context.http_session()
+
+        return self._http_session
 
 
 class SpeechStream(stt.SpeechStream):
     def __init__(
         self,
         stt: STT,
+        *,
+        params: STTOptions,
+        base_url: str,
+        api_key: str,
+        ensure_session: Callable[[], aiohttp.ClientSession],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
-        self._stt: STT = stt
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
+        self._params = params
+        self._base_url = base_url
+        self._api_key = api_key
+        self._ensure_session = ensure_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
@@ -249,17 +269,10 @@ class SpeechStream(stt.SpeechStream):
 
         self._reported_duration_ms = 0
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp ClientSession for WebSocket connections."""
-        if not self._stt._http_session:
-            self._stt._http_session = utils.http_context.http_session()
-
-        return self._stt._http_session
-
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
         initial configuration."""
-        context_raw = self._stt._params.context
+        context_raw = self._params.context
         context_value: dict[str, Any] | str | None
         if isinstance(context_raw, ContextObject):
             context_value = asdict(context_raw)
@@ -268,27 +281,27 @@ class SpeechStream(stt.SpeechStream):
 
         # Create initial config object.
         config: dict[str, Any] = {
-            "model": self._stt._params.model,
+            "model": self._params.model,
             "audio_format": "pcm_s16le",
-            "num_channels": self._stt._params.num_channels or 1,
+            "num_channels": self._params.num_channels or 1,
             "enable_endpoint_detection": True,
-            "sample_rate": self._stt._params.sample_rate,
-            "language_hints": self._stt._params.language_hints,
-            "language_hints_strict": self._stt._params.language_hints_strict,
+            "sample_rate": self._params.sample_rate,
+            "language_hints": self._params.language_hints,
+            "language_hints_strict": self._params.language_hints_strict,
             "context": context_value,
-            "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,
-            "enable_language_identification": self._stt._params.enable_language_identification,
-            "client_reference_id": self._stt._params.client_reference_id,
+            "enable_speaker_diarization": self._params.enable_speaker_diarization,
+            "enable_language_identification": self._params.enable_language_identification,
+            "client_reference_id": self._params.client_reference_id,
         }
-        config["max_endpoint_delay_ms"] = self._stt._params.max_endpoint_delay_ms
-        if self._stt._params.endpoint_sensitivity is not None:
-            config["endpoint_sensitivity"] = self._stt._params.endpoint_sensitivity
-        if self._stt._params.endpoint_latency_adjustment_level is not None:
+        config["max_endpoint_delay_ms"] = self._params.max_endpoint_delay_ms
+        if self._params.endpoint_sensitivity is not None:
+            config["endpoint_sensitivity"] = self._params.endpoint_sensitivity
+        if self._params.endpoint_latency_adjustment_level is not None:
             config["endpoint_latency_adjustment_level"] = (
-                self._stt._params.endpoint_latency_adjustment_level
+                self._params.endpoint_latency_adjustment_level
             )
-        if self._stt._params.translation is not None:
-            tr = self._stt._params.translation
+        if self._params.translation is not None:
+            tr = self._params.translation
             translation_dict: dict[str, Any] = {"type": tr.type}
             if tr.type == "one_way":
                 translation_dict["target_language"] = tr.target_language
@@ -299,8 +312,8 @@ class SpeechStream(stt.SpeechStream):
         # Connect to the Soniox Speech-to-Text API.
         ws = await utils.http_context.ws_connect(
             self._ensure_session(),
-            self._stt._base_url,
-            headers={"Authorization": f"Bearer {self._stt._api_key}"},
+            self._base_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
             # Without a heartbeat a silently dropped socket (half-open TCP, no
             # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
             # forever and the reconnect in `_run` is only ever triggered by that
@@ -467,7 +480,7 @@ class SpeechStream(stt.SpeechStream):
         # Translation routes original-language tokens to `final_original` and translated
         # tokens to `final`. In non-translation mode, all tokens go to `final` and
         # `final_original` stays empty (so `final` IS the source side there).
-        is_translation_mode = self._stt._params.translation is not None
+        is_translation_mode = self._params.translation is not None
 
         # final tokens are accumulated across messages until an endpoint is detected.
         final = _TokenAccumulator()
@@ -485,9 +498,9 @@ class SpeechStream(stt.SpeechStream):
                 # is off, `final` IS the source side and `final_original`
                 # stays empty.
                 src_segs, tgt_segs = (
-                    (final_original._lang_segments, final._lang_segments)
+                    (final_original.language_segments, final.language_segments)
                     if is_translation_mode
-                    else (final._lang_segments, [])
+                    else (final.language_segments, [])
                 )
                 source_languages, source_texts = _lang_segments_to_fields(src_segs)
                 target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
@@ -586,11 +599,11 @@ class SpeechStream(stt.SpeechStream):
                         # mode the `_original` buckets are empty and `final` /
                         # `non_final` ARE the source.
                         merged_originals = _merge_lang_segments(
-                            final_original._lang_segments,
-                            non_final_original._lang_segments,
+                            final_original.language_segments,
+                            non_final_original.language_segments,
                         )
                         merged_primary = _merge_lang_segments(
-                            final._lang_segments, non_final._lang_segments
+                            final.language_segments, non_final.language_segments
                         )
                         interim_src_segs, interim_tgt_segs = (
                             (merged_originals, merged_primary)
@@ -675,7 +688,7 @@ class SpeechStream(stt.SpeechStream):
 
 
 def _merge_lang_segments(
-    a: list[tuple[str, str]], b: list[tuple[str, str]]
+    a: Sequence[tuple[str, str]], b: Sequence[tuple[str, str]]
 ) -> list[tuple[str, str]]:
     """Merge two (language, text) segment lists, combining adjacent segments of the same language."""
     result = list(a)
@@ -689,7 +702,7 @@ def _merge_lang_segments(
 
 
 def _lang_segments_to_fields(
-    segments: list[tuple[str, str]],
+    segments: Sequence[tuple[str, str]],
 ) -> tuple[list[LanguageCode] | None, list[str] | None]:
     """Convert `(lang, text)` runs to the parallel `SpeechData` field pair,
     or `(None, None)` when empty."""
@@ -726,6 +739,10 @@ class _TokenAccumulator:
         self._has_start_time: bool = False
         self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
         self._lang_stats: dict[str, _LangStats] = {}
+
+    @property
+    def language_segments(self) -> Sequence[tuple[str, str]]:
+        return tuple(self._lang_segments)
 
     def _get_language(self) -> str:
         """Language with the most characters; ties go to the one that reached the count first."""
