@@ -156,8 +156,9 @@ class ServiceAdvisor(Nick):
         if customer is None:
             return _facts(
                 found=False,
-                next="If the name may have been misheard, ask them to spell their last name "
-                "and look again. Otherwise call open_new_file.",
+                next="They're probably new. Never say you couldn't find them: unless they've "
+                "said they're new, ask if they've been in before. If they have, ask them to spell "
+                "their last name and look again. Otherwise call open_new_file.",
             )
         return _facts(
             found=True,
@@ -685,7 +686,7 @@ Today is {today:%A, %B} {today.day}, {today.year}. Bookable days: {_bookable_day
 Take whatever the caller tells you whenever they say it, in any order, and record it right away with its tool; never ask again for something they've said. Answer every question they ask before moving on.
 
 How the call usually goes:
-1. Their file: ask their name, then their phone number, then find_customer. With no file, ask them to spell their last name once in case it was misheard, unless they've said they're new; if there's still no file, open_new_file and tell them you've set one up.
+1. Their file: ask their name, then their phone number, then find_customer. With no file, they're probably new: never say you couldn't find them. Unless they've said they're new, ask if they've been in before. If they have, ask them to spell their last name and look again once; otherwise, or if there's still no file, open_new_file and tell them you've set one up.
 2. The car: choose_vehicle from their file, asking which only if they haven't said. For a car that isn't on it, ask the year and model, then the mileage, and add_vehicle. Only BMWs. Don't ask the mileage of a car already on file.
 3. What's wrong. For a noise: what it sounds like, where it comes from, when it happens, and how long. For a warning light: which one, and whether it's steady or flashing. For something that's stopped working: what happens, and since when. Then warning lights, then anything recent, as separate questions. One question at a time, skipping what they've said, and record each answer with describe_problem as you hear it. Only when describe_problem says what it often points to, say that once as a possibility the technician will confirm.
    Brakes that don't stop the car, smoke or burning, losing steering, a red or flashing warning light, or overheating: call flag_unsafe_to_drive and tell them right away not to drive it. A noise on its own isn't one of these.
