@@ -1100,3 +1100,82 @@ fn provider_markup_forwards_legacy_and_declared_classes_through_the_same_contrac
         "records already beside the base must not import their own module"
     );
 }
+
+#[test]
+fn record_options_keep_omitted_null_and_value_distinct() {
+    let decls = crate::decl::tests::read(
+        r#"
+        use crate::utils::maybe::Maybe;
+        #[crate::host(record(module = "session", extract))]
+        pub struct Details { pub text: String }
+        #[crate::host(record(module = "session", extract))]
+        pub struct Options {
+            pub persona: Maybe<String>,
+            pub reset: Maybe<Option<String>>,
+            pub details: Maybe<Details>,
+        }
+    "#,
+    )
+    .expect("omittable record options resolve");
+    let models = crate::records::python(&decls).expect("models");
+    let model = &models.iter().find(|o| o.path == "session.py").unwrap().text;
+    assert!(model.contains("from ..types import NOT_GIVEN\n"), "{model}");
+    assert!(model.contains("from ..types import NotGivenOr\n"), "{model}");
+    assert!(model.contains("persona: NotGivenOr[str] = NOT_GIVEN"), "{model}");
+    assert!(model.contains("reset: NotGivenOr[str | None] = NOT_GIVEN"), "{model}");
+    assert!(model.contains("details: NotGivenOr[Details] = NOT_GIVEN"), "{model}");
+    let adapter = crate::records::conversions(&decls).expect("conversions").text;
+    syn::parse_file(&adapter).expect("generated conversion syntax");
+    assert!(adapter.contains(
+        "if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) }"
+    ), "{adapter}");
+    assert!(adapter.contains(
+        "else { (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }).map(::lk_agents_abi::Maybe::Given) }"
+    ), "{adapter}");
+    assert!(adapter.contains(
+        "(crate::generated::records::session::details_from_py(v)).map(::lk_agents_abi::Maybe::Given)"
+    ), "{adapter}");
+}
+
+#[test]
+fn omittable_record_options_refuse_competing_defaults_and_output() {
+    for attr in ["default = None", "default = \"persona\"", "default_factory = \"types.default\""] {
+        let result = crate::decl::tests::read(&format!(
+            r#"
+            use crate::utils::maybe::Maybe;
+            #[crate::host(record(module = "session", extract))]
+            pub struct Options {{ #[host({attr})] pub persona: Maybe<String> }}
+        "#
+        ));
+        let error = result.expect_err("the omission sentinel is the field's only default");
+        assert!(error.contains("Options.persona"), "{error}");
+        assert!(error.contains("default"), "{error}");
+    }
+    let result = crate::decl::tests::read(
+        r#"
+        use crate::utils::maybe::Maybe;
+        #[crate::host(record(module = "session", emit))]
+        pub struct Options { pub persona: Maybe<String> }
+    "#,
+    );
+    assert!(result.expect_err("omission is input-only").contains("omission is an input state"));
+}
+
+#[test]
+fn merged_record_annotations_keep_both_modules_typing_imports() {
+    let decls = crate::decl::tests::read(
+        r#"
+        use crate::utils::maybe::Maybe;
+        #[crate::host(record(module = "session", extract))]
+        pub struct Options { pub persona: Maybe<String> }
+    "#,
+    )
+    .unwrap();
+    let models = crate::records::python(&decls).unwrap();
+    let model = &models.iter().find(|o| o.path == "session.py").unwrap().text;
+    let legacy = "from __future__ import annotations\n\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from ..existing import Existing\n\nclass Legacy:\n    pass\n";
+    let merged = crate::records::merge(legacy, model).unwrap();
+    assert!(merged.contains("    from ..types import NotGivenOr\n"), "{merged}");
+    assert!(merged.contains("    from ..existing import Existing\n"), "{merged}");
+    assert_eq!(merged.matches("if TYPE_CHECKING:").count(), 1, "{merged}");
+}

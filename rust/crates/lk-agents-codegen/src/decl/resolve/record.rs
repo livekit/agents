@@ -255,6 +255,11 @@ impl Resolver<'_> {
                 ));
             }
             check_default(&at, &ty, default.as_ref())?;
+            if matches!(ty, Ty::Maybe(_)) && factory.is_some() {
+                return Err(format!(
+                    "{at}: an omittable field defaults to NOT_GIVEN, not default_factory"
+                ));
+            }
             if !skip || factory.is_some() {
                 check_record_field(&at, &ty, dirs)?;
             }

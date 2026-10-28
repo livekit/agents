@@ -230,7 +230,9 @@ pub(crate) fn derived_at(items: &[syn::Item], ident: &str) -> bool {
 fn records_in(ty: &Ty, out: &mut Vec<String>) {
     match ty {
         Ty::Record(r) if matches!(r.host, HostForm::Record { .. }) => out.push(r.rust.clone()),
-        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => records_in(t, out),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => {
+            records_in(t, out)
+        }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             records_in(k, out);
             records_in(t, out);
@@ -243,7 +245,9 @@ fn records_in(ty: &Ty, out: &mut Vec<String>) {
 fn mark(ty: &mut Ty, held: &BTreeSet<String>) {
     match ty {
         Ty::Record(r) => r.in_place = held.contains(&r.rust),
-        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => mark(t, held),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::HostSource(t) => {
+            mark(t, held)
+        }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             mark(k, held);
             mark(t, held);
@@ -313,7 +317,7 @@ pub(crate) fn holds_record(ty: &Ty) -> bool {
         Ty::Record(r) => {
             matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs) && !r.in_place
         }
-        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
+        Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) => holds_record(t),
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
         Ty::OrderedMap(..) => true,
         Ty::Tuple(ts) => ts.iter().any(holds_record),
@@ -621,6 +625,10 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Optional(t) => {
             format!("if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}", read(t, v, path)?)
         }
+        Ty::Maybe(t) => format!(
+            "if ::lk_agents_abi::python::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
+            read(t, v, path)?
+        ),
         Ty::Tuple(_) | Ty::OrderedMap(..) => {
             crate::adapter::from_object(v, ty, &format!("{path:?}"), path)?
         }

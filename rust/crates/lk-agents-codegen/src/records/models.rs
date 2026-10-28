@@ -318,6 +318,9 @@ fn model(
             .collect(),
         RecordBody::Literals(_) => Vec::new(),
     };
+    if all.iter().any(|f| matches!(f.ty, Ty::Maybe(_))) {
+        runtime.add("..types", "NOT_GIVEN");
+    }
     for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
         runtime.add("dataclasses", "field");
         runtime.add_module(factory.rsplit_once('.').map_or(factory, |(m, _)| m));
@@ -351,6 +354,7 @@ fn model(
                 (Some(d), _) => format!(" = {}", py_literal(d)),
                 // Computed in `__post_init__` when left out: the field is never `None` after.
                 (None, Some(_)) => " = None  # type: ignore[assignment]".to_owned(),
+                (None, None) if matches!(f.ty, Ty::Maybe(_)) => " = NOT_GIVEN".to_owned(),
                 (None, None) => String::new(),
             };
             let ann = annotation(&f.ty, module, own, out, typing);
@@ -496,6 +500,10 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Ty::Maybe(t) => {
+            typing.add("..types", "NotGivenOr");
+            format!("NotGivenOr[{}]", annotation(t, module, own, out, typing))
+        }
         // Bytes cross as `bytes`, as class arguments and results do.
         Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => "bytes".into(),
         Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, typing)),
