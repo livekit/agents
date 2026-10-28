@@ -198,8 +198,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         timeout: Hard limit from the start of listening.
         inference_timeout: Prediction deadline per committed turn. Late results are ignored.
         machine_silence_threshold: Continuous participant silence before a machine
-            reply plays. Includes silence before and during classification. Reply
-            generation starts before the silence ends.
+            reply plays. Includes silence before and during classification. Pipeline
+            reply generation starts before the silence ends; realtime generation
+            starts after it.
             Predictions update the category immediately. Replies outside a machine
             stage do not wait. Set to zero to disable the extra silence wait.
         max_uncertain_turns: Consecutive uncertain predictions before completion
