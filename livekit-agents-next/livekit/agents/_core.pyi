@@ -20,9 +20,9 @@ from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
-from ._generated.storage import DatabaseInfo, EventRow, InboxRow, StreamInfo
+from ._generated._core_storage import *  # noqa: F401, F403
+from ._generated.storage import EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow
-from ._generated.storage_threads import ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
 from ._generated.storage_turn import Policy, TurnOptions, TurnResult
 
 # --- runtime.rs ----------------------------------------------------------------------------------
@@ -280,103 +280,28 @@ class ProcPool:
 # every result, rows included, is an instance of its model. An ``Awaitable`` runs on the loop
 # that constructed the object and is cancelled when Rust drops the operation.
 
-class Storage:
-    """The root: credentials and the agentstore URL (plan 13.4), the public API every request
-    goes through, derived from the project ``url`` (``LIVEKIT_URL``). Lease timing is in seconds,
-    ``None`` for the Rust defaults."""
-
-    def __init__(
-        self,
-        *,
-        url: str,
-        api_key: str,
-        api_secret: str,
-        lease_ttl: float | None = None,
-        renew_interval: float | None = None,
-    ) -> None: ...
-    @property
-    def url(self) -> str:
-        """The public API agentstore is reached through."""
-
-    def open(self, database_id: str, holder: str) -> Awaitable[Thread]:
-        """One connection to a thread's database; its leases and waiter marks carry ``holder``
-        plus a handle id of their own."""
-
-    @property
-    def streams(self) -> Streams: ...
-    @property
-    def threads(self) -> Threads: ...
-    def create_database(self, ttl_seconds: int = 0) -> Awaitable[DatabaseInfo]:
-        """``DatabaseService.CreateDatabase``, for development and tests."""
-
-    def delete_database(self, database_id: str) -> Awaitable[None]: ...
-
 class Streams:
-    """The answer streams (plan 6) over ``/v1/streams``."""
+    """The response streams of one storage (``Storage.streams()``)."""
 
-    def create(
-        self, ttl_seconds: int | None = None, region: str | None = None
-    ) -> Awaitable[StreamInfo]: ...
+    def create(self, ttl_seconds: int | None = None) -> Awaitable[StreamInfo]: ...
     def append(self, stream_id: str, record: bytes) -> None:
-        """Queued; sent in order, a failure is logged and does not fail the turn."""
+        """Queued: kept in order; a failure is logged and does not fail the turn."""
 
-    def append_now(self, stream_id: str, record: bytes) -> Awaitable[str]:
-        """One append, awaited: the record's offset token."""
+    def close(self, stream_id: str) -> Awaitable[None]:
+        """Once the stream's queued frames are kept."""
 
-    def flush(self, stream_id: str) -> Awaitable[None]: ...
-    def close(self, stream_id: str) -> Awaitable[None]: ...
     def delete(self, stream_id: str) -> Awaitable[None]: ...
     def read(self, stream_id: str, after: str | None = None, live: bool = False) -> StreamReader:
-        """From ``after`` (an offset token; ``None`` is the beginning); ``live`` follows the tail
-        until the stream closes."""
+        """From ``after`` (an offset; ``None`` is the beginning); ``live`` follows the tail until
+        the stream closes."""
 
 class StreamReader:
     """A read position over one stream."""
 
     def next(self) -> Awaitable[bytes | None]:
-        """The next record, or ``None``: the tail of a catch-up read, the close of a live one."""
+        """The next frame, or ``None``: the tail of a catch-up read, the close of a live one."""
 
     def next_offset(self) -> Awaitable[str]: ...
-    def is_closed(self) -> Awaitable[bool]: ...
-
-class Threads:
-    """The threads service's client (plan 4.3)."""
-
-    def create_thread(
-        self,
-        *,
-        scope: str = "",
-        attributes: dict[str, str] | None = None,
-        idle_ttl_seconds: int = 0,
-    ) -> Awaitable[ThreadInfo]:
-        """A new thread in ``scope``, with its database."""
-
-    def get_thread(self, thread_id: str) -> Awaitable[ThreadInfo]: ...
-    def list_threads(
-        self, scope: str, *, before: str = "", limit: int = 0
-    ) -> Awaitable[ThreadPage]:
-        """The threads of one scope, newest first."""
-
-    def update_thread(
-        self,
-        thread_id: str,
-        *,
-        attributes: dict[str, str] | None = None,
-        idle_ttl_seconds: int | None = None,
-    ) -> Awaitable[ThreadInfo]:
-        """Merges ``attributes`` (an empty value deletes the entry) and sets the idle TTL when
-        given."""
-
-    def delete_thread(self, thread_id: str) -> Awaitable[None]: ...
-    def get_thread_items(
-        self, thread_id: str, *, agent: str = "", after: str = "", limit: int = 0
-    ) -> Awaitable[ThreadItemPage]:
-        """The thread's chat items, oldest first; ``agent`` keeps one agent's."""
-
-    def get_thread_tasks(
-        self, thread_id: str, *, status: str | None = None
-    ) -> Awaitable[list[ThreadTask]]:
-        """The thread's background tasks, oldest first, of one ``status`` when given."""
 
 # --- turn.rs -------------------------------------------------------------------------------------
 

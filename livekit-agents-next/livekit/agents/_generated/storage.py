@@ -3,7 +3,6 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` declarations in:
 #     rust/crates/lk-agents-storage/src/schema.rs
 #     rust/crates/lk-agents-storage/src/streams.rs
-#     rust/crates/lk-agents-py/src/storage.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -72,13 +71,3 @@ class StreamInfo(BaseModel):
     model_config = ConfigDict(frozen=True)
     stream_id: str
     expires_at: int
-
-
-class DatabaseInfo(BaseModel):
-    """A database made through `DatabaseService.CreateDatabase`."""
-
-    model_config = ConfigDict(frozen=True)
-    database_id: str
-    """`DB_..`."""
-    expires_at: int
-    """Unix seconds; `0` for never."""

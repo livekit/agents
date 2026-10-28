@@ -18,10 +18,10 @@ except ImportError:  # livekit-agents-next: the CLI is one module
     from livekit.agents.cli import NOISY_LOGGERS
 
 from . import concurrency
-from .agentdb_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
-    agentdb_storage,
-    agentdb_worker,
-    agentdb_workers,
+from .storage_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
+    thread_storage,
+    thread_storage_worker,
+    thread_storages,
 )
 from .toxic_proxy import Toxiproxy
 from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the fixtures)

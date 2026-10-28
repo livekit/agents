@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 pub mod agent;
 pub mod inference;
 pub mod llm;
+pub mod storage;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
@@ -18,6 +19,7 @@ pub trait Implementations: 'static {
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
+    type Storage: ::lk_agents_abi::storage::Storage;
 }
 
 /// Adds every declared class to `_core`.
@@ -29,5 +31,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;
     m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
+    m.add_class::<storage::Storage>()?;
     Ok(())
 }

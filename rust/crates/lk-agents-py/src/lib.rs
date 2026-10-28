@@ -24,12 +24,18 @@ pub mod generated;
 /// `init(role)` and the registration table.
 pub mod loop_monitor;
 pub mod runtime;
-/// `Storage`, `ThreadDb`, `Lease`, `Streams`, `StreamReader`, `Registry` and the storage errors.
+/// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
 pub mod storage;
 /// `AgentNodes`, `tts_node` and `stt_node`: an agent's nodes over `lk-agents-voice`'s `NodeFactory`.
 pub mod nodes;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
+
+/// The classes the generated adapters hand an implementation's own objects out as.
+pub mod handles {
+    pub use crate::storage::PyStreams as Streams;
+    pub use crate::turn::PyThread as Thread;
+}
 
 /// The implementation of each declared class: a class without one, or an implementation
 /// missing a declared method, does not compile.
@@ -41,6 +47,7 @@ impl generated::Implementations for Selected {
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;
     type ChoiceParser = lk_agents_inference::llm::parse::ChoiceParser;
     type CompletionWire = lk_agents_inference::llm::parse::CompletionWire;
+    type Storage = lk_agents_runtime::storage::host::HostStorage;
 }
 
 #[pymodule]

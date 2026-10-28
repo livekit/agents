@@ -29,7 +29,7 @@ from .job import (
 )
 from .log import logger
 from .simulation import SimulationContext
-from .storage.agentdb import AgentDBStorage
+from .storage.backends import Storage
 from .storage.context import Handler
 from .storage.resolve import CallThreadEntrypoint
 from .types import NOT_GIVEN, NotGivenOr
@@ -180,7 +180,7 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         self,
         *,
         agent_name: NotGivenOr[str] = NOT_GIVEN,
-        storage: AgentDBStorage | None = None,
+        storage: Storage | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
         ws_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -217,7 +217,7 @@ class AgentServer(AgentHandler, utils.EventEmitter[Literal["worker_started", "wo
         self._jobs: _ServerHost | None = None
 
     @property
-    def storage(self) -> AgentDBStorage | None:
+    def storage(self) -> Storage | None:
         """The session storage every door of this server opens its lane with."""
         return self._storage
 
