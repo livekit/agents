@@ -20,7 +20,6 @@ use crate::speech_handle::SpeechHandle;
 use crate::tool_executor::Toolset;
 use crate::trace::{CoreStep, Step};
 use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::voice::events::HostWire;
 use lk_agents_abi::voice::session_effects::StartPlan;
 use lk_agents_abi::{
     Clock, Llm, LlmStream, Maybe, Spawner, SpawnerExt, Stt, SttSink, SttSource, Tts, TtsSink,
@@ -810,18 +809,7 @@ fn origin_of(origin: Option<&str>) -> Result<Origin, CommandRefused> {
     origin.map_or(Ok(Origin::Host), |o| o.parse().map_err(CommandRefused::Invalid))
 }
 
-/// Where a host session's events go: one call per event, in driver order, on the host loop
-/// (`call_soon_threadsafe`: a callback touching `asyncio` from a tokio worker lands in `_ready`
-/// without waking the selector).
-#[lk_agents_abi::host(proxy)]
-pub trait SessionEvents: Send + Sync {
-    fn event(&self, wire: &HostWire);
-
-    /// `str()` of the error record `error` is emitted with: the message the remote session sends.
-    fn error_message(&self, error: &lk_agents_abi::voice::events::SessionErrorWire) -> String {
-        error.error.to_string()
-    }
-}
+pub use lk_agents_abi::voice::session_effects::SessionEvents;
 
 pub use lk_agents_abi::worker::job::SessionJob;
 

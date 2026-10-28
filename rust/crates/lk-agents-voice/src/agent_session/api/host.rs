@@ -443,14 +443,19 @@ impl SessionApi {
                             for mut wire in std::iter::once(wire).chain(updated) {
                                 match (&forwarding, &events, &wire) {
                                     (Some(remote), Some(events), HostWire::Error(error)) => {
-                                        remote.forward_error(events.error_message(error));
+                                        // The host's record of the error, else the error's own text.
+                                        let message = events.error_message(error).unwrap_or_else(|e| {
+                                            log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "error record unreadable");
+                                            error.error.to_string()
+                                        });
+                                        remote.forward_error(message);
                                     }
                                     (Some(remote), ..) => remote.forward(&wire),
                                     (None, ..) => {}
                                 }
                                 if let Some(events) = &events {
                                     agents.resolve(&mut wire);
-                                    events.event(&wire);
+                                    events.event(wire);
                                 }
                             }
                         }

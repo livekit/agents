@@ -91,3 +91,20 @@ pub trait SessionHooks: Send + Sync {
     #[host(notify, name = "_core_hook_failed")]
     fn hook_failed(&self, hook: &str, error: Option<crate::errors::CapturedError>);
 }
+
+/// Where a host session's events go: one notification per event, delivered in driver order on
+/// the host loop.
+#[crate::host(proxy(host = "livekit.agents.voice.agent_session.VoiceSession"))]
+pub trait SessionEvents: Send + Sync {
+    #[host(notify, name = "_core_event")]
+    fn event(&self, wire: crate::voice::events::HostWire);
+
+    /// `str()` of the error record `error` is emitted with: the message the remote session sends.
+    #[host(call, name = "_core_error_message")]
+    fn error_message(
+        &self,
+        error: &crate::voice::events::SessionErrorWire,
+    ) -> Result<String, crate::errors::HostError> {
+        Ok(error.error.to_string())
+    }
+}

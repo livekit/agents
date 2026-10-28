@@ -468,7 +468,7 @@ pub(super) const CALLER: &str = "caller";
 struct WireSink;
 
 impl SessionEvents for WireSink {
-    fn event(&self, _wire: &lk_agents_abi::voice::events::HostWire) {}
+    fn event(&self, _wire: lk_agents_abi::voice::events::HostWire) {}
 }
 
 pub(super) fn turn_detection(mode: TurnMode) -> Option<TurnDetection> {
