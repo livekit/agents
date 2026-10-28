@@ -1,7 +1,10 @@
 """Grades a simulated call on what the clinic ended up with, against the scenario's `expected`.
 
 Keys, all optional:
-    new_patient: the name a new chart must be registered under, or false if none may be
+    patient: the name the caller must end the call verified or registered as; anything booked
+        or moved must be theirs
+    born: the date of birth, YYYY-MM-DD, that the patient's chart must have
+    new_patient: true if the caller must be registered as a new patient, false if they mustn't
     booked: morning or afternoon if a new appointment must be booked then, or false if none may
         be
     moved: morning or afternoon if an appointment must be moved to then, or false if none may
@@ -10,6 +13,7 @@ Keys, all optional:
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from livekit.agents import SimulationContext
@@ -23,21 +27,34 @@ async def on_simulation_end(sim: SimulationContext) -> None:
     if not expected:
         return
     state: CallState = sim.job_context.primary_session.userdata
-    assert state.clinic is not None
-    if problems := grade(state.clinic, expected):
+    if problems := grade(state, expected):
         sim.fail(reason="; ".join(problems))
 
 
-def grade(clinic: Clinic, expected: dict[str, Any]) -> list[str]:
+def grade(state: CallState, expected: dict[str, Any]) -> list[str]:
+    clinic = state.clinic
+    assert clinic is not None
     problems: list[str] = []
+    caller = state.caller
+    patient = expected.get("patient")
+    if patient and (caller is None or caller.name.casefold() != patient.casefold()):
+        problems.append(
+            f"verified {caller.name if caller else 'nobody'}, expected {patient}"
+        )
+    elif caller and (born := expected.get("born")):
+        chart = clinic.patients.get(caller.name)
+        if chart != date.fromisoformat(str(born)):
+            problems.append(
+                f"{caller.name}'s chart has birthday {chart}, expected {born}"
+            )
+
     if "new_patient" in expected:
         registered = [name for name in clinic.patients if name not in PATIENTS_ON_FILE]
-        want = expected["new_patient"]
-        if not want and registered:
-            problems.append(f"registered {registered[0]} as a new patient")
-        elif want and [n.casefold() for n in registered] != [want.casefold()]:
+        if bool(registered) != expected["new_patient"]:
             problems.append(
-                f"registered {', '.join(registered) or 'nobody'}, expected {want}"
+                f"registered {', '.join(registered)} as a new patient"
+                if registered
+                else "never registered a new patient"
             )
 
     seeded = {a.id: a.starts_at for a in Clinic(today=clinic.today).appointments}
@@ -47,14 +64,19 @@ def grade(clinic: Clinic, expected: dict[str, Any]) -> list[str]:
     ]
     for key, appointments in (("booked", added), ("moved", moved)):
         if key in expected:
-            problems += _check(key, appointments, expected[key])
+            problems += _check(key, appointments, expected[key], patient)
     return problems
 
 
-def _check(key: str, appointments: list[Appointment], want: str | bool) -> list[str]:
+def _check(
+    key: str, appointments: list[Appointment], want: str | bool, patient: str | None
+) -> list[str]:
     if want is False:
         return [f"{key} an appointment it shouldn't have"] if appointments else []
     if len(appointments) != 1:
         return [f"{key} {len(appointments)} appointments, expected one in the {want}"]
-    part = "morning" if appointments[0].starts_at.hour < 12 else "afternoon"
+    appointment = appointments[0]
+    if patient and appointment.patient.casefold() != patient.casefold():
+        return [f"{key} one for {appointment.patient}, expected {patient}"]
+    part = "morning" if appointment.starts_at.hour < 12 else "afternoon"
     return [] if part == want else [f"{key} one for the {part}, expected the {want}"]

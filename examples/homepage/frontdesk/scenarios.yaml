@@ -24,6 +24,8 @@ scenarios:
       feature: reschedule
     userdata:
       expected:
+        patient: Taylor Smith
+        born: "1988-03-14"
         new_patient: false
         booked: false
         moved: morning
@@ -50,7 +52,9 @@ scenarios:
       feature: new-patient
     userdata:
       expected:
-        new_patient: Casey Morgan
+        patient: Casey Morgan
+        born: "1995-06-01"
+        new_patient: true
         booked: afternoon
         moved: false
 
@@ -78,7 +82,9 @@ scenarios:
       feature: new-patient
     userdata:
       expected:
-        new_patient: Sam Rivera
+        patient: Sam Rivera
+        born: "1990-08-17"
+        new_patient: true
         booked: morning
         moved: false
 
@@ -102,6 +108,8 @@ scenarios:
       feature: lookup
     userdata:
       expected:
+        patient: Jordan Lee
+        born: "1992-07-08"
         new_patient: false
         booked: false
         moved: false
@@ -123,6 +131,8 @@ scenarios:
       feature: lookup
     userdata:
       expected:
+        patient: Morgan Brooks
+        born: "1979-11-02"
         new_patient: false
         booked: false
         moved: false
@@ -145,6 +155,8 @@ scenarios:
       feature: new-patient
     userdata:
       expected:
-        new_patient: Priya Raghunathan
+        patient: Priya Raghunathan
+        born: "1987-04-23"
+        new_patient: true
         booked: false
         moved: false
