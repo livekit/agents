@@ -38,6 +38,7 @@
     "ExpFilter",
     "FakeRoom",
     "FallbackLlm",
+    "FallbackLlmChunks",
     "FallbackStt",
     "FallbackSttStream",
     "FallbackTts",

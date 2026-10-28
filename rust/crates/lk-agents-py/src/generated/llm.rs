@@ -10,6 +10,85 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+type FallbackLlmImpl = <crate::Selected as super::Implementations>::FallbackLlm;
+
+/// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
+#[pyclass(frozen, name = "FallbackLlm", module = "livekit.agents._core")]
+pub struct FallbackLlm(::std::sync::Arc<FallbackLlmImpl>);
+
+#[pymethods]
+impl FallbackLlm {
+    #[new]
+    #[pyo3(signature = (llms, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
+    fn new(llms: Bound<'_, PyAny>, attempt_timeout: f64, max_retry_per_llm: u32, retry_interval: f64, sticky: bool, on_availability: Option<Bound<'_, PyAny>>) -> PyResult<FallbackLlm> {
+        ::lk_agents_abi::python::check_pid()?;
+        let llms = llms.try_iter().and_then(|items| items.map(|item| { let item = item?; super::llm::LlmProxy::from_host(&item) }).collect::<PyResult<Vec<_>>>())?;
+        let on_availability = on_availability.map(|v| super::llm::ChainObserverProxy::from_host(&v)).transpose()?;
+        let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(llms, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(FallbackLlm(::std::sync::Arc::new(out)))
+    }
+
+    #[getter]
+    fn active_index(&self) -> PyResult<usize> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::active_index(&self.0);
+        Ok(out)
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (chat_ctx_host, *, tools, tools_host = None, parallel_tool_calls = None, tool_choice = None, extra_kwargs = None, conn_options = None))]
+    fn chat<'py>(&self, py: Python<'py>, chat_ctx_host: ::lk_agents_abi::HostRef, tools: ::std::vec::Vec<::lk_agents_abi::ToolSpec>, tools_host: ::std::option::Option<::lk_agents_abi::HostRef>, parallel_tool_calls: ::std::option::Option<bool>, tool_choice: Option<Bound<'_, PyAny>>, extra_kwargs: Option<Bound<'_, PyAny>>, conn_options: ::std::option::Option<::lk_agents_abi::ApiConnectOptions>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        let tool_choice = tool_choice.map(|v| ::lk_agents_abi::python::value_from_py(&v, "tool_choice")).transpose()?;
+        let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        ::lk_agents_abi::python::future_into_py(py, async move {
+            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx_host, tools, tools_host, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(FallbackLlmChunks(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
+        read: |obj| {
+            let this = obj.cast::<FallbackLlm>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::Llm> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+/// One stream of `::lk_agents_abi::LlmChunk` items: `recv()` resolves to the next, `None` at the end.
+#[pyclass(frozen, name = "FallbackLlmChunks", module = "livekit.agents._core")]
+pub struct FallbackLlmChunks(::lk_agents_runtime::source::NativeSource<::lk_agents_abi::LlmChunk>);
+
+#[pymethods]
+impl FallbackLlmChunks {
+    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        self.0.recv(py, |py, item| ::pyo3::IntoPyObjectExt::into_py_any(item, py))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        ::lk_agents_abi::python::check_pid()?;
+        self.0.aclose(py)
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/inference.rs.
 type InferenceLlmImpl = <crate::Selected as super::Implementations>::InferenceLlm;
 

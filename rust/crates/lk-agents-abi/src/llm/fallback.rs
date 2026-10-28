@@ -48,3 +48,38 @@ pub struct ErrorPlan {
     /// is already in flight.
     pub swap_to: Option<usize>,
 }
+
+/// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
+#[crate::host(class(name = "FallbackLlm", native = crate::Llm))]
+pub trait FallbackLlm: Send + Sync + Sized + 'static {
+    #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
+    type Chunks: crate::StreamSource<crate::LlmChunk> + 'static;
+
+    #[host(new)]
+    fn new(
+        llms: Vec<std::sync::Arc<dyn crate::Llm>>,
+        #[host(kw, default = 5.0)] attempt_timeout: f64,
+        #[host(default = 0)] max_retry_per_llm: u32,
+        #[host(default = 0.5)] retry_interval: f64,
+        #[host(default = false)] sticky: bool,
+        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
+    ) -> Result<Self, crate::llm::inference::InvalidPayload>;
+
+    #[host(getter)]
+    fn active_index(&self) -> usize;
+
+    #[host(await)]
+    async fn aclose(&self);
+
+    #[host(await)]
+    async fn chat(
+        &self,
+        chat_ctx_host: crate::HostRef,
+        #[host(kw)] tools: Vec<crate::ToolSpec>,
+        #[host(default = None)] tools_host: Option<crate::HostRef>,
+        #[host(default = None)] parallel_tool_calls: Option<bool>,
+        #[host(default = None)] tool_choice: Option<serde_json::Value>,
+        #[host(default = None)] extra_kwargs: Option<crate::Extra>,
+        #[host(default = None)] conn_options: Option<crate::ApiConnectOptions>,
+    ) -> Result<Self::Chunks, crate::errors::ProviderError>;
+}

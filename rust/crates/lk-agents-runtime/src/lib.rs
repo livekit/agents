@@ -20,6 +20,7 @@ pub mod codecs;
 #[cfg(feature = "media-images")]
 pub mod images;
 pub mod evals;
+pub mod fallback;
 pub mod media_workers;
 pub mod recording;
 pub mod avatar;

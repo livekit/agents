@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from livekit.agents._core_view import AvailabilityObserver
 from livekit.agents.llm import LLM
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.types import APIConnectOptions
@@ -14,6 +15,37 @@ from livekit.agents.types import APIConnectOptions
 from .._core import ChatItem
 from .mcp_session import McpCleanup
 from .realtime_options import NativeRealtimeConfig, RealtimeOptions
+
+class FallbackLlm:
+    """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
+    def __init__(
+        self,
+        llms: list[LLM[Any]],
+        *,
+        attempt_timeout: float = 5.0,
+        max_retry_per_llm: int = 0,
+        retry_interval: float = 0.5,
+        sticky: bool = False,
+        on_availability: AvailabilityObserver | None = None,
+    ) -> None: ...
+    @property
+    def active_index(self) -> int: ...
+    async def aclose(self) -> None: ...
+    async def chat(
+        self,
+        chat_ctx_host: object,
+        *,
+        tools: list[dict[str, object]],
+        tools_host: object | None = None,
+        parallel_tool_calls: bool | None = None,
+        tool_choice: object | None = None,
+        extra_kwargs: dict[str, object] | None = None,
+        conn_options: APIConnectOptions | None = None,
+    ) -> FallbackLlmChunks: ...
+
+class FallbackLlmChunks:
+    async def recv(self) -> dict[str, object] | None: ...
+    async def aclose(self) -> None: ...
 
 class InferenceLlm:
     """The gateway LLM behind `inference.LLM`. Its options are shared by every view

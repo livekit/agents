@@ -42,6 +42,7 @@ pub trait Implementations: 'static {
     type Evaluations: ::lk_agents_abi::evals::Evaluations;
     type InferenceCredentials: ::lk_agents_abi::inference::InferenceCredentials;
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
+    type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type InferenceLlm: ::lk_agents_abi::llm::inference::InferenceLlm;
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
@@ -90,6 +91,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::inference_resolve_api_key, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_resolve_api_secret, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
+    m.add_class::<llm::FallbackLlm>()?;
+    m.add_class::<llm::FallbackLlmChunks>()?;
     m.add_class::<llm::InferenceLlm>()?;
     m.add_class::<llm::InferenceLlmChunks>()?;
     m.add_class::<llm::LlmChoiceParser>()?;

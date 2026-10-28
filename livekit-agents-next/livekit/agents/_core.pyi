@@ -95,7 +95,6 @@ from ._generated._core_classes import (
     DataStreamAudioReceiver as DataStreamAudioReceiver,
     ExpFilter as ExpFilter,
     FakeRoom as FakeRoom,
-    FallbackLlm as FallbackLlm,
     FallbackStt as FallbackStt,
     FallbackSttStream as FallbackSttStream,
     FallbackTts as FallbackTts,
@@ -322,6 +321,8 @@ from ._generated._core_inference import (
     inference_resolve_api_secret as inference_resolve_api_secret,
 )
 from ._generated._core_llm import (
+    FallbackLlm as FallbackLlm,
+    FallbackLlmChunks as FallbackLlmChunks,
     InferenceLlm as InferenceLlm,
     InferenceLlmChunks as InferenceLlmChunks,
     LlmChoiceParser as LlmChoiceParser,

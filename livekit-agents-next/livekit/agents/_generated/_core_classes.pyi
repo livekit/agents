@@ -1757,37 +1757,6 @@ class TtsMetricState:
     ) -> dict[str, Any] | None: ...
 
 
-class FallbackLlm:
-    """`llm.FallbackAdapter`'s engine as the host builds it. The public class stays Python (users
-    construct, subclass and call it standalone); its `chat()` calls [`chat_for_host`](Self::chat_for_host).
-    """
-
-    def __init__(
-        self,
-        llms: list[Any],
-        *,
-        attempt_timeout: float = 5.0,
-        max_retry_per_llm: int = 0,
-        retry_interval: float = 0.5,
-        sticky: bool = False,
-        on_availability: Any | None = None,
-    ) -> None: ...
-    @property
-    def active_index(self) -> int: ...
-    async def aclose(self) -> None: ...
-    async def chat(
-        self,
-        chat_ctx_host: Any,
-        *,
-        tools: list[Any] = ...,
-        tools_host: Any | None = None,
-        parallel_tool_calls: bool | None = None,
-        tool_choice: Any | None = None,
-        extra_kwargs: dict[str, Any] | None = None,
-        conn_options: Any | None = None,
-    ) -> InferenceLlmStream: ...
-
-
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
 

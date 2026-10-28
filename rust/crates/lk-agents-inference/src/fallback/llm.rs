@@ -100,20 +100,10 @@ impl FallbackLlm {
 
 /// `llm.FallbackAdapter`'s engine as the host builds it. The public class stays Python (users
 /// construct, subclass and call it standalone); its `chat()` calls [`chat_for_host`](Self::chat_for_host).
-#[lk_agents_abi::host(object(cell = "arc", as_dyn(Llm = as_llm)))]
 impl FallbackLlm {
     /// `llms` in order; the keywords are `FallbackAdapter.__init__`'s. Each entry is bound to
     /// `max_retry = 0`, distinct from the chain's `max_retry_per_llm`: the chain is the retry loop,
     /// and a plugin's own would multiply it (N×M attempts).
-    #[host(new(
-        kw_only = "attempt_timeout",
-        defaults(
-            attempt_timeout = 5.0,
-            max_retry_per_llm = 0,
-            retry_interval = 0.5,
-            sticky = false
-        )
-    ))]
     #[allow(clippy::too_many_arguments)]
     pub fn for_host(
         llms: Vec<Arc<dyn Llm>>,
@@ -122,8 +112,8 @@ impl FallbackLlm {
         retry_interval: f64,
         sticky: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
     ) -> Result<Self, NoBackends> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
@@ -142,7 +132,6 @@ impl FallbackLlm {
 
     /// Which entry most recently served, as a position in the host's list (the reference's
     /// `_active_instance`; 0 before any traffic).
-    #[host(getter)]
     pub fn active_index(&self) -> usize {
         self.chain.active_index()
     }
@@ -153,19 +142,12 @@ impl FallbackLlm {
     }
 
     /// `aclose()`: every recovery probe in flight closes its stream, awaited (bounded).
-    #[host(method(name = "aclose"))]
     pub async fn aclose_for_host(&self) {
         self.chain.close().await;
     }
 
     /// Open a completion over the caller's own `ChatContext` and tools (the host objects every
     /// entry is handed, §1.11); the chain picks an entry on the first `recv()`.
-    #[host(method(
-        name = "chat",
-        stream = lk_agents_abi::InferenceLlmStream,
-        kw_only = "tools",
-        defaults(tools = Vec::new())
-    ))]
     #[allow(clippy::too_many_arguments)]
     pub async fn chat_for_host(
         &self,
