@@ -13,6 +13,7 @@
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
 from typing import Any
+
 from livekit import rtc
 
 from ..types import NotGivenOr
@@ -309,23 +310,6 @@ HSR_REFUSED: int
 HSR_INTERNAL: int
 HSR_TIMEOUT: int
 HSR_PROTOCOL: int
-def format_log_record(
-    style: str,
-    record: Any,
-    message: str,
-    asctime: str,
-    exception: str | None,
-    stack: str | None,
-    ensure_ascii: bool,
-) -> str: ...
-async def dev_channel(
-    cli_addr: str,
-    agent_name: str,
-    url: str,
-    api_key: str,
-    api_secret: str,
-    server: Any,
-) -> None: ...
 def resolve_keyterm_detection(config: Any | None = None) -> dict[str, Any]: ...
 def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float: ...
 def amd_constants() -> dict[str, Any]: ...

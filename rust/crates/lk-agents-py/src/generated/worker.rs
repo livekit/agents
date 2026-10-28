@@ -18,7 +18,7 @@ fn _extract_endpoint_stream_read_max_bytes(obj: &Bound<'_, PyAny>) -> PyResult<u
 }
 
 fn _extract_endpoint_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>())
+    { if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&obj, "data", None)?; Ok(obj.py().detach(move || bytes.to_vec())) } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "data") }).collect::<PyResult<Vec<_>>>()) } }
 }
 
 fn _extract_endpoint_stream_reset_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
@@ -818,7 +818,7 @@ fn _extract_server_runtime_drain_timeout(obj: &Bound<'_, PyAny>) -> PyResult<::s
 }
 
 fn _extract_server_runtime_simulate_job_room_info(obj: &Bound<'_, PyAny>) -> PyResult<::std::option::Option<::std::vec::Vec<u8>>> {
-    if obj.is_none() { Ok(None) } else { (obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "room_info") }).collect::<PyResult<Vec<_>>>())).map(Some) }
+    if obj.is_none() { Ok(None) } else { ({ if obj.is_instance_of::<::pyo3::types::PyBytes>() || obj.is_instance_of::<::pyo3::types::PyByteArray>() || obj.is_instance_of::<::pyo3::types::PyMemoryView>() { let bytes = ::lk_agents_abi::python::retained_bytes(&obj, "room_info", None)?; Ok(obj.py().detach(move || bytes.to_vec())) } else { obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "room_info") }).collect::<PyResult<Vec<_>>>()) } }).map(Some) }
 }
 
 /// Returned host references are futures owned by the bootstrap loop.

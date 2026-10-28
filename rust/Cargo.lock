@@ -1606,7 +1606,6 @@ dependencies = [
  "pbjson-types",
  "prost",
  "pyo3",
- "rcgen",
  "reqwest 0.13.4",
  "rmcp",
  "rustls",
