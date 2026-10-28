@@ -1,10 +1,10 @@
 //! Transcript visibility, segment framing and subject routing over supplied records.
 
+use super::ingress::MAX_STREAM_BYTES;
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
 use crate::transcription::{Visible, VisibleStream};
 use crate::tts::markup::expression_attribute;
 use lk_agents_abi::voice::io::{IoError, Result};
-use super::ingress::MAX_STREAM_BYTES;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString};
 use std::collections::BTreeMap;

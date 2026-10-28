@@ -1,7 +1,6 @@
 //! Fake room text execution using the production transcript writer and subject-selection core.
 
 use lk_agents_abi::voice::io::{IoError, Result, TextOutput};
-use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RtcRoom, StreamTextOptions, TextStreamWriter, TrackSid,
     TrackSource, Transcription, TranscriptionSegment,
@@ -10,6 +9,7 @@ use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, BoxFuture, Clock, Monotone, Spawner, SpawnerExt,
     TOPIC_TRANSCRIPTION, TimedString,
 };
+use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 use lk_agents_voice::room_io::transcription::{
     ParticipantTracks, Subject, Writer, WriterEffect, Writing, retained_bytes, stream_attributes,
 };

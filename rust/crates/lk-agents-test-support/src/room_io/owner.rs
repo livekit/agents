@@ -1,5 +1,6 @@
 //! A simulated room executor. Selection and readiness use the production room coordinator.
 
+use super::transcription::SegmentIds;
 use super::{
     input::{ParticipantAudioInput, ParticipantVideoInput},
     output::RoomAudioOutput,
@@ -13,7 +14,6 @@ use lk_agents_abi::voice::room_io::{
 use lk_agents_abi::voice::room_owner::{self, RoomAudioInput, RoomIoEvent, RoomVideoInput};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RoomEvent, RtcRoom};
 use lk_agents_abi::{AbortHandle, Clock, Closed, Monotone, Spawner, TaskSet, Ts};
-use super::transcription::SegmentIds;
 use lk_agents_voice::room_io::coordinator::RoomCoordinator;
 use lk_agents_voice::room_io::{accepted_kinds, publishes_on_behalf_of};
 use std::sync::{Arc, Mutex, Weak};

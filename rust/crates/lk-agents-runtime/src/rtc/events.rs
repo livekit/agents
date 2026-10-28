@@ -8,11 +8,11 @@ use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, TrackPublicatio
 use lk_agents_abi::voice::rtc::ports::{
     self, ByteStream, ByteStreamIngress, Receiver, TextStream, TextStreamIngress,
 };
-use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
 use lk_agents_abi::voice::rtc::{
     ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, StreamInfo,
 };
 use lk_agents_abi::{Closed, StreamSource, Ts};
+use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 const EVENT_CAPACITY: usize = 128;
