@@ -81,6 +81,12 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
         b.push_str(&format!("{l}\n"));
         wrote = true;
     }
+    if body.contains("NotGivenOr[") {
+        // The package's own module: isort's local section.
+        b.push_str(if wrote { "\n" } else { "" });
+        b.push_str("from ..types import NotGivenOr\n");
+        wrote = true;
+    }
     if wrote {
         b.push('\n');
     }
@@ -210,7 +216,22 @@ fn items(decls: &[Decl], x: &Exposed) -> Result<Vec<String>, String> {
         for c in &o.consts {
             b.push_str(&format!("    {}: {}\n", c.name, py_ty(cx, &c.ty, false)?));
         }
+        // A setter follows its getter: `@x.setter` names the property defined just before.
+        let mut methods: Vec<&Method> = Vec::new();
         for m in &o.methods {
+            if m.kind == MethodKind::Setter
+                && o.methods.iter().any(|g| g.kind == MethodKind::Getter && g.name == m.name)
+            {
+                continue;
+            }
+            methods.push(m);
+            if m.kind == MethodKind::Getter {
+                methods.extend(
+                    o.methods.iter().filter(|s| s.kind == MethodKind::Setter && s.name == m.name),
+                );
+            }
+        }
+        for m in methods {
             let d = match m.kind {
                 MethodKind::New => {
                     def(cx, "    ", "", "__init__", &Sig { ret: RTy::Unit, ..m.sig.clone() }, true)?
@@ -303,11 +324,16 @@ fn def(
     method: bool,
 ) -> Result<String, String> {
     let mut parts: Vec<String> = if method { vec!["self".to_owned()] } else { Vec::new() };
+    // Python compares with any object; pyo3 answers `NotImplemented` for a foreign type.
+    let comparison = matches!(name, "__eq__" | "__ne__");
     for (stub, star) in args(cx, sig)? {
         if star {
             parts.push("*".to_owned());
         }
-        parts.push(stub);
+        match stub.split_once(':') {
+            Some((param, _)) if comparison => parts.push(format!("{param}: object")),
+            _ => parts.push(stub),
+        }
     }
     let ret = match &sig.stream {
         Some(class) => class.clone(),
