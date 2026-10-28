@@ -86,7 +86,7 @@ class TextSession(Generic[Context_T, Output_T]):
             usage = RunUsage()
             runs: dict[str, _TextRun[Any]] = {}
             cleanup = AsyncExitStack()
-            contexts = _FrameContexts(self._context_factory, root_scope)
+            contexts = _FrameContexts(self._context_factory)
             try:
                 bindings = []
                 for agent in agents:
@@ -98,6 +98,7 @@ class TextSession(Generic[Context_T, Output_T]):
                         hooks=hooks,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
                     )
+                    cleanup.push_async_callback(run.release_toolsets)
                     if not runs:
                         await run.prepare_thread()
                         shared_thread = run.thread
@@ -108,7 +109,6 @@ class TextSession(Generic[Context_T, Output_T]):
                             run._store = shared_store
                     run.frame_contexts = contexts
                     await run.acquire_toolsets()
-                    cleanup.push_async_callback(run.release_toolsets)
                     run.tools = llm.ToolContext(agent.tools)
                     captured = contextvars.copy_context()
                     captured.run(_BindingContextVar.set, run)
@@ -196,15 +196,18 @@ class _FrameContexts:
     def __init__(
         self,
         factory: Callable[[str, ContextStore], object | Awaitable[object]] | None,
-        root_scope: str,
     ) -> None:
         self.factory = factory
-        self.root_scope = root_scope
         self.contexts: dict[str, object] = {}
 
     async def resolve(self, run: _TextRun[Any]) -> None:
         scope = run.context_scope
-        if self.factory is None or scope is None or scope == self.root_scope:
+        if (
+            self.factory is None
+            or scope is None
+            or run.frame_id is None
+            or scope != run.frame_id.value
+        ):
             return
         if scope not in self.contexts:
             context = self.factory(run.agent.name, run.store)
