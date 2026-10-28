@@ -277,7 +277,7 @@ class TTS(tts.TTS):
             async with self._send_lock:
                 if self._closed:
                     return
-                await self._ensure_session(DEFAULT_API_CONNECT_OPTIONS.timeout)
+                await self._ensure_session(DEFAULT_API_CONNECT_OPTIONS.connect_timeout)
 
     def update_options(
         self,
