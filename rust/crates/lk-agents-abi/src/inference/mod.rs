@@ -533,6 +533,56 @@ pub trait InferenceModels {
     /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
     #[host(function)]
     fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: String) -> bool;
+
+    /// Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table.
+    #[host(function)]
+    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption>;
+
+    /// `AMDPredictionEvent.is_human` for a category's wire value.
+    #[host(function)]
+    fn amd_category_is_human(category: String) -> Result<bool, InvalidOption>;
+
+    /// `AMDPredictionEvent.is_machine` for a category's wire value.
+    #[host(function)]
+    fn amd_category_is_machine(category: String) -> Result<bool, InvalidOption>;
+
+    /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
+    /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
+    /// `reasoning`.
+    #[host(function)]
+    fn llm_unsupported_params(
+        model: String,
+        #[host(kw, default = false)] has_tools: bool,
+        #[host(default = None)] reasoning_effort: Option<String>,
+        #[host(default = None)] reasoning: Option<String>,
+    ) -> Vec<String>;
+
+    /// The turn detector a host constructs: `(model, cloud, warnings)`.
+    #[host(function)]
+    #[allow(clippy::too_many_arguments)]
+    fn eot_select(
+        version: Option<String>,
+        hosted: bool,
+        dev: bool,
+        url: String,
+        key: String,
+        secret: String,
+        local_fallback: bool,
+    ) -> Result<(String, bool, Vec<String>), InvalidOption>;
+
+    /// `_normalize_fallback`'s string arm for an STT chain.
+    #[host(function)]
+    fn stt_normalize_fallback_str(model: String) -> fallback::SttFallbackModel;
+
+    /// `_normalize_fallback`'s string arm for a TTS chain.
+    #[host(function)]
+    fn tts_normalize_fallback_str(model: String) -> fallback::TtsFallbackModel;
 }
+
+/// An option value the inference lookups do not know.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidOption(pub String);
 
 pub mod tts_client;

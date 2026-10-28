@@ -23,7 +23,6 @@ pub fn is_evaluated_model(model: &str, evaluated: &[&str]) -> bool {
 }
 
 /// [`is_evaluated_model`] against the `"llm"` or `"stt"` table; any other kind is refused.
-#[lk_agents_abi::host(export(pid = false, name = "amd_is_evaluated_model"))]
 pub fn is_evaluated_model_of_kind(model: &str, kind: &str) -> Result<bool, String> {
     let table = match kind {
         "llm" => EVALUATED_LLM_MODELS,
@@ -39,13 +38,11 @@ fn parse_category(category: &str) -> Result<AmdCategory, String> {
 }
 
 /// `AMDPredictionEvent.is_human`, over [`AmdCategory::is_human`].
-#[lk_agents_abi::host(export(pid = false, name = "amd_category_is_human"))]
 pub fn category_is_human(category: &str) -> Result<bool, String> {
     Ok(parse_category(category)?.is_human())
 }
 
 /// `AMDPredictionEvent.is_machine`, over [`AmdCategory::is_machine`].
-#[lk_agents_abi::host(export(pid = false, name = "amd_category_is_machine"))]
 pub fn category_is_machine(category: &str) -> Result<bool, String> {
     Ok(parse_category(category)?.is_machine())
 }

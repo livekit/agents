@@ -96,7 +96,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/tool_executor.rs",
     "rust/crates/lk-agents-abi/src/worker/endpoint/reset_codes.rs",
     "rust/crates/lk-agents-worker/src/cli.rs",
-    "rust/crates/lk-agents-inference/src/amd/detector.rs",
     "rust/crates/lk-agents-voice/src/keyterm_detection.rs",
     "rust/crates/lk-agents-voice/src/amd/classifier.rs",
     "rust/crates/lk-agents-voice/src/agent_activity/options.rs",
@@ -105,7 +104,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs",
     "rust/crates/lk-agents-voice/src/workflows/prompts.rs",
     "rust/crates/lk-agents-abi/src/voice/workflows.rs",
-    "rust/crates/lk-agents-inference/src/llm/models.rs",
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
     "rust/crates/lk-agents-voice/src/agent_session/mod.rs",
@@ -118,7 +116,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/tts/stream_pacer.rs",
     "rust/crates/lk-agents-media/src/stream_buffer.rs",
     "rust/crates/lk-agents-media/src/decoder.rs",
-    "rust/crates/lk-agents-inference/src/eot/options.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-voice/src/remote_session.rs",
     "rust/crates/lk-agents-abi/src/errors/api.rs",
@@ -154,7 +151,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/llm/realtime.rs",
     "rust/crates/lk-agents-inference/src/realtime/dialect.rs",
     "rust/crates/lk-agents-inference/src/stt/options.rs",
-    "rust/crates/lk-agents-inference/src/tts/wire.rs",
     "rust/crates/lk-agents-abi/src/tokenize/language/code.rs",
     "rust/crates/lk-agents-abi/src/utils/connection_pool.rs",
     "rust/crates/lk-agents-voice/src/room_io/_input.rs",

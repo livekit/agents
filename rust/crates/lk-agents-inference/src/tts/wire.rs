@@ -16,7 +16,6 @@ pub fn parse_model_string(model: &str) -> (&str, Option<&str>) {
 }
 
 /// `_normalize_fallback`'s string arm.
-#[lk_agents_abi::host(export(name = "tts_normalize_fallback_str"))]
 pub fn normalize_fallback_str(model: &str) -> lk_agents_abi::inference::fallback::TtsFallbackModel {
     let (name, voice) = parse_model_string(model);
     FallbackModel {

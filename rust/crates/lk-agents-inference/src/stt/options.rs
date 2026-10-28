@@ -156,7 +156,6 @@ pub use lk_agents_abi::inference::fallback::SttFallbackModel as FallbackModel;
 
 /// `_normalize_fallback`: a bare string becomes `FallbackModel(model=<name>)`, with the
 /// `:language` suffix parsed off and discarded.
-#[lk_agents_abi::host(export(name = "stt_normalize_fallback_str"))]
 pub fn normalize_fallback_str(model: &str) -> lk_agents_abi::inference::fallback::SttFallbackModel {
     let (name, _language) = parse_model_string(model);
     FallbackModel { model: name.to_owned(), extra_kwargs: None }

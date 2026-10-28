@@ -64,12 +64,6 @@ pub fn bare_model_name(model: &str) -> &str {
 
 /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort` is
 /// the request's `reasoning_effort` and `reasoning` the effort of its Responses `reasoning`.
-#[lk_agents_abi::host(export(
-    name = "llm_unsupported_params",
-    pid = false,
-    kw_only = "has_tools",
-    defaults(has_tools = false, reasoning_effort = None, reasoning = None)
-))]
 pub fn unsupported_params(
     model: &str,
     has_tools: bool,

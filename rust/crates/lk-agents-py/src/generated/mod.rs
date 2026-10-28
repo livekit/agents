@@ -130,6 +130,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::stt_aligned_transcript_for_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::min_reasoning_effort, m)?)?;
     m.add_function(wrap_pyfunction!(inference::amd_auto_select_models, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::amd_is_evaluated_model, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::amd_category_is_human, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::amd_category_is_machine, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::llm_unsupported_params, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::stt_normalize_fallback_str, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::tts_normalize_fallback_str, m)?)?;
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
     m.add_class::<llm::FallbackLlm>()?;

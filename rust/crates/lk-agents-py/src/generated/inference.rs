@@ -165,6 +165,64 @@ pub fn amd_auto_select_models(livekit_url: ::std::string::String, api_key: ::std
     Ok(out)
 }
 
+/// Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table.
+#[pyfunction]
+#[pyo3(signature = (model, kind))]
+pub fn amd_is_evaluated_model(model: ::std::string::String, kind: ::std::string::String) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// `AMDPredictionEvent.is_human` for a category's wire value.
+#[pyfunction]
+#[pyo3(signature = (category))]
+pub fn amd_category_is_human(category: ::std::string::String) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_category_is_human(category).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// `AMDPredictionEvent.is_machine` for a category's wire value.
+#[pyfunction]
+#[pyo3(signature = (category))]
+pub fn amd_category_is_machine(category: ::std::string::String) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_category_is_machine(category).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
+/// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
+/// `reasoning`.
+#[pyfunction]
+#[pyo3(signature = (model, *, has_tools = false, reasoning_effort = None, reasoning = None))]
+pub fn llm_unsupported_params(model: ::std::string::String, has_tools: bool, reasoning_effort: ::std::option::Option<::std::string::String>, reasoning: ::std::option::Option<::std::string::String>) -> PyResult<::std::vec::Vec<::std::string::String>> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::llm_unsupported_params(model, has_tools, reasoning_effort, reasoning);
+    Ok(out)
+}
+
+/// The turn detector a host constructs: `(model, cloud, warnings)`.
+#[pyfunction]
+#[pyo3(signature = (version, hosted, dev, url, key, secret, local_fallback))]
+pub fn eot_select(version: ::std::option::Option<::std::string::String>, hosted: bool, dev: bool, url: ::std::string::String, key: ::std::string::String, secret: ::std::string::String, local_fallback: bool) -> PyResult<(::std::string::String, bool, ::std::vec::Vec<::std::string::String>)> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(version, hosted, dev, url, key, secret, local_fallback).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    Ok(out)
+}
+
+/// `_normalize_fallback`'s string arm for an STT chain.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn stt_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk_agents_abi::inference::fallback::SttFallbackModel> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_normalize_fallback_str(model);
+    Ok(out)
+}
+
+/// `_normalize_fallback`'s string arm for a TTS chain.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn tts_normalize_fallback_str(model: ::std::string::String) -> PyResult<::lk_agents_abi::inference::fallback::TtsFallbackModel> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_normalize_fallback_str(model);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.
 type InferenceAvatarImpl = <crate::Selected as super::Implementations>::InferenceAvatar;
 

@@ -72,6 +72,44 @@ def min_reasoning_effort(model: str) -> str | None:
 def amd_auto_select_models(livekit_url: str, api_key: str, api_secret: str) -> bool:
     """Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`)."""
 
+def amd_is_evaluated_model(model: str, kind: str) -> bool:
+    """Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table."""
+
+def amd_category_is_human(category: str) -> bool:
+    """`AMDPredictionEvent.is_human` for a category's wire value."""
+
+def amd_category_is_machine(category: str) -> bool:
+    """`AMDPredictionEvent.is_machine` for a category's wire value."""
+
+def llm_unsupported_params(
+    model: str,
+    *,
+    has_tools: bool = False,
+    reasoning_effort: str | None = None,
+    reasoning: str | None = None,
+) -> list[str]:
+    """The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
+    is the request's `reasoning_effort` and `reasoning` the effort of its Responses
+    `reasoning`.
+    """
+
+def eot_select(
+    version: str | None,
+    hosted: bool,
+    dev: bool,
+    url: str,
+    key: str,
+    secret: str,
+    local_fallback: bool,
+) -> tuple[str, bool, list[str]]:
+    """The turn detector a host constructs: `(model, cloud, warnings)`."""
+
+def stt_normalize_fallback_str(model: str) -> dict[str, object]:
+    """`_normalize_fallback`'s string arm for an STT chain."""
+
+def tts_normalize_fallback_str(model: str) -> dict[str, object]:
+    """`_normalize_fallback`'s string arm for a TTS chain."""
+
 class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,
     created under one operation identity, held until `aclose()` terminates it.

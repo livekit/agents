@@ -1,7 +1,8 @@
 //! `_core`'s inference lookups ([`InferenceModels`]): the gateway's model tables, request headers
 //! and local model registry, answered by the modules that own them.
 
-use lk_agents_abi::inference::InferenceModels;
+use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
+use lk_agents_abi::inference::{InferenceModels, InvalidOption};
 use serde_json::{Map, Value};
 
 pub struct Models;
@@ -72,5 +73,64 @@ impl InferenceModels for Models {
 
     fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: String) -> bool {
         crate::amd::auto_select_models(&livekit_url, &api_key, &api_secret)
+    }
+
+    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption> {
+        crate::amd::is_evaluated_model_of_kind(&model, &kind).map_err(InvalidOption)
+    }
+
+    fn amd_category_is_human(category: String) -> Result<bool, InvalidOption> {
+        crate::amd::category_is_human(&category).map_err(InvalidOption)
+    }
+
+    fn amd_category_is_machine(category: String) -> Result<bool, InvalidOption> {
+        crate::amd::category_is_machine(&category).map_err(InvalidOption)
+    }
+
+    fn llm_unsupported_params(
+        model: String,
+        has_tools: bool,
+        reasoning_effort: Option<String>,
+        reasoning: Option<String>,
+    ) -> Vec<String> {
+        crate::llm::models::unsupported_params(
+            &model,
+            has_tools,
+            reasoning_effort.as_deref(),
+            reasoning.as_deref(),
+        )
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    }
+
+    fn eot_select(
+        version: Option<String>,
+        hosted: bool,
+        dev: bool,
+        url: String,
+        key: String,
+        secret: String,
+        local_fallback: bool,
+    ) -> Result<(String, bool, Vec<String>), InvalidOption> {
+        crate::eot::options::select_wire(
+            version.as_deref(),
+            hosted,
+            dev,
+            &url,
+            &key,
+            &secret,
+            local_fallback,
+        )
+        .map(|(model, cloud, warnings)| (model.to_owned(), cloud, warnings))
+        .map_err(InvalidOption)
+    }
+
+    fn stt_normalize_fallback_str(model: String) -> SttFallbackModel {
+        crate::stt::options::normalize_fallback_str(&model)
+    }
+
+    fn tts_normalize_fallback_str(model: String) -> TtsFallbackModel {
+        crate::tts::wire::normalize_fallback_str(&model)
     }
 }

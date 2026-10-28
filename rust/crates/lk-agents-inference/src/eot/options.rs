@@ -1,7 +1,6 @@
 //! Constructor selection, shared by every host. Ambient environment is supplied as data.
 
 /// The turn detector a host constructs: `(model, cloud, warnings)`.
-#[lk_agents_abi::host(export(name = "eot_select"))]
 pub fn select_wire(
     version: Option<&str>,
     hosted: bool,
