@@ -223,7 +223,7 @@ def _validate_json_envelope(envelope: Any) -> None:
         raise _ContaminatedConnection(f"Rime v1 sent a malformed {payload} event")
 
 
-def _codec_for_protocol(protocol: WebSocketProtocol | str) -> _EnvelopeCodec:
+def codec_for_protocol(protocol: WebSocketProtocol | str) -> _EnvelopeCodec:
     if protocol == "binary":
         return _BinaryEnvelopeCodec()
     if protocol == "json":
@@ -235,7 +235,7 @@ class _ContaminatedConnection(APIConnectionError):
     pass
 
 
-class _ContextCancelled(asyncio.CancelledError):
+class ContextCancelled(asyncio.CancelledError):
     def __init__(self, *, reusable: bool) -> None:
         super().__init__()
         self.reusable = reusable
@@ -281,7 +281,7 @@ def validate_websocket_url(websocket_url: str, *, allow_custom_endpoint: bool = 
     validate_endpoint_host(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
 
 
-def _model_endpoint_identity(websocket_url: str) -> tuple[str, str, int, str]:
+def model_endpoint_identity(websocket_url: str) -> tuple[str, str, int, str]:
     """Return the URL parts that identify the model behind an endpoint."""
     parts = urlsplit(websocket_url)
     assert parts.hostname is not None
@@ -320,7 +320,7 @@ async def connect(
     """Open a v1 socket and consume its one connection-level ready event (a response, under
     ``read_timeout``)."""
     validate_websocket_url(websocket_url, allow_custom_endpoint=allow_custom_endpoint)
-    codec = _codec_for_protocol(protocol)
+    codec = codec_for_protocol(protocol)
     try:
         ws = await utils.http_context.ws_connect(
             session,
@@ -538,7 +538,7 @@ async def run_context(
                 if read_timeout is None
                 else min(read_timeout, CANCEL_TIMEOUT),
             )
-        raise _ContextCancelled(reusable=reusable) from None
+        raise ContextCancelled(reusable=reusable) from None
     finally:
         context_started.set()
         await _cancel_tasks(*tasks)

@@ -18,6 +18,7 @@ import asyncio
 import copy
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import overload
 from urllib.parse import urlencode
@@ -483,7 +484,15 @@ class TTS(tts.TTS):
             raise RuntimeError(
                 "Rime TTS one-shot synthesize requires use_websocket=False at construction time"
             )
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+            opts=copy.deepcopy(self._opts),
+            base_url=self._base_url,
+            api_key=self._api_key,
+            ensure_session=self._ensure_session,
+        )
 
     def update_options(
         self,
@@ -618,10 +627,22 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize using the chunked api endpoint"""
 
-    def __init__(self, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+        *,
+        opts: _TTSOptions,
+        base_url: str,
+        api_key: str,
+        ensure_session: Callable[[], aiohttp.ClientSession],
+    ) -> None:
         self._sample_rate = tts.sample_rate
-        self._opts = copy.deepcopy(tts._opts)
-        self._base_url = tts._base_url
+        self._opts = opts
+        self._base_url = base_url
+        self._api_key = api_key
+        self._ensure_session = ensure_session
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
 
@@ -641,12 +662,12 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._ensure_session(),
                 "POST",
                 self._base_url,
                 headers={
                     "accept": format,
-                    "Authorization": f"Bearer {self._tts._api_key}",
+                    "Authorization": f"Bearer {self._api_key}",
                     "content-type": "application/json",
                 },
                 json=payload,

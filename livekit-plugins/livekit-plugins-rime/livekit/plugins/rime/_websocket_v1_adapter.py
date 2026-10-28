@@ -48,29 +48,6 @@ class V1SynthesisOptions:
     pause_between_brackets: NotGivenOr[bool] = NOT_GIVEN
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
-    def _to_protocol(self) -> _websocket_v1.SynthesisOptions:
-        if not is_given(self.language):
-            raise APIError("Rime v1 requires a language", retryable=False)
-
-        return _websocket_v1.SynthesisOptions(
-            model=self.model,
-            speaker=self.speaker,
-            language=self.language,
-            audio_format=self.audio_format,
-            sampling_rate=self.sampling_rate if is_given(self.sampling_rate) else None,
-            time_scale_factor=(
-                self.time_scale_factor if is_given(self.time_scale_factor) else None
-            ),
-            pause_between_brackets=(
-                self.pause_between_brackets if is_given(self.pause_between_brackets) else None
-            ),
-            phonemize_between_brackets=(
-                self.phonemize_between_brackets
-                if is_given(self.phonemize_between_brackets)
-                else None
-            ),
-        )
-
 
 class WebSocketV1Adapter:
     """Adapt LiveKit streaming to the Rime WebSocket v1 protocol."""
@@ -88,7 +65,7 @@ class WebSocketV1Adapter:
         _websocket_v1.validate_websocket_url(
             websocket_v1_url, allow_custom_endpoint=allow_custom_endpoint
         )
-        _websocket_v1._codec_for_protocol(websocket_protocol)
+        _websocket_v1.codec_for_protocol(websocket_protocol)
         self._websocket_v1_url = websocket_v1_url
         self._websocket_protocol: _websocket_v1.WebSocketProtocol = websocket_protocol
         self._api_key = api_key
@@ -128,11 +105,29 @@ class WebSocketV1Adapter:
         options: V1SynthesisOptions,
         conn_options: APIConnectOptions,
     ) -> _WebSocketV1SynthesizeStream:
+        if not is_given(options.language):
+            raise APIError("Rime v1 requires a language", retryable=False)
+        protocol_options = _websocket_v1.SynthesisOptions(
+            model=options.model,
+            speaker=options.speaker,
+            language=options.language,
+            audio_format=options.audio_format,
+            sampling_rate=options.sampling_rate if is_given(options.sampling_rate) else None,
+            time_scale_factor=options.time_scale_factor
+            if is_given(options.time_scale_factor)
+            else None,
+            pause_between_brackets=options.pause_between_brackets
+            if is_given(options.pause_between_brackets)
+            else None,
+            phonemize_between_brackets=options.phonemize_between_brackets
+            if is_given(options.phonemize_between_brackets)
+            else None,
+        )
         pool = self._pools.current
         stream = _WebSocketV1SynthesizeStream(
             tts_instance=tts_instance,
             pool=pool,
-            options=options._to_protocol(),
+            options=protocol_options,
             conn_options=conn_options,
             sentence_tokenizer=self._sentence_tokenizer,
         )
@@ -147,9 +142,9 @@ class WebSocketV1Adapter:
         _websocket_v1.validate_websocket_url(
             websocket_v1_url, allow_custom_endpoint=self._allow_custom_endpoint
         )
-        model_endpoint_changed = _websocket_v1._model_endpoint_identity(
+        model_endpoint_changed = _websocket_v1.model_endpoint_identity(
             websocket_v1_url
-        ) != _websocket_v1._model_endpoint_identity(self._websocket_v1_url)
+        ) != _websocket_v1.model_endpoint_identity(self._websocket_v1_url)
         if model_changed and not model_endpoint_changed:
             raise ValueError("model cannot change without changing websocket_url")
         if websocket_v1_url == self._websocket_v1_url:
@@ -246,7 +241,7 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
                 mark_started=self.mark_started,
             )
             reusable = result.reusable
-        except _websocket_v1._ContextCancelled as error:
+        except _websocket_v1.ContextCancelled as error:
             reusable = error.reusable
             raise
         finally:

@@ -31,7 +31,7 @@ from livekit.agents import (
 )
 from livekit.agents.telemetry import utils as telemetry_utils
 from livekit.plugins.rime import TTS
-from livekit.plugins.rime._websocket_v1 import _codec_for_protocol
+from livekit.plugins.rime._websocket_v1 import codec_for_protocol
 
 pytestmark = pytest.mark.unit
 
@@ -1912,7 +1912,7 @@ async def test_v1_accepts_done_before_end_write_returns(
     done_received = asyncio.Event()
     end_write_pending = False
     original_send = _websocket_v1._send_envelope
-    codec_class = type(_websocket_v1._codec_for_protocol(websocket_protocol))
+    codec_class = type(_websocket_v1.codec_for_protocol(websocket_protocol))
     original_decode = codec_class.decode_response
 
     async def send_envelope(
@@ -2319,7 +2319,7 @@ async def test_v1_connection_error_does_not_expose_transport_data(
                 websocket_url="wss://api.rime.ai/coda/ws",
                 api_key="test-key",
                 protocol="binary",
-                timeout=1,
+                conn_options=APIConnectOptions(max_retry=0, connect_timeout=1),
             )
 
     _assert_exception_is_safe(exc_info.value)
@@ -2346,7 +2346,7 @@ async def test_v1_connect_rejects_untrusted_host_before_transport(
                 websocket_url="wss://attacker.example/coda/ws",
                 api_key="test-key",
                 protocol="binary",
-                timeout=1,
+                conn_options=APIConnectOptions(max_retry=0, connect_timeout=1),
             )
 
     assert transport_called is False
@@ -2672,7 +2672,7 @@ _FIXTURES = [
 @pytest.mark.parametrize("fixture", _FIXTURES)
 @pytest.mark.parametrize("protocol", ["binary", "json"])
 async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> None:
-    codec = _codec_for_protocol(protocol)
+    codec = codec_for_protocol(protocol)
     binary = bytes.fromhex(fixture["binary"])
     expected = fixture["json"]
     if fixture["message"] == "WebSocketRequest":
