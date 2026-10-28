@@ -529,7 +529,8 @@ statement! {
 }
 
 statement! {
-    /// Inserts or replaces a history item at the end of the lane.
+    /// Inserts or replaces a history item at the end of the lane. An id another lane holds sets
+    /// `lane` to NULL, which the NOT NULL column refuses: the whole commit fails, nothing moved.
     InsertItem<'a> {
         lane: &'a str,
         version: i64,
@@ -542,7 +543,8 @@ INSERT INTO items (id, lane, seq, message_id, payload)
 SELECT :id, :lane, COALESCE((SELECT MAX(seq) FROM items WHERE lane = :lane), 0) + 1, :message_id, jsonb(:payload)
 FROM lanes
 WHERE lane = :lane AND version = :version AND lease_token = :token
-ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload
+ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
+  lane = CASE WHEN items.lane = excluded.lane THEN items.lane END
 "#
 }
 
@@ -558,7 +560,8 @@ INSERT INTO items (id, lane, seq, message_id, payload)
 SELECT :id, :lane, COALESCE((SELECT MAX(seq) FROM items WHERE lane = :lane), 0) + 1, :message_id, jsonb(:payload)
 FROM lanes
 WHERE lane = :lane
-ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload
+ON CONFLICT(id) DO UPDATE SET message_id = excluded.message_id, payload = excluded.payload,
+  lane = CASE WHEN items.lane = excluded.lane THEN items.lane END
 "#
 }
 
@@ -615,7 +618,8 @@ WHERE lane = :lane
 }
 
 statement! {
-    /// Inserts a task row or updates every column but its `seq`; a terminal row stays as it is.
+    /// Inserts a task row or updates every column but its `seq`; a terminal row stays as it is,
+    /// and a task id another lane holds fails the commit as [`InsertItem`] does.
     UpsertTask<'a> {
         lane: &'a str,
         version: i64,
@@ -636,7 +640,8 @@ WHERE lane = :lane AND version = :version AND lease_token = :token
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
-  updated_at = excluded.updated_at
+  updated_at = excluded.updated_at,
+  lane = CASE WHEN tasks.lane = excluded.lane THEN tasks.lane END
 WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }
@@ -661,7 +666,8 @@ WHERE lane = :lane
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
   data = excluded.data, internal = excluded.internal,
-  updated_at = excluded.updated_at
+  updated_at = excluded.updated_at,
+  lane = CASE WHEN tasks.lane = excluded.lane THEN tasks.lane END
 WHERE tasks.status NOT IN ('completed', 'failed', 'canceled', 'rejected')
 "#
 }

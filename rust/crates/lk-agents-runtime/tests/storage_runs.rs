@@ -429,7 +429,27 @@ async fn a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost
     fx.cleanup(&[&s]).await;
 }
 
+/// I-19: an item id another lane holds fails the commit; the other lane's item is untouched and
+/// nothing of the failed commit lands.
+async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let mut a = s.lane("lane-a").open(RunOptions::new("ra", "AST_a")).await.unwrap();
+    a.history.push(message("shared", ChatRole::User, "a's"));
+    a.commit(CommitOptions::default()).await.unwrap();
+
+    let mut b = s.lane("lane-b").open(RunOptions::new("rb", "AST_b")).await.unwrap();
+    b.history.push(message("b1", ChatRole::User, "b's own"));
+    b.history.push(message("shared", ChatRole::User, "b's"));
+    assert!(b.commit(CommitOptions::default()).await.is_err());
+    let a_items = s.lane("lane-a").history().await.unwrap();
+    assert_eq!(a_items, vec![message("shared", ChatRole::User, "a's")]);
+    assert!(s.lane("lane-b").history().await.unwrap().is_empty(), "atomic: nothing of b landed");
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    an_item_id_of_another_lane_fails_the_commit_without_mutation,
     waiters_take_the_lane_in_the_order_their_rows_were_submitted,
     a_late_renewal_keeps_a_lane_nobody_took_and_a_released_lease_stays_lost,
     a_dropped_run_stops_renewing_and_its_lease_lapses,
