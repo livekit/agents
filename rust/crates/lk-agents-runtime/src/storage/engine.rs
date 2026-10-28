@@ -19,8 +19,8 @@ use lk_agents_storage::run::{
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
 use lk_agents_storage::schema::{
-    EventRow, InboxRow, ItemRow, LaneRow, NO_SCHEMA, RunEnded, RunStarted, THREAD_SCHEMA_VERSION,
-    TaskData, TaskRow,
+    EventRow, InboxRow, ItemRow, LaneRow, RunEnded, RunStarted, THREAD_SCHEMA_VERSION, TaskData,
+    TaskRow,
 };
 use lk_agents_storage::sql::Statement;
 use lk_agents_storage::{Fence, StorageError};
@@ -118,10 +118,24 @@ impl ThreadDb {
 
     /// The version the database holds; `None` before any SDK wrote it.
     async fn probe_schema(&self) -> Result<Option<i64>, StorageError> {
-        match self.conn.query(db::schema_version()).await {
-            Ok(rows) => db::decode_schema_version(&rows),
-            Err(StorageError::Server { message, .. }) if message.contains(NO_SCHEMA) => Ok(None),
-            Err(e) => Err(e),
+        let catalog = self.conn.query(db::schema_exists()).await?;
+        if !db::decode_schema_exists(&catalog)? {
+            return Ok(None);
+        }
+        let rows = self.conn.query(db::schema_version()).await?;
+        match db::decode_schema_version(&rows)? {
+            Some(version) => Ok(Some(version)),
+            None => Err(StorageError::Schema("schema_version has no valid version".into())),
+        }
+    }
+
+    /// A competing initializer may have committed while this batch failed. Only an
+    /// authoritative supported schema permits retry; unrelated failures keep their error.
+    async fn reconcile_schema(&self, original: StorageError) -> Result<(), StorageError> {
+        match self.probe_schema().await {
+            Ok(Some(_)) => Ok(()),
+            Err(error @ StorageError::Schema(_)) => Err(error),
+            _ => Err(original),
         }
     }
 
@@ -152,8 +166,7 @@ impl ThreadDb {
         }
         match self.conn.batch(db::bootstrap()).await {
             Ok(_) => {}
-            Err(e) if lost_schema_race(&e) => {}
-            Err(e) => return Err(e),
+            Err(error) => self.reconcile_schema(error).await?,
         }
         self.schema_applied();
         Ok(())
@@ -220,11 +233,6 @@ impl ThreadDb {
     }
 }
 
-/// A batch that lost the race against another creator's DDL: the schema exists now.
-fn lost_schema_race(e: &StorageError) -> bool {
-    e.to_string().contains("already exists")
-}
-
 /// A thread's database scoped to one lane: every statement of the lane.
 #[derive(Clone)]
 pub struct LaneDb {
@@ -240,8 +248,11 @@ impl LaneDb {
     /// Takes the lease and loads the lane, one atomic batch, the DDL riding along on a fresh
     /// database; a batch that loses the race to another creator's DDL is retried without it.
     async fn acquire(&self, req: &Acquire<'_>) -> Result<AcquireOutcome, StorageError> {
-        let outcome = match self.db.execute(db::acquire(req, self.db.bootstrap())).await {
-            Err(e) if lost_schema_race(&e) => {
+        let bootstrap = self.db.bootstrap();
+        let initializing = !bootstrap.is_empty();
+        let outcome = match self.db.execute(db::acquire(req, bootstrap)).await {
+            Err(error) if initializing => {
+                self.db.reconcile_schema(error).await?;
                 self.db.schema_applied();
                 self.db.execute(db::acquire(req, Vec::new())).await
             }

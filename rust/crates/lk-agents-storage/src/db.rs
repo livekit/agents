@@ -193,7 +193,24 @@ pub fn bootstrap() -> Vec<Statement> {
     out
 }
 
-/// The schema probe.
+/// Whether the schema version table exists, without provoking a missing-table error.
+pub fn schema_exists() -> Statement {
+    SelectSchemaExists {}.bind()
+}
+
+/// Validate the catalog probe's one boolean scalar before choosing initialization.
+pub fn decode_schema_exists(rows: &[Row]) -> Result<bool, StorageError> {
+    if let [row] = rows {
+        match row.as_slice() {
+            [SqlValue::Int(0)] => return Ok(false),
+            [SqlValue::Int(1)] => return Ok(true),
+            _ => {}
+        }
+    }
+    Err(StorageError::Decode("schema catalog probe did not return one boolean".into()))
+}
+
+/// The version of an existing schema.
 pub fn schema_version() -> Statement {
     SelectSchemaVersion {}.bind()
 }

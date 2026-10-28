@@ -486,12 +486,18 @@ SELECT task_id FROM inbox WHERE lane = :lane AND message_id = :message_id
 }
 
 statement! {
-    /// The schema probe: fails `no such table` on a database no SDK wrote yet.
-    SelectSchemaVersion {} => "SELECT version FROM schema_version"
+    /// The catalog exists even before framework initialization.
+    SelectSchemaExists {} => r#"
+SELECT EXISTS (
+    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'schema_version'
+)
+"#
 }
 
-/// The error [`SelectSchemaVersion`] answers on a database no SDK wrote yet.
-pub const NO_SCHEMA: &str = "no such table: schema_version";
+statement! {
+    /// The version of a schema the catalog probe found.
+    SelectSchemaVersion {} => "SELECT version FROM schema_version"
+}
 
 statement! {
     /// `schema_version`'s one row, written with the DDL.

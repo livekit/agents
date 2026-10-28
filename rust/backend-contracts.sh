@@ -25,7 +25,7 @@ cd "$(dirname "$0")"
 args=(
     --locked -p lk-agents-runtime
     --test storage_lifecycle --test storage_runs --test storage_lease
-    --test storage_context --test storage_process --test a2a_turns
+    --test storage_context --test storage_process --test storage_schema --test a2a_turns
     --no-tests fail
 )
 if [[ $backend == agentdb ]]; then
