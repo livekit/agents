@@ -183,7 +183,7 @@ class AvatarSession(BaseAvatarSession):
                 client = SynthesiaAPI(api_key=self._config.api_key, api_url=self._config.api_url)
                 launch_conn = dataclasses.replace(
                     DEFAULT_API_CONNECT_OPTIONS,
-                    timeout=self._config.join_timeout,
+                    total_timeout=self._config.join_timeout,
                     max_retry=0,
                 )
                 response = await client.start_session(
