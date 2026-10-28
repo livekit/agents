@@ -12,7 +12,6 @@
   "host|rust/crates/lk-agents-inference/src/amd/detector.rs|fn category_is_machine|lk_agents_abi :: host (export (pid = false , name = \"amd_category_is_machine\"))",
   "host|rust/crates/lk-agents-inference/src/amd/detector.rs|fn is_evaluated_model_of_kind|lk_agents_abi :: host (export (pid = false , name = \"amd_is_evaluated_model\"))",
   "host|rust/crates/lk-agents-inference/src/eot/options.rs|fn select_wire|lk_agents_abi :: host (export (name = \"eot_select\"))",
-  "host|rust/crates/lk-agents-inference/src/fallback/chain.rs|trait ChainObserver|lk_agents_abi :: host (proxy)",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::aclose_for_host|host (method (name = \"aclose\"))",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::active_index|host (getter)",
   "host|rust/crates/lk-agents-inference/src/fallback/llm.rs|impl  for FallbackLlm::chat_for_host|host (method (name = \"chat\" , stream = lk_agents_abi :: InferenceLlmStream , kw_only = \"tools\" , defaults (tools = Vec :: new ())))",

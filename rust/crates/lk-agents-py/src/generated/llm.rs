@@ -438,6 +438,62 @@ impl RealtimeFallbackModel {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+
+/// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._core_view.AvailabilityObserver`.
+#[derive(Clone)]
+pub struct ChainObserverProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: ::lk_agents_runtime::host::python::Notifier,
+}
+
+impl ChainObserverProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
+        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj) {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
+        Ok(::std::boxed::Box::new(Self::take(obj)?))
+    }
+
+    fn take(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(ChainObserverProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context: ::lk_agents_runtime::host::python::capture_context(obj.py())?, notifier: ::lk_agents_runtime::host::python::Notifier::new(::lk_agents_runtime::host::python::capture_context(obj.py())?) })
+    }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(|obj| ChainObserverProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
+}
+
+impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
+    fn availability_changed(&self, ev: ::lk_agents_abi::llm::fallback::AvailabilityChanged) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let ev_arg = ev;
+        let context = ::std::clone::Clone::clone(&self.context);
+        self.notifier.notify(context, "ChainObserver._core_availability_changed", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(ev_arg, py)?];
+            Ok((host.bind(py).getattr("_core_availability_changed")?, ::pyo3::types::PyTuple::new(py, args)?))
+        });
+    }
+
+    fn all_unavailable(&self) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let context = ::std::clone::Clone::clone(&self.context);
+        self.notifier.notify(context, "ChainObserver._core_all_unavailable", move |py| {
+            let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+            Ok((host.bind(py).getattr("_core_all_unavailable")?, ::pyo3::types::PyTuple::new(py, args)?))
+        });
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
 
 /// [`::lk_agents_abi::Llm`] over a host `livekit.agents.llm.LLM`.

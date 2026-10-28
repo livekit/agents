@@ -6,6 +6,7 @@ from typing import Any, Literal
 from livekit import rtc
 
 from .. import _core
+from .._generated.llm_fallback import AvailabilityChanged
 from .chat_context import MetricsMetadata
 from .realtime import RealtimeCapabilities, RealtimeModel, RealtimeSession
 
@@ -90,11 +91,11 @@ class RealtimeModelFallbackAdapter(
         )
         return self._native
 
-    def _core_availability_changed(self, ev: dict[str, Any]) -> None:
+    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "realtime_availability_changed",
             RealtimeAvailabilityChangedEvent(
-                realtime_model=self._models[ev["index"]], available=ev["available"]
+                realtime_model=self._models[ev.index], available=ev.available
             ),
         )
 

@@ -7,6 +7,25 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+static AVAILABILITY_CHANGED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    ::pyo3::sync::PyOnceLock::new();
+
+impl<'py> IntoPyObject<'py> for ::lk_agents_abi::llm::fallback::AvailabilityChanged {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let Self { index, label, available } = self;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("index", ::pyo3::IntoPyObjectExt::into_bound_py_any(index, py)?)?;
+        kwargs.set_item("label", ::pyo3::IntoPyObjectExt::into_bound_py_any(label, py)?)?;
+        kwargs.set_item("available", ::pyo3::IntoPyObjectExt::into_bound_py_any(available, py)?)?;
+        AVAILABILITY_CHANGED.import(py, "livekit.agents._generated.llm_fallback", "AvailabilityChanged")?.call((), Some(&kwargs))
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 
 impl<'py> IntoPyObject<'py> for ::lk_agents_abi::llm::mcp::McpCleanupStatus {
@@ -470,6 +489,18 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ::lk_agents_abi::llm::tool_executor::Too
             approval: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "approval", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::llm::tool_executor::Approval>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
             transition: ::lk_agents_abi::python::attr_with(obj, "ToolReport", "transition", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
         })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
+impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::fallback::ChainObserver {
+    fn from_host(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::sync::Arc<Self>> {
+        crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
+    }
+
+    fn view(handle: crate::python::HostHandle, _clock: ::std::option::Option<::std::sync::Arc<dyn crate::Clock>>) -> ::pyo3::PyResult<::std::boxed::Box<Self>> {
+        let _ = handle;
+        Err(::pyo3::exceptions::PyTypeError::new_err("`ChainObserver` is a declared proxy: it is taken from the host object, not a view"))
     }
 }
 

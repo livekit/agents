@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from .. import _bindings, _core
 from .._generated.llm import LLM, ChatChunk, LLMStream
+from .._generated.llm_fallback import AvailabilityChanged
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -68,12 +69,10 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
     def _core_leg(self) -> Any:
         return self if _bindings.overrides(self, FallbackAdapter, "chat") else self._native
 
-    def _core_availability_changed(self, ev: dict[str, Any]) -> None:
+    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "llm_availability_changed",
-            AvailabilityChangedEvent(
-                llm=self._llm_instances[ev["index"]], available=ev["available"]
-            ),
+            AvailabilityChangedEvent(llm=self._llm_instances[ev.index], available=ev.available),
         )
 
     def _core_all_unavailable(self) -> None:

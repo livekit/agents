@@ -14,11 +14,12 @@ import asyncio
 import dataclasses
 import functools
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import TypeAdapter
 
 from . import _core, llm
+from ._generated.llm_fallback import AvailabilityChanged
 from .llm.chat_context import AudioContent, ChatContent, ChatItem, ImageContent
 from .llm.tool_context import (
     ProviderTool,
@@ -205,6 +206,15 @@ _DUPLEX_UPDATES: dict[str, Callable[[_DuplexSession, dict[str, Any]], Awaitable[
         offered_tools(v._tools(), cmd["names"])
     ),
 }
+
+
+class AvailabilityObserver(Protocol):
+    """A fallback adapter as its chain reports to it: an entry, by its index in the adapter's
+    list, went unavailable or recovered; every entry is unavailable."""
+
+    def _core_availability_changed(self, ev: AvailabilityChanged) -> None: ...
+
+    def _core_all_unavailable(self) -> None: ...
 
 
 class TurnDetector:

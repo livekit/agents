@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from . import _bindings, _core, tokenize, utils
+from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.tts import (
     TTS,
     ChunkedStream,
@@ -162,12 +163,10 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             return self
         return self._native
 
-    def _core_availability_changed(self, ev: dict[str, Any]) -> None:
+    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "tts_availability_changed",
-            AvailabilityChangedEvent(
-                tts=self._tts_instances[ev["index"]], available=ev["available"]
-            ),
+            AvailabilityChangedEvent(tts=self._tts_instances[ev.index], available=ev.available),
         )
 
     def _core_all_unavailable(self) -> None:

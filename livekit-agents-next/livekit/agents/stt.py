@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from . import _bindings, _core, utils
+from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.stt import (
     STT,
     RecognitionUsage,
@@ -128,12 +129,10 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
             return self
         return self._native
 
-    def _core_availability_changed(self, ev: dict[str, Any]) -> None:
+    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "stt_availability_changed",
-            AvailabilityChangedEvent(
-                stt=self._stt_instances[ev["index"]], available=ev["available"]
-            ),
+            AvailabilityChangedEvent(stt=self._stt_instances[ev.index], available=ev.available),
         )
 
     def _core_all_unavailable(self) -> None:

@@ -87,20 +87,7 @@ pub enum ChainOutcome<T> {
     Served(T),
 }
 
-pub use lk_agents_abi::llm::fallback::AvailabilityChanged;
-
-/// The chain's one outbound port. `metrics_collected` re-emission lives in `lk-agents-py`.
-///
-/// A host adapter is this trait through its bare `#[host(proxy)]` (`PyChainObserver`): the
-/// `FallbackAdapter` itself, whose `_core_availability_changed` maps the index back to its instance.
-#[lk_agents_abi::host(proxy)]
-pub trait ChainObserver: Send + Sync {
-    fn availability_changed(&self, ev: AvailabilityChanged);
-
-    /// `logger.error("all X are unavailable, retrying..")`. The chain then tries every entry
-    /// anyway rather than failing fast, which is what `all_failed` does in all three adapters.
-    fn all_unavailable(&self) {}
-}
+pub use lk_agents_abi::llm::fallback::{AvailabilityChanged, ChainObserver};
 
 pub struct IgnoreEvents;
 impl ChainObserver for IgnoreEvents {
