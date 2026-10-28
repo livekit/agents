@@ -194,3 +194,61 @@ impl From<ToolOutcome> for ToolReport {
         ToolReport { outcome, approval: None, transition: None }
     }
 }
+
+/// `voice/tool_executor.py`'s `ToolRunner`, the only port on the generation path: runs one call
+/// and classifies what the body returned or raised. A report, not a decision; `lk-agents-voice`'s
+/// `tool_executor::answer` owns the output.
+#[crate::host(proxy(host = "livekit.agents.voice.tool_executor.ToolRunner"))]
+#[async_trait::async_trait]
+pub trait HostToolRunner: Send + Sync {
+    /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
+    /// whose `host` is the host's own object once it made one. `granted`: the call repeats a
+    /// read-back the person answered (`approval_granted`), so a tool that requires approval runs.
+    /// `task`: the speech is a `VoiceTask` agent's, so a `Completed` the body returns is
+    /// validated against the agent's `output_type` and reported with its value, which ends the
+    /// task.
+    #[host(await, name = "_core_run")]
+    async fn run(
+        &self,
+        call: &crate::FunctionCall,
+        speech: &crate::CoreObject,
+        granted: bool,
+        task: bool,
+    ) -> Result<ToolReport, crate::errors::HostError>;
+
+    /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
+    /// `call_id` is cancelled. Fire-and-forget: the driver has already told the call's end.
+    #[host(notify, name = "_core_cancel")]
+    fn cancel(&self, call_id: &str);
+}
+
+impl dyn HostToolRunner {
+    /// Resolves when the tool returns, raises, is cancelled, or releases the step with its first
+    /// `ctx.update()`. Every call gets exactly one answer: a runner that raises or reports an
+    /// unreadable outcome is answered as the reference's internal error, and logged. Only a
+    /// `VoiceTask`'s speech (`task`) ends a task: an ordinary tool's `Completed` is its call's
+    /// output, asking for a reply, whatever value the host handed with it.
+    pub async fn answer(
+        &self,
+        call: &crate::FunctionCall,
+        speech: &crate::CoreObject,
+        granted: bool,
+        task: bool,
+    ) -> ToolReport {
+        let mut report = self.run(call, speech, granted, task).await.unwrap_or_else(|e| {
+            log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
+                "the tool executor failed outside the tool's own error handling: {e}");
+            ToolOutcome::Internal.into()
+        });
+        if !task && matches!(report.outcome, ToolOutcome::Completed { .. }) {
+            report.transition = None;
+        }
+        report
+    }
+}
+
+impl std::fmt::Debug for dyn HostToolRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostToolRunner")
+    }
+}

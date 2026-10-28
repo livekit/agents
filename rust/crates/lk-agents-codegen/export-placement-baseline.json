@@ -485,7 +485,6 @@
   "host|rust/crates/lk-agents-voice/src/speech_handle.rs|impl  for SpeechHandle|lk_agents_abi :: host (object (name = \"SpeechHandle\" , cell = \"arc\"))",
   "host|rust/crates/lk-agents-voice/src/tool_executor.rs|fn tool_call_output|lk_agents_abi :: host (export (pid = false))",
   "host|rust/crates/lk-agents-voice/src/tool_executor.rs|fn unknown_tool_message|lk_agents_abi :: host (export)",
-  "host|rust/crates/lk-agents-voice/src/tool_executor.rs|trait HostToolRunner|lk_agents_abi :: host (proxy)",
   "host|rust/crates/lk-agents-voice/src/transcription/filters.rs|fn filter_emoji|lk_agents_abi :: host (export (pid = false))",
   "host|rust/crates/lk-agents-voice/src/transcription/filters.rs|impl  for MarkdownFilter::flush|host (method)",
   "host|rust/crates/lk-agents-voice/src/transcription/filters.rs|impl  for MarkdownFilter::new|host (new)",
