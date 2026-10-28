@@ -500,9 +500,8 @@ class ResponsesLLMStream(llm.LLMStream):
             # admit only that one message
             self._hosted_continuation = True
         if event.item.type == "function_call":
-            if self._second_message_started:
-                self._drop_item(event.item.call_id)
-                return None
+            # kept even after an alternate message was dropped: losing a call the
+            # model made is worse than acting on a reply branch that wasn't spoken
             chunk = llm.ChatChunk(
                 id=self._response_id,
                 delta=llm.ChoiceDelta(
