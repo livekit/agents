@@ -167,7 +167,7 @@ fn result_renderer_uses_upstream_content_records() {
         rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text("hello")]);
     let expected = serde_json::to_string(&result.content[0]).unwrap();
     assert_eq!(
-        super::render::render_result("echo", &serde_json::to_value(result).unwrap()).unwrap(),
+        lk_agents_core::mcp::render_result("echo", &serde_json::to_value(result).unwrap()).unwrap(),
         expected
     );
 }

@@ -408,14 +408,14 @@ pub(super) async fn connect_http(
         .read_timeout(read_timeout)
         .build()
         .map_err(conn)?;
-    match super::http_transport(&url, Some(transport))? {
-        super::HttpTransport::StreamableHttp => {
+    match lk_agents_core::mcp::http_transport(&url, Some(transport))? {
+        lk_agents_core::mcp::HttpTransport::StreamableHttp => {
             Ok(HttpConnection::Streamable(StreamableHttpClientTransport::with_client(
                 CleanupClient { client, receipt: receipt.clone() },
                 StreamableHttpClientTransportConfig::with_uri(url),
             )))
         }
-        super::HttpTransport::Sse => {
+        lk_agents_core::mcp::HttpTransport::Sse => {
             let (posts, messages) = connect_sse(client, &url, receipt).await?;
             Ok(HttpConnection::Sse(rmcp::transport::sink_stream::SinkStreamTransport::new(
                 posts, messages,

@@ -23,7 +23,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use super::transport::{HostStreams, Observed, StdioTransport, TransportReceipt, connect_http};
-use super::{McpCleanup, McpCleanupStatus, McpError, McpProgress, McpTransport};
+use super::{McpCleanup, McpError, McpProgress, McpTransport};
 
 #[derive(Clone, Default)]
 struct Progress(ProgressDispatcher);
@@ -133,13 +133,11 @@ impl Connection {
         let mut receipt = self.receipt.cleanup();
         receipt.service_settled = state.service_settled;
         receipt.calls_settled = state.calls == 0;
-        receipt.status = if state.incomplete || self.receipt.failed() {
-            McpCleanupStatus::Incomplete
-        } else if state.settled && receipt.reader_settled {
-            McpCleanupStatus::Clean
-        } else {
-            McpCleanupStatus::Pending
-        };
+        receipt.status = lk_agents_core::mcp::cleanup_status(
+            state.incomplete || self.receipt.failed(),
+            state.settled,
+            receipt.reader_settled,
+        );
         receipt
     }
 }
