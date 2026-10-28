@@ -129,10 +129,10 @@ impl Worker {
         let phase = std::mem::replace(&mut self.phase, Phase::Done);
         self.phase = match phase {
             Phase::Submit => self.submit(m, now, db, seen),
-            Phase::Acquire { poll } => self.acquire(m, poll, now, db, rng, t, seen),
+            Phase::Acquire { poll } => self.acquire(m, poll, now, db, rng, t),
             Phase::Work { until, held, commit } => self.work(until, held, commit, now, db, t),
             Phase::Commit { held, commit } => self.commit(m, held, commit, db, rng, t, seen),
-            Phase::Resolve { held, commit } => self.resolve(m, held, commit, db, rng, t, seen),
+            Phase::Resolve { held, commit } => self.resolve(m, held, commit, db, seen),
             Phase::Done => Phase::Done,
         };
         if matches!(self.phase, Phase::Done) {
@@ -172,7 +172,6 @@ impl Worker {
         db: &mut SimDb,
         rng: &mut Rng,
         t: &Timing,
-        seen: &mut Observed,
     ) -> Phase {
         self.tokens += 1;
         let token = format!("lease_{}_{}", self.id, self.tokens);
@@ -282,15 +281,12 @@ impl Worker {
     }
 
     /// A lost acknowledgment, resolved by the run's identity before anything is reported.
-    #[allow(clippy::too_many_arguments)]
     fn resolve(
         &mut self,
         m: usize,
         held: Held,
         commit: Box<Commit>,
         db: &mut SimDb,
-        _rng: &mut Rng,
-        _t: &Timing,
         seen: &mut Observed,
     ) -> Phase {
         seen.resolved += 1;
