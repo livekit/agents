@@ -47,8 +47,10 @@ class TaskRow(BaseModel):
     """Unix milliseconds."""
     data: TaskData
     """The A2A `Task` fields: `history`, `artifacts`, `metadata`."""
-    ask: Ask | None
-    """The question the task waits on the person to answer, while it does."""
+    internal: Ask | None
+    """What the framework keeps to resume the task: the question it waits on the person to
+    answer, while it does.
+    """
 
 
 class LaneRow(BaseModel):

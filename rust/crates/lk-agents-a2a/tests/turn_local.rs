@@ -5,6 +5,7 @@
 //! a text, raises, asks input-required with a pending call, or sleeps until told, and records what
 //! it was handed. The cases are those of `tests/test_storage.py`, with its assertions.
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -73,6 +74,7 @@ async fn cleanup(storage: &Storage, database_id: &str, sessions: &[&Thread]) {
     storage.databases().delete(database_id).await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -241,11 +243,14 @@ struct Call {
 #[derive(Clone)]
 struct Fake {
     behavior: Behavior,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     calls: Arc<Mutex<Vec<Call>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     updates: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Fake {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     fn new(behavior: Behavior) -> Arc<Self> {
         Arc::new(Self {
             behavior,
@@ -268,6 +273,7 @@ fn text(output: &str) -> HandlerOutput {
 }
 
 /// The turn's verdicts, as the host's sink.
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 struct Verdicts(mpsc::UnboundedSender<Verdict>);
 
 impl StreamSink<Verdict> for Verdicts {
@@ -282,6 +288,7 @@ impl StreamSink<Verdict> for Verdicts {
 }
 
 /// The handler's events, as the host's source.
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 struct Events(mpsc::UnboundedReceiver<Result<TurnEvent, ProviderError>>);
 
 #[async_trait::async_trait]
@@ -296,7 +303,9 @@ impl StreamSource<TurnEvent> for Events {
 
 /// A checkpoint of the fake's run: `true` when the turn answered `yield`.
 struct Checkpoints {
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     events: mpsc::UnboundedSender<Result<TurnEvent, ProviderError>>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     verdicts: mpsc::UnboundedReceiver<Verdict>,
 }
 
@@ -308,6 +317,7 @@ impl Checkpoints {
 }
 
 impl TurnHost for Fake {
+    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     #[allow(clippy::type_complexity)]
     fn handle(
         &self,
@@ -557,6 +567,7 @@ async fn a_run_that_raises_writes_run_ended_and_nothing_else() {
 
 // -- interrupt --
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn interrupt_yields_and_the_newer_task_answers_both() {
     let Some((storage, database_id)) = fresh_database().await else { return };
@@ -624,6 +635,7 @@ async fn interrupt_yields_and_the_newer_task_answers_both() {
 
 // -- inbox --
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn the_inbox_batches_a_burst_into_one_reply() {
     let Some((storage, database_id)) = fresh_database().await else { return };
@@ -703,6 +715,7 @@ async fn a_message_id_resend_returns_the_existing_task() {
 
 // -- the lease --
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_lapsed_lease_fails_the_orphan_worker_lost() {
     let lease = Some((Duration::from_secs(1), Duration::from_millis(300)));
@@ -759,7 +772,7 @@ async fn input_required_pending_call_is_the_next_messages_output() {
     .unwrap();
     assert_eq!(first.task.status, TaskState::InputRequired);
     assert_eq!(
-        first.task.ask.as_ref(),
+        first.task.internal.as_ref(),
         Some(&Ask {
             question: "Could you send a photo?".into(),
             tool: Some("request_photo".into()),
@@ -804,12 +817,13 @@ async fn input_required_pending_call_is_the_next_messages_output() {
     let answered = s.lane(LANE).task(&first.task.task_id).await.unwrap().unwrap();
     assert_eq!(answered.status, TaskState::Completed);
     assert_eq!(answered.data.metadata.get(MERGED_INTO_KEY), Some(&json!(second.task.task_id)));
-    assert!(answered.ask.is_none(), "a completed row holds no pending transition");
+    assert!(answered.internal.is_none(), "a completed row holds no pending transition");
     cleanup(&storage, &database_id, &[&s]).await;
 }
 
 // -- concurrent and reject --
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn concurrent_runs_append_without_a_lease() {
     let Some((storage, database_id)) = fresh_database().await else { return };
@@ -840,6 +854,7 @@ async fn concurrent_runs_append_without_a_lease() {
     cleanup(&storage, &database_id, &[&a, &b]).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn reject_refuses_while_a_turn_runs() {
     let Some((storage, database_id)) = fresh_database().await else { return };
@@ -881,6 +896,7 @@ async fn reject_refuses_while_a_turn_runs() {
     cleanup(&storage, &database_id, &[&a, &b]).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_submitted_row_exists_while_the_turn_runs() {
     for policy in [Policy::Interrupt, Policy::Queue, Policy::Concurrent, Policy::Reject] {
@@ -912,7 +928,7 @@ async fn a_submitted_row_exists_while_the_turn_runs() {
         assert_eq!(during.message_id.as_deref(), Some("m1"));
         assert_eq!(during.data.history, vec![user_message("hello", "m1", None, None)]);
         assert_eq!(during.seq, 1);
-        assert_eq!((during.name.as_ref(), during.ask.as_ref()), (None, None));
+        assert_eq!((during.name.as_ref(), during.internal.as_ref()), (None, None));
         assert!(during.data.metadata.is_empty());
 
         gate.set();
@@ -951,6 +967,7 @@ async fn a_submitted_row_exists_while_the_turn_runs() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_lease_timeout_fails_the_early_row() {
     let Some((storage, database_id)) = fresh_database().await else { return };
@@ -998,6 +1015,7 @@ async fn a_lease_timeout_fails_the_early_row() {
     cleanup(&storage, &database_id, &[&a, &b]).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_rejected_message_leaves_no_submitted_row() {
     let Some((storage, database_id)) = fresh_database().await else { return };

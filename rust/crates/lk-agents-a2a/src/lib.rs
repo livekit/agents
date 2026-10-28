@@ -6,6 +6,7 @@
 //! [`Verdict`], then the [`HandlerOutput`]. A turn yields at a checkpoint once a newer message
 //! waits under `interrupt` or a client canceled its task.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -132,6 +133,7 @@ impl Turn {
         resolve_policy(&self.opts.policy, channel)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// One incoming message through its policy. `task_id` is the answer stream's id when the
     /// caller created one. [`StorageError::RunRejected`] under `reject`,
     /// [`StorageError::Cancelled`] when the host cancelled the handler.
@@ -268,6 +270,7 @@ impl Turn {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn batch(
         &self,
         ctx: &mut Ctx,
@@ -620,6 +623,7 @@ pub enum PolicySpec {
     #[default]
     Default,
     All(Policy),
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ByChannel(HashMap<String, Policy>),
 }
 
@@ -629,6 +633,7 @@ pub enum PolicySpec {
 #[serde(untagged)]
 enum PolicyWire {
     All(String),
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ByChannel(HashMap<String, String>),
 }
 
@@ -668,6 +673,7 @@ pub enum DebounceSpec {
     #[default]
     Default,
     All(Duration),
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ByChannel(HashMap<String, Duration>),
 }
 
@@ -676,6 +682,7 @@ pub enum DebounceSpec {
 #[serde(untagged)]
 enum DebounceWire {
     All(f64),
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ByChannel(HashMap<String, f64>),
 }
 
@@ -746,6 +753,7 @@ pub fn channel_of(message: &a2a::Message) -> String {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// One policy for a channel: a value applies to every channel, a map overrides the default map;
 /// a channel in neither gets the `a2a` policy.
 pub fn resolve_policy(policy: &PolicySpec, channel: &str) -> Policy {
@@ -761,6 +769,7 @@ pub fn resolve_policy(policy: &PolicySpec, channel: &str) -> Policy {
     table.get(channel).or_else(|| table.get(A2A_CHANNEL)).copied().unwrap_or(Policy::Interrupt)
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The wait before a turn starts so a burst has landed; per channel, or one value for all. A
 /// channel the defaults do not name waits the `sms` default under `batch` and nothing otherwise.
 pub fn resolve_debounce(debounce: &DebounceSpec, channel: &str, policy: Policy) -> Duration {
@@ -1123,7 +1132,7 @@ impl Turn {
         let pending = run.tasks.pending_ask().await?;
         let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
         if let Some(pending) = pending
-            && let Some(ask) = &pending.ask
+            && let Some(ask) = &pending.internal
             && let Some(call_id) = nonempty(&ask.call_id)
         {
             answer_tool = nonempty(&ask.answer_tool);
@@ -1363,6 +1372,7 @@ impl Turn {
         Ok(outcome(output, false))
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The host's stream to its output: each checkpoint answered `yield` once the turn should stop
     /// (a newer message waiting under `interrupt`, a client's `tasks/cancel`), else `continue`. A
     /// lost lease ends it with `Unavailable`; the stream is closed either way.
@@ -1539,7 +1549,7 @@ pub fn unpersisted_failed(
             metadata,
             status_message: Some(failed_message(task_id, reason)),
         },
-        ask: None,
+        internal: None,
     }
 }
 

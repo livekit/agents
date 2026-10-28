@@ -1,8 +1,8 @@
 use livekit_protocol::agent::ChatRole;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
-/// The thread database's tables, as livekit-protocol defines them. Every `#[table]` record below
-/// is checked against them when the crate compiles.
-pub use livekit_protocol::agent::{THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
+/// The thread database's tables, as livekit-protocol defines them (version 1). Every `#[table]`
+/// record below is checked against them when the crate compiles.
+pub use livekit_protocol::agent::{THREAD_SCHEMA_V1 as THREAD_SCHEMA, THREAD_SCHEMA_VERSION};
 use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -94,9 +94,10 @@ pub struct TaskRow {
     /// The A2A `Task` fields: `history`, `artifacts`, `metadata`.
     #[table(json)]
     pub data: TaskData,
-    /// The question the task waits on the person to answer, while it does.
+    /// What the framework keeps to resume the task: the question it waits on the person to
+    /// answer, while it does.
     #[table(json)]
-    pub ask: Option<Ask>,
+    pub internal: Option<Ask>,
 }
 
 impl TaskRow {
@@ -410,12 +411,12 @@ statement! {
         name: Option<&'a str>,
         message_id: Option<&'a str>,
         data: SqlValue,
-        ask: SqlValue,
+        internal: SqlValue,
     } => r#"
 INSERT OR IGNORE INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, ask, updated_at)
+  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
-  :name, :message_id, 'submitted', jsonb(:data), jsonb(:ask), CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  :name, :message_id, 'submitted', jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 "#
 }
 
@@ -429,7 +430,7 @@ statement! {
         data: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, ask, updated_at)
+  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
   NULL, :message_id, 'submitted', jsonb(:data), NULL, CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM inbox
@@ -607,17 +608,17 @@ statement! {
         message_id: Option<&'a str>,
         status: &'a str,
         data: SqlValue,
-        ask: SqlValue,
+        internal: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, ask, updated_at)
+  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
-  :name, :message_id, :status, jsonb(:data), jsonb(:ask), CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  :name, :message_id, :status, jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM lanes
 WHERE lane = :lane AND version = :version AND lease_token = :token
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
-  data = excluded.data, ask = excluded.ask,
+  data = excluded.data, internal = excluded.internal,
   updated_at = excluded.updated_at
 "#
 }
@@ -631,17 +632,17 @@ statement! {
         message_id: Option<&'a str>,
         status: &'a str,
         data: SqlValue,
-        ask: SqlValue,
+        internal: SqlValue,
     } => r#"
 INSERT INTO tasks
-  (task_id, lane, seq, name, message_id, status, data, ask, updated_at)
+  (task_id, lane, seq, name, message_id, status, data, internal, updated_at)
 SELECT :task_id, :lane, COALESCE((SELECT MAX(seq) FROM tasks WHERE lane = :lane), 0) + 1,
-  :name, :message_id, :status, jsonb(:data), jsonb(:ask), CAST(unixepoch('subsec') * 1000 AS INTEGER)
+  :name, :message_id, :status, jsonb(:data), jsonb(:internal), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 FROM lanes
 WHERE lane = :lane
 ON CONFLICT(task_id) DO UPDATE SET
   status = excluded.status, name = excluded.name, message_id = excluded.message_id,
-  data = excluded.data, ask = excluded.ask,
+  data = excluded.data, internal = excluded.internal,
   updated_at = excluded.updated_at
 "#
 }
@@ -736,7 +737,7 @@ statement! {
     /// The newest `limit` task rows.
     SelectTasks<'a> { lane: &'a str, limit: i64 } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks WHERE lane = :lane ORDER BY seq DESC LIMIT :limit
 "#
 }
@@ -745,7 +746,7 @@ statement! {
     /// The newest `limit` task rows of one status.
     SelectTasksByStatus<'a> { lane: &'a str, status: &'a str, limit: i64 } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks WHERE lane = :lane AND status = :status ORDER BY seq DESC LIMIT :limit
 "#
 }
@@ -754,7 +755,7 @@ statement! {
     /// One task row.
     SelectTask<'a> { lane: &'a str, task_id: &'a str } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks WHERE lane = :lane AND task_id = :task_id
 "#
 }
@@ -763,7 +764,7 @@ statement! {
     /// One task row, whichever lane it is on.
     SelectThreadTask<'a> { task_id: &'a str } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks WHERE task_id = :task_id
 "#
 }
@@ -780,7 +781,7 @@ statement! {
         limit: i64,
     } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks
 WHERE (:status IS NULL OR status = :status)
   AND updated_at > :updated_after
@@ -801,7 +802,7 @@ statement! {
     /// The task row an A2A message id created.
     SelectTaskForMessage<'a> { lane: &'a str, message_id: &'a str } => r#"
 SELECT task_id, lane, seq, name, message_id, status, updated_at,
-  json(data), json(ask)
+  json(data), json(internal)
 FROM tasks WHERE lane = :lane AND message_id = :message_id
 "#
 }

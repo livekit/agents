@@ -16,6 +16,7 @@ default-members = [
     "crates/lk-agents-abi",
     "crates/lk-agents-bindgen",
     "crates/lk-agents-codegen",
+    "crates/lk-agents-core",
     "crates/lk-agents-fuzz",
     "crates/lk-agents-host-derive",
     "crates/lk-agents-inference",
@@ -42,23 +43,21 @@ smallvec     = "1"
 ordered-float = "5"
 # --- below the purity line ---
 tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }
-# The LiveKit protocol, from `livekit/rust-sdks` `main` on GitHub (Cargo.lock pins the commit): `livekit_protocol::agent` is the
-# generated `livekit.agent` package -- `AgentSessionEvent`, `SessionRequest`, the EOT inference
-# messages -- and `livekit_protocol::{WorkerMessage, ServerMessage}` the worker's own wire. One
-# source for every proto in the workspace; nothing generates or vendors a `.rs` from a `.proto`
-# here any more (2026-09-09; `lk-agents-voice/src/remote/proto.rs` and
-# `lk-agents-inference/src/eot/proto.rs` were the two copies).
+# The LiveKit protocol: `livekit_protocol::agent` is the generated `livekit.agent` package --
+# `AgentSessionEvent`, `SessionRequest`, the EOT inference messages, the thread schema (v1) -- and
+# `livekit_protocol::{WorkerMessage, ServerMessage}` the worker's own wire. One source for every
+# proto in the workspace; nothing here generates or vendors a `.rs` from a `.proto`.
 #
-# A git dependency, because rust-sdks `main` is not released yet.
-livekit-protocol = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2" }
-# The access token, from the same repository: `AccessToken`/`TokenVerifier`/`Claims` over HS256.
-# The worker's `/agent` credential and a simulated job's participant token need `VideoGrants.agent`
-# and `Claims.kind`.
-livekit-token = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2" }
-# `livekit-api`, from the same repository: its `ThreadClient` and `DatabaseClient` are the only way
-# to agentstore's threads and databases. Its rustls is
-# pinned to `ring`, the workspace's one crypto provider.
-livekit-api = { git = "https://github.com/livekit/rust-sdks", branch = "theo/thread-schema-v2", default-features = false, features = ["services", "rustls-tls-native-roots"] }
+# Path dependencies on the local `rust-sdks` checkout, branch `theo/thread-schema-v1`: `main` with
+# the protocol at livekit/protocol `main` plus the thread schema without `lanes.agent_stack`, not
+# upstream yet.
+livekit-protocol = { path = "../../rust-sdks/livekit-protocol" }
+# The access token: `AccessToken`/`TokenVerifier`/`Claims` over HS256. The worker's `/agent`
+# credential and a simulated job's participant token need `VideoGrants.agent` and `Claims.kind`.
+livekit-token = { path = "../../rust-sdks/livekit-token" }
+# Its `ThreadClient` and `DatabaseClient` are the only way to agentstore's threads and databases.
+# Its rustls is pinned to `ring`, the workspace's one crypto provider.
+livekit-api = { path = "../../rust-sdks/livekit-api", default-features = false, features = ["services", "rustls-tls-native-roots"] }
 # `livekit-protocol`'s prost, and therefore the workspace's: prost-derive emits `::prost::` paths,
 # so every crate that names a `Message` from that package must see the same major, 0.14 since
 # livekit/rust-sdks#1447.

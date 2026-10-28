@@ -66,6 +66,7 @@ fn message_item(id: &str, role: ChatRole, text: &str, message_id: Option<&str>) 
     ItemRow { message_id: message_id.map(str::to_owned), ..item }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 /// Whether a renewal of `lease` fails within a few intervals: a lease that is no longer its own.
 async fn renewal_fails(storage: &Storage, lease: &Lease) -> bool {
     lease.keep_alive();
@@ -120,6 +121,7 @@ async fn assert_lease_ttl(db: &LaneDb, ttl: Duration) {
     assert!((seconds - 2..=seconds + 1).contains(&remaining), "remaining TTL: {remaining}");
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_second_holder_acquires_after_a_short_lease_expires_without_renewal() {
     let Some((mut opts, minter)) = common::project() else { return };
@@ -155,6 +157,7 @@ async fn a_second_holder_acquires_after_a_short_lease_expires_without_renewal() 
     storage.databases().delete(&created.database_id).await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_lapsed_lease_nobody_took_renews_and_a_released_one_does_not() {
     let Some((mut opts, minter)) = common::project() else { return };
@@ -185,6 +188,7 @@ async fn a_lapsed_lease_nobody_took_renews_and_a_released_one_does_not() {
     storage.databases().delete(&created.database_id).await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -192,6 +196,7 @@ fn unix_now() -> i64 {
         .as_secs() as i64
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
     let Some(storage) = storage() else { return };
@@ -252,7 +257,7 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
     assert_eq!(submitted.len(), 1);
     assert_eq!(submitted[0].seq, 1);
     assert_eq!(submitted[0].data, early.data);
-    assert_eq!(submitted[0].ask, None);
+    assert_eq!(submitted[0].internal, None);
 
     // The fenced commit: items, an event, the task row to its terminal state, the snapshots;
     // release.
@@ -391,6 +396,7 @@ async fn a_lane_runs_through_the_lease_the_commit_and_the_inbox() {
     storage.databases().delete(&created.database_id).await.unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test]
 async fn a_stream_is_created_appended_read_and_closed() {
     let Some(storage) = storage() else { return };

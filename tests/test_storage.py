@@ -505,11 +505,13 @@ async def test_input_required_pending_call_is_the_next_messages_output(
 
     first = await run_turn(storage, sid, LANE, a2a("my car is damaged", "m1"), "interrupt", handler)
     assert first.task.status == "input-required"
-    assert first.task.internal is not None and first.task.internal.ask == {
-        "question": "Could you send a photo?",
-        "tool": "request_photo",
-        "call_id": "p1",
-    }
+    ask = first.task.internal
+    assert ask is not None
+    assert (ask.question, ask.tool, ask.call_id) == (
+        "Could you send a photo?",
+        "request_photo",
+        "p1",
+    )
     assert first.task.data.status_message["parts"][0]["text"] == "Could you send a photo?"
 
     second = await run_turn(storage, sid, LANE, a2a("here it is", "m2"), "interrupt", handler)

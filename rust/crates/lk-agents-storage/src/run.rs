@@ -3,6 +3,7 @@
 //! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
 //! `exclusive: false` is the `concurrent` policy: no lease, append-only.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,10 +33,12 @@ pub struct LanePoll {
 }
 
 impl LanePoll {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(timeout: Duration) -> Self {
         Self { deadline: Instant::now() + timeout, pause: Duration::from_millis(100) }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Pauses before the next attempt; `false`, at once, once the deadline passed.
     pub async fn pause(&mut self) -> bool {
         if Instant::now() >= self.deadline {
@@ -247,7 +250,7 @@ impl Lane {
                 message_id: row.message_id,
                 name: row.name,
                 data,
-                ask: row.ask,
+                ask: row.internal,
             }],
             events: vec![EventWrite::run_started(&RunStarted {
                 task_id: Some(task_id.to_owned()),
@@ -502,6 +505,7 @@ impl Run {
     }
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// The stored items that differ from what was `loaded`, and the loaded ids no longer in the
 /// history, in loaded order.
 fn item_changes(history: &[ItemRow], loaded: &[(String, ChatItem)]) -> (Vec<ItemRow>, Vec<String>) {
@@ -766,7 +770,7 @@ impl Tasks {
                 status: w.status,
                 updated_at: 0,
                 data: w.data.clone(),
-                ask: w.ask.clone(),
+                internal: w.ask.clone(),
             }));
         }
         let read = self.lane.task_for_message(message_id);
@@ -778,7 +782,7 @@ impl Tasks {
         if let Some(rows) = self.snapshot() {
             return Ok(rows
                 .iter()
-                .find(|r| r.status == TaskState::InputRequired && r.ask.is_some())
+                .find(|r| r.status == TaskState::InputRequired && r.internal.is_some())
                 .cloned());
         }
         Ok(self
@@ -786,7 +790,7 @@ impl Tasks {
             .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
             .await?
             .into_iter()
-            .find(|r| r.ask.is_some()))
+            .find(|r| r.internal.is_some()))
     }
 
     /// Insert or update one row; what the patch leaves `None` keeps the existing row's value.
@@ -806,7 +810,7 @@ impl Tasks {
                     message_id: r.message_id,
                     name: r.name,
                     data: r.data,
-                    ask: r.ask,
+                    ask: r.internal,
                 })
             }
         };

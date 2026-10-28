@@ -50,4 +50,5 @@ async-trait.workspace = true
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("python"))'] }
 
 [dev-dependencies]
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }

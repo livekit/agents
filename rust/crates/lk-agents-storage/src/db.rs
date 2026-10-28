@@ -1,8 +1,11 @@
 //! The thread database's operations: [`ThreadDb`] for the database, [`LaneDb`] for one lane, and
 //! the [`Lease`] an acquire takes, which keeps itself alive, commits and releases.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -163,6 +166,7 @@ const IDLE_TOTAL: usize = 64;
 /// back, with the schema version it knew, instead of dialing and probing again.
 #[derive(Default)]
 pub(crate) struct DbPool {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     idle: Mutex<HashMap<String, Vec<Idle>>>,
 }
 
@@ -173,6 +177,7 @@ struct Idle {
 }
 
 impl DbPool {
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn take(&self, database_id: &str) -> Option<Idle> {
         let mut idle = self.idle.lock().expect("pool");
         let parked = idle.get_mut(database_id)?;
@@ -185,6 +190,7 @@ impl DbPool {
         None
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn put(&self, conn: Conn, schema: Option<i64>) {
         let mut idle = self.idle.lock().expect("pool");
         idle.retain(|_, parked| {
@@ -213,15 +219,18 @@ pub struct ThreadDb {
     conn: Conn,
     lease_ttl_secs: i64,
     renew_interval: Duration,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The schema version found at open, `None` when the database has no schema yet.
     schema: Arc<Mutex<Option<i64>>>,
     /// Where `close` parks the connection.
     pool: Arc<DbPool>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Set by `close`, shared by the clones: a parked connection is no longer this database's.
     closed: Arc<AtomicBool>,
 }
 
 impl ThreadDb {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The parked connection of `database_id` when there is one, else `dial`'s with its schema
     /// version read: missing means the first write applies the DDL, ahead means a newer SDK wrote
     /// this database. `close` parks it for the next open.
@@ -364,7 +373,7 @@ impl ThreadDb {
         if !self.schema_missing() {
             return Vec::new();
         }
-        let ddl = THREAD_SCHEMA.split(';').map(str::trim).filter(|s| !s.is_empty());
+        let ddl = crate::sql::schema_statements(THREAD_SCHEMA);
         let mut out: Vec<pb::Statement> = ddl.map(|s| statement(s, vec![])).collect();
         out.push(wire(InsertSchemaVersion { version: THREAD_SCHEMA_VERSION }));
         out
@@ -686,9 +695,12 @@ struct LeaseInner {
     holder: String,
     token: String,
     version: i64,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     lost: AtomicBool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     reason: Mutex<Option<String>>,
     notify: tokio::sync::Notify,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     renewal: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -701,6 +713,7 @@ impl Drop for LeaseInner {
 }
 
 impl Lease {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     fn new(lane: LaneDb, holder: &str, token: String, version: i64) -> Self {
         Self {
             inner: Arc::new(LeaseInner {
@@ -725,6 +738,7 @@ impl Lease {
         &self.inner.holder
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Extends the lease every interval until [`Lease::stop`]. An extend that changes no row, or
     /// one that keeps failing until the lease could have lapsed, marks it lost.
     pub fn keep_alive(&self) {
@@ -881,7 +895,7 @@ async fn write(
                     message_id: t.message_id.as_deref(),
                     status: t.status.as_str(),
                     data: SqlValue::json(&t.data),
-                    ask: SqlValue::opt_json(t.ask.as_ref()),
+                    internal: SqlValue::opt_json(t.ask.as_ref()),
                 });
             }
         }
@@ -917,7 +931,7 @@ async fn write(
                     message_id: t.message_id.as_deref(),
                     status: t.status.as_str(),
                     data: SqlValue::json(&t.data),
-                    ask: SqlValue::opt_json(t.ask.as_ref()),
+                    internal: SqlValue::opt_json(t.ask.as_ref()),
                 });
             }
         }
@@ -982,7 +996,7 @@ fn submitted_task<'a>(lane: &'a str, task: &'a TaskWrite) -> InsertSubmittedTask
         name: task.name.as_deref(),
         message_id: task.message_id.as_deref(),
         data: SqlValue::json(&task.data),
-        ask: SqlValue::opt_json(task.ask.as_ref()),
+        internal: SqlValue::opt_json(task.ask.as_ref()),
     }
 }
 
@@ -1012,6 +1026,7 @@ fn first_int(r: &StatementResult) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::atomic::AtomicU32;
 
     use super::*;
@@ -1065,9 +1080,11 @@ mod tests {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn an_extend_that_fails_for_a_while_is_retried_and_the_lease_kept() {
         fn flaky(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+            #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
             static EXTENDS: AtomicU32 = AtomicU32::new(0);
             let landed = || EXTENDS.fetch_add(1, Ordering::SeqCst) >= 2;
             extend_answer(m, landed()).or_else(|| schema_answer(m)).unwrap_or_else(|| script(m))
@@ -1080,6 +1097,7 @@ mod tests {
         lease.stop();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn an_extend_that_keeps_failing_loses_the_lease_before_it_could_lapse() {
         fn down(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {

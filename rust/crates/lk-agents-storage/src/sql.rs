@@ -6,6 +6,9 @@ use serde_json::Value;
 use crate::StorageError;
 use crate::conn::{Row, SqlValue};
 
+mod script;
+pub(crate) use script::schema_statements;
+
 /// Typed reads of one row's cells, positional, each failure naming the column.
 pub struct Cells<'a> {
     row: &'a Row,
@@ -242,8 +245,8 @@ mod tests {
     #[test]
     fn a_column_matches_by_name_nullability_and_json() {
         let ddl = THREAD_SCHEMA;
-        assert!(is_column(ddl, "tasks", "ask", true, true));
-        assert!(!is_column(ddl, "tasks", "ask", false, true), "JSONB read as text");
+        assert!(is_column(ddl, "tasks", "internal", true, true));
+        assert!(!is_column(ddl, "tasks", "internal", false, true), "JSONB read as text");
         assert!(!is_column(ddl, "tasks", "status", false, true), "NOT NULL read as an Option");
         assert!(!is_column(ddl, "tasks", "nope", false, false));
         assert!(!is_column(ddl, "items", "status", false, false), "another table's column");

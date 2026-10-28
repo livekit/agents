@@ -7,11 +7,11 @@ pub use livekit_protocol::server_message;
 pub use livekit_protocol::{
     AvailabilityRequest, AvailabilityResponse, Job, JobAssignment, JobStatus, JobTermination,
     JobType, MigrateJobRequest, RegisterWorkerRequest, RegisterWorkerResponse, ServerInfo,
-    ServerMessage, UpdateJobStatus, UpdateWorkerStatus,
-    WorkerMessage, WorkerPing, WorkerPong,
+    ServerMessage, UpdateJobStatus, UpdateWorkerStatus, WorkerMessage, WorkerPing, WorkerPong,
 };
 use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use prost::Message as _;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
 
 fn server_type_proto(server_type: ServerType) -> JobType {
@@ -103,6 +103,7 @@ pub fn availability_reject(job_id: &str, terminate: bool) -> WorkerMessage {
     }))
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 /// `lk.agent.name` is written first and user attributes merged over it, so the user's wins.
 pub fn availability_accept(
     job_id: &str,
@@ -160,7 +161,10 @@ pub fn update_job(job_id: &str, status: JobStatus) -> WorkerMessage {
 
 /// Sent once after registration: the jobs this worker already holds.
 pub fn migrate_jobs(job_ids: Vec<String>) -> WorkerMessage {
-    wrap(pb::worker_message::Message::MigrateJob(MigrateJobRequest { job_ids }))
+    wrap(pb::worker_message::Message::MigrateJob(MigrateJobRequest {
+        job_ids,
+        ..Default::default()
+    }))
 }
 
 /// The heartbeat is `WorkerPing`/`WorkerPong`, not the signal-protocol `Ping`/`Pong` beside them.
