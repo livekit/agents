@@ -9,7 +9,7 @@ use std::time::Duration;
 
 type Steps = Arc<Mutex<Vec<Step>>>;
 
-async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
+fn builder(name: &str) -> (DriverBuilder, Steps) {
     let time = Timebase::from_virtual(Arc::new(lk_agents_abi::VirtualClock::new()));
     let config = lk_agents_voice::agent_activity::DriverConfig::new(
         Default::default(),
@@ -65,6 +65,11 @@ async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
         toolset: Default::default(),
         // `dst` is enabled by the runtime's test dependency so SessionCores has the same shape.
     };
+    (builder, steps)
+}
+
+async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
+    let (builder, steps) = builder(name);
     let mut executor = Executor::default();
     let (cores, handle) = builder.start(&mut executor).await.unwrap();
     (Runtime::new(cores, Vec::new()), handle, steps)
@@ -168,4 +173,146 @@ async fn accepted_views_are_published_before_receipts() {
         Effect::SessionView(Arc::new(accepted)),
     ]);
     assert!(receipt.await.is_ok(), "the receipt was not delivered");
+}
+
+struct StartupStt(Arc<std::sync::atomic::AtomicUsize>, Arc<tokio::sync::Notify>);
+struct StartupSource(Arc<std::sync::atomic::AtomicUsize>, Arc<tokio::sync::Notify>);
+struct StartupSink;
+
+impl lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame> for StartupSink {
+    fn push(
+        &self,
+        _: lk_agents_abi::AudioFrame,
+    ) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        Ok(())
+    }
+    fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+
+impl lk_agents_abi::StreamSource<lk_agents_abi::SpeechEvent> for StartupSource {
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::SpeechEvent>, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn close(
+        self: Box<Self>,
+        _: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.1.notify_one();
+            lk_agents_abi::Closed::Clean
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl lk_agents_abi::Stt for StartupStt {
+    fn label(&self) -> String {
+        "startup-stt".into()
+    }
+    fn capabilities(&self) -> lk_agents_abi::SttCapabilities {
+        lk_agents_abi::SttCapabilities { streaming: true, ..Default::default() }
+    }
+    async fn recognize(
+        &self,
+        _: &[lk_agents_abi::AudioFrame],
+        _: Option<&lk_agents_abi::LanguageCode>,
+    ) -> Result<lk_agents_abi::SpeechEvent, lk_agents_abi::errors::ProviderError> {
+        unreachable!("startup uses streaming recognition")
+    }
+    async fn stream(
+        &self,
+        _: Option<&lk_agents_abi::LanguageCode>,
+        _: Option<f64>,
+    ) -> Result<
+        Option<(lk_agents_abi::SttSink, lk_agents_abi::SttSource)>,
+        lk_agents_abi::errors::ProviderError,
+    > {
+        Ok(Some((Box::new(StartupSink), Box::new(StartupSource(self.0.clone(), self.1.clone())))))
+    }
+}
+
+struct StartupVad(bool);
+#[async_trait::async_trait]
+impl lk_agents_abi::Vad for StartupVad {
+    fn label(&self) -> String {
+        "startup-vad".into()
+    }
+    fn capabilities(&self) -> lk_agents_abi::VadCapabilities {
+        Default::default()
+    }
+    async fn stream(
+        &self,
+    ) -> Result<
+        (lk_agents_abi::VadSink, lk_agents_abi::VadSource),
+        lk_agents_abi::errors::ProviderError,
+    > {
+        if self.0 {
+            return Err(lk_agents_abi::errors::ApiError::new("VAD startup failed").into());
+        }
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_or_cancelled_startup_closes_each_already_opened_provider_stream() {
+    for fails in [true, false] {
+        let (mut builder, _) = builder("provider-startup-cleanup");
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settled = Arc::new(tokio::sync::Notify::new());
+        builder.stt = Some(Arc::new(StartupStt(closed.clone(), settled.clone())));
+        builder.vad = Some(Arc::new(StartupVad(fails)));
+        let mut executor = Executor::default();
+        let mut opening = Box::pin(builder.start(&mut executor));
+        if fails {
+            assert!(opening.await.is_err());
+        } else {
+            std::future::poll_fn(|cx| {
+                assert!(opening.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            drop(opening);
+        }
+        tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+            .await
+            .expect("startup abandoned its opened STT stream without closing it");
+        assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
+    let (builder, _) = builder("unadopted-provider");
+    let resources = builder.resources.clone();
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let settled = Arc::new(tokio::sync::Notify::new());
+    let mut executor = Executor::default();
+    let legs = executor
+        .open_legs(
+            &resources,
+            builder.time,
+            builder.spawner,
+            Some(Arc::new(StartupStt(closed.clone(), settled.clone()))),
+            None,
+        )
+        .await
+        .unwrap();
+    let sink = legs.stt.expect("the initial STT sink was registered");
+    assert!(resources.audio_sink(sink).is_some());
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(executor);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("an executor dropped before adoption left its provider stream open");
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }

@@ -16,7 +16,7 @@ use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AbortHandle, AudioFrame, SpawnerExt};
 use lk_agents_voice::agent_session::{
     Driver, Event, Now, PeerHandle, QueueOwner, SessionCores, Tx,
 };
-use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd};
+use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
@@ -74,10 +74,7 @@ pub struct Runtime {
 impl Runtime {
     /// Takes the cores over: the opening legs and the microphone are read and the start's
     /// effects performed.
-    fn new(
-        cores: SessionCores,
-        opening: Vec<(AudioChannel, ResourceId, legs::PendingLeg)>,
-    ) -> Self {
+    fn new(cores: SessionCores, opening: Vec<legs::OpeningLeg>) -> Self {
         let SessionCores {
             driver,
             forwarder,

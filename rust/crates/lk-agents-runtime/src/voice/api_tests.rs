@@ -165,10 +165,12 @@ impl SessionExecutor for Observing {
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a lk_agents_abi::resources::Resources,
+        time: Timebase,
+        spawner: Arc<dyn lk_agents_abi::Spawner>,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        self.0.open_legs(resources, stt, vad)
+        self.0.open_legs(resources, time, spawner, stt, vad)
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {

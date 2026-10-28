@@ -3,13 +3,13 @@
 mod recorder;
 
 use super::*;
-use crate::tts::markup::ChatMessageExt;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::{HookId, HookOutcome};
 use crate::agent_session::host_events::HookCall;
 use crate::agent_session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor};
 use crate::events::SessionEvent;
 use crate::test_support::FixedRoom;
+use crate::tts::markup::ChatMessageExt;
 use lk_agents_abi::errors::ProviderError;
 
 /// Builds the cores of a session with no STT or VAD; nothing here runs them.
@@ -27,6 +27,8 @@ impl SessionExecutor for NoLegs {
     fn open_legs<'a>(
         &'a mut self,
         _: &'a lk_agents_abi::resources::Resources,
+        _: Timebase,
+        _: Arc<dyn lk_agents_abi::Spawner>,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {

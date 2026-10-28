@@ -4,10 +4,10 @@
 use super::Runtime;
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::turn::detector::LegEvent;
-use lk_agents_abi::{BoxFuture, SpawnerExt, Stt, Vad};
+use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt, Stt, Vad};
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{
-    DriverError, Event, Input, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Tx,
+    DriverError, Event, Input, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
 };
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
@@ -18,7 +18,58 @@ use std::time::Duration;
 #[derive(Default)]
 pub struct Executor {
     /// The opening streams, read once the cores exist.
-    opening: Vec<(AudioChannel, ResourceId, PendingLeg)>,
+    opening: Vec<OpeningLeg>,
+}
+
+/// Keeps an initial source and its registered sink owned until the runtime adopts them.
+pub(super) struct OpeningLeg {
+    channel: AudioChannel,
+    sink: ResourceId,
+    source: Option<PendingLeg>,
+    resources: Resources,
+    time: Timebase,
+    spawner: Arc<dyn Spawner>,
+}
+
+impl OpeningLeg {
+    fn new(
+        channel: AudioChannel,
+        sink: ResourceId,
+        source: PendingLeg,
+        resources: Resources,
+        time: Timebase,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
+        Self { channel, sink, source: Some(source), resources, time, spawner }
+    }
+
+    fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
+        let source = self.source.take().expect("an opening stream is adopted once");
+        (self.channel, self.sink, source)
+    }
+}
+
+impl Drop for OpeningLeg {
+    fn drop(&mut self) {
+        let Some(source) = self.source.take() else { return };
+        let resources = self.resources.clone();
+        let sink = self.sink;
+        let deadline = self.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if let Some(input) = resources.audio_sink(sink) {
+            input.end_input();
+        }
+        let channel = self.channel;
+        self.spawner.spawn_unboxed(async move {
+            let outcome = match source {
+                PendingLeg::Stt(source) => source.close(deadline).await,
+                PendingLeg::Vad(source) => source.close(deadline).await,
+            };
+            if outcome != lk_agents_abi::Closed::Clean {
+                log::error!(target: "livekit.agents", "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
+            }
+            resources.release(sink);
+        });
+    }
 }
 
 impl SessionExecutor for Executor {
@@ -37,24 +88,42 @@ impl SessionExecutor for Executor {
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a Resources,
+        time: Timebase,
+        spawner: Arc<dyn Spawner>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
             let mut legs = OpeningLegs::default();
+            let mut opening = Vec::new();
             if let Some(stt) = stt {
                 let (sink, source) =
                     stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
                 let sink = resources.register_audio_sink(Arc::from(sink));
-                self.opening.push((AudioChannel::Stt, sink, PendingLeg::Stt(source)));
+                opening.push(OpeningLeg::new(
+                    AudioChannel::Stt,
+                    sink,
+                    PendingLeg::Stt(source),
+                    resources.clone(),
+                    time.clone(),
+                    Arc::clone(&spawner),
+                ));
                 legs.stt = Some(sink);
             }
             if let Some(vad) = vad {
                 let (sink, source) = vad.stream().await?;
                 let sink = resources.register_audio_sink(Arc::from(sink));
-                self.opening.push((AudioChannel::Vad, sink, PendingLeg::Vad(source)));
+                opening.push(OpeningLeg::new(
+                    AudioChannel::Vad,
+                    sink,
+                    PendingLeg::Vad(source),
+                    resources.clone(),
+                    time.clone(),
+                    Arc::clone(&spawner),
+                ));
                 legs.vad = Some(sink);
             }
+            self.opening = opening;
             Ok(legs)
         })
     }
@@ -74,8 +143,9 @@ pub(super) enum PendingLeg {
 impl Runtime {
     /// The legs the session opens with: the opening streams' drains and the interruption
     /// detector's verdicts join the queue until `Closing`.
-    pub(super) fn start_legs(&mut self, opening: Vec<(AudioChannel, ResourceId, PendingLeg)>) {
-        for (channel, sink, stream) in opening {
+    pub(super) fn start_legs(&mut self, opening: Vec<OpeningLeg>) {
+        for opening in opening {
+            let (channel, sink, stream) = opening.adopt();
             self.drain(channel, sink, stream);
         }
         if let Some(detector) = self.interruption.clone() {

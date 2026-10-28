@@ -76,12 +76,50 @@ pub(crate) struct Handover {
     executor: Option<Executor>,
     run: Option<oneshot::Sender<Executor>>,
     /// The opening streams, read once the cores exist.
-    opening: Vec<(AudioChannel, ResourceId, PendingLeg)>,
+    opening: Vec<OpeningLeg>,
 }
 
 impl Handover {
     pub(crate) fn new(run: oneshot::Sender<Executor>) -> Self {
         Handover { executor: None, run: Some(run), opening: Vec::new() }
+    }
+}
+
+/// Retains each opened stream until the executor adopts it, including during later provider opens.
+struct OpeningLeg {
+    channel: AudioChannel,
+    sink: ResourceId,
+    source: Option<PendingLeg>,
+    resources: lk_agents_abi::resources::Resources,
+    time: lk_agents_voice::agent_session::Timebase,
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
+}
+
+impl OpeningLeg {
+    fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
+        (self.channel, self.sink, self.source.take().expect("an opening stream is adopted once"))
+    }
+}
+
+impl Drop for OpeningLeg {
+    fn drop(&mut self) {
+        let Some(source) = self.source.take() else { return };
+        if let Some(sink) = self.resources.audio_sink(self.sink) {
+            sink.end_input();
+        }
+        let (resources, sink) = (self.resources.clone(), self.sink);
+        let deadline = self.time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.spawner.spawn_unboxed(async move {
+            match source {
+                PendingLeg::Stt(source) => {
+                    let _ = source.close(deadline).await;
+                }
+                PendingLeg::Vad(source) => {
+                    let _ = source.close(deadline).await;
+                }
+            }
+            resources.release(sink);
+        });
     }
 }
 
@@ -101,24 +139,42 @@ impl SessionExecutor for Handover {
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a lk_agents_abi::resources::Resources,
+        time: lk_agents_voice::agent_session::Timebase,
+        spawner: Arc<dyn lk_agents_abi::Spawner>,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
             let mut legs = OpeningLegs::default();
+            let mut opening = Vec::new();
             if let Some(stt) = stt {
                 let (sink, source) =
                     stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
                 let sink = resources.register_audio_sink(Arc::from(sink));
-                self.opening.push((AudioChannel::Stt, sink, PendingLeg::Stt(source)));
+                opening.push(OpeningLeg {
+                    channel: AudioChannel::Stt,
+                    sink,
+                    source: Some(PendingLeg::Stt(source)),
+                    resources: resources.clone(),
+                    time: time.clone(),
+                    spawner: spawner.clone(),
+                });
                 legs.stt = Some(sink);
             }
             if let Some(vad) = vad {
                 let (sink, source) = vad.stream().await?;
                 let sink = resources.register_audio_sink(Arc::from(sink));
-                self.opening.push((AudioChannel::Vad, sink, PendingLeg::Vad(source)));
+                opening.push(OpeningLeg {
+                    channel: AudioChannel::Vad,
+                    sink,
+                    source: Some(PendingLeg::Vad(source)),
+                    resources: resources.clone(),
+                    time,
+                    spawner,
+                });
                 legs.vad = Some(sink);
             }
+            self.opening = opening;
             Ok(legs)
         })
     }
@@ -146,7 +202,7 @@ impl QueueOwner for Handover {
 }
 
 impl Executor {
-    fn new(cores: SessionCores, opening: Vec<(AudioChannel, ResourceId, PendingLeg)>) -> Self {
+    fn new(cores: SessionCores, opening: Vec<OpeningLeg>) -> Self {
         let SessionCores {
             driver,
             forwarder,
@@ -197,7 +253,8 @@ impl Executor {
         if let Some(rx) = room {
             executor.forward(rx);
         }
-        for (channel, sink, stream) in opening {
+        for opening in opening {
+            let (channel, sink, stream) = opening.adopt();
             executor.drain(channel, sink, stream);
         }
         if let Some(detector) = executor.interruption.clone() {
