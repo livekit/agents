@@ -103,7 +103,7 @@ class _LLMOptions:
     api_key: str
     api_secret: str
     inference_class: InferenceClass | None
-    extra_kwargs: ResponsesOptions | dict[str, Any]
+    extra_kwargs: dict[str, Any]
     prompt_cache_breakpoints: bool | Literal["auto"]
     use_websocket: bool = False
 
@@ -145,7 +145,7 @@ class LLM(llm.LLM):
             api_key=lk_api_key,
             api_secret=lk_api_secret,
             inference_class=inference_class,
-            extra_kwargs=extra_kwargs or {},
+            extra_kwargs=_copy_kwargs(extra_kwargs or {}),
             prompt_cache_breakpoints=prompt_cache_breakpoints,
             use_websocket=use_websocket,
         )
@@ -231,15 +231,26 @@ class LLM(llm.LLM):
             if isinstance(self._ws, _GatewayResponsesWebsocket):
                 self._retire_ws(self._ws)
                 self._ws = self._make_ws()
+                self._prewarm_swapped_ws(self._ws)
         if is_given(extra_kwargs):
             old_headers = self._opts.extra_kwargs.get("extra_headers")
-            self._opts.extra_kwargs = dict(extra_kwargs)
+            self._opts.extra_kwargs = _copy_kwargs(extra_kwargs)
             # headers ride on the upgrade, so pooled sockets carry the old ones
             if self._ws is not None and extra_kwargs.get("extra_headers") != old_headers:
                 self._ws._pool.invalidate()
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
+
+    def _prewarm_swapped_ws(self, ws: _GatewayResponsesWebsocket) -> None:
+        # prewarm dials a socket, so only replace a warm pool with a warm one
+        if self._prewarm_task is None:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        ws._pool.prewarm()
 
     def _retire_ws(self, ws: _GatewayResponsesWebsocket) -> None:
         ws._pool.invalidate()
@@ -355,6 +366,14 @@ class LLM(llm.LLM):
         if isinstance(setting, bool):
             return setting
         return supports_prompt_cache_breakpoints(self._opts.model)
+
+
+def _copy_kwargs(kwargs: ResponsesOptions | dict[str, Any]) -> dict[str, Any]:
+    # a caller mutating their dict must not change ours behind update_options' header diff
+    copied: dict[str, Any] = dict(kwargs)
+    if isinstance(copied.get("extra_headers"), dict):
+        copied["extra_headers"] = dict(copied["extra_headers"])
+    return copied
 
 
 def _to_responses_tool_choice(tool_choice: Any) -> response_create_params.ToolChoice | None:
