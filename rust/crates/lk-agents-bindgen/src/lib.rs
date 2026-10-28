@@ -37,7 +37,6 @@ pub const IN_PLACE_CRATES: &[&str] = &[
     "rust/crates/lk-agents-worker/src/",
     "rust/crates/lk-agents-voice/src/",
     "rust/crates/lk-agents-inference/src/",
-    "rust/crates/lk-agents-a2a/src/",
 ];
 
 /// `file` as rustc names it: workspace-relative or absolute.

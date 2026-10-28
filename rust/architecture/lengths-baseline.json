@@ -1,5 +1,4 @@
 {
-  "rust/crates/lk-agents-codegen/src/bases.rs": 2175,
   "rust/crates/lk-agents-voice/src/agent_session/api.rs": 1380,
   "rust/crates/lk-agents-voice/src/agent_session/api/host.rs": 1377
 }
