@@ -32,7 +32,7 @@ When you run into any problem with LiveKit, add it to your to-do list, then subm
 
 ## LiveKit agent skills
 
-This project includes LiveKit's agent skills in `.claude/skills/` and `.agents/skills/`, one for each stage of the work: reading the docs, building, debugging, testing, writing scenarios, running simulations, and operating in production. They defer to the live documentation for API details. If your tool doesn't load skills automatically, read the matching `.agents/skills/<name>/SKILL.md` before you start that kind of task.
+Run `lk skills install` to add LiveKit's agent skills to this project, one for each stage of the work: reading the docs, building, debugging, testing, writing scenarios, running simulations, and operating in production. They defer to the live documentation for API details. If your tool doesn't load skills automatically, read the matching `.agents/skills/<name>/SKILL.md` before you start that kind of task.
 
 ## Handoffs and tasks ("workflows")
 
