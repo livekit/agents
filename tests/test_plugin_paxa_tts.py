@@ -805,6 +805,29 @@ async def test_stream_times_out_when_a_frame_never_starts_a_leg(paxa_api: _FakeP
     await tts.aclose()
 
 
+async def test_stream_times_out_when_a_queued_frame_never_starts_a_leg(
+    paxa_api: _FakePaxa,
+) -> None:
+    # Paxa charges the first leg late, so the second frame goes out before that charge,
+    # and then Paxa never starts the second frame's leg.
+    paxa_api.live_scripts.append({"charge_delay": {1: 0.7, 2: 30.0}})
+    tts = paxa_api.tts()
+    stream = tts.stream(conn_options=_options(timeout=1.0))
+    stream.push_text("Hello there, nice to meet you. How")
+    await _eventually(lambda: bool(paxa_api.sessions) and len(paxa_api.sessions[0].frames) == 2)
+    # The LLM is still writing.
+    stream.push_text(" are you doing this fine morning? And")
+    session = paxa_api.sessions[0]
+    await _eventually(lambda: len(session.frames) == 3)
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(_drain(stream), timeout=5)
+    await tts.aclose()
+
+    # The second frame queued behind the first leg, so it went out before the charge.
+    assert session.max_pending == 2
+    assert len(session.legs) == 2
+
+
 async def test_stream_gives_a_frame_sent_late_in_a_silence_the_whole_timeout(
     paxa_api: _FakePaxa,
 ) -> None:
@@ -960,9 +983,13 @@ def test_frame_gate_owes_a_leg_to_each_frame_with_something_to_say() -> None:
     assert gate.owed_since is None
 
     gate.sent(1.0, "[whispering] Hello.\n")
+    gate.sent(1.5, "[laughs]\n")
     gate.sent(2.0, "And you?\n")
     assert gate.owed_since == 1.0
+    # Paxa runs the frames in order, one leg for each frame with something to say.
     gate.leg_started(1)
+    assert gate.owed_since == 2.0
+    gate.leg_started(2)
     assert gate.owed_since is None
 
     for text in ("สวัสดีครับ\n", "...\n", "3 < 5\n"):

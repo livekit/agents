@@ -27,6 +27,7 @@ import os
 import re
 import time
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -318,10 +319,16 @@ class _FrameGate:
 
     def __init__(self) -> None:
         self.open_leg: int | None = None
-        # When the first frame still owed a leg went out.
-        self.owed_since: float | None = None
+        # When each frame still owed a leg went out. Paxa runs the frames in order, one leg
+        # for each frame with something to say, so a leg pays off the oldest.
+        self._owed: deque[float] = deque()
         self._unacked = 0
         self._last_sent = 0.0
+
+    @property
+    def owed_since(self) -> float | None:
+        """When the oldest frame still owed a leg went out."""
+        return self._owed[0] if self._owed else None
 
     def can_send(self, now: float) -> bool:
         if self.open_leg is not None:
@@ -340,12 +347,13 @@ class _FrameGate:
     def sent(self, now: float, text: str) -> None:
         self._unacked += 1
         self._last_sent = now
-        if self.owed_since is None and _TAG_RE.sub("", text).strip():
-            self.owed_since = now
+        if _TAG_RE.sub("", text).strip():
+            self._owed.append(now)
 
     def leg_started(self, seq: int) -> None:
         self._unacked = 0
-        self.owed_since = None
+        if self._owed:
+            self._owed.popleft()
         self.open_leg = seq
 
     def leg_flushed(self, seq: int) -> bool:
