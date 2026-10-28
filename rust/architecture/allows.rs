@@ -11,6 +11,8 @@ struct Scan {
     locations: Vec<(Span, String)>,
     exemptions: Vec<String>,
     occurrences: BTreeMap<String, usize>,
+    tuple_fields: BTreeMap<String, usize>,
+    errors: Vec<String>,
 }
 
 impl Scan {
@@ -32,7 +34,7 @@ impl Scan {
                             syn::Attribute::parse_outer.parse2(quote::quote!(#token #group))
                         {
                             for attr in attrs {
-                                self.meta(&attr.meta, &attr.to_token_stream().to_string());
+                                self.meta(&attr.meta, "always");
                             }
                         }
                     }
@@ -53,8 +55,13 @@ impl Scan {
                 syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
                     .parse2(list.tokens.clone())
             {
+                let condition = items
+                    .first()
+                    .map(|item| item.to_token_stream().to_string())
+                    .unwrap_or_default();
+                let nested = format!("{context}/cfg({condition})");
                 for item in items.iter().skip(1) {
-                    self.meta(item, context);
+                    self.meta(item, &nested);
                 }
             }
         } else if matches!(kind.as_str(), "allow" | "expect" | "warn") {
@@ -63,6 +70,12 @@ impl Scan {
                 syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
                     .parse2(list.tokens.clone())
             {
+                let reason = items.iter().any(|item| {
+                    matches!(item, syn::Meta::NameValue(value)
+                        if value.path.is_ident("reason") && matches!(&value.value,
+                            syn::Expr::Lit(value) if matches!(&value.lit,
+                                syn::Lit::Str(text) if !text.value().trim().is_empty())))
+                });
                 for item in items {
                     let lint = item.path().to_token_stream().to_string().replace(' ', "");
                     if matches!(
@@ -74,6 +87,13 @@ impl Scan {
                             | "clippy::disallowed_types"
                             | "clippy::disallowed_macros"
                     ) {
+                        if !reason {
+                            self.errors.push(format!(
+                                "{}:{}: {kind}({lint}) requires a nonempty reason",
+                                self.path,
+                                self.scopes.join("/")
+                            ));
+                        }
                         let key = format!(
                             "{}:{}:{lint}:{kind}:{context}",
                             self.path,
@@ -153,17 +173,18 @@ impl<'ast> Visit<'ast> for Scan {
         syn::visit::visit_macro(self, node);
     }
     fn visit_field(&mut self, node: &'ast syn::Field) {
-        let name = format!(
-            "field {}",
-            node.ident
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| node.ty.to_token_stream().to_string())
-        );
+        let name = if let Some(ident) = &node.ident {
+            format!("field {ident}")
+        } else {
+            let ordinal = self.tuple_fields.entry(self.scopes.join("/")).or_default();
+            let name = format!("field {} {}", *ordinal, node.ty.to_token_stream());
+            *ordinal += 1;
+            name
+        };
         self.enter(name, node.span(), |s| syn::visit::visit_field(s, node));
     }
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        self.meta(&attr.meta, &attr.to_token_stream().to_string());
+        self.meta(&attr.meta, "always");
     }
 }
 
@@ -214,6 +235,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}\t{name}", span.start().line);
             }
         } else if mode == "inventory" {
+            if !scan.errors.is_empty() {
+                return Err(scan.errors.join("\n").into());
+            }
             for exemption in scan.exemptions {
                 println!("{exemption}");
             }

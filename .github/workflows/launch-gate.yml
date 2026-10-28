@@ -42,6 +42,12 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
+      - name: Prepare architecture checks
+        run: |
+          rustup component add clippy
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin
 

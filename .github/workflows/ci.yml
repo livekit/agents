@@ -136,6 +136,16 @@ jobs:
         working-directory: rust
         run: cargo run --locked -q -p lk-agents-codegen -- --check
 
+      # ABI architecture tests invoke Clippy and compare baselines with their full history.
+      - name: Prepare architecture checks
+        run: |
+          rustup component add clippy
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --unshallow
+          fi
+
       - name: The core's provider and voice tests
         working-directory: rust
         run: cargo test --locked -q -p lk-agents-abi -p lk-agents-inference -p lk-agents-voice

@@ -872,7 +872,8 @@ with `core_names.json`.
 Enforcement must cover:
 
 - No pyo3 or executor dependencies in cores; no core-to-runtime dependency.
-- Handwritten `#[host(...)]`, `#[derive(Host)]` and API export metadata only in ABI.
+- Handwritten `#[host(...)]`, `#[derive(Host)]`, `#[class]`, `#[binding]` and API
+  export metadata only in ABI.
 - No handwritten `#[pyclass]`, `#[pymethods]`, `#[pyfunction]`, `#[napi]` or
   `#[pymodule]` outside generated output and registration shells.
 - Generated host conversions at the language boundary; executable proxies and
@@ -880,13 +881,34 @@ Enforcement must cover:
 - Generated forwarding modules and matching stubs.
 
 Codegen `--check` enforces export placement and generated output, failing with
-the file and item. Dependency direction is a `cargo metadata` test: core crates
-have no tokio, futures or pyo3 in their dependency graph. Banned constructs in
-cores, such as spawns, `select!`/`join!`, ambient clocks and unbounded channels,
-are clippy `disallowed_methods`, `disallowed_types` and `disallowed_macros` in
-`clippy.toml`. A test keeps every handwritten `.rs` file within 1,250 lines.
-Existing violations carry `#[allow]` or a file entry in a baseline that may only
-shrink; each check has deliberately failing inputs as tests.
+the file and item. The dependency check reads `cargo metadata --all-features`
+and traverses the resolved closure of every subject core and `lk-agents-abi`.
+Those closures must contain no runtime, executor, async transport or host SDK:
+no tokio, futures, pyo3, async-trait, reqwest, tungstenite, `livekit` or
+`livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
+is `py -> runtime -> subject cores -> abi`, with the composition edges
+`voice -> core`, `a2a -> storage` and `fuzz -> subject cores + abi` described
+above. These dependency bans apply to the subjects and ABI, not to runtime,
+fuzz support, language bindings or build tools.
+
+Per-core `clippy.toml` files configure `disallowed-methods`, `disallowed-types`
+and `disallowed-macros`. Banned constructs include task/thread spawns,
+`select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,
+environment/process reads, unbounded tokio/std/futures/crossbeam channels,
+locks, host-shared atomics and randomly ordered hash collections in decision
+state. Supplied inputs and runtime-owned resources keep decisions deterministic.
+The file-length check reads git-tracked `.rs` files, skips generated-marker
+files and rejects handwritten files over 1,250 lines.
+
+Existing violations are recorded in checked-in baselines; clippy exemptions
+also require `#[allow(...)]` with a reason. Baselines may only shrink by
+violation kind and location identity. Removing an old violation cannot excuse
+a different one, and neither baseline identities nor exemptions may grow or
+broaden. Each check has deliberately failing inputs, including replacement of
+an old violation with a new identity. The shared enforcement step is
+[`rust/architecture/check.sh`](../../rust/architecture/check.sh), invoked by CI
+and the launch gate. These checks enforce the listed boundaries; they do not
+replace review of core state, effects, live resources or executable ownership.
 
 ## Common runtime primitives
 

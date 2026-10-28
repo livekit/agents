@@ -217,14 +217,27 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Use `make check` and `make fix` before committing
 
 ## Rust architecture rules
+- Dependency direction is `lk-agents-py -> lk-agents-runtime -> subject cores -> lk-agents-abi`;
+  `voice -> core`, `a2a -> storage`, and `fuzz -> subject cores + abi` are allowed composition edges.
+  ABI never depends on subjects or runtime; cores never depend on runtime or host adapters.
 - The subject cores (`lk-agents-core`, `-voice`, `-worker`, `-inference`, `-storage`, `-a2a`,
-  `-media`) and `lk-agents-abi` have no tokio, futures or pyo3 dependency; a `cargo metadata`
-  test enforces it. Cores never depend on the runtime.
-- Banned constructs in cores (spawns, `select!`/`join!`, ambient clocks, unbounded channels) are
-  clippy `disallowed_methods`, `disallowed_types` and `disallowed_macros` in `clippy.toml`.
-- Every handwritten `.rs` file stays within 1,250 lines; generated files carry a marker and are
-  skipped. A test enforces it.
-- Handwritten export declarations (`#[host]`, `#[derive(Host)]`) live only in `lk-agents-abi`;
-  generated files are never edited, and `lk-agents-codegen --check` rejects drift.
-- Existing violations carry `#[allow]` or a baseline entry; baselines only shrink. Never add one:
-  fix the code.
+  `-media`) and `lk-agents-abi` have no executor, async transport or SDK dependency in their
+  all-features resolved dependency closure: no tokio, futures, pyo3, async-trait, reqwest,
+  tungstenite, `livekit` or `livekit-ffi`. `livekit-protocol` records remain allowed. These
+  dependency bans do not apply to runtime, fuzz support, language bindings or build tools.
+- Per-core `clippy.toml` uses `disallowed-methods`, `disallowed-types` and `disallowed-macros`
+  to reject spawns, `select!`/`join!`, ambient clocks/entropy/environment/process reads,
+  unbounded channels, locks, host-shared atomics and randomly ordered decision state.
+  Supply time and IDs as inputs; keep live resources and execution in runtime.
+- Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
+  marker are skipped. Split by responsibility when moving code.
+- Handwritten export declarations (`#[host]`, `#[derive(Host)]`, `#[class]`, `#[binding]` and
+  export metadata) live only in `lk-agents-abi`. Handwritten `#[pyclass]`, `#[pymethods]`,
+  `#[pyfunction]` and `#[pymodule]` belong only in generated output or the module registration shell.
+  Generated files are never edited manually; `lk-agents-codegen --check` rejects placement violations
+  and generated drift.
+- Existing violations have checked-in baselines; clippy exemptions also carry `#[allow(...)]`
+  with a reason. Baselines shrink by violation kind and location identity, never by count:
+  removing one violation does not permit another. Never add or broaden an exemption.
+- Run `rust/architecture/check.sh` for dependency, clippy, baseline and file-length enforcement;
+  CI and the launch gate use the same step. Every check has deliberately failing fixtures.
