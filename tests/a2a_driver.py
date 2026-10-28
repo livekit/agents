@@ -261,16 +261,17 @@ async def door(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., D
 
 @pytest.fixture
 async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., A2ADelegate]]:
-    """``expert(handler)``: an ``A2ADelegate`` to an expert's door on the same store."""
+    """``expert(handler, name=, announce=)``: an ``A2ADelegate`` to an expert's door, its own lane,
+    on the same store."""
     clients: list[httpx.AsyncClient] = []
     delegates: list[A2ADelegate] = []
 
-    def make(handler: Any, **kw: Any) -> A2ADelegate:
+    def make(handler: Any, name: str = EXPERT, announce: bool = True, **kw: Any) -> A2ADelegate:
         server = AgentServer(
-            storage=agentdb_storage, agent_name=EXPERT, api_key=API_KEY, api_secret=API_SECRET
+            storage=agentdb_storage, agent_name=name, api_key=API_KEY, api_secret=API_SECRET
         )
         kw.setdefault("description", "Answers what the front desk cannot.")
-        server.a2a_session(endpoint=EXPERT, **kw)(handler)
+        server.a2a_session(endpoint=name, **kw)(handler)
         clients.append(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=server.http.app),
@@ -278,7 +279,8 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
                 timeout=30.0,
             )
         )
-        delegates.append(A2ADelegate(f"http://experts.test/{EXPERT}", httpx_client=clients[-1]))
+        url = f"http://experts.test/{name}"
+        delegates.append(A2ADelegate(url, httpx_client=clients[-1], announce=announce))
         return delegates[-1]
 
     yield make
