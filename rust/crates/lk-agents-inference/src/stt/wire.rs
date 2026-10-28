@@ -59,10 +59,7 @@ pub fn session_create(opts: &SttOptions, session_keyterms: &[String]) -> Value {
         params.insert("fallback".into(), json!({"models": models}));
     }
 
-    params.insert(
-        "connection".into(),
-        crate::extra::connection(&opts.conn_options),
-    );
+    params.insert("connection".into(), crate::extra::connection(&opts.conn_options));
 
     params.insert("type".into(), json!("session.create"));
     Value::Object(params)
@@ -152,8 +149,8 @@ pub enum Incoming {
     #[serde(rename = "final_transcript")]
     FinalTranscript(Transcript),
     #[serde(rename = "error")]
+    /// Its `message` can carry customer content: only the code is read.
     Error {
-        message: Option<String>,
         #[serde(default = "missing_code")]
         code: i64,
     },
@@ -288,10 +285,7 @@ mod tests {
     fn an_error_without_a_code_reports_minus_one() {
         let got = decode(r#"{"type": "error", "message": "nope"}"#).unwrap();
         match got {
-            Incoming::Error { message, code, .. } => {
-                assert_eq!(message.as_deref(), Some("nope"));
-                assert_eq!(code, -1);
-            }
+            Incoming::Error { code } => assert_eq!(code, -1),
             other => panic!("{other:?}"),
         }
     }

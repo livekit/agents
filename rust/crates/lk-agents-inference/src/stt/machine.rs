@@ -58,12 +58,9 @@ impl TranscriptMachine {
             Incoming::PreflightTranscript(data) => self.preflight(&data),
             Incoming::InterimTranscript(data) => self.transcript(&data, false),
             Incoming::FinalTranscript(data) => self.transcript(&data, true),
-            Incoming::Error { message, code, .. } => Processed {
+            Incoming::Error { code } => Processed {
                 error: Some(lk_agents_abi::errors::ApiError::status(
-                    format!(
-                        "LiveKit Inference STT returned error: {}",
-                        message.as_deref().unwrap_or("None")
-                    ),
+                    "LiveKit Inference STT returned an error",
                     code,
                     None,
                     None,
@@ -249,14 +246,15 @@ mod tests {
         );
     }
 
-    // Catches: swallowing the gateway's `error` frame.
+    // Catches: swallowing the gateway's `error` frame, or copying its message (which can carry
+    // customer content) into the error the application logs; the code is the diagnostic.
     #[test]
     fn a_gateway_error_frame_becomes_a_terminal_error() {
         let mut m = TranscriptMachine::new("r", None);
-        let out = m.process(msg(json!({"type": "error", "message": "bad model", "code": 400})));
+        let out = m.process(msg(json!({"type": "error", "message": "user words", "code": 400})));
         let err = out.error.expect("an error");
         assert_eq!(err.status_code, Some(400));
-        assert!(err.message.contains("bad model"), "{}", err.message);
+        assert_eq!(err.message, "LiveKit Inference STT returned an error");
         assert!(!err.retryable, "a 400 is not retried");
         assert!(out.events.is_empty());
 
