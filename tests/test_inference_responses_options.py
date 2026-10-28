@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
@@ -246,6 +246,34 @@ async def test_retired_ws_transport_closes_after_its_last_stream() -> None:
 
     assert transport not in model._retired_ws
     assert session.sockets[0].closed is True
+
+
+async def test_aclose_survives_retired_stream_finishing_mid_close() -> None:
+    model = _make_ws_llm()
+    first = _gateway_ws(model)
+    first._holders = 1
+    model.update_options(model="openai/gpt-4.1-mini")
+    second = _gateway_ws(model)
+    second._holders = 1
+    model.update_options(model="openai/gpt-4.1-nano")
+    closes: list[inference_responses._GatewayResponsesWebsocket] = []
+
+    def _closing_releases(
+        ws: inference_responses._GatewayResponsesWebsocket,
+    ) -> Callable[[], Awaitable[None]]:
+        async def _aclose() -> None:
+            closes.append(ws)
+            model._release_ws(ws)  # its last stream finishes during shutdown
+
+        return _aclose
+
+    first.aclose = _closing_releases(first)  # type: ignore[method-assign]
+    second.aclose = _closing_releases(second)  # type: ignore[method-assign]
+
+    await model.aclose()
+
+    assert sorted(map(id, closes)) == sorted([id(first), id(second)])
+    assert model._retired_ws == set()
 
 
 async def test_update_same_model_keeps_ws_pool(monkeypatch: pytest.MonkeyPatch) -> None:
