@@ -768,8 +768,8 @@ avatar sink's interrupted path after a give-up timer.
 
 Measured nowhere here, and each a separate source of production risk:
 
-- The Python voice pipeline (`livekit-agents/livekit/agents/voice/`), which is what ships today:
-  `docs/internals/rust-core.md` says it does not call this driver.
+- The Python voice host adapters (`livekit-agents-next/livekit/agents/voice/`), including the
+  `livekit.rtc` room adapter.
 - The binding from Python to the driver (`lk-agents-py`), plugins reached through host proxies.
 - Threads, lanes and leases in agent-db, the A2A text door, and a text turn landing on a lane
   while a call is live (`storage/live.py`).

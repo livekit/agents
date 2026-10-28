@@ -1,7 +1,7 @@
 """Record what real providers send, as event kinds and relative timing: the corpus the fuzz fakes
 are calibrated from and checked against (`src/corpus.rs`, `tests/conformance.rs`).
 
-Runs against LiveKit Inference with the reference package (`livekit-agents/`): the realtime model
+Runs against LiveKit Inference with `livekit.agents` (`livekit-agents-next/`): the realtime model
 over its raw OpenAI-protocol websocket, streaming STT, streaming TTS and a streaming LLM. Nothing
 the providers say is kept, only the shape of it: event types, when each arrived, audio durations,
 word counts, statuses and error codes. Ids are replaced by ordinals so linkage survives.
