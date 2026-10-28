@@ -238,7 +238,7 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
 @click.option(
     "--agents-only",
     is_flag=True,
-    help="Pre-release livekit-agents-next alone; the plugins and their livekit-agents floor stay as they are.",
+    help="Pre-release livekit-agents-next alone; the plugins and their livekit-agents-next floor stay as they are.",
 )
 @click.option(
     "--bump-type",

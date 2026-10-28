@@ -36,7 +36,7 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice lk-agents-worker lk-agents-runtime)
+executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-net lk-agents-voice lk-agents-worker lk-agents-runtime)
 compiled=(
     "lk-agents-bench-steps: measurement CLI; run explicitly on qualified hardware"
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
@@ -112,9 +112,10 @@ cargo test -q -p lk-agents-core
 step "voice core unit tests"
 cargo test -q -p lk-agents-voice
 
-# The provider clients the DST does not run: the gateway's TTS, STT and LLM, the host bridges.
-step "provider clients' unit tests"
-cargo test -q -p lk-agents-inference -p lk-agents-abi
+# The provider clients the DST does not run: the gateway's TTS, STT and LLM, the host bridges, and
+# the shared transport under them.
+step "provider clients' and transport unit tests"
+cargo test -q -p lk-agents-inference -p lk-agents-net -p lk-agents-abi
 
 # The abi tests behind the binding's `python` feature (the host bridge, the value crossings, the
 # fork guard) against a live interpreter: the repository's venv unless `PYO3_PYTHON` names one. A

@@ -15,10 +15,11 @@ _RELEASE_SCRIPT = Path(__file__).resolve().parents[1] / ".github" / "update_vers
 
 
 @pytest.mark.parametrize(
-    "arguments, expected", [(["--pre", "b", "--agents-only"], "2.0.0b2"), ([], "2.0.1")]
+    "arguments, expected, plugin_floor",
+    [(["--pre", "b", "--agents-only"], "2.0.0b2", "1.8.6"), ([], "2.0.1", "2.0.1")],
 )
 def test_release_updates_the_v2_distribution(
-    tmp_path: Path, arguments: list[str], expected: str
+    tmp_path: Path, arguments: list[str], expected: str, plugin_floor: str
 ) -> None:
     package = tmp_path / "livekit-agents-next"
     version = package / "livekit" / "agents" / "version.py"
@@ -30,11 +31,11 @@ def test_release_updates_the_v2_distribution(
     plugin.mkdir(parents=True)
     plugin_manifest = plugin / "pyproject.toml"
     plugin_manifest.write_text(
-        '[project]\nname = "livekit-plugins-example"\ndependencies = ["livekit-agents>=1.8.6"]\n'
+        '[project]\nname = "livekit-plugins-example"\ndependencies = ["livekit-agents-next>=1.8.6"]\n'
     )
 
     subprocess.run([sys.executable, str(_RELEASE_SCRIPT), *arguments], cwd=tmp_path, check=True)
 
     assert version.read_text() == f'__version__ = "{expected}"\n'
     assert tomllib.loads(manifest.read_text())["project"]["version"] == expected
-    assert '"livekit-agents>=1.8.6"' in plugin_manifest.read_text()
+    assert f'"livekit-agents-next>={plugin_floor}"' in plugin_manifest.read_text()
