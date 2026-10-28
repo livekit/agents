@@ -241,7 +241,7 @@ class Bank:
 
 def card_digits(text: str) -> str:
     """The card's last four digits as the backend model gave them, like "1111" or "11 11"."""
-    digits = "".join(c for c in text if c.isdigit())
+    digits = "".join(c for c in text if c.isdecimal())
     if len(digits) != 4:
         raise BankError(f"Ask for the card's last four digits, got {text!r}.")
     return digits

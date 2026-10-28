@@ -15,6 +15,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.voice import SpeechHandle
 from livekit.plugins import ai_coustics
 
 from bank import Bank
@@ -152,8 +153,13 @@ def _masked(number: str) -> str | None:
 
 def check_in_when_user_away(session: AgentSession) -> None:
     """Asks once whether the caller's still there when the line goes quiet, and says goodbye
-    if it stays quiet. The voice model speaks for itself, so it's told what to say."""
+    if it stays quiet. The voice model speaks for itself, so it's told what to say, and handles
+    barge-in itself, so a caller who comes back during the goodbye stays on."""
     quiet_spells = 0
+
+    def hang_up_unless_back(goodbye: SpeechHandle) -> None:
+        if quiet_spells == 2 and not goodbye.interrupted:
+            session.shutdown()
 
     def on_user_state(ev: UserStateChangedEvent) -> None:
         nonlocal quiet_spells
@@ -165,9 +171,9 @@ def check_in_when_user_away(session: AgentSession) -> None:
                 session.generate_reply(instructions=STILL_THERE)
                 session.reset_away_timer()
             elif quiet_spells == 2:
-                session.generate_reply(
-                    instructions=SILENT_GOODBYE, allow_interruptions=False
-                ).add_done_callback(lambda _: session.shutdown())
+                session.generate_reply(instructions=SILENT_GOODBYE).add_done_callback(
+                    hang_up_unless_back
+                )
 
     session.on("user_state_changed", on_user_state)
 

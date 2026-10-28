@@ -160,3 +160,22 @@ scenarios:
         new_patient: true
         booked: false
         moved: false
+
+  - id: SCN_Nue38fEtkBTH
+    label: Caller goes quiet and gets hung up on
+    instructions: |
+      PERSONA: Taylor Smith, who put the phone down right after calling and never picked it back up.
+      OPENING LINE: "Hi, it's Taylor Smith."
+      After your opening line, say nothing at all for the rest of the call, whatever Riley asks.
+      Stay silent, and don't hang up.
+    agent_expectations: >
+      Once the caller goes quiet, asks once, in a few words, whether they're still there. When
+      the line stays quiet, says a short goodbye and ends the call. Opens no chart and changes
+      nothing on the calendar.
+    tags:
+      feature: idle
+    userdata:
+      expected:
+        new_patient: false
+        booked: false
+        moved: false
