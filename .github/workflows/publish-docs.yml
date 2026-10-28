@@ -22,10 +22,7 @@ jobs:
           rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
 
       - name: Install native build prerequisites
-        run: |
-          rustup toolchain install stable --profile minimal && rustup default stable
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+        uses: ./.github/actions/native-build
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7

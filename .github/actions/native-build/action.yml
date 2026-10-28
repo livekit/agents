@@ -1,0 +1,10 @@
+name: Install native build prerequisites
+description: Install the stable Rust toolchain and the system libraries the Rust core builds against.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        rustup toolchain install stable --profile minimal && rustup default stable
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config

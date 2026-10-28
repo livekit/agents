@@ -39,10 +39,7 @@ jobs:
         run: bash rust/backend-contracts.sh "${{ matrix.backend }}" --check
 
       - name: Install native build prerequisites
-        run: |
-          rustup toolchain install stable --profile minimal && rustup default stable
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+        uses: ./.github/actions/native-build
 
       - name: Install cargo-nextest
         run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C ~/.cargo/bin

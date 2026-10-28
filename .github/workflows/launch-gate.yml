@@ -32,10 +32,7 @@ jobs:
           rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
 
       - name: Install native build prerequisites
-        run: |
-          rustup toolchain install stable --profile minimal && rustup default stable
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libopus-dev nasm pkg-config
+        uses: ./.github/actions/native-build
 
       # Shrink-only: a pull request may remove open findings, never add one.
       - name: Known findings only shrink
