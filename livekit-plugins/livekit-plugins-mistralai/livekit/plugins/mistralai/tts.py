@@ -22,6 +22,7 @@ from livekit.agents.utils import is_given
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
 
+from ._http import request_timeout_ms
 from .models import TTSModels, TTSVoices
 
 
@@ -146,6 +147,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        timeout_ms = request_timeout_ms(self._conn_options)
         try:
             output_emitter.initialize(
                 request_id=str(uuid.uuid4()),
@@ -159,7 +161,8 @@ class ChunkedStream(tts.ChunkedStream):
                     input=self.input_text,
                     ref_audio=self._opts.ref_audio,
                     response_format=self._opts.response_format,
-                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    timeout_ms=timeout_ms,
+                    retries=None,
                     stream=True,
                 )
             else:
@@ -168,7 +171,8 @@ class ChunkedStream(tts.ChunkedStream):
                     input=self.input_text,
                     voice_id=self._opts.voice or DEFAULT_VOICE,
                     response_format=self._opts.response_format,
-                    timeout_ms=int(self._conn_options.timeout * 1000),
+                    timeout_ms=timeout_ms,
+                    retries=None,
                     stream=True,
                 )
             async for ev in stream:

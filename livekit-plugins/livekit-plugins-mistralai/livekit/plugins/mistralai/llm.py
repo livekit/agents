@@ -39,6 +39,7 @@ from mistralai.client.models import (
 )
 from mistralai.client.types import UNSET
 
+from ._http import request_timeout_ms
 from .log import logger
 from .models import ChatModels
 from .tools import MistralTool
@@ -269,6 +270,7 @@ class LLMStream(llm.LLMStream):
         self._provider_tool_args: dict[str, str] = {}
 
     async def _run(self) -> None:
+        request_timeout_ms(self._conn_options)
         if self._api_mode == ApiMode.CHAT_COMPLETIONS:
             await self._run_chat_completions()
         else:
@@ -294,7 +296,8 @@ class LLMStream(llm.LLMStream):
                 inputs=entries,
                 model=self._model,
                 instructions=extra_data.instructions,
-                timeout_ms=int(self._conn_options.timeout * 1000),
+                timeout_ms=request_timeout_ms(self._conn_options),
+                retries=None,
                 **start_kwargs,
                 **self._extra_kwargs,
             )
@@ -378,7 +381,8 @@ class LLMStream(llm.LLMStream):
             async_response = await self._client.chat.stream_async(
                 model=self._model,
                 messages=messages,
-                timeout_ms=int(self._conn_options.timeout * 1000),
+                timeout_ms=request_timeout_ms(self._conn_options),
+                retries=None,
                 **call_kwargs,
             )
 

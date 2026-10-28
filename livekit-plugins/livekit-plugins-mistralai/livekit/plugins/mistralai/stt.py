@@ -12,6 +12,7 @@ from livekit.agents import (
     VAD,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -38,6 +39,7 @@ from mistralai.client.models import (
 )
 from mistralai.extra.realtime import RealtimeConnection, RealtimeTranscription
 
+from ._http import request_timeout_ms
 from .log import logger
 from .models import STTModels
 
@@ -126,7 +128,7 @@ class STT(stt.STT):
             close_cb=self._close_ws,
         )
 
-    async def _connect_ws(self, timeout: float) -> RealtimeConnection:
+    async def _connect_ws(self, timeout: float | None) -> RealtimeConnection:
         rt = RealtimeTranscription(self._client.sdk_configuration)
         http_headers = None
         cfg = self._client.sdk_configuration
@@ -199,6 +201,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        timeout_ms = request_timeout_ms(conn_options)
         try:
             if is_given(language):
                 self._opts.language = LanguageCode(language)
@@ -210,6 +213,8 @@ class STT(stt.STT):
                 language=self._opts.language if self._opts.language else None,
                 context_bias=self._opts.context_bias if self._opts.context_bias else None,
                 timestamp_granularities=["segment"] if not self._opts.language else None,
+                timeout_ms=timeout_ms,
+                retries=None,
             )
 
             return stt.SpeechEvent(
@@ -254,6 +259,15 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        if (
+            conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "Realtime transcription cannot enforce write/read inactivity or total_timeout",
+                retryable=False,
+            )
         stream = SpeechStream(
             stt=self,
             pool=self._pool,
@@ -418,7 +432,10 @@ class SpeechStream(stt.RecognizeStream):
     async def _run(self) -> None:
         try:
             while True:
-                async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
+                async with self._pool.connection(
+                    timeout=self._conn_options.connect_timeout,
+                    pool_timeout=self._conn_options.pool_timeout,
+                ) as connection:
                     vad_stream = self._vad.stream() if self._vad else None
 
                     tasks = [
