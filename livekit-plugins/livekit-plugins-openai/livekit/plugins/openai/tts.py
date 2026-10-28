@@ -140,7 +140,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return self._client._base_url.netloc.decode("utf-8")
+        return self._client.base_url.netloc.decode("utf-8")
 
     def update_options(
         self,

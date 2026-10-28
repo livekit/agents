@@ -333,7 +333,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return self._client._base_url.netloc.decode("utf-8")
+        return self._client.base_url.netloc.decode("utf-8")
 
     @staticmethod
     def with_azure(
