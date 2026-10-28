@@ -241,7 +241,6 @@ impl lk_agents_abi::Stt for StartupStt {
 }
 
 struct StartupVad(bool);
-#[async_trait::async_trait]
 impl lk_agents_abi::Vad for StartupVad {
     fn label(&self) -> String {
         "startup-vad".into()
@@ -249,16 +248,21 @@ impl lk_agents_abi::Vad for StartupVad {
     fn capabilities(&self) -> lk_agents_abi::VadCapabilities {
         Default::default()
     }
-    async fn stream(
+    fn stream(
         &self,
-    ) -> Result<
-        (lk_agents_abi::VadSink, lk_agents_abi::VadSource),
-        lk_agents_abi::errors::ProviderError,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            (lk_agents_abi::VadSink, lk_agents_abi::VadSource),
+            lk_agents_abi::errors::ProviderError,
+        >,
     > {
-        if self.0 {
-            return Err(lk_agents_abi::errors::ApiError::new("VAD startup failed").into());
-        }
-        std::future::pending().await
+        Box::pin(async move {
+            if self.0 {
+                return Err(lk_agents_abi::errors::ApiError::new("VAD startup failed").into());
+            }
+            std::future::pending().await
+        })
     }
 }
 
