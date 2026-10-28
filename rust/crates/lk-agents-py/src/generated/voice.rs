@@ -144,11 +144,11 @@ impl AvatarAudioReceiverProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>(|obj| AvatarAudioReceiverProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiverProxy {
-    async fn open_audio(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn open_audio(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -165,11 +165,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn next_audio(&self) -> ::std::result::Result<(u64, bool, ::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>), ::lk_agents_abi::errors::ProviderError> {
+    fn next_audio(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(u64, bool, ::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -186,11 +188,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "AvatarAudioReceiver._core_next_audio"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((item_0.extract::<u64>())?, (item_1.extract::<bool>())?, (item_2.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn notify_playback_started(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn notify_playback_started(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -207,13 +211,15 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn notify_playback_finished(&self, playback_position: f64, interrupted: bool) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn notify_playback_finished(&self, playback_position: f64, interrupted: bool) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let playback_position_arg = playback_position;
         let interrupted_arg = interrupted;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?];
@@ -230,11 +236,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn aclose(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -250,6 +258,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }
@@ -287,12 +296,12 @@ impl AvatarVideoGeneratorProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>(|obj| AvatarVideoGeneratorProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGeneratorProxy {
-    async fn push_audio(&self, frame: ::std::option::Option<::lk_agents_abi::utils::video::MediaFrame>) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn push_audio(&self, frame: ::std::option::Option<::lk_agents_abi::utils::video::MediaFrame>) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
@@ -309,11 +318,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn clear_buffer(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn clear_buffer(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -330,11 +341,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn open_frames(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn open_frames(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -351,11 +364,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn next_frame(&self) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>, ::lk_agents_abi::errors::ProviderError> {
+    fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>, ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -371,6 +386,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
             let o = out.bind(py);
             let out = (o.extract::<::std::option::Option<::lk_agents_abi::utils::video::AvatarFrame>>()).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }
@@ -408,11 +424,11 @@ impl AvatarMediaProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::avatar::AvatarMedia>(|obj| AvatarMediaProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
-    async fn publish(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn publish(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -429,12 +445,14 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn push(&self, frame: ::lk_agents_abi::utils::video::MediaFrame) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn push(&self, frame: ::lk_agents_abi::utils::video::MediaFrame) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(frame_arg, py)?];
@@ -451,11 +469,13 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
+        })
     }
 
-    async fn aclose(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError> {
+    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::ProviderError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -471,6 +491,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarMedia for AvatarMediaProxy {
             let o = out.bind(py);
             let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 }
@@ -673,15 +694,15 @@ impl AudioInputProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::AudioInput>(|obj| AudioInputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
     fn label(&self) -> &str {
         &self.label
     }
 
-    async fn next_frame(&self) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::voice::io::IoError> {
+    fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::AudioFrame>, ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -697,6 +718,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
             let o = out.bind(py);
             let out = (o.extract::<::std::option::Option<::lk_agents_abi::AudioFrame>>()).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 
@@ -761,15 +783,15 @@ impl VideoInputProxy {
     ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::voice::io::VideoInput>(|obj| VideoInputProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
-#[::async_trait::async_trait]
 impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
     fn label(&self) -> &str {
         &self.label
     }
 
-    async fn next_frame(&self) -> ::std::result::Result<::std::option::Option<::lk_agents_abi::voice::rtc::VideoFrameRef>, ::lk_agents_abi::voice::io::IoError> {
+    fn next_frame(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::option::Option<::lk_agents_abi::voice::rtc::VideoFrameRef>, ::lk_agents_abi::voice::io::IoError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::std::clone::Clone::clone(&self.context);
+        ::std::boxed::Box::pin(async move {
         let context = &context;
         let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -785,6 +807,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
             let o = out.bind(py);
             let out = (o.extract::<::std::option::Option<::lk_agents_abi::voice::rtc::VideoFrameRef>>().map_err(::pyo3::PyErr::from)).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
+        })
         })
     }
 

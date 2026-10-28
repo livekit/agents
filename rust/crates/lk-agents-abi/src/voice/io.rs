@@ -458,14 +458,13 @@ impl PlaybackObserver for ListenerObserver {
     host = "livekit.agents.voice.io.AudioInput",
     view = "livekit.agents._core_view._AudioInput"
 ))]
-#[async_trait]
 pub trait AudioInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     /// The next frame, or `None` at end of stream.
     #[host(await, name = "_core_next_frame")]
-    async fn next_frame(&self) -> Result<Option<AudioFrame>>;
+    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<AudioFrame>>>;
 
     /// The chain was enabled; frames are dropped while detached, so a re-attach resumes mid-stream.
     #[host(notify, name = "_core_on_attached")]
@@ -479,14 +478,13 @@ pub trait AudioInput: Send + Sync {
     host = "livekit.agents.voice.io.VideoInput",
     view = "livekit.agents._core_view._VideoInput"
 ))]
-#[async_trait]
 pub trait VideoInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
     fn label(&self) -> &str;
 
     /// The next frame, or `None` at end of stream.
     #[host(await, name = "_core_next_frame")]
-    async fn next_frame(&self) -> Result<Option<crate::voice::rtc::VideoFrameRef>>;
+    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<crate::voice::rtc::VideoFrameRef>>>;
 
     /// `set_video_enabled`: frames are dropped while detached.
     #[host(notify, name = "_core_on_attached")]
@@ -566,11 +564,12 @@ pub trait AudioOutput: Send + Sync {
 }
 
 /// The caller-facing half of [`AudioOutput`]. Blanket-implemented; never implement it directly.
-#[async_trait]
 pub trait AudioOutputExt: AudioOutput {
-    async fn capture_frame(&self, frame: &AudioFrame) -> Result<()> {
-        self.tracker().note_captured(Duration::from_secs_f64(frame.duration()));
-        self.capture(frame).await
+    fn capture_frame<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.tracker().note_captured(Duration::from_secs_f64(frame.duration()));
+            self.capture(frame).await
+        })
     }
 
     fn flush(&self) {
@@ -585,8 +584,8 @@ pub trait AudioOutputExt: AudioOutput {
         self.clear_buffer();
     }
 
-    async fn wait_for_playout(&self) -> PlaybackFinished {
-        self.tracker().wait_for_playout().await
+    fn wait_for_playout(&self) -> crate::BoxFuture<'_, PlaybackFinished> {
+        Box::pin(async move { self.tracker().wait_for_playout().await })
     }
 
     /// Only if every link can pause, or wrapper and terminal desynchronise.

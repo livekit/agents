@@ -44,13 +44,14 @@ impl FakeAudioInput {
     }
 }
 
-#[async_trait::async_trait]
 impl AudioInput for FakeAudioInput {
     fn label(&self) -> &str {
         "fake::audio_input"
     }
-    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<AudioFrame>> {
-        Ok(self.frames.lock().await.recv().await)
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<AudioFrame>>> {
+        Box::pin(async move { Ok(self.frames.lock().await.recv().await) })
     }
 }
 
@@ -69,21 +70,25 @@ impl FakeVideoInput {
     }
 }
 
-#[async_trait::async_trait]
 impl VideoInput for FakeVideoInput {
     fn label(&self) -> &str {
         "fake::video_input"
     }
-    async fn next_frame(
+    fn next_frame(
         &self,
-    ) -> lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>> {
-        let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
-        Ok(Some(lk_agents_rtc::VideoFrameRef {
-            media: MediaRef::new(ordinal, &self.refs),
-            width: 1280,
-            height: 720,
-            timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,
-        }))
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>>,
+    > {
+        Box::pin(async move {
+            let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
+            Ok(Some(lk_agents_rtc::VideoFrameRef {
+                media: MediaRef::new(ordinal, &self.refs),
+                width: 1280,
+                height: 720,
+                timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,
+            }))
+        })
     }
 }
 

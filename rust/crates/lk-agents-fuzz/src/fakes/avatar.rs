@@ -21,18 +21,17 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
+use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::{
     AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
-use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
     avatar::{DataStreamAudioReceiver, RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{
-        AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner, AvatarVideoGenerator,
-        Event,
+        AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner,
+        AvatarVideoGenerator, Event,
     },
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -142,69 +141,80 @@ impl Receiver {
     }
 }
 
-#[async_trait]
 impl AvatarAudioReceiver for Receiver {
-    async fn open_audio(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn open_audio(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
 
-    async fn next_audio(&self) -> Result<(u64, bool, Option<AvatarFrame>), ProviderError> {
-        match self.rx.recv().await {
-            Ok(Received::Audio(frame)) => {
-                let (segment, starts_segment, epoch) = {
-                    let mut segment = self.segment.lock().unwrap();
-                    let observation = (segment.0, !segment.1, segment.2);
-                    segment.1 = true;
-                    observation
-                };
-                let from = record(&self.log, &self.stamps, AvatarStep::Received { segment });
-                let entry = Entry::Received {
-                    segment,
-                    from,
-                    samples: frame.samples_per_channel,
-                    rate: frame.sample_rate,
-                };
-                Ok((
-                    epoch,
-                    starts_segment,
-                    Some(AvatarFrame::Audio(self.frames.audio(
-                        entry,
-                        frame.samples_per_channel,
-                        frame.sample_rate,
-                    ))),
-                ))
+    fn next_audio(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>> {
+        Box::pin(async move {
+            match self.rx.recv().await {
+                Ok(Received::Audio(frame)) => {
+                    let (segment, starts_segment, epoch) = {
+                        let mut segment = self.segment.lock().unwrap();
+                        let observation = (segment.0, !segment.1, segment.2);
+                        segment.1 = true;
+                        observation
+                    };
+                    let from = record(&self.log, &self.stamps, AvatarStep::Received { segment });
+                    let entry = Entry::Received {
+                        segment,
+                        from,
+                        samples: frame.samples_per_channel,
+                        rate: frame.sample_rate,
+                    };
+                    Ok((
+                        epoch,
+                        starts_segment,
+                        Some(AvatarFrame::Audio(self.frames.audio(
+                            entry,
+                            frame.samples_per_channel,
+                            frame.sample_rate,
+                        ))),
+                    ))
+                }
+                Ok(Received::SegmentEnd) => {
+                    record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
+                    self.next_segment();
+                    Ok((self.segment.lock().unwrap().2, false, Some(AvatarFrame::SegmentEnd)))
+                }
+                Ok(Received::Video(_)) => {
+                    Err(ProviderError::Local(ApiError::new("video from the receiver")))
+                }
+                Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None)),
+                Err(e) => Err(ProviderError::Local(ApiError::new(format!("{e:?}")))),
             }
-            Ok(Received::SegmentEnd) => {
-                record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
-                self.next_segment();
-                Ok((self.segment.lock().unwrap().2, false, Some(AvatarFrame::SegmentEnd)))
-            }
-            Ok(Received::Video(_)) => Err(ProviderError::Local(ApiError::new("video from the receiver"))),
-            Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None)),
-            Err(e) => Err(ProviderError::Local(ApiError::new(format!("{e:?}")))),
-        }
+        })
     }
 
-    async fn notify_playback_started(&self) -> Result<(), ProviderError> {
-        record(&self.log, &self.stamps, AvatarStep::ReportedStarted);
-        self.rx.notify_playback_started();
-        Ok(())
+    fn notify_playback_started(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            record(&self.log, &self.stamps, AvatarStep::ReportedStarted);
+            self.rx.notify_playback_started();
+            Ok(())
+        })
     }
 
-    async fn notify_playback_finished(
+    fn notify_playback_finished(
         &self,
         position: f64,
         interrupted: bool,
-    ) -> Result<(), ProviderError> {
-        record(&self.log, &self.stamps, AvatarStep::ReportedFinished { interrupted });
-        self.rx.notify_playback_finished(position, interrupted);
-        Ok(())
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            record(&self.log, &self.stamps, AvatarStep::ReportedFinished { interrupted });
+            self.rx.notify_playback_finished(position, interrupted);
+            Ok(())
+        })
     }
 
-    async fn aclose(&self) -> Result<(), ProviderError> {
-        *self.closed.lock().unwrap() = true;
-        self.rx.aclose();
-        Ok(())
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            *self.closed.lock().unwrap() = true;
+            self.rx.aclose();
+            Ok(())
+        })
     }
 }
 
@@ -212,7 +222,12 @@ impl AvatarAudioReceiver for Receiver {
 
 #[derive(Clone, Copy, Debug)]
 enum Buffered {
-    Audio { segment: u32, from: Observed, samples: u32, rate: u32 },
+    Audio {
+        segment: u32,
+        from: Observed,
+        samples: u32,
+        rate: u32,
+    },
     /// The end of the segment whose audio was pushed last when it came: a segment's end can come
     /// out after the next segment's audio went in.
     End(Option<u32>),
@@ -313,78 +328,92 @@ impl Generator {
     }
 }
 
-#[async_trait]
 impl AvatarVideoGenerator for Generator {
-    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError> {
-        let mut state = self.state.lock().unwrap();
-        match frame.as_ref().and_then(|f| self.frames.of(f)) {
-            Some(Entry::Received { segment, from, samples, rate }) => {
-                state.last_segment = Some(segment);
-                state.buffer.push_back(Buffered::Audio { segment, from, samples, rate });
-            }
-            Some(Entry::Generated { .. }) => {}
-            None => {
-                let ends = state.last_segment;
-                state.buffer.push_back(Buffered::End(ends));
-            }
-        }
-        Ok(())
-    }
-
-    async fn clear_buffer(&self) -> Result<(), ProviderError> {
-        // Nothing generated before the clear is yielded after it, as the reference's generators
-        // make each frame from their audio queue as it is pulled.
-        let mut state = self.state.lock().unwrap();
-        state.buffer.clear();
-        state.ready.clear();
-        state.clears += 1;
-        drop(state);
-        record(&self.log, &self.stamps, AvatarStep::GeneratorCleared);
-        Ok(())
-    }
-
-    async fn open_frames(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-
-    async fn next_frame(&self) -> Result<Option<AvatarFrame>, ProviderError> {
-        loop {
-            let at = {
-                let mut state = self.state.lock().unwrap();
-                if state.closed {
-                    state.pulls_after_close += 1;
-                }
-                if let Some((frame, label, end)) = state.ready.pop_front() {
-                    drop(state);
-                    return Ok(Some(match (frame, label) {
-                        (Some(frame), Some(label)) => {
-                            record(&self.log, &self.stamps, AvatarStep::Generated(label));
-                            frame
-                        }
-                        _ => {
-                            let segment = end.unwrap_or_default();
-                            record(&self.log, &self.stamps, AvatarStep::GeneratedEnd { segment });
-                            AvatarFrame::SegmentEnd
-                        }
-                    }));
-                }
-                let now = now_ms(&*self.clock);
-                let at = state.next_tick_ms.unwrap_or(now).max(now);
-                state.next_tick_ms = Some(at + self.period_ms);
-                at
-            };
-            until_ms(&*self.clock, at).await;
-            // taken from the buffer now: in flight for the generation's latency
-            let (made, clears) = {
-                let mut state = self.state.lock().unwrap();
-                (self.tick(&mut state), state.clears)
-            };
-            until_ms(&*self.clock, at + self.latency_ms).await;
+    fn push_audio(
+        &self,
+        frame: Option<MediaFrame>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
             let mut state = self.state.lock().unwrap();
-            if state.clears == clears {
-                state.ready.extend(made);
+            match frame.as_ref().and_then(|f| self.frames.of(f)) {
+                Some(Entry::Received { segment, from, samples, rate }) => {
+                    state.last_segment = Some(segment);
+                    state.buffer.push_back(Buffered::Audio { segment, from, samples, rate });
+                }
+                Some(Entry::Generated { .. }) => {}
+                None => {
+                    let ends = state.last_segment;
+                    state.buffer.push_back(Buffered::End(ends));
+                }
             }
-        }
+            Ok(())
+        })
+    }
+
+    fn clear_buffer(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            // Nothing generated before the clear is yielded after it, as the reference's generators
+            // make each frame from their audio queue as it is pulled.
+            let mut state = self.state.lock().unwrap();
+            state.buffer.clear();
+            state.ready.clear();
+            state.clears += 1;
+            drop(state);
+            record(&self.log, &self.stamps, AvatarStep::GeneratorCleared);
+            Ok(())
+        })
+    }
+
+    fn open_frames(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>> {
+        Box::pin(async move {
+            loop {
+                let at = {
+                    let mut state = self.state.lock().unwrap();
+                    if state.closed {
+                        state.pulls_after_close += 1;
+                    }
+                    if let Some((frame, label, end)) = state.ready.pop_front() {
+                        drop(state);
+                        return Ok(Some(match (frame, label) {
+                            (Some(frame), Some(label)) => {
+                                record(&self.log, &self.stamps, AvatarStep::Generated(label));
+                                frame
+                            }
+                            _ => {
+                                let segment = end.unwrap_or_default();
+                                record(
+                                    &self.log,
+                                    &self.stamps,
+                                    AvatarStep::GeneratedEnd { segment },
+                                );
+                                AvatarFrame::SegmentEnd
+                            }
+                        }));
+                    }
+                    let now = now_ms(&*self.clock);
+                    let at = state.next_tick_ms.unwrap_or(now).max(now);
+                    state.next_tick_ms = Some(at + self.period_ms);
+                    at
+                };
+                until_ms(&*self.clock, at).await;
+                // taken from the buffer now: in flight for the generation's latency
+                let (made, clears) = {
+                    let mut state = self.state.lock().unwrap();
+                    (self.tick(&mut state), state.clears)
+                };
+                until_ms(&*self.clock, at + self.latency_ms).await;
+                let mut state = self.state.lock().unwrap();
+                if state.clears == clears {
+                    state.ready.extend(made);
+                }
+            }
+        })
     }
 }
 
@@ -410,56 +439,65 @@ struct Synchronizer {
     state: Mutex<AvState>,
 }
 
-#[async_trait]
 impl AvatarMedia for Synchronizer {
-    async fn publish(&self) -> Result<(), ProviderError> {
-        let at = now_ms(&*self.clock) + SUBSCRIBE_MS;
-        until_ms(&*self.clock, at).await;
-        Ok(())
+    fn publish(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            let at = now_ms(&*self.clock) + SUBSCRIBE_MS;
+            until_ms(&*self.clock, at).await;
+            Ok(())
+        })
     }
 
-    async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError> {
-        let at = self.stamps.next();
-        let Some(Entry::Generated { label, ms }) = self.frames.of(&frame) else {
-            return Ok(());
-        };
-        // When the push returns (a full queue holds it) and when the frame plays, decided now:
-        // pushes come one at a time, so nothing else moves the queues meanwhile.
-        let (returns_ms, plays_ms) = {
-            let now = now_ms(&*self.clock);
-            let mut state = self.state.lock().unwrap();
-            if label.video {
-                let slots = (1000 / self.period_ms * QUEUE_MS / 1000).max(1) as usize;
-                state.shows.retain(|show| *show > now);
-                let returns = if state.shows.len() >= slots {
-                    state.shows[state.shows.len() - slots]
+    fn push(&self, frame: MediaFrame) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            let at = self.stamps.next();
+            let Some(Entry::Generated { label, ms }) = self.frames.of(&frame) else {
+                return Ok(());
+            };
+            // When the push returns (a full queue holds it) and when the frame plays, decided now:
+            // pushes come one at a time, so nothing else moves the queues meanwhile.
+            let (returns_ms, plays_ms) = {
+                let now = now_ms(&*self.clock);
+                let mut state = self.state.lock().unwrap();
+                if label.video {
+                    let slots = (1000 / self.period_ms * QUEUE_MS / 1000).max(1) as usize;
+                    state.shows.retain(|show| *show > now);
+                    let returns = if state.shows.len() >= slots {
+                        state.shows[state.shows.len() - slots]
+                    } else {
+                        now
+                    };
+                    let next = state.next_show_ms.unwrap_or(returns);
+                    let show =
+                        if returns > next + MAX_DELAY_MS { returns } else { next.max(returns) };
+                    state.next_show_ms = Some(show + self.period_ms);
+                    state.shows.push_back(show);
+                    (returns, show)
                 } else {
-                    now
-                };
-                let next = state.next_show_ms.unwrap_or(returns);
-                let show = if returns > next + MAX_DELAY_MS { returns } else { next.max(returns) };
-                state.next_show_ms = Some(show + self.period_ms);
-                state.shows.push_back(show);
-                (returns, show)
-            } else {
-                let queued = state.audio_end_ms.saturating_sub(now);
-                let returns =
-                    if queued + ms > QUEUE_MS { state.audio_end_ms + ms - QUEUE_MS } else { now };
-                let start = state.audio_end_ms.max(returns);
-                state.audio_end_ms = start + ms;
-                (returns, start)
-            }
-        };
-        self.log.lock().unwrap().push((at, AvatarStep::Pushed { frame: label, plays_ms }));
-        drop(frame);
-        until_ms(&*self.clock, returns_ms).await;
-        Ok(())
+                    let queued = state.audio_end_ms.saturating_sub(now);
+                    let returns = if queued + ms > QUEUE_MS {
+                        state.audio_end_ms + ms - QUEUE_MS
+                    } else {
+                        now
+                    };
+                    let start = state.audio_end_ms.max(returns);
+                    state.audio_end_ms = start + ms;
+                    (returns, start)
+                }
+            };
+            self.log.lock().unwrap().push((at, AvatarStep::Pushed { frame: label, plays_ms }));
+            drop(frame);
+            until_ms(&*self.clock, returns_ms).await;
+            Ok(())
+        })
     }
 
-    async fn aclose(&self) -> Result<(), ProviderError> {
-        self.state.lock().unwrap().closes += 1;
-        self.generator.state.lock().unwrap().closed = true;
-        Ok(())
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            self.state.lock().unwrap().closes += 1;
+            self.generator.state.lock().unwrap().closed = true;
+            Ok(())
+        })
     }
 }
 

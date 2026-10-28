@@ -245,14 +245,15 @@ impl ConsoleSink for ConsoleIo {
     }
 }
 
-#[async_trait]
 impl AudioInput for ConsoleIo {
     fn label(&self) -> &str {
         "Console"
     }
 
-    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<AudioFrame>> {
-        Ok(self.mic_rx.lock().await.recv().await)
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<AudioFrame>>> {
+        Box::pin(async move { Ok(self.mic_rx.lock().await.recv().await) })
     }
 }
 

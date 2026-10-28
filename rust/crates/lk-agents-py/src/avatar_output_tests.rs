@@ -20,35 +20,40 @@ struct Receiver {
     report_started: mpsc::Sender<()>,
     allow_report: Arc<Notify>,
 }
-#[async_trait::async_trait]
 impl AvatarAudioReceiver for Receiver {
-    async fn open_audio(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn open_audio(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn next_audio(&self) -> Result<(u64, bool, Option<AvatarFrame>), ProviderError> {
-        let frame = self.audio.lock().await.recv().await;
-        if !self.clear_once.swap(true, Ordering::AcqRel) {
-            self.runner.get().unwrap().upgrade().unwrap().clear_buffer(1);
-        }
-        Ok(frame.unwrap_or((1, false, None)))
+    fn next_audio(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>> {
+        Box::pin(async move {
+            let frame = self.audio.lock().await.recv().await;
+            if !self.clear_once.swap(true, Ordering::AcqRel) {
+                self.runner.get().unwrap().upgrade().unwrap().clear_buffer(1);
+            }
+            Ok(frame.unwrap_or((1, false, None)))
+        })
     }
-    async fn notify_playback_started(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn notify_playback_started(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn notify_playback_finished(
+    fn notify_playback_finished(
         &self,
         _: f64,
         interrupted: bool,
-    ) -> Result<(), ProviderError> {
-        if interrupted && self.block_interruption {
-            self.report_started.send(()).await.unwrap();
-            self.allow_report.notified().await;
-        }
-        self.reports.send(interrupted).await.unwrap();
-        Ok(())
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            if interrupted && self.block_interruption {
+                self.report_started.send(()).await.unwrap();
+                self.allow_report.notified().await;
+            }
+            self.reports.send(interrupted).await.unwrap();
+            Ok(())
+        })
     }
-    async fn aclose(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 struct Generator {
@@ -56,37 +61,42 @@ struct Generator {
     frames_tx: mpsc::Sender<AvatarFrame>,
     frames: Mutex<mpsc::Receiver<AvatarFrame>>,
 }
-#[async_trait::async_trait]
 impl AvatarVideoGenerator for Generator {
-    async fn open_frames(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn open_frames(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn next_frame(&self) -> Result<Option<AvatarFrame>, ProviderError> {
-        Ok(self.frames.lock().await.recv().await)
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>> {
+        Box::pin(async move { Ok(self.frames.lock().await.recv().await) })
     }
-    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError> {
-        if let Some(frame) = frame {
-            self.pushed.send(frame).await.unwrap();
-        } else {
-            self.frames_tx.send(AvatarFrame::SegmentEnd).await.unwrap();
-        }
-        Ok(())
+    fn push_audio(
+        &self,
+        frame: Option<MediaFrame>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move {
+            if let Some(frame) = frame {
+                self.pushed.send(frame).await.unwrap();
+            } else {
+                self.frames_tx.send(AvatarFrame::SegmentEnd).await.unwrap();
+            }
+            Ok(())
+        })
     }
-    async fn clear_buffer(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn clear_buffer(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 struct Media;
-#[async_trait::async_trait]
 impl AvatarMedia for Media {
-    async fn publish(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn publish(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn push(&self, _: MediaFrame) -> Result<(), ProviderError> {
-        Ok(())
+    fn push(&self, _: MediaFrame) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
-    async fn aclose(&self) -> Result<(), ProviderError> {
-        Ok(())
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async move { Ok(()) })
     }
 }
 async fn settle() {

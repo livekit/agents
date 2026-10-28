@@ -132,14 +132,15 @@ impl ParticipantVideoInput {
 }
 
 /// The room's camera as the driver's video source (`ActivityCommand::SetVideoInput`, the pump).
-#[async_trait::async_trait]
 impl VideoInput for ParticipantVideoInput {
     fn label(&self) -> &str {
         "RoomIO"
     }
 
-    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<VideoFrameRef>> {
-        Ok(ParticipantVideoInput::next_frame(self).await)
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<VideoFrameRef>>> {
+        Box::pin(async move { Ok(ParticipantVideoInput::next_frame(self).await) })
     }
 
     fn on_attached(&self) {
@@ -658,14 +659,15 @@ impl ParticipantAudioInput {
     }
 }
 
-#[async_trait]
 impl AudioInput for ParticipantAudioInput {
     fn label(&self) -> &str {
         "RoomIO"
     }
 
-    async fn next_frame(&self) -> lk_agents_abi::voice::io::Result<Option<AudioFrame>> {
-        Ok(self.reader.recv().await)
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<AudioFrame>>> {
+        Box::pin(async move { Ok(self.reader.recv().await) })
     }
 
     fn on_attached(&self) {

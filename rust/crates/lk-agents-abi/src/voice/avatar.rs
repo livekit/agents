@@ -15,58 +15,60 @@ pub trait ClearBufferListener: Send + Sync {
 /// `AudioReceiver`: the agent's audio as the avatar worker receives it, and where its playback is
 /// reported. A host `AudioReceiver` carries this surface (`voice/avatar.py`).
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
-#[async_trait::async_trait]
 pub trait AvatarAudioReceiver: Send + Sync {
     /// Begin iterating (`__aiter__`).
     #[host(await, name = "_core_open_audio")]
-    async fn open_audio(&self) -> Result<(), ProviderError>;
+    fn open_audio(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// One observation: receiver clear epoch, whether this first frame opened a segment,
     /// and the frame (None at EOF). The receiver stamps it before crossing the async boundary.
     #[host(await, name = "_core_next_audio")]
-    async fn next_audio(&self) -> Result<(u64, bool, Option<AvatarFrame>), ProviderError>;
+    fn next_audio(
+        &self,
+    ) -> crate::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>>;
     #[host(await, name = "_core_notify_playback_started")]
-    async fn notify_playback_started(&self) -> Result<(), ProviderError>;
+    fn notify_playback_started(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_notify_playback_finished")]
-    async fn notify_playback_finished(
+    fn notify_playback_finished(
         &self,
         playback_position: f64,
         interrupted: bool,
-    ) -> Result<(), ProviderError>;
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_aclose")]
-    async fn aclose(&self) -> Result<(), ProviderError>;
+    fn aclose(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
 }
 
 /// `VideoGenerator`: the avatar's model, fed the audio and yielding the frames to publish. A host
 /// `VideoGenerator` carries this surface (`voice/avatar.py`).
 #[crate::host(proxy(host = "livekit.agents.voice.avatar.VideoGenerator"))]
-#[async_trait::async_trait]
 pub trait AvatarVideoGenerator: Send + Sync {
     /// An audio frame, or `None` for `AudioSegmentEnd`.
     #[host(await, name = "_core_push_audio")]
-    async fn push_audio(&self, frame: Option<MediaFrame>) -> Result<(), ProviderError>;
+    fn push_audio(
+        &self,
+        frame: Option<MediaFrame>,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_clear_buffer")]
-    async fn clear_buffer(&self) -> Result<(), ProviderError>;
+    fn clear_buffer(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// Begin iterating (`__aiter__`).
     #[host(await, name = "_core_open_frames")]
-    async fn open_frames(&self) -> Result<(), ProviderError>;
+    fn open_frames(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// The next frame or segment end; `None` once the generator is exhausted.
     #[host(await, name = "_core_next_frame")]
-    async fn next_frame(&self) -> Result<Option<AvatarFrame>, ProviderError>;
+    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>>;
 }
 
 /// The SDK's half: the avatar's tracks in the room and the `rtc.AVSynchronizer` pacing what is
 /// pushed to them. Python and Node each have their own.
 #[crate::host(proxy(host = "livekit.agents.voice.avatar._AvatarMedia"))]
-#[async_trait::async_trait]
 pub trait AvatarMedia: Send + Sync {
     /// Publish the audio track, wait for its subscription, then publish the video track.
     #[host(await, name = "_core_publish")]
-    async fn publish(&self) -> Result<(), ProviderError>;
+    fn publish(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// One frame into the synchronizer, which paces it out.
     #[host(await, name = "_core_push")]
-    async fn push(&self, frame: MediaFrame) -> Result<(), ProviderError>;
+    fn push(&self, frame: MediaFrame) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_aclose")]
-    async fn aclose(&self) -> Result<(), ProviderError>;
+    fn aclose(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
 }
 
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
