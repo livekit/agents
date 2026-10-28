@@ -473,8 +473,18 @@ pub struct Exposed {
     pub providers: Vec<Provider>,
     pub str_classes: Vec<StrClass>,
     pub wrappers: Vec<Wrapper>,
+    /// `#[host(error(kind, declare))]`: an exception class of `_core`'s own.
+    pub exceptions: Vec<Exception>,
     /// `#[python(forward(module = ..))]` on an export: `(module, exported name, source)`.
     pub forwards: Vec<(String, String, String)>,
+}
+
+/// `class <name>(<base>)`, raised for the Rust error it is declared on.
+#[derive(Debug, Clone)]
+pub struct Exception {
+    pub name: String,
+    pub base: String,
+    pub doc: Vec<String>,
 }
 
 /// `#[python(wrapper(module, path, name, base))]` on a `#[host(object)]` impl: a host class
@@ -516,6 +526,7 @@ impl Exposed {
             && self.kwargs.is_empty()
             && self.streams.is_empty()
             && self.proxies.is_empty()
+            && self.exceptions.is_empty()
     }
 
     pub fn extend(&mut self, other: Exposed) {
@@ -528,6 +539,7 @@ impl Exposed {
         self.providers.extend(other.providers);
         self.str_classes.extend(other.str_classes);
         self.wrappers.extend(other.wrappers);
+        self.exceptions.extend(other.exceptions);
         self.forwards.extend(other.forwards);
     }
 }

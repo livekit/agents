@@ -1,20 +1,57 @@
-"""Type stub for ``livekit.agents._core``, the pyo3 extension built from ``rust/crates/lk-agents-py``.
+# GENERATED FILE -- DO NOT EDIT.
+#
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): the stub of
+# `livekit.agents._core`, the pyo3 extension built from `rust/crates/lk-agents-py`. Every name
+# comes from the generated stub of its declaration, or from `_core_handwritten.pyi` while its
+# pyo3 code is still handwritten. `core_names.json` lists the same names.
 
-The generated stubs are star-imported below, written by ``cargo run -p lk-agents-codegen --
---write`` (from ``rust/``): ``_generated/_core_classes.pyi`` for the bindings expanded in place,
-``_generated/_core_<subject>.pyi`` for the declared classes and functions. This file is
-hand-written and carries the rest: the classes of
-``lk-agents-py/src/{runtime,storage,turn}.rs``, whose requests and results are the pydantic models
-of ``_generated/storage*.py``. The full name list is ``rust/crates/lk-agents-py/src/core_names.json``.
-"""
-
-from __future__ import annotations
-
-import asyncio
-from collections.abc import Awaitable, Callable
-from enum import Enum
-from typing import Any, Protocol
-
+from ._core_handwritten import (
+    AdaptiveNoiseGate as AdaptiveNoiseGate,
+    AgentNodes as AgentNodes,
+    AudioEmitter as AudioEmitter,
+    DuplexRealtimeModel as DuplexRealtimeModel,
+    EndpointServer as EndpointServer,
+    EndpointStream as EndpointStream,
+    EotStream as EotStream,
+    EotThresholdOptions as EotThresholdOptions,
+    FixedGate as FixedGate,
+    InterruptionDetector as InterruptionDetector,
+    InterruptionDetectorStream as InterruptionDetectorStream,
+    IpcClient as IpcClient,
+    ItemStream as ItemStream,
+    JobRun as JobRun,
+    ProcPool as ProcPool,
+    ProcSupervisor as ProcSupervisor,
+    RealtimeFallbackModel as RealtimeFallbackModel,
+    Role as Role,
+    Run as Run,
+    ServerConfig as ServerConfig,
+    ServerRuntime as ServerRuntime,
+    StreamReader as StreamReader,
+    Streams as Streams,
+    Thread as Thread,
+    TokenBuffer as TokenBuffer,
+    Turn as Turn,
+    chat_ctx_to_dict as chat_ctx_to_dict,
+    cpu_count as cpu_count,
+    endpoint_url_base as endpoint_url_base,
+    inference_resolve_api_key as inference_resolve_api_key,
+    inference_resolve_api_secret as inference_resolve_api_secret,
+    init as init,
+    interruption_metrics as interruption_metrics,
+    ipc_pair as ipc_pair,
+    job_timeline as job_timeline,
+    metrics_log_fields as metrics_log_fields,
+    otel_usage_records as otel_usage_records,
+    resolve_host_ref as resolve_host_ref,
+    run_shutdown_callbacks as run_shutdown_callbacks,
+    session_records as session_records,
+    stt_capabilities as stt_capabilities,
+    stt_keyterms_extra_for_model as stt_keyterms_extra_for_model,
+    stt_node as stt_node,
+    tts_node as tts_node,
+    xml_tokenize as xml_tokenize,
+)
 from ._generated._core_a2a import (
     AgentClient as AgentClient,
     Reply as Reply,
@@ -24,25 +61,296 @@ from ._generated._core_a2a import (
     _core_remote_token as _core_remote_token,
     _core_RemoteInteraction as _core_RemoteInteraction,
 )
-from ._generated._core_agent import *  # noqa: F401, F403
-from ._generated._core_classes import *  # noqa: F401, F403
+from ._generated._core_agent import (
+    AgentRunner as AgentRunner,
+    AgentRunUpdates as AgentRunUpdates,
+    RunEvents as RunEvents,
+)
 from ._generated._core_classes import (
-    ChatItem,
-    StartJobFields,
+    END_CALL_DESCRIPTION as END_CALL_DESCRIPTION,
+    HSR_ABORT as HSR_ABORT,
+    HSR_INTERNAL as HSR_INTERNAL,
+    HSR_PROTOCOL as HSR_PROTOCOL,
+    HSR_REFUSED as HSR_REFUSED,
+    HSR_TIMEOUT as HSR_TIMEOUT,
+    TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
+    WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
+    AcceptArguments as AcceptArguments,
+    AudioByteStream as AudioByteStream,
+    AudioDecoder as AudioDecoder,
+    AudioFrameSender as AudioFrameSender,
+    AudioOutputCapabilities as AudioOutputCapabilities,
+    AudioStreamOptions as AudioStreamOptions,
+    AvatarRunner as AvatarRunner,
+    BackgroundAudioPlayer as BackgroundAudioPlayer,
+    BasicSentenceTokenizer as BasicSentenceTokenizer,
+    BasicWordTokenizer as BasicWordTokenizer,
+    BM25Index as BM25Index,
+    ByteChunks as ByteChunks,
+    ByteStreamSender as ByteStreamSender,
+    ChatContent as ChatContent,
+    ChatItem as ChatItem,
+    ChatRequest as ChatRequest,
+    ConnectionPoolState as ConnectionPoolState,
+    ConsoleIo as ConsoleIo,
+    CoreAudioSink as CoreAudioSink,
+    CoreTextOutput as CoreTextOutput,
+    CpuMonitor as CpuMonitor,
+    DataStreamAudioOutput as DataStreamAudioOutput,
+    DataStreamAudioReceiver as DataStreamAudioReceiver,
+    ExpFilter as ExpFilter,
+    FakeRoom as FakeRoom,
+    FallbackLlm as FallbackLlm,
+    FallbackStt as FallbackStt,
+    FallbackSttStream as FallbackSttStream,
+    FallbackTts as FallbackTts,
+    FallbackTtsStream as FallbackTtsStream,
+    FrameDecoder as FrameDecoder,
+    GetAddressResult as GetAddressResult,
+    GetCardNumberResult as GetCardNumberResult,
+    GetCreditCardResult as GetCreditCardResult,
+    GetDOBResult as GetDOBResult,
+    GetDtmfResult as GetDtmfResult,
+    GetEmailResult as GetEmailResult,
+    GetExpirationDateResult as GetExpirationDateResult,
+    GetNameResult as GetNameResult,
+    GetPhoneNumberResult as GetPhoneNumberResult,
+    GetSecurityCodeResult as GetSecurityCodeResult,
+    InferenceLlmStream as InferenceLlmStream,
+    InferenceStt as InferenceStt,
+    InferenceSttStream as InferenceSttStream,
+    InferenceTts as InferenceTts,
+    InferenceTtsStream as InferenceTtsStream,
+    InferenceVad as InferenceVad,
+    InferenceVadStream as InferenceVadStream,
+    JobInfo as JobInfo,
+    JobRequest as JobRequest,
+    LlmMetricState as LlmMetricState,
+    MarkdownFilter as MarkdownFilter,
+    Markup as Markup,
+    ModelUsageCollector as ModelUsageCollector,
+    MovingAverage as MovingAverage,
+    NativeRealtimeModel as NativeRealtimeModel,
+    OfflineRoom as OfflineRoom,
+    PlaybackInfo as PlaybackInfo,
+    PlaybackTracker as PlaybackTracker,
+    PlayoutLedger as PlayoutLedger,
+    PlayState as PlayState,
+    ProcessPoolOptions as ProcessPoolOptions,
+    ProcessStartOptions as ProcessStartOptions,
+    RecordingOptions as RecordingOptions,
+    RemoteSessionClient as RemoteSessionClient,
+    RemoteSessionHost as RemoteSessionHost,
+    RetryingStt as RetryingStt,
+    RoomAudioInput as RoomAudioInput,
+    RoomEventBus as RoomEventBus,
+    RoomVideoInput as RoomVideoInput,
+    RpcHandler as RpcHandler,
+    RunningJobInfo as RunningJobInfo,
+    SearchDocument as SearchDocument,
+    SentencePacer as SentencePacer,
+    SessionClock as SessionClock,
+    SessionClosing as SessionClosing,
+    SessionOptions as SessionOptions,
+    Sound as Sound,
+    SpeechHandle as SpeechHandle,
+    StaleHandle as StaleHandle,
+    StartJobFields as StartJobFields,
+    StreamBuffer as StreamBuffer,
+    StreamBytesOptions as StreamBytesOptions,
+    StreamTextOptions as StreamTextOptions,
+    SttStreamAdapter as SttStreamAdapter,
+    Tagger as Tagger,
+    TextChunks as TextChunks,
+    TextStreamSender as TextStreamSender,
+    TrackPublishOptions as TrackPublishOptions,
+    Transcription as Transcription,
+    TranscriptMarkupStripper as TranscriptMarkupStripper,
+    TranscriptSynchronizer as TranscriptSynchronizer,
+    TtsMetricState as TtsMetricState,
+    TtsTokenLog as TtsTokenLog,
+    UploadGate as UploadGate,
+    VideoFrameRef as VideoFrameRef,
+    VideoFrameSender as VideoFrameSender,
+    VideoSampler as VideoSampler,
+    VoiceSession as VoiceSession,
+    WarmTransfer as WarmTransfer,
     _core_session_chat_record as _core_session_chat_record,
+    agent_join_token as agent_join_token,
+    amd_auto_select_models as amd_auto_select_models,
+    amd_category_is_human as amd_category_is_human,
+    amd_category_is_machine as amd_category_is_machine,
+    amd_constants as amd_constants,
+    amd_is_evaluated_model as amd_is_evaluated_model,
+    amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
+    api_attempt_connected as api_attempt_connected,
+    api_connect_options_check as api_connect_options_check,
+    api_retry_interval as api_retry_interval,
+    base_language as base_language,
+    basic_split_sentences as basic_split_sentences,
+    build_legacy_openai_schema as build_legacy_openai_schema,
+    build_strict_openai_schema as build_strict_openai_schema,
+    camel_to_snake_case as camel_to_snake_case,
+    card_expired as card_expired,
+    chat_chunk_has_response as chat_chunk_has_response,
+    chat_ctx_copy_plan as chat_ctx_copy_plan,
+    chat_ctx_gen_ai_events as chat_ctx_gen_ai_events,
+    chat_ctx_merge_plan as chat_ctx_merge_plan,
+    chat_ctx_summarize_plan as chat_ctx_summarize_plan,
+    chat_ctx_truncate_plan as chat_ctx_truncate_plan,
+    chat_history_summary_xml as chat_history_summary_xml,
+    chat_message_raw_text_content as chat_message_raw_text_content,
+    chat_message_text_content as chat_message_text_content,
+    compute_chat_ctx_diff as compute_chat_ctx_diff,
+    confirm_duplicate_description as confirm_duplicate_description,
+    convert_expression_tags as convert_expression_tags,
+    convert_mid_conversation_instructions as convert_mid_conversation_instructions,
+    decide_duplicate as decide_duplicate,
+    default_aec_warmup as default_aec_warmup,
+    default_input_modality as default_input_modality,
+    default_load_window as default_load_window,
+    dev_channel as dev_channel,
+    drop_bracket_cues as drop_bracket_cues,
+    dtmf_code as dtmf_code,
+    duplicate_key as duplicate_key,
+    encode_image as encode_image,
+    eot_select as eot_select,
+    expression_attribute as expression_attribute,
+    extend_job_token as extend_job_token,
+    extract_and_strip as extract_and_strip,
+    filter_emoji as filter_emoji,
+    flatten_delta_text as flatten_delta_text,
+    format_dtmf as format_dtmf,
+    format_log_record as format_log_record,
+    frame as frame,
+    gen_ai_tool_call_json as gen_ai_tool_call_json,
+    http_error_display as http_error_display,
+    hyphenate_word as hyphenate_word,
+    inference_default_url as inference_default_url,
+    inference_quota_usage as inference_quota_usage,
+    inject_confirm_duplicate as inject_confirm_duplicate,
+    inject_schema_defaults as inject_schema_defaults,
+    instructions_message_id as instructions_message_id,
+    interruption_estimate_probability as interruption_estimate_probability,
+    interruption_min_frames as interruption_min_frames,
+    interruption_timeout as interruption_timeout,
+    is_cloud as is_cloud,
+    keyword_search as keyword_search,
+    language_iso as language_iso,
+    language_name as language_name,
+    language_region as language_region,
+    llm_unsupported_params as llm_unsupported_params,
+    local_models_init as local_models_init,
+    local_models_native as local_models_native,
+    match_mood as match_mood,
+    max_input_len as max_input_len,
+    merge_realtime_capabilities as merge_realtime_capabilities,
+    min_reasoning_effort as min_reasoning_effort,
+    normalize_date_of_birth as normalize_date_of_birth,
+    normalize_email_address as normalize_email_address,
+    normalize_language as normalize_language,
+    normalize_phone_number as normalize_phone_number,
+    observability_url as observability_url,
+    otel_turn_records as otel_turn_records,
+    parse_function_arguments as parse_function_arguments,
+    plan_session_start as plan_session_start,
+    provider_retry as provider_retry,
+    receive_dtmf as receive_dtmf,
+    recording_enabled as recording_enabled,
+    remove_instructions as remove_instructions,
+    replace_words as replace_words,
+    resolve_interruption_detector as resolve_interruption_detector,
+    resolve_keyterm_detection as resolve_keyterm_detection,
+    resolve_recording_options as resolve_recording_options,
+    resolve_ref as resolve_ref,
+    rt_server_turn_detection as rt_server_turn_detection,
+    rtc_wire_names as rtc_wire_names,
+    send_dtmf_events as send_dtmf_events,
+    sentence_tokenizer_config as sentence_tokenizer_config,
+    serialize_image_frame as serialize_image_frame,
+    serialize_image_url as serialize_image_url,
+    session_messages_topic as session_messages_topic,
+    session_state_option_fields as session_state_option_fields,
+    speech_priorities as speech_priorities,
+    split_all_markup as split_all_markup,
+    split_expr_markup as split_expr_markup,
+    split_paragraphs as split_paragraphs,
+    split_sentences as split_sentences,
+    split_words as split_words,
+    status_retryable as status_retryable,
+    steering_instructions as steering_instructions,
+    strip_all_markup as strip_all_markup,
+    strip_expr_markup as strip_expr_markup,
+    strip_thinking as strip_thinking,
+    stt_aligned_transcript_for_model as stt_aligned_transcript_for_model,
+    stt_batch_metrics as stt_batch_metrics,
+    stt_diarization_enabled as stt_diarization_enabled,
+    stt_fallback_capabilities as stt_fallback_capabilities,
+    stt_normalize_fallback_str as stt_normalize_fallback_str,
+    stt_parse_model_string as stt_parse_model_string,
+    stt_resolve_vad_for_model as stt_resolve_vad_for_model,
+    stt_stream_metrics as stt_stream_metrics,
+    stt_supports_agent_context_carryover as stt_supports_agent_context_carryover,
+    supported_nonverbals as supported_nonverbals,
+    to_fnc_ctx as to_fnc_ctx,
+    to_openai_response_format as to_openai_response_format,
+    to_provider_format as to_provider_format,
+    to_strict_json_schema as to_strict_json_schema,
+    to_xml as to_xml,
+    token_identity as token_identity,
+    tokenize_paragraphs as tokenize_paragraphs,
+    tool_call_output as tool_call_output,
+    tool_proxy_arguments as tool_proxy_arguments,
+    tool_search_loaded as tool_search_loaded,
+    tool_search_validate as tool_search_validate,
+    tts_adapter_stream as tts_adapter_stream,
+    tts_fallback_capabilities as tts_fallback_capabilities,
+    tts_has_aligned_transcript as tts_has_aligned_transcript,
+    tts_markup_provider_key as tts_markup_provider_key,
+    tts_normalize_fallback_str as tts_normalize_fallback_str,
+    tts_parse_model_string as tts_parse_model_string,
+    unknown_tool_message as unknown_tool_message,
+    update_load_interval as update_load_interval,
+    validate_card_number as validate_card_number,
+    validate_synthesis as validate_synthesis,
+    video_queue_frames as video_queue_frames,
+    wait_avatar_join as wait_avatar_join,
+    wait_for_agent as wait_for_agent,
+    wait_for_participant as wait_for_participant,
+    wait_for_participant_attribute as wait_for_participant_attribute,
+    wait_for_track_publication as wait_for_track_publication,
+    xml_has_unclosed_tags as xml_has_unclosed_tags,
 )
 from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
     _core_judge_tool_schemas as _core_judge_tool_schemas,
     _core_JudgeRunner as _core_JudgeRunner,
 )
-from ._generated._core_inference import *  # noqa: F401, F403
-from ._generated._core_llm import *  # noqa: F401, F403
-from ._generated._core_recorder import *  # noqa: F401, F403
-from ._generated._core_storage import *  # noqa: F401, F403
-from ._generated._core_storage import _core_ContextActivation as _core_ContextActivation
-from ._generated._core_telemetry import *  # noqa: F401, F403
+from ._generated._core_inference import (
+    InferenceAvatar as InferenceAvatar,
+)
+from ._generated._core_llm import (
+    InferenceLlm as InferenceLlm,
+    InferenceLlmChunks as InferenceLlmChunks,
+    LlmChoiceParser as LlmChoiceParser,
+    McpSession as McpSession,
+    llm_usage_chunk as llm_usage_chunk,
+    mcp_check_result as mcp_check_result,
+    mcp_http_transport as mcp_http_transport,
+    mcp_plan_setup as mcp_plan_setup,
+    mcp_raw_schema as mcp_raw_schema,
+    mcp_render_result as mcp_render_result,
+    resolve_mcp_tool_options as resolve_mcp_tool_options,
+)
+from ._generated._core_recorder import (
+    SessionRecorder as SessionRecorder,
+)
+from ._generated._core_storage import (
+    Storage as Storage,
+    _core_ContextActivation as _core_ContextActivation,
+)
 from ._generated._core_telemetry import (
+    LoopMonitor as LoopMonitor,
     _core_EventRetention as _core_EventRetention,
     _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
     _core_PreparedTranscript as _core_PreparedTranscript,
@@ -50,446 +358,14 @@ from ._generated._core_telemetry import (
     _core_TelemetryPolicy as _core_TelemetryPolicy,
     _core_TelemetryWorker as _core_TelemetryWorker,
 )
-from ._generated._core_text_session import *  # noqa: F401, F403
 from ._generated._core_text_session import (
+    TextSessionRunner as TextSessionRunner,
+    TextSessionUpdates as TextSessionUpdates,
     _core_persist_text_session_state as _core_persist_text_session_state,
     _core_restore_text_session_state as _core_restore_text_session_state,
 )
-from ._generated._core_worker import *  # noqa: F401, F403
-from ._generated.storage_class import (
-    EventRow,
-    InboxRow,
-    ItemRow,
-    LaneRow,
-    StreamInfo,
-    TaskPage,
-    TaskRecord,
+from ._generated._core_worker import (
+    ExitSignals as ExitSignals,
+    entrypoint_module as entrypoint_module,
+    parse_cli as parse_cli,
 )
-from ._generated.storage_context import ContextScope, ContextScopeWrite
-from ._generated.storage_options import Policy, TurnOptions
-from ._generated.storage_turn import TurnContext, TurnResult
-from ._generated.worker_options import ServerOptions
-
-# --- runtime.rs ----------------------------------------------------------------------------------
-
-class Role(Enum):
-    Worker = ...
-    Job = ...
-
-def init(role: Role) -> None: ...
-def cpu_count() -> float:
-    """Logical CPUs, fractional under a cgroup quota; the worker sizes its defaults by it."""
-
-# --- the worker ----------------------------------------------------------------------------------
-
-class ServerHostProtocol(Protocol):
-    """What ``ServerRuntime`` calls back into, in the generator's ``open(kind, args)`` shape: the
-    worker's callbacks (``job_request``, ``launch_job``, ``terminate_job``, ``load``, ``endpoint``)
-    and the server's (``start``: the job processes from the resolved options; ``started``,
-    ``registered``, ``idle_processes``, ``worker_load``, ``health``, ``metrics``,
-    ``close_websockets``,
-    ``join_jobs``, ``close``). The awaitable runs on the loop that constructed the runtime and is
-    cancelled when Rust drops the operation.
-    """
-
-    def open(self, kind: str, args: Any) -> Awaitable[Any]: ...
-
-class EndpointStream:
-    """One exchange stream of the endpoint data plane, positioned after its preamble."""
-
-    def read(self, max_bytes: int = 65536) -> Awaitable[bytes]: ...
-    def write(self, data: bytes) -> Awaitable[None]: ...
-    def finish(self) -> None: ...
-    def reset(self, code: int) -> None: ...
-    def stop(self, code: int) -> None: ...
-
-class EndpointServer:
-    """``AgentHttp``'s server half: one ASGI call per endpoint stream (an HTTP/1.1 exchange, or a
-    WebSocket after an upgrade), and the open WebSockets to drain."""
-
-    def __init__(self) -> None: ...
-    def serve(self, stream: Any, app: Any, request: Any) -> Awaitable[None]: ...
-    def close_websockets(
-        self, code: int = 1001, reason: str = "worker draining"
-    ) -> Awaitable[None]: ...
-
-def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | None: ...
-
-class ServerConfig:
-    """``AgentServer``'s options, resolved against the environment; writable until it starts."""
-
-    def __init__(self, options: ServerOptions) -> None: ...
-    def update(self, options: ServerOptions) -> None: ...
-    @property
-    def ws_url(self) -> str: ...
-    @property
-    def api_key(self) -> str: ...
-    @property
-    def api_secret(self) -> str: ...
-    @property
-    def agent_name(self) -> str: ...
-    @property
-    def deployment(self) -> str: ...
-    @property
-    def cloud(self) -> bool: ...
-    @property
-    def drain_timeout(self) -> float: ...
-    @property
-    def simulation(self) -> bool: ...
-    @simulation.setter
-    def simulation(self, value: bool) -> None: ...
-
-class ServerRuntime:
-    """``AgentServer``'s lifecycle over a ``ServerHostProtocol``."""
-
-    def __init__(self, config: ServerConfig, host: ServerHostProtocol) -> None: ...
-    @property
-    def worker_id(self) -> str: ...
-    @property
-    def draining(self) -> bool: ...
-    @property
-    def http_port(self) -> int: ...
-    def run(
-        self,
-        *,
-        devmode: bool,
-        unregistered: bool,
-        has_rtc: bool,
-        has_text_doors: bool,
-        publisher: bool,
-        routes: list[dict[str, Any]],
-        has_load_fnc: bool,
-        has_on_request: bool,
-    ) -> Awaitable[None]: ...
-    def drain(self, timeout: float | None = None) -> Awaitable[None]: ...
-    def aclose(self) -> Awaitable[None]: ...
-    def job_status(self, job_id: str, status: str) -> None: ...
-    def simulate_job(
-        self,
-        room: str,
-        *,
-        fake_job: bool,
-        agent_identity: str | None = None,
-        room_info: bytes | None = None,
-        token: str | None = None,
-    ) -> Awaitable[None]: ...
-
-# --- the job process IPC (worker ipc/) -----------------------------------------------------------
-
-def ipc_pair() -> tuple[int, int]:
-    """One process's control socket: the parent's end and the child's, as descriptors the caller
-    owns (the parent's for ``ProcSupervisor``, the child's for the process's ``IpcClient``)."""
-
-class ProcHostProtocol(Protocol):
-    """Bootstrap completion and queued diagnostics; native ownership lasts through reaping."""
-
-    def _core_log(
-        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
-    ) -> None: ...
-    async def _core_launched(self) -> None: ...
-    async def _core_launch_failed(self, cause: str) -> None: ...
-    async def _core_completed(self, exitcode: int, pid: int) -> None: ...
-
-class ProcSupervisor:
-    """The worker's side of one job process, over the socket ``fd`` it owns."""
-
-    def __init__(
-        self,
-        fd: int,
-        host: ProcHostProtocol,
-        *,
-        pid: int,
-        initialize_timeout: float,
-        close_timeout: float,
-        memory_warn_mb: float,
-        memory_limit_mb: float,
-        ping_interval: float,
-        ping_timeout: float,
-        high_ping_threshold: float,
-        killable: bool = True,
-    ) -> None: ...
-    def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> Awaitable[float]:
-        """Sends the ``Hello``; the seconds until the process was ready, ``asyncio.TimeoutError``
-        when late (a process is then killed)."""
-    @property
-    def initialized(self) -> bool: ...
-    def _core_launched_process(
-        self, pid: int, sentinel: int, method: str, owned: list[int]
-    ) -> None: ...
-    def run(self, joined: Awaitable[None], host: ProcHostProtocol) -> asyncio.Future[bool]:
-        """Owns the bootstrap operation and native process through OS exit and reaping."""
-    def _core_join(self) -> Awaitable[bool]: ...
-    def _core_wait_exit(self) -> Awaitable[bool]: ...
-    def aclose(self) -> Awaitable[None]: ...
-    def kill(self) -> Awaitable[None]: ...
-    def start_job(self, fields: StartJobFields) -> Awaitable[None]:
-        """Returns after the child accepts the typed job record."""
-    @property
-    def killed(self) -> bool: ...
-
-class IpcClient:
-    """The child's side of the parent's socket ``fd`` it owns: the initialize handshake (blocking,
-    ``initialize(http_proxy)``), then the parent's messages served to a host: it starts one job
-    and acks the shutdown."""
-
-    def __init__(
-        self, fd: int, initialize: Callable[[str | None], None], *, process: bool = False
-    ) -> None: ...
-    @property
-    def asyncio_debug(self) -> bool: ...
-    def serve(self, host: Any) -> Awaitable[None]: ...
-    def stop(self) -> None: ...
-    def aclose(self) -> Awaitable[None]: ...
-
-class JobRun:
-    """A job's run, for ``JobContext`` and ``ipc/job_proc_lazy_main.py``'s ``_JobProc``: what
-    ends it, the entrypoint's supervision, the order and bounds of the shutdown (whose steps the
-    host given to ``run`` runs, ``_core_*``), the participant entrypoints, the room connected
-    once, the API calls in flight and the recording's setup."""
-
-    def __init__(
-        self,
-        *,
-        fake_job: bool,
-        session_end_timeout: float,
-        redaction: bool,
-        url: str = "",
-        recording: bool = False,
-        session_end: Callable[..., Any] | None = None,
-        session_aclose_timeout: float = 60.0,
-    ) -> None: ...
-    def add_shutdown_callback(self, callback: Callable[..., Awaitable[None]]) -> None:
-        """``callback(reason)``, or ``callback()`` when it takes no argument, runs as the job
-        shuts down."""
-    @property
-    def observability_url(self) -> str | None: ...
-    @property
-    def buffer_logs(self) -> bool:
-        """The job buffers its logs from the start, for the recording to upload them."""
-    def shutdown(self, reason: str, user_initiated: bool) -> None: ...
-    def connected(self) -> None: ...
-    def connect(self, connect: Callable[[], Awaitable[None]]) -> Awaitable[None]: ...
-    def add_participant_entrypoint(self, entrypoint: Any, kinds: list[int]) -> None: ...
-    def participant_joined(self, ctx: Any, participant: Any, identity: str, kind: int) -> None: ...
-    def participant_left(self, attributes: dict[str, str]) -> None: ...
-    def api_call(
-        self, call: Callable[[], Awaitable[Any]], name: str, console_result: Any
-    ) -> asyncio.Future[Any]: ...
-    def close_tasks(self) -> Awaitable[None]: ...
-    def init_recording(self, options: dict[str, bool]) -> bool | None: ...
-    def claim_session(self, session: Any) -> bool: ...
-    @property
-    def primary_session(self) -> Any: ...
-    @property
-    def recording_initialized(self) -> bool: ...
-    @property
-    def redaction(self) -> bool: ...
-    def run(self, host: Any) -> Awaitable[None]: ...
-
-def job_timeline(
-    received_at: float,
-    accepted_at: float,
-    assigned_at: float,
-    launched_at: float,
-    entrypoint_started_at: float,
-    server_started_at: int,
-) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
-    """A job's dispatch timeline for its root span: the known stage instants as events (unix
-    nanoseconds), the seconds between adjacent stages as attributes."""
-
-class ProcPool:
-    """The warm job processes of ``ipc/proc_pool.py``'s ``ProcPool`` (``host``), which makes the
-    executors (``_core_create``), reports a failed initialization (``_core_init_failed``) and
-    emits the pool's events."""
-
-    def __init__(
-        self, host: Any, *, num_idle_processes: int, initialize_timeout: float, close_timeout: float
-    ) -> None: ...
-    @property
-    def processes(self) -> list[Any]: ...
-    @property
-    def jobs_waiting(self) -> int: ...
-    @property
-    def target_idle_processes(self) -> int: ...
-    @target_idle_processes.setter
-    def target_idle_processes(self, n: int) -> None: ...
-    def start(self) -> Awaitable[None]: ...
-    def launch_job(self, info: Any) -> Awaitable[None]: ...
-    def join_jobs(self) -> Awaitable[None]:
-        """Waits until every process a job was launched on exited."""
-    def aclose(self) -> Awaitable[None]: ...
-
-# --- storage.rs ----------------------------------------------------------------------------------
-#
-# Every request is the model of its name, or a dict in the model's shape (its ``model_dump``);
-# every result, rows included, is an instance of its model. An ``Awaitable`` runs on the loop
-# that constructed the object and is cancelled when Rust drops the operation.
-
-class Streams:
-    """The response streams of one storage (``Storage.streams()``)."""
-
-    def create(self, ttl_seconds: int | None = None) -> Awaitable[StreamInfo]: ...
-    def append(self, stream_id: str, record: bytes) -> None:
-        """Queued: kept in order; a failure is logged and does not fail the turn."""
-
-    def close(self, stream_id: str) -> Awaitable[None]:
-        """Once the stream's queued frames are kept."""
-
-    def delete(self, stream_id: str) -> Awaitable[None]: ...
-    def read(self, stream_id: str, after: str | None = None, live: bool = False) -> StreamReader:
-        """From ``after`` (an offset; ``None`` is the beginning); ``live`` follows the tail until
-        the stream closes."""
-
-class StreamReader:
-    """A read position over one stream."""
-
-    def next(self) -> Awaitable[bytes | None]:
-        """The next frame, or ``None``: the tail of a catch-up read, the close of a live one."""
-
-    def next_offset(self) -> Awaitable[str]: ...
-
-# --- turn.rs -------------------------------------------------------------------------------------
-
-class Thread:
-    """One open thread (plan 5.2), from ``Storage.open``: leases and waiter marks carry
-    ``holder`` plus a handle id of their own."""
-
-    @property
-    def id(self) -> str: ...
-    @property
-    def holder(self) -> str: ...
-    def lanes(self) -> Awaitable[list[LaneRow]]: ...
-    def events(self, after_id: int = 0, limit: int = 100) -> Awaitable[list[EventRow]]: ...
-    def history(self, lane: str) -> Awaitable[list[ItemRow]]:
-        """A lane's history as stored, in order."""
-
-    def tasks(self, lane: str, limit: int = 50) -> Awaitable[list[TaskRecord]]:
-        """A lane's task rows as records, newest first."""
-
-    def task(self, task_id: str) -> Awaitable[TaskRecord | None]:
-        """One task, whichever lane it is on; ``None`` when the thread has none of that id."""
-
-    def list_tasks(
-        self,
-        status: str | None = None,
-        updated_after: int = 0,
-        page_size: int = 50,
-        page_token: str | None = None,
-    ) -> Awaitable[TaskPage]:
-        """One page of every lane's tasks, last updated first (A2A ``tasks/list``)."""
-
-    def lane_info(self, lane: str) -> Awaitable[LaneRow | None]:
-        """A lane's row, ``None`` before its first run."""
-
-    def inbox(self, lane: str, pending: bool = False) -> Awaitable[list[InboxRow]]:
-        """A lane's inbox rows in arrival order: every one, or the pending ones."""
-
-    def cancel_task(
-        self, lane: str, task_id: str, metadata: dict[str, Any]
-    ) -> Awaitable[TaskRecord | None]:
-        """``tasks/cancel`` (plan 5.5): the row ``canceled`` with ``metadata`` merged in;
-        ``None`` when the task is not the lane's."""
-
-    def open_run(
-        self,
-        lane: str,
-        run_id: str,
-        *,
-        channel: str | None = None,
-        wait_timeout: float | None = None,
-    ) -> Awaitable[Run]:
-        """Takes the lane for one run (plan 5.2), waiting up to ``wait_timeout`` seconds for
-        another holder's lease."""
-
-    def close(self) -> None: ...
-
-class Run:
-    """One run the host drives itself (the voice lane): what it loaded, then one ``commit`` of
-    the history and state it ends with, or ``abandon``."""
-
-    @property
-    def version(self) -> int:
-        """The version loaded: the commit's fence."""
-
-    @property
-    def closed(self) -> bool:
-        """The run's id already committed: ``commit`` only releases."""
-
-    @property
-    def history(self) -> list[ItemRow]: ...
-    @property
-    def state(self) -> Any: ...
-    @property
-    def context_scopes(self) -> list[ContextScope]: ...
-    def commit(
-        self,
-        history: list[ItemRow],
-        state: Any = None,
-        *,
-        scope_writes: list[ContextScopeWrite] | None = None,
-    ) -> Awaitable[int]:
-        """Writes what changed since the load (``None`` state keeps the stored one), then
-        releases; the version after."""
-
-    def abandon(self, outcome: str, reason: str) -> Awaitable[None]:
-        """``run_ended`` with ``outcome`` and ``reason``, and the release."""
-
-class TurnHostProtocol(Protocol):
-    """What ``Turn`` calls back into: ``_core_handle`` receives a ``storage_turn.TurnContext``
-    dict and returns the turn's event stream (``storage.context.TurnStream``)."""
-
-    async def _core_handle(self, ctx: TurnContext) -> Any: ...
-
-class Turn:
-    """One text door's turns (``TurnRunner``); ``options`` left out or ``None`` is the Rust
-    defaults, and so is every field left out of it."""
-
-    def __init__(
-        self,
-        thread: Thread,
-        lane: str,
-        host: TurnHostProtocol,
-        options: TurnOptions | None = None,
-    ) -> None: ...
-    @property
-    def lane(self) -> str: ...
-    def policy_for(self, channel: str) -> Policy: ...
-    def run(
-        self,
-        message: dict[str, Any],
-        task_id: str | None = None,
-    ) -> Awaitable[TurnResult]:
-        """One incoming A2A message through its policy. Raises ``RunRejected`` under
-        ``reject``, ``asyncio.CancelledError`` when the handler was cancelled, the storage
-        errors otherwise."""
-
-# --- the voice nodes (lk-agents-py nodes.rs) -----------------------------------------------------
-
-class ItemStream:
-    def __aiter__(self) -> ItemStream: ...
-    def __anext__(self) -> Awaitable[Any]: ...
-    def aclose(self) -> Awaitable[None]: ...
-
-class AgentNodes:
-    def __init__(self, context: Any, host: Any) -> None: ...
-
-def tts_node(tts: Any, text: Any, *, conn_options: Any) -> ItemStream: ...
-def stt_node(stt: Any, audio: Any, *, conn_options: Any) -> ItemStream: ...
-
-# --- lk-agents-abi llm/to_dict.rs ----------------------------------------------------------------
-
-def chat_ctx_to_dict(
-    items: list[ChatItem],
-    *,
-    exclude_image: bool = True,
-    exclude_audio: bool = True,
-    exclude_timestamp: bool = True,
-    exclude_function_call: bool = False,
-    exclude_metrics: bool = False,
-    exclude_config_update: bool = False,
-    serialize_media: Callable[[Any], Any] | None = None,
-    strip_expr_markup: Callable[[str], str] | None = None,
-) -> dict[str, Any]:
-    """``ChatContext.to_dict``: ``{"items": [...]}``, each item's JSON dump. ``serialize_media``
-    renders a frame (required only when media is kept); ``strip_expr_markup`` strips assistant
-    messages' markup."""

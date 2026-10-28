@@ -19,6 +19,7 @@ mod proxy;
 mod python;
 mod records;
 mod stub;
+mod surface;
 #[cfg(test)]
 mod tests;
 
@@ -190,6 +191,11 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs",
     "rust/crates/lk-agents-abi/src/llm/schema/defaults.rs",
     "rust/crates/lk-agents-media/src/images/serialize.rs",
+    "rust/crates/lk-agents-inference/src/headers.rs",
+    "rust/crates/lk-agents-inference/src/local_models.rs",
+    "rust/crates/lk-agents-abi/src/llm/events.rs",
+    "rust/crates/lk-agents-voice/src/agent_session/commands.rs",
+    "rust/crates/lk-agents-abi/src/utils/host_ref.rs",
 ];
 
 /// The generated Python package, under every Python project the repo has: `python/livekit-agents`
@@ -198,6 +204,10 @@ const EXPORT_SOURCES: &[&str] = &[
 const PYTHON_PACKAGES: &[&str] =
     &["python/livekit-agents", "livekit-agents", "livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
+/// Where `_core.pyi` sits, beside the extension.
+const PYTHON_CORE: &str = "livekit/agents";
+/// The names `dir(_core)` returns, which the registration test of `lk-agents-py` reads.
+const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/core_names.json";
 /// The package whose plugin base classes stay hand-written: the reference the copy is held to.
 const REFERENCE_PACKAGE: &str = "livekit-agents";
 
@@ -291,12 +301,14 @@ fn run(check: bool) -> Result<usize, String> {
         .collect();
     let records = python::emit_with(&reference, &[], &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
+    let (core_pyi, core_names) = surface::emit(class_stubs.iter().chain(&stub))?;
+    stale += put(&root.join(CORE_NAMES), &core_names.text, check)?;
     let forward = forward::emit(&decls, &exposed)?;
     for package in python_packages {
         let python_root = root.join(package).join(PYTHON_GENERATED);
         // The reference keeps its hand-written base classes.
         let python = if package == REFERENCE_PACKAGE { &records } else { &with_bases };
-        for out in python.iter().chain(&stub) {
+        for out in python.iter().chain(stub.iter().map(|s| &s.out)) {
             stale += put(&python_root.join(&out.path), &out.text, check)?;
         }
         // Every package: the records name these modules (`.language`), the reference's included.
@@ -305,9 +317,10 @@ fn run(check: bool) -> Result<usize, String> {
         }
         // The declared classes are the successor's: the reference keeps its own `_core`.
         if package != REFERENCE_PACKAGE {
-            for out in class_stubs.iter().chain(&models) {
+            for out in class_stubs.iter().map(|s| &s.out).chain(&models) {
                 stale += put(&python_root.join(&out.path), &out.text, check)?;
             }
+            stale += put(&root.join(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text, check)?;
         }
         stale += put(&python_root.join("__init__.py"), INIT, check)?;
     }

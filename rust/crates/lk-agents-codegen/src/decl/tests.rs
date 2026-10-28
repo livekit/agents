@@ -268,7 +268,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
         "{llm}"
     );
     assert!(llm.contains("TypeId::of::<dyn ::lk_agents_abi::llm::chat::Llm>()"), "{llm}");
-    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0];
+    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].out;
     assert_eq!(stub.path, "_core_llm.pyi");
     for want in [
         "def __init__(self, model: str, *, extra: dict[str, object] | None = None) -> None: ...",
@@ -319,7 +319,7 @@ fn mutable_classes_and_functions_are_their_own_forms() {
             && root.contains("type Wire: ::lk_agents_abi::llm::class::Wire;"),
         "{root}"
     );
-    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].text;
+    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].out.text;
     assert!(
         stub.contains("\ndef llm_usage_chunk(chunk: object) -> dict[str, object] | None: ...")
             && !stub.contains("class Wire"),
@@ -659,7 +659,7 @@ fn a_class_hands_out_an_async_iterable_instance_of_another_class() {
     ] {
         assert!(text.contains(want), "{want}\n{text}");
     }
-    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].text;
+    let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].out.text;
     assert!(stub.contains("async def __anext__(self) -> dict[str, object]"), "{stub}");
     let err = read(
         r#"use super::chat::{Chunk, Res};
@@ -695,7 +695,7 @@ fn handwritten_scalar_unions_import_the_records_in_their_declaring_module() {
     )
     .expect("resolves");
     let out = crate::class_stub::emit(&decls).expect("emits");
-    let stub = &out[0].text;
+    let stub = &out[0].out.text;
     assert!(stub.contains("from .client import Message"), "{stub}");
     assert!(stub.contains("message: str | Message"), "{stub}");
     assert!(!stub.contains("from .other import Message"), "{stub}");

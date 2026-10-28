@@ -129,9 +129,10 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                             out.wire_enums.push(WireEnum { name: e.ident.to_string() })
                         }
                         "stream" => out.streams.push(stream(label, &e.ident, &m)?),
-                        // The binding maps the error itself; the wire strings are Rust side
-                        // only: the enum crosses by its own impls, if at all.
-                        "error" | "wire_strs" | "handwritten" => {}
+                        "error" => out.exceptions.extend(exception(&m, &e.attrs)),
+                        // The wire strings are Rust side only: the enum crosses by its own
+                        // impls, if at all.
+                        "wire_strs" | "handwritten" => {}
                         other => {
                             return Err(format!(
                                 "{label}: enum {}: #[host({other})] -- an enum takes wire_enum, wire_strs, string, error or stream",
@@ -145,8 +146,9 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
                 for m in host_attrs_strict(label, &st.attrs)? {
                     match head_of(&m).as_str() {
                         "client" | "kwargs" => out.kwargs.push(kw_record(label, st, &al)?),
-                        // The binding maps the error itself; a handwritten type crosses by its own impls.
-                        "error" | "handwritten" => {}
+                        "error" => out.exceptions.extend(exception(&m, &st.attrs)),
+                        // A handwritten type crosses by its own impls.
+                        "handwritten" => {}
                         "stream" => out.streams.push(stream(label, &st.ident, &m)?),
                         // `Display` out, `FromStr` in; the macro writes nothing.
                         "string" => {
@@ -185,6 +187,16 @@ pub fn exposed_with(label: &str, text: &str, global: &[(String, String)]) -> Res
         }
     }
     Ok(out)
+}
+
+/// The exception class an `error(kind, declare)` adds to `_core`; the binding maps every other
+/// error to an existing class itself.
+fn exception(m: &[Meta], attrs: &[syn::Attribute]) -> Option<Exception> {
+    Some(Exception {
+        name: meta_str(m, "error.kind")?,
+        base: meta_str(m, "error.declare")?,
+        doc: doc(attrs),
+    })
 }
 
 fn item_attrs(item: &syn::Item) -> Vec<syn::Attribute> {

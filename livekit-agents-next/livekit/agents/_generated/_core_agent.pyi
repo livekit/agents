@@ -1,7 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the
-# `#[host(class)]` declarations of `lk-agents-abi`. `_core.pyi` star-imports it.
+# `#[host(class)]` declarations of `lk-agents-abi`. `_core.pyi` re-exports it.
 
 from __future__ import annotations
 

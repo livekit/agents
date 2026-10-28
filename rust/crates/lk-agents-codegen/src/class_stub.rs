@@ -1,12 +1,13 @@
 //! The `.pyi` of the declared classes, one per ABI subject (`_generated/_core_<subject>.pyi`),
-//! star-imported by `_core.pyi`. Written from the same IR as the adapters.
+//! re-exported by `_core.pyi`. Written from the same IR as the adapters.
 
 use crate::decl::{
     Class, Declarations, Form, HostForm, Literal, Method, MethodKind, RecordDecl, Ty,
 };
 use crate::python::Out;
+use crate::surface::Stub;
 
-pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
+pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
     let mut families: Vec<&str> = decls
         .classes
         .iter()
@@ -21,9 +22,12 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         let mut imports = Imports(Vec::new(), decls.records.clone());
         let mut body = String::new();
         let mut own: Vec<String> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         for c in &classes {
             body.push_str(&class(c, &mut imports));
-            if c.form != Form::Functions {
+            if c.form == Form::Functions {
+                names.extend(c.methods.iter().map(|m| m.name.clone()));
+            } else {
                 own.push(c.name.clone());
             }
             for (name, item) in crate::adapter::sources(c) {
@@ -41,10 +45,12 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
                 "\ndef {persist}(record: {name}) -> str: ...\ndef {restore}(data: str) -> {name}: ...\n",
                 name = r.name
             ));
+            names.extend([persist, restore]);
         }
+        names.extend(own.iter().cloned());
         let own: Vec<&str> = own.iter().map(String::as_str).collect();
         let mut text = String::from(
-            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n# `#[host(class)]` declarations of `lk-agents-abi`. `_core.pyi` star-imports it.\n\nfrom __future__ import annotations\n",
+            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n# `#[host(class)]` declarations of `lk-agents-abi`. `_core.pyi` re-exports it.\n\nfrom __future__ import annotations\n",
         );
         let imports = imports.render(&own);
         if !imports.is_empty() {
@@ -52,7 +58,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             text.push_str(&imports);
         }
         text.push_str(&body);
-        out.push(Out { path: format!("_core_{family}.pyi"), text });
+        out.push(Stub { out: Out { path: format!("_core_{family}.pyi"), text }, names });
     }
     Ok(out)
 }

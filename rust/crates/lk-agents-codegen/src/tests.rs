@@ -44,6 +44,7 @@ fn generate_stub(src: &str) -> String {
     stub::emit(&decls, &ir::Exposed::default())
         .expect("the stub generates")
         .expect("there is a class")
+        .out
         .text
 }
 
@@ -307,7 +308,7 @@ fn the_stub_types_a_converted_field_from_its_python_annotation() {
 fn exports_stub(src: &str) -> String {
     let decls = parse::file("test.rs", src).expect("the declarations parse");
     let x = parse::exposed("test.rs", src).expect("the items parse");
-    stub::emit(&decls, &x).expect("the stub generates").expect("there are items").text
+    stub::emit(&decls, &x).expect("the stub generates").expect("there are items").out.text
 }
 
 // Catches: a raw-identifier parameter reaching the stub as `r#ref: str`, which is not Python:

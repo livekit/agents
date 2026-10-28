@@ -1,4 +1,4 @@
-//! The `_core` classes' stub, `_generated/_core_classes.pyi`, star-imported by `_core.pyi`: a
+//! The `_core` classes' stub, `_generated/_core_classes.pyi`, re-exported by `_core.pyi`: a
 //! generated class must bring its stub or griffe and the equivalence gate lose its signatures.
 //! Getters are `@property` (read-only on a frozen pyclass). Field types are
 //! [`python::render`]'s, except: a converted field is its `ty` or `Any`, a unit enum is `str`, a
@@ -6,11 +6,12 @@
 
 use crate::ir::*;
 use crate::python::{self, Out};
+use crate::surface::Stub;
 
 pub const PATH: &str = "_core_classes.pyi";
 
 /// `None` when no declaration is a class; then no file is written.
-pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Out>, String> {
+pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Stub>, String> {
     let classes: Vec<(&Decl, &Target)> = decls
         .iter()
         .flat_map(|d| d.targets_for(Host::Binding).map(move |t| (d, t)))
@@ -20,6 +21,7 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Out>, String> {
         && exposed.fns.is_empty()
         && exposed.objects.is_empty()
         && exposed.streams.is_empty()
+        && exposed.exceptions.is_empty()
     {
         return Ok(None);
     }
@@ -42,6 +44,13 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Out>, String> {
         body.push(fns.concat());
     }
     body.extend(objects.iter().cloned());
+    for e in &exposed.exceptions {
+        let mut b = format!("class {}({}):\n", e.name, e.base);
+        if !python::docstring(&mut b, &summary(&e.doc), 4) {
+            b.push_str("    ...\n");
+        }
+        body.push(b);
+    }
     let body = body.join("\n\n");
 
     let mut b = String::new();
@@ -53,8 +62,7 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Out>, String> {
     b.push_str(
         "# and the `#[host(export)]` / `#[host(object)]` items in `EXPORT_SOURCES`.\n\
          #\n# The stub of every `_core` class and function the binding generates rather than\n\
-         # writes. `_core.pyi` star-imports this file, so the hand-written stub carries only what\n\
-         # is still hand-written.\n\
+         # writes. `_core.pyi` re-exports this file.\n\
          #\n# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a\n\
          # non-empty diff, so a hand edit here is reverted rather than merged.\n\n",
     );
@@ -77,7 +85,15 @@ pub fn emit(decls: &[Decl], exposed: &Exposed) -> Result<Option<Out>, String> {
         b.push('\n');
     }
     b.push_str(&body);
-    Ok(Some(Out { path: PATH.to_owned(), text: b }))
+    let names = classes
+        .iter()
+        .map(|(_, t)| t.name.clone())
+        .chain(exposed.fns.iter().map(|f| f.name.clone()))
+        .chain(exposed.objects.iter().map(|o| o.name.clone()))
+        .chain(exposed.streams.iter().map(|s| s.name.clone()))
+        .chain(exposed.exceptions.iter().map(|e| e.name.clone()))
+        .collect();
+    Ok(Some(Stub { out: Out { path: PATH.to_owned(), text: b }, names }))
 }
 
 fn class(all: &[Decl], d: &Decl, t: &Target) -> Result<String, String> {
