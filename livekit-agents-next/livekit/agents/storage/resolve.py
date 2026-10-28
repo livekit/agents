@@ -54,7 +54,7 @@ class Thread:
 
     async def info(self) -> ThreadInfo:
         """The platform's record: scope, attributes, created, last active, expiry."""
-        return await self._storage.get_thread(self._id, fresh=True)
+        return await self._storage.threads.get_thread(self._id)
 
     async def update(
         self, *, attributes: Mapping[str, str] | None = None, idle_ttl_seconds: int | None = None

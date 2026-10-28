@@ -16,7 +16,6 @@ from typing import Any
 
 from .. import _core
 from .._core import Streams, Thread
-from .._generated.storage_class import ThreadInfo
 
 
 class Storage:
@@ -47,10 +46,6 @@ class Storage:
     async def streams(self) -> Streams:
         """The response streams a task's subscribers read."""
         return await self._core.streams()
-
-    async def get_thread(self, thread_id: str, *, fresh: bool = False) -> ThreadInfo:
-        """Load authoritative metadata, including updates, deletion and expiry."""
-        return await self._core.get_thread(thread_id)
 
     async def open(self, thread_id: str) -> Thread:
         """The thread's handle, its writes under this worker's holder. Takes no lease."""

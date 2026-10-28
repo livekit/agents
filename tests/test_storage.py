@@ -844,7 +844,7 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     assert await history_items(storage, thread_id, "front") == []
     first = await run_turn(storage, thread_id, "front", a2a("hi", "m1"), "queue", echo)
     assert first.output == "reply to: hi"
-    info = await storage.get_thread(thread_id, fresh=True)
+    info = await storage.threads.get_thread(thread_id)
     assert info.database_id == created.database_id
     second = await run_turn(storage, thread_id, "front", a2a("again", "m2"), "queue", echo)
     assert second.output == "reply to: again"
