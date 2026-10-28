@@ -41,8 +41,8 @@ pub const VOICE: Boundary = Boundary {
         "fakes::output",
         "fakes::avatar",
         "fakes::realtime (simulated OpenAI Realtime server, in the protocol's typed records; the \
-         fallback adapter over two of them, on the inference fallback policy); a duplex model \
-         over the inference duplex segmenter and gate",
+         fallback adapter over two of them); a duplex model over the inference duplex segmenter \
+         and gate",
         "lk_agents_test_support::rtc::FakeRoom",
     ],
     transitional: &[

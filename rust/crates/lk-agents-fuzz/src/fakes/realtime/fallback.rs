@@ -1,13 +1,14 @@
-//! The realtime fallback adapter (`RealtimeModelFallbackAdapter`) over two simulated models: the
-//! runtime's `realtime::fallback` contract on the driver's side of the boundary, its decisions
-//! the inference core's ([`RealtimePolicy`], [`FallbackBacklog`], [`merge_capabilities`]).
+//! The realtime fallback adapter (`RealtimeModelFallbackAdapter`) over two simulated models, as
+//! the driver sees it at the `Realtime` boundary.
 //!
-//! A child's terminal error swaps to the other model while one is available: the error reaches
+//! A child's terminal error swaps to the other model while it is available: the error reaches
 //! the driver as recoverable, the generation in flight is closed as cancelled, the old session
 //! closes and the new one opens, and `SessionSwapped` asks the driver for the new session's
 //! frame. Until the frame's tools arrive, what names the old session is dropped and replies are
-//! held; past the adapter's bounds a reply is refused. The cooldown runs on the run's wall clock.
+//! held; past the adapter's bound a reply is refused. A failed model is out for the adapter's
+//! cooldown, on the run's wall clock; with no other model available the error escalates as is.
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::{
     ChatContext, Clock, Realtime, RealtimeCommand, RealtimeSession,
@@ -18,13 +19,11 @@ use lk_agents_abi::{
         TokenUsage,
     },
 };
-use lk_agents_inference::fallback::{
-    RealtimePolicy,
-    realtime::{FallbackBacklog, merge_capabilities},
-};
 
-/// The adapter's cooldown before a failed model is tried again, and its default regeneration.
-const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
+/// The adapter's cooldown before a failed model is tried again.
+const COOLDOWN: Duration = Duration::from_secs(10);
+/// The replies the adapter holds for a new model before it refuses one.
+const HELD_REPLIES: usize = 32;
 
 pub struct FallbackRealtime {
     children: Vec<Arc<dyn Realtime>>,
@@ -33,9 +32,10 @@ pub struct FallbackRealtime {
 }
 
 impl FallbackRealtime {
+    /// Children of one setup: their capabilities agree, so the adapter's are theirs.
     pub fn new(children: Vec<Arc<dyn Realtime>>, clock: Arc<dyn Clock>) -> Arc<Self> {
-        let caps: Vec<_> = children.iter().map(|c| c.capabilities()).collect();
-        let caps = merge_capabilities(&caps).expect("children that agree");
+        let caps = children[0].capabilities();
+        assert!(children.iter().all(|c| c.capabilities() == caps), "children that agree");
         Arc::new(FallbackRealtime { children, caps, clock })
     }
 }
@@ -60,10 +60,11 @@ impl Realtime for FallbackRealtime {
             disabled,
             state: Mutex::new(State {
                 active,
-                policy: RealtimePolicy::new(self.children.len(), COOLDOWN),
+                active_index: 0,
+                down_until: vec![None; self.children.len()],
                 swapping: false,
                 fresh: false,
-                held: FallbackBacklog::default(),
+                held: Vec::new(),
                 events: Default::default(),
                 generation: None,
                 closed: false,
@@ -81,12 +82,15 @@ struct Open {
 
 struct State {
     active: Arc<dyn RealtimeSession>,
-    policy: RealtimePolicy,
+    active_index: usize,
+    /// Each model's cooldown after its terminal error: out until then.
+    down_until: Vec<Option<SystemTime>>,
     /// The old session is closing and the new one opening.
     swapping: bool,
     /// The new session waits for its frame, which ends with the tools.
     fresh: bool,
-    held: FallbackBacklog,
+    /// The replies asked while the new model waits for its frame, in order.
+    held: Vec<RealtimeCommand>,
     events: std::collections::VecDeque<Event>,
     generation: Option<Open>,
     closed: bool,
@@ -106,9 +110,13 @@ impl FallbackSession {
         self.state.lock().unwrap()
     }
 
-    /// The policy's `time.time()`: only compared with itself.
-    fn now(&self) -> f64 {
-        self.clock.wall().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+    /// The active model failed for good: it is out for the cooldown, and the model to swap to is
+    /// the first available one, the primary preferred.
+    fn swap_target(&self, st: &mut State) -> Option<usize> {
+        let now = self.clock.wall();
+        st.down_until[st.active_index] = Some(now + COOLDOWN);
+        let up = |until: &Option<SystemTime>| until.is_none_or(|at| at <= now);
+        st.down_until.iter().position(up)
     }
 
     /// The generation a dead session leaves open, closed as the child would on its close.
@@ -153,7 +161,7 @@ impl FallbackSession {
         let mut st = self.lock();
         st.swapping = false;
         st.active = session;
-        st.policy.set_active_index(target);
+        st.active_index = target;
         st.events.push_back(Event::SessionSwapped { regenerate: true });
     }
 
@@ -213,15 +221,17 @@ impl RealtimeSession for FallbackSession {
                     RealtimeCommand::UpdateTools(_) if !st.swapping => {
                         st.fresh = false;
                         let mut commands = vec![cmd];
-                        commands.extend(st.held.take());
+                        commands.append(&mut st.held);
                         Some((st.active.clone(), commands))
                     }
                     RealtimeCommand::GenerateReply(_) | RealtimeCommand::Say(_) => {
-                        if let Err((reason, refused)) = st.held.hold(cmd) {
+                        if st.held.len() < HELD_REPLIES {
+                            st.held.push(cmd);
+                        } else {
                             st.events.push_back(Event::GenerateReplyFailed(GenerateReplyFailed {
-                                req_id: refused.req_id().unwrap_or_default().to_owned(),
+                                req_id: cmd.req_id().unwrap_or_default().to_owned(),
                                 error: RealtimeError::with_code(
-                                    reason.to_string(),
+                                    "realtime fallback pending reply limit exceeded",
                                     Some("realtime_fallback_backlog_exceeded".into()),
                                 ),
                             }));
@@ -230,7 +240,7 @@ impl RealtimeSession for FallbackSession {
                         None
                     }
                     RealtimeCommand::CancelReply(c) => {
-                        st.held.cancel(&c.req_id);
+                        st.held.retain(|held| held.req_id() != Some(c.req_id.as_str()));
                         None
                     }
                     // The old session's (an interrupt, a truncation, its audio), or superseded by
@@ -267,8 +277,11 @@ impl RealtimeSession for FallbackSession {
                 None if !Arc::ptr_eq(&active, &self.lock().active) => continue,
                 None => return None,
                 Some(Event::Error(e)) if !e.recoverable => {
-                    let plan = self.lock().policy.on_child_error(false, false, self.now());
-                    let Some(target) = plan.swap_to else { return Some(Event::Error(e)) };
+                    let target = {
+                        let mut st = self.lock();
+                        self.swap_target(&mut st)
+                    };
+                    let Some(target) = target else { return Some(Event::Error(e)) };
                     // While a fallback remains the error is recoverable.
                     let e = RealtimeModelError { recoverable: true, ..e };
                     self.lock().events.push_back(Event::Error(e));
