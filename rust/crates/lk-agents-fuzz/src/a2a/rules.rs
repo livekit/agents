@@ -5,10 +5,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use lk_agents_a2a::{A2A_CHANNEL, channel_of};
+use lk_agents_a2a::{Policy, channel_of, resolve_policy};
+use lk_agents_storage::StorageError;
 use lk_agents_storage::run::{INTERRUPTED_KEY, MERGED_INTO_KEY, TaskRow, TaskState};
 
 use super::Record;
+use super::door::FOLLOW_UP_REFUSED;
 
 /// One broken promise: the kind of subject it concerns, and what happened.
 #[derive(Debug, Clone)]
@@ -46,7 +48,7 @@ impl std::fmt::Display for Finding {
 type Rule = fn(&Record) -> Vec<Violation>;
 
 /// Every rule, by name.
-pub const RULES: [(&str, Rule); 8] = [
+pub const RULES: [(&str, Rule); 12] = [
     ("message_executes_once", message_executes_once),
     ("request_answered_once", request_answered_once),
     ("terminal_task_never_changes", terminal_task_never_changes),
@@ -55,6 +57,10 @@ pub const RULES: [(&str, Rule); 8] = [
     ("only_interrupt_yields", only_interrupt_yields),
     ("one_question_pending", one_question_pending),
     ("listing_is_complete_and_bound", listing_is_complete_and_bound),
+    ("committed_items_stay_once", committed_items_stay_once),
+    ("received_message_is_drained", received_message_is_drained),
+    ("refusal_only_while_held", refusal_only_while_held),
+    ("answer_is_an_outcome", answer_is_an_outcome),
 ];
 
 /// Every violation of every rule; a terminal row seen changing while the run went is
@@ -82,9 +88,17 @@ fn committed(record: &Record) -> impl Iterator<Item = &super::StagedRun> {
     record.seen.staged.iter().filter(move |s| ended.contains(s.run_id.as_str()))
 }
 
-/// A message that continued a pending question (it named that task) is a `Continuation`.
+/// A message's subject kind, by its channel's policy: `Inbox` under `batch`, `Concurrent`,
+/// `Refusable` under `reject`; under `interrupt` and `queue` a `Continuation` when it continued
+/// a pending question (it named that task), else a `Message`.
 fn subject(record: &Record, message: &str) -> &'static str {
-    if record.continued.contains(message) { "Continuation" } else { "Message" }
+    match record.policies.get(message).copied() {
+        Some(Policy::Batch) => "Inbox",
+        Some(Policy::Concurrent) => "Concurrent",
+        Some(Policy::Reject) => "Refusable",
+        _ if record.continued.contains(message) => "Continuation",
+        _ => "Message",
+    }
 }
 
 /// A message runs at most one committed turn, and every answer to it names its one task or the
@@ -93,7 +107,9 @@ pub fn message_executes_once(record: &Record) -> Vec<Violation> {
     let mut out = Vec::new();
     let mut runs: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for s in committed(record) {
-        runs.entry(&s.message_id).or_default().push(&s.run_id);
+        for message in &s.messages {
+            runs.entry(message).or_default().push(&s.run_id);
+        }
     }
     for (message, runs) in runs.iter().filter(|(_, r)| r.len() > 1) {
         out.push(v(
@@ -184,7 +200,7 @@ pub fn commit_is_what_the_run_staged(record: &Record) -> Vec<Violation> {
             let now = final_status.get(task.as_str()).copied();
             if now != Some(*staged) && now != Some(TaskState::Canceled) {
                 out.push(v(
-                    "Run",
+                    if s.leased { "Run" } else { "Concurrent" },
                     format!("{}: staged {task} {staged:?}, it is {now:?}", s.run_id),
                 ));
             }
@@ -212,7 +228,8 @@ pub fn only_interrupt_yields(record: &Record) -> Vec<Violation> {
     for t in &record.tasks {
         let interrupted = t.data.metadata.get(INTERRUPTED_KEY).and_then(|v| v.as_bool());
         let channel = t.data.history.last().map(channel_of);
-        if interrupted == Some(true) && channel.as_deref() != Some(A2A_CHANNEL) {
+        let policy = channel.as_deref().map(|c| resolve_policy(&record.policy, c));
+        if interrupted == Some(true) && policy != Some(Policy::Interrupt) {
             out.push(v("Task", format!("{} was interrupted on channel {channel:?}", t.task_id)));
         }
     }
@@ -222,12 +239,111 @@ pub fn only_interrupt_yields(record: &Record) -> Vec<Violation> {
     out
 }
 
-/// A turn settles the pending question before it may ask its own: one is pending at a time.
-pub fn one_question_pending(record: &Record) -> Vec<Violation> {
-    match record.seen.most_pending {
-        0 | 1 => Vec::new(),
-        n => vec![v("Lane", format!("{n} questions were pending at once"))],
+/// Every history item a committed run added is in the lane's history, once: no run's commit
+/// (an exclusive one fenced by version, a concurrent one appending) loses or repeats another's.
+pub fn committed_items_stay_once(record: &Record) -> Vec<Violation> {
+    let mut count: BTreeMap<&str, usize> = BTreeMap::new();
+    for item in &record.items {
+        *count.entry(item.id.as_str()).or_default() += 1;
     }
+    let mut out = Vec::new();
+    for s in committed(record) {
+        for item in &s.items {
+            let n = count.get(item.as_str()).copied().unwrap_or(0);
+            if n != 1 {
+                out.push(v(
+                    "Run",
+                    format!("{}: its item {item} is in the history {n} times", s.run_id),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// A message received into the inbox is drained: once every request is done, its task is no
+/// longer `submitted`, unless the lane's last runner died with it pending.
+pub fn received_message_is_drained(record: &Record) -> Vec<Violation> {
+    if !record.seen.lost.is_empty() {
+        return Vec::new();
+    }
+    let status: BTreeMap<&str, TaskState> =
+        record.at_rest.iter().map(|t| (t.task_id.as_str(), t.status)).collect();
+    let mut out = Vec::new();
+    for (request, message) in &record.seen.received {
+        let task = format!("AST_r{request}");
+        if status.get(task.as_str()) == Some(&TaskState::Submitted) {
+            out.push(v("Inbox", format!("{message} ({task}) stayed in the inbox undrained")));
+        }
+    }
+    out
+}
+
+/// `reject` refuses a message only while another run holds the lane, and a refused message
+/// leaves no task row.
+pub fn refusal_only_while_held(record: &Record) -> Vec<Violation> {
+    let rows: BTreeSet<&str> = record.tasks.iter().map(|t| t.task_id.as_str()).collect();
+    let mut out = Vec::new();
+    for r in &record.seen.refusals {
+        if !r.held {
+            out.push(v("Request", format!("request {} was refused on a free lane", r.request)));
+        }
+        if rows.contains(r.task_id.as_str()) {
+            out.push(v(
+                "Request",
+                format!("request {} was refused and left {}", r.request, r.task_id),
+            ));
+        }
+    }
+    out
+}
+
+/// A turn settles the pending question before it may ask its own: one is pending at a time
+/// (`concurrent` turns may overlap and are not counted). An `Inbox` lane is one where a drained
+/// batch left a question.
+pub fn one_question_pending(record: &Record) -> Vec<Violation> {
+    let s = &record.seen;
+    if s.most_pending < 2 {
+        return Vec::new();
+    }
+    let message =
+        |task: &String| record.tasks.iter().find(|t| t.task_id == *task)?.message_id.clone();
+    let inbox = s
+        .most_pending_tasks
+        .iter()
+        .filter_map(message)
+        .any(|m| record.policies.get(&m) == Some(&Policy::Batch));
+    let subject = if inbox { "Inbox" } else { "Lane" };
+    vec![v(subject, format!("{:?} were pending at once", s.most_pending_tasks))]
+}
+
+/// A request is answered with the task's outcome or with an error the client can act on: the
+/// door refused a follow-up to a terminal task, the lane refused it (`reject`), the database could not be reached or its commit stayed
+/// unresolved or was rejected, the handler was cancelled. A framework-internal condition (a
+/// lease another run holds, an invalid write) never reaches the client.
+pub fn answer_is_an_outcome(record: &Record) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for r in &record.seen.responses {
+        let Err(e) = &r.answer else { continue };
+        let actionable = match e {
+            StorageError::RunRejected { .. } => {
+                record.policies.get(&r.message_id) == Some(&Policy::Reject)
+            }
+            StorageError::Unavailable(_)
+            | StorageError::Uncertain(_)
+            | StorageError::VersionConflict { .. }
+            | StorageError::Cancelled(_) => true,
+            StorageError::Server { code, .. } => code == FOLLOW_UP_REFUSED,
+            _ => false,
+        };
+        if !actionable {
+            out.push(v(
+                subject(record, &r.message_id),
+                format!("request {} ({}) was answered {e:?}", r.request, r.message_id),
+            ));
+        }
+    }
+    out
 }
 
 /// A listing returns no task twice, every task that matched its filters and did not change
@@ -261,16 +377,17 @@ pub fn listing_is_complete_and_bound(record: &Record) -> Vec<Violation> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::a2a::{Cancel, run};
+    use crate::a2a::{Cancel, Refusal, Response, run};
     use crate::sched::Sampling;
 
-    /// A run that reached what the counterexamples break: answers, committed runs, a cancel and
-    /// a listing with pages.
+    /// A run that keeps every rule and reached what the counterexamples break: answers,
+    /// committed runs, a cancel and a listing with pages.
     fn reached() -> Record {
         (0..200)
             .map(|seed| run(seed, 8, Sampling::BasicPos))
             .find(|r| {
-                committed(r).count() > 1
+                check(r).is_empty()
+                    && committed(r).count() > 1
                     && !r.seen.cancels.is_empty()
                     && r.seen.listings.iter().any(|l| l.listed.len() > 1)
             })
@@ -365,7 +482,10 @@ mod tests {
 
     #[test]
     fn two_pending_questions_are_rejected() {
-        breaks(one_question_pending, |r| r.seen.most_pending = 2);
+        breaks(one_question_pending, |r| {
+            r.seen.most_pending = 2;
+            r.seen.most_pending_tasks = vec!["AST_x".into(), "AST_y".into()];
+        });
     }
 
     fn paged(r: &mut Record) -> &mut crate::a2a::list::Listing {
@@ -390,5 +510,52 @@ mod tests {
             l.after.push(entry);
         });
         breaks(listing_is_complete_and_bound, |r| r.seen.listings[0].foreign_token = Some(false));
+    }
+
+    #[test]
+    fn a_committed_item_lost_or_repeated_is_rejected() {
+        let item = |r: &Record| {
+            let run = committed(r).find(|s| !s.items.is_empty()).unwrap();
+            run.items[0].clone()
+        };
+        breaks(committed_items_stay_once, |r| {
+            let lost = item(r);
+            r.items.retain(|i| i.id != lost);
+        });
+        breaks(committed_items_stay_once, |r| {
+            let again = item(r);
+            let row = r.items.iter().find(|i| i.id == again).unwrap().clone();
+            r.items.push(row);
+        });
+    }
+
+    #[test]
+    fn a_received_message_left_in_the_inbox_is_rejected() {
+        breaks(received_message_is_drained, |r| {
+            r.seen.received.push((99, "m99".into()));
+            let mut row = r.at_rest[0].clone();
+            (row.task_id, row.status) = ("AST_r99".into(), TaskState::Submitted);
+            r.at_rest.push(row);
+        });
+    }
+
+    #[test]
+    fn a_refusal_on_a_free_lane_or_with_a_row_is_rejected() {
+        breaks(refusal_only_while_held, |r| {
+            r.seen.refusals.push(Refusal { request: 99, task_id: "AST_r99".into(), held: false });
+        });
+        breaks(refusal_only_while_held, |r| {
+            let task_id = r.tasks[0].task_id.clone();
+            r.seen.refusals.push(Refusal { request: 99, task_id, held: true });
+        });
+    }
+
+    #[test]
+    fn an_internal_error_answered_is_rejected() {
+        breaks(answer_is_an_outcome, |r| {
+            let message_id = r.seen.responses[0].message_id.clone();
+            let answer = Err(StorageError::LeaseHeld("front-desk".into()));
+            r.seen.responses.push(Response { request: 99, message_id, answer, uncertain: false });
+        });
     }
 }

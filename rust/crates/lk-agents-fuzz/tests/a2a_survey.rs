@@ -29,6 +29,11 @@ fn reach(record: &a2a::Record, into: &mut std::collections::BTreeMap<&'static st
         ("RejectedSave", s.rejected),
         ("LeaseTimeout", s.lease_timeouts),
         ("WorkerLost", s.lost.len() as u64),
+        ("FollowUpRefused", s.follow_ups_refused),
+        ("Received", s.received.len() as u64),
+        ("Batched", s.batched),
+        ("ConcurrentRun", s.concurrent_runs),
+        ("Refused", s.refusals.len() as u64),
         ("Listing", s.listings.len() as u64),
         (
             "ForeignPageToken",
@@ -100,4 +105,15 @@ fn survey() {
         assert!(missing.is_empty(), "the campaign never reached {missing:?}");
     }
     assert!(failures.is_empty(), "{} failing runs:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn a_canceled_continuation_keeps_its_receipt_identity() {
+    for seed in [154, 239] {
+        for sampling in [Sampling::Arrival, Sampling::BasicPos] {
+            let record = a2a::run(seed, MESSAGES, sampling);
+            let failures = a2a::rules::message_executes_once(&record);
+            assert!(failures.is_empty(), "seed {seed} {sampling:?}: {failures:?}\n{record:#?}");
+        }
+    }
 }

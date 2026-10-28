@@ -86,30 +86,34 @@ pub const STORAGE: Boundary = Boundary {
 pub const A2A: Boundary = Boundary {
     cores: &[
         "A2A core (lk_agents_a2a: resolve_policy, resolve_debounce, answer_pending, \
-         checkpoint_stop, settle, result_for), stepped by simulated door requests one decision \
-         at a time",
+         checkpoint_stop, settle, result_for) under every inbox policy (interrupt, queue, \
+         batch, concurrent, reject), stepped by simulated door requests one decision at a time",
         "storage core (lk_agents_storage::db plans and decodings: acquire with submit and pickup, \
-         set_waiter, checkpoint, cancel, commit, resolve_commit, list_tasks; run_commit, \
-         merge_write, Renewal, LanePoll)",
+         receive, inbox, release_if_drained, submit, set_waiter, checkpoint, pickup, cancel, \
+         commit fenced, keeping the lease past a drained row or appending without one, \
+         resolve_commit, lane_info, lane_events, list_tasks; run_commit, merge_write, Renewal, \
+         LanePoll)",
     ],
     fakes: &[
         "storage::db: the thread database as a real SQLite in memory on the simulated clock",
         "a2a::door's handler: drawn work time, checkpoints, text/raise/question endings, a yield \
          seen at once or only at the next await",
-        "the clients: out-of-order arrivals on the a2a and delegation channels, resends after a \
-         lost or failed answer and at once, continuations of the pending question, cancels, \
+        "the clients: out-of-order arrivals on the a2a, delegation and sms channels under door \
+         options mixing the policies on one lane, resends after a lost or failed answer and at \
+         once, continuations of the pending question (stale ones the door refuses), cancels, \
          ListTasks paging with a page token tried under other filters",
         "the AgentDB faults: lost commit acknowledgments, unreachable windows, paused and lost \
          workers",
     ],
     transitional: &[
-        "a2a::door mirrors lk_agents_runtime::a2a::Turn::exclusive and the storage engine's run \
-         by hand until the arrival policy and task transitions are a core machine (I-1, I-8)",
+        "a2a::door and a2a::batch mirror lk_agents_runtime::a2a::Turn (exclusive, batch with \
+         its drain and await_task, concurrent, reject), the door's follow-up check and the \
+         storage engine's run by hand until the arrival policy and task transitions are a core \
+         machine (I-1, I-8)",
     ],
     outside: &[
         "SubscribeToTask and resubscribe from a cursor (current Task first, then the frames \
          after the offset): runtime door and response streams, no core decision (K-30, I-27)",
-        "the batch, concurrent and reject policies: next K-4 slice",
         "the door's HTTP/JSON-RPC transport and the host's handler (runtime a2a_turns suite)",
     ],
 };

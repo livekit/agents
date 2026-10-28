@@ -2,27 +2,32 @@
 //! over its thread, every decision the A2A and storage cores', every statement run on the
 //! storage simulation's SQLite ([`crate::storage::db`]) on the simulated clock.
 //!
-//! Requests ([`door`]) arrive out of order on two channels whose default policies differ
-//! (`a2a` interrupts, `delegation` queues); a client resends a message whose answer it lost
-//! (its worker died, or the door answered an error) and sometimes resends one at once; a client
-//! answers a pending question by continuing its task; another cancels tasks at random, racing
+//! Requests ([`door`]) arrive out of order on three channels under door options the seed draws:
+//! the default map (`a2a` interrupts, `delegation` queues, `sms` batches), or maps that put the
+//! `batch` ([`batch`]), `concurrent` and `reject` policies on the same lane as the exclusive ones.
+//! A client resends a message whose answer it lost (its worker died, or the door answered an
+//! error) and sometimes resends one at once; a client answers a pending question by continuing its
+//! task, which the door refuses once that task ended; another cancels tasks at random, racing
 //! their turns; a third pages through `ListTasks` ([`list`]) while the tasks change. The faults
 //! are AgentDB's: commit acknowledgments lost before or after they applied, unreachable windows,
 //! paused workers whose lease lapses, workers lost mid-turn.
 //!
 //! The rules ([`rules`]) hold over the whole run: a message is executed once and every answer
-//! to it names the same task; every request is answered once, unless its worker died; a terminal
+//! to it names the same task; every request is answered once, unless its worker died, with an
+//! outcome or an error the client can act on, never a framework-internal one; a terminal
 //! task never changes; a cancel answers the row as it is; a committed run's rows are what it
 //! staged (a lost acknowledgment is resolved by the run's identity, never a failure it did not
-//! observe, decision 39); only `interrupt` yields to a newer message; one question is pending at
-//! a time; a listing returns each task that did not change once and refuses a page token made
-//! under other filters.
+//! observe, decision 39) and its history items stay, once; only `interrupt` yields to a newer
+//! message; one question is pending at a time; a received inbox message is drained; a refusal
+//! happens only while another run holds the lane and leaves no row; a listing returns each task
+//! that did not change once and refuses a page token made under other filters.
 //!
 //! Outside the simulation: the SSE stream of a `SubscribeToTask` and its resume from a cursor
 //! (the current `Task` first, then the frames after the offset) are runtime code
-//! (`lk_agents_runtime::a2a` and its response streams) with no core decision to step; the
-//! `batch`, `concurrent` and `reject` policies are the next slice.
+//! (`lk_agents_runtime::a2a` and its response streams) with no core decision to step.
 
+pub mod batch;
+mod commit;
 pub mod door;
 pub mod list;
 pub mod rules;
@@ -32,7 +37,9 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use fastrand::Rng;
-use lk_agents_a2a::{DELEGATION_CHANNEL, DebounceSpec};
+use lk_agents_a2a::{
+    DELEGATION_CHANNEL, DebounceSpec, Policy, PolicySpec, channel_of, resolve_policy,
+};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{self as plans, Decode};
 use lk_agents_storage::run::{CHANNEL_KEY, REASON_WORKER_LOST, TaskRow, TaskState};
@@ -46,10 +53,13 @@ use list::Lister;
 
 pub const LANE: &str = "front-desk";
 pub const THREAD: &str = "AT_sim";
+/// An inbox channel: `batch` by default.
+const SMS_CHANNEL: &str = "sms";
 
-/// The timing a seed draws, production defaults scaled down.
+/// What a seed draws: the door's options, and production timings scaled down.
 #[derive(Debug, Clone)]
-pub struct Timing {
+pub struct Setup {
+    pub policy: PolicySpec,
     pub lease_ttl: Duration,
     pub renew_interval: Duration,
     /// How long a handler works, in milliseconds.
@@ -73,11 +83,25 @@ pub struct Response {
 #[derive(Debug, Clone)]
 pub struct StagedRun {
     pub run_id: String,
-    pub message_id: String,
+    /// The messages of its turn: one, or a drained batch.
+    pub messages: Vec<String>,
     pub interrupt: bool,
+    /// It held the lease; a `concurrent` run holds none.
+    pub leased: bool,
     /// The turn yielded to a newer message waiting for the lane.
     pub yielded_to_waiter: bool,
     pub writes: Vec<(String, TaskState)>,
+    /// The history items it adds.
+    pub items: Vec<String>,
+}
+
+/// A `reject` request refused: its task, and whether another run held the lane when it was
+/// refused, as the database stood.
+#[derive(Debug, Clone)]
+pub struct Refusal {
+    pub request: usize,
+    pub task_id: String,
+    pub held: bool,
 }
 
 /// A client's `tasks/cancel`: the row before and what the cancel answered.
@@ -97,10 +121,18 @@ pub struct Observed {
     pub staged: Vec<StagedRun>,
     pub cancels: Vec<Cancel>,
     pub listings: Vec<list::Listing>,
+    pub refusals: Vec<Refusal>,
+    /// Messages a `batch` request put in the inbox, by request.
+    pub received: Vec<(usize, String)>,
     /// Each task's statuses as they changed, step by step.
     pub statuses: BTreeMap<String, Vec<TaskState>>,
-    /// The most input-required rows holding a question at one time.
+    /// The most input-required rows holding a question at one time, but those asked by
+    /// `concurrent` runs, which may overlap.
     pub most_pending: usize,
+    /// The tasks pending at once when the most were.
+    pub most_pending_tasks: Vec<String>,
+    /// Tasks a `concurrent` run left waiting on a question.
+    pub concurrent_asks: BTreeSet<String>,
     pub deduplicated: u64,
     pub continuations: u64,
     pub interrupted: u64,
@@ -109,6 +141,10 @@ pub struct Observed {
     pub unresolved: u64,
     pub rejected: u64,
     pub lease_timeouts: u64,
+    /// Drain turns over more than one message.
+    pub batched: u64,
+    pub concurrent_runs: u64,
+    pub follow_ups_refused: u64,
 }
 
 /// Everything a finished run leaves for the rules: what was observed and the database after.
@@ -116,11 +152,16 @@ pub struct Observed {
 pub struct Record {
     pub seed: u64,
     pub steps: u64,
+    pub policy: PolicySpec,
     /// Requests sent, by id: the message each carried.
     pub requests: Vec<(usize, String)>,
     /// The messages sent continuing a task (`taskId` set): answers to a pending question.
     pub continued: BTreeSet<String>,
+    /// Each message's policy, by its channel.
+    pub policies: BTreeMap<String, Policy>,
     pub seen: Observed,
+    /// The tasks once every request was done, before the sweep failed what dead workers left.
+    pub at_rest: Vec<TaskRow>,
     pub tasks: Vec<TaskRow>,
     pub items: Vec<ItemRow>,
     pub events: Vec<EventRow>,
@@ -133,6 +174,9 @@ const SCHED_STREAM: u64 = u64::from_be_bytes(*b"\0\0\0sched");
 const CANCELER: u64 = 1 << 20;
 const LISTER: u64 = CANCELER + 1;
 const WORKERS: usize = 3;
+/// The simulated clock starts at a real time (2026-01-01, in milliseconds): the database's
+/// `unixepoch()` is never 0, which a released lease's `lease_until` would equal.
+const EPOCH: i64 = 1_767_225_600_000;
 
 /// The client side of the run: what it sends next and what it learned from the answers.
 struct Clients {
@@ -147,7 +191,8 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
     let mut rng = Rng::with_seed(seed);
     let mut sched: Sched<Infallible, Infallible> =
         Sched::new(sampling, Rng::with_seed(seed ^ SCHED_STREAM), &[]);
-    let timing = Timing {
+    let timing = Setup {
+        policy: draw_policy(&mut rng),
         lease_ttl: Duration::from_secs(rng.u64(2..6)),
         renew_interval: Duration::from_millis(rng.u64(500..1500)),
         work_ms: (50, rng.i64(200..3000)),
@@ -158,15 +203,16 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
         },
     };
     let clock = Clock::default();
+    clock.set(EPOCH);
     let mut db = SimDb::new(clock.clone());
     let mut seen = Observed::default();
     let mut requests: Vec<Request> = Vec::new();
     for id in 0..messages {
-        requests.push(Request::new(id, None, rng.i64(0..8000), rng.usize(0..WORKERS)));
+        requests.push(Request::new(id, None, EPOCH + rng.i64(0..8000), rng.usize(0..WORKERS)));
     }
     let mut clients =
-        Clients { pending: None, cancels: rng.usize(0..=3), cancel_at: rng.i64(0..6000) };
-    let mut lister = Lister::new(rng.i64(500..6000));
+        Clients { pending: None, cancels: rng.usize(0..=3), cancel_at: EPOCH + rng.i64(0..6000) };
+    let mut lister = Lister::new(EPOCH + rng.i64(500..6000));
     let mut answered = 0;
     let mut steps = 0u64;
     let mut online = Vec::new();
@@ -240,7 +286,17 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
             {
                 clients.pending = Some(result.task.task_id.clone());
             }
-            if response.answer.is_err() && rng.u8(0..3) != 0 && requests.len() < 4 * messages {
+            // a follow-up the door refused is not sent again: the client starts a new task
+            let refused = matches!(&response.answer,
+                Err(StorageError::Server { code, .. }) if code == door::FOLLOW_UP_REFUSED);
+            if refused {
+                clients.pending = None;
+            }
+            if response.answer.is_err()
+                && !refused
+                && rng.u8(0..3) != 0
+                && requests.len() < 4 * messages
+            {
                 let message = requests[response.request].message.clone();
                 let at = now + rng.i64(100..3000);
                 requests.push(Request::new(requests.len(), message, at, rng.usize(0..WORKERS)));
@@ -251,6 +307,7 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
         clock.set(clock.get() + rng.i64(1..15));
         observe(&db, &mut seen, &mut online);
     }
+    let at_rest = db.inspect(&plans::tasks(LANE, None, 10_000).statement);
     sweep(&mut db, &clock);
     observe(&db, &mut seen, &mut online);
     let tasks = db.inspect(&plans::tasks(LANE, None, 10_000).statement);
@@ -259,9 +316,15 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
     Record {
         seed,
         steps,
+        policy: timing.policy.clone(),
         requests: requests
             .iter()
             .filter_map(|r| Some((r.id, r.message.as_ref()?.message_id.clone())))
+            .collect(),
+        policies: requests
+            .iter()
+            .filter_map(|r| r.message.as_ref())
+            .map(|m| (m.message_id.clone(), resolve_policy(&timing.policy, &channel_of(m))))
             .collect(),
         continued: requests
             .iter()
@@ -270,6 +333,7 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
             .map(|m| m.message_id.clone())
             .collect(),
         seen,
+        at_rest: at_rest.iter().map(|r| TaskRow::from_row(r).expect("a task row")).collect(),
         tasks: tasks.iter().map(|r| TaskRow::from_row(r).expect("a task row")).collect(),
         items: items.iter().map(|r| ItemRow::from_row(r).expect("an item row")).collect(),
         events: events.iter().map(|r| EventRow::from_row(r).expect("an event row")).collect(),
@@ -277,14 +341,34 @@ pub fn run(seed: u64, messages: usize, sampling: Sampling) -> Record {
     }
 }
 
-/// The message request `id` sends: on the `a2a` or the `delegation` channel, continuing the
+/// The door's options: the default map, or maps that put `batch`, `concurrent` and `reject` on
+/// the lane beside the exclusive policies.
+fn draw_policy(rng: &mut Rng) -> PolicySpec {
+    let map = |pairs: &[(&str, Policy)]| {
+        PolicySpec::ByChannel(pairs.iter().map(|(c, p)| ((*c).to_owned(), *p)).collect())
+    };
+    match rng.u8(0..6) {
+        0 | 1 => PolicySpec::Default,
+        2 => PolicySpec::All(Policy::Concurrent),
+        3 => PolicySpec::All(Policy::Reject),
+        4 => map(&[("a2a", Policy::Concurrent), (DELEGATION_CHANNEL, Policy::Batch)]),
+        _ => map(&[("a2a", Policy::Reject), ("sms", Policy::Queue)]),
+    }
+}
+
+/// The message request `id` sends: on the `a2a`, `delegation` or `sms` channel, continuing the
 /// pending question's task when the client saw one.
 fn compose(id: usize, rng: &mut Rng, pending: Option<&str>) -> a2a::Message {
     let mut message =
         a2a::Message::new(a2a::Role::User, vec![a2a::Part::text(format!("message {id}"))]);
     message.message_id = format!("m{id}");
-    if rng.bool() {
-        let channel = Value::String(DELEGATION_CHANNEL.to_owned());
+    let channel = match rng.u8(0..3) {
+        0 => None,
+        1 => Some(DELEGATION_CHANNEL),
+        _ => Some(SMS_CHANNEL),
+    };
+    if let Some(channel) = channel {
+        let channel = Value::String(channel.to_owned());
         message.metadata = Some([(CHANNEL_KEY.to_owned(), channel)].into_iter().collect());
     }
     if rng.u8(0..3) != 0 {
@@ -313,12 +397,13 @@ fn cancel(db: &mut SimDb, rng: &mut Rng, seen: &mut Observed) {
 /// Every task's status now; a terminal status that changes is a violation at once.
 fn observe(db: &SimDb, seen: &mut Observed, online: &mut Vec<String>) {
     let rows = db.inspect(&plans::tasks(LANE, None, 10_000).statement);
-    let mut pending = 0;
+    let mut pending = Vec::new();
     for row in rows.iter().map(|r| TaskRow::from_row(r).expect("a task row")) {
         if row.status == TaskState::InputRequired
             && row.internal.as_ref().is_some_and(|i| i.ask.is_some())
+            && !seen.concurrent_asks.contains(&row.task_id)
         {
-            pending += 1;
+            pending.push(row.task_id.clone());
         }
         let log = seen.statuses.entry(row.task_id.clone()).or_default();
         if log.last() == Some(&row.status) {
@@ -331,7 +416,10 @@ fn observe(db: &SimDb, seen: &mut Observed, online: &mut Vec<String>) {
         }
         log.push(row.status);
     }
-    seen.most_pending = seen.most_pending.max(pending);
+    if pending.len() > seen.most_pending {
+        seen.most_pending = pending.len();
+        seen.most_pending_tasks = pending;
+    }
 }
 
 /// After every lease lapsed, one last holder fails what dead workers left running, so every
