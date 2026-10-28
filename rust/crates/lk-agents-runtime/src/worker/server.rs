@@ -4,21 +4,20 @@
 //! processes and the user's callbacks.
 
 use std::sync::Arc;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use livekit_protocol as proto;
 use prost::Message as _;
 
-use crate::{
+use crate::worker::{
     AcceptArguments, EnvOption, JobDecision, JobRequest, RunningJobInfo, ServerType,
     WORKER_PROTOCOL_VERSION, WorkerPermissions,
 };
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
-    dev: crate::config::DEFAULT_LOAD_THRESHOLD_DEV,
-    prod: crate::config::DEFAULT_LOAD_THRESHOLD_PROD,
+    dev: crate::worker::config::DEFAULT_LOAD_THRESHOLD_DEV,
+    prod: crate::worker::config::DEFAULT_LOAD_THRESHOLD_PROD,
 };
 
 /// What `AgentServer(...)` was given, with the environment read where an option was left empty, as
@@ -73,7 +72,7 @@ impl Default for ServerSettings {
             port: EnvOption::Split { dev: 0, prod: 8081 },
             load_threshold: DEFAULT_LOAD_THRESHOLD,
             num_idle_processes: None,
-            drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
+            drain_timeout: crate::worker::DRAIN_TIMEOUT.as_secs_f64(),
             max_retry: 16,
             permissions: WorkerPermissions::default(),
             http_proxy: None,
@@ -285,10 +284,10 @@ impl ServerSettings {
         devmode: bool,
         server_type: ServerType,
         endpoints: Vec<proto::agent_http::AgentEndpoint>,
-        transport: crate::TransportConfig,
+        transport: crate::worker::TransportConfig,
         worker_url: Option<String>,
-    ) -> crate::WorkerOptions {
-        crate::WorkerOptions {
+    ) -> crate::worker::WorkerOptions {
+        crate::worker::WorkerOptions {
             ws_url: Some(self.ws_url.clone()),
             worker_url: Some(worker_url.unwrap_or_default()),
             api_key: Some(self.api_key.clone()),
@@ -307,12 +306,11 @@ impl ServerSettings {
             drain_timeout: std::time::Duration::try_from_secs_f64(self.drain_timeout).ok(),
             transport,
             max_retry: self.max_retry,
-            ..crate::WorkerOptions::default()
+            ..crate::worker::WorkerOptions::default()
         }
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// The Prometheus multiprocess directory a run uses: the configured one, else the inherited
 /// `PROMETHEUS_MULTIPROC_DIR`; created, and emptied of a previous run's files.
 pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
@@ -320,20 +318,20 @@ pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
         .map(str::to_owned)
         .or_else(|| std::env::var("PROMETHEUS_MULTIPROC_DIR").ok().filter(|d| !d.is_empty()))?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        crate::diagnostics::emit(
+        crate::worker::diagnostics::emit(
             log::Level::Warn,
             format!("failed to create the prometheus directory path={dir} error={e}"),
         );
         return Some(dir);
     }
-    crate::diagnostics::emit(
+    crate::worker::diagnostics::emit(
         log::Level::Debug,
         format!("cleaning prometheus multiprocess directory path={dir}"),
     );
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
             if let Err(e) = std::fs::remove_file(&path) {
-                crate::diagnostics::emit(
+                crate::worker::diagnostics::emit(
                     log::Level::Warn,
                     format!("failed to remove {}: {e}", path.display()),
                 );
@@ -376,7 +374,7 @@ pub fn simulated_job(
 ) -> Result<RunningJobInfo, String> {
     let token = token.filter(|t| !t.is_empty());
     let agent_identity = match (&token, agent_identity) {
-        (Some(token), _) => Some(crate::token_identity(token).map_err(|e| e.to_string())?),
+        (Some(token), _) => Some(crate::worker::token_identity(token).map_err(|e| e.to_string())?),
         (None, identity) => identity,
     };
     let identity = match agent_identity {
@@ -404,8 +402,13 @@ pub fn simulated_job(
         None if fake_job && (settings.api_key.is_empty() || settings.api_secret.is_empty()) => {
             String::new()
         }
-        None => crate::agent_join_token(&settings.api_key, &settings.api_secret, &identity, room)
-            .map_err(|e| e.to_string())?,
+        None => crate::worker::agent_join_token(
+            &settings.api_key,
+            &settings.api_secret,
+            &identity,
+            room,
+        )
+        .map_err(|e| e.to_string())?,
     };
     Ok(RunningJobInfo {
         accept_arguments: AcceptArguments {
@@ -414,7 +417,7 @@ pub fn simulated_job(
             metadata: String::new(),
             attributes: Vec::new(),
         },
-        job: crate::protocol::job_info(&job),
+        job: crate::worker::protocol::job_info(&job),
         url: settings.ws_url.clone(),
         token,
         worker_id: worker_id.to_owned(),
@@ -432,7 +435,7 @@ pub fn simulated_job(
 /// has no `on_request` accepts it as `JobRequest.accept()` does. `None`: ask the host.
 pub fn own_decision(req: &JobRequest, has_rtc: bool, has_on_request: bool) -> Option<JobDecision> {
     if !has_rtc {
-        crate::diagnostics::emit(
+        crate::worker::diagnostics::emit(
             log::Level::Warn,
             format!(
                 "a job reached a server with no rtc_session; rejecting it job_id={} room={}",
@@ -469,15 +472,13 @@ pub trait HealthProbe: Send + Sync {
 /// The server state the listener and `/worker` read.
 pub struct ServerStatus {
     pub ready: tokio::sync::watch::Sender<bool>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub connection_failed: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     /// `f32` bits.
     pub worker_load: AtomicU32,
 }
 
 impl Default for ServerStatus {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     fn default() -> Self {
         Self {
             ready: tokio::sync::watch::channel(false).0,
@@ -607,7 +608,6 @@ pub async fn serve_metrics(
     .await
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Serves `listener` until dropped: one request per connection, answered by
 /// `respond(method, path)`, then closed.
 async fn serve<F, R>(
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn a_server_answers_a_job_request_alone_unless_its_door_has_on_request() {
         let job = proto::Job { id: "AJ_1".into(), ..Default::default() };
-        let req = JobRequest { job: crate::protocol::job_info(&job), resuming: false };
+        let req = JobRequest { job: crate::worker::protocol::job_info(&job), resuming: false };
         assert_eq!(own_decision(&req, false, true), Some(JobDecision::Reject { terminate: false }));
         let Some(JobDecision::Accept(args)) = own_decision(&req, true, false) else {
             panic!("a door without on_request accepts")
@@ -904,7 +904,7 @@ mod tests {
                 .unwrap();
         assert_eq!(named.accept_arguments.identity, minted.accept_arguments.identity);
     }
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+
     #[tokio::test]
     async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

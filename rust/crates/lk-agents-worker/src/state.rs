@@ -6,8 +6,8 @@ use crate::protocol::{
     self, AvailabilityRequest, Job, JobAssignment, JobStatus, RegisterWorkerResponse,
     ServerMessage, WorkerMessage,
 };
-use crate::worker::{HostError, JobId};
 use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo};
+use crate::{HostError, JobId};
 use lk_agents_abi::{TimerSet, Ts, WallAnchor};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
@@ -178,7 +178,7 @@ impl WorkerState {
         Self::with_assignment_capacity(cfg, DEFAULT_ASSIGNMENT_CAPACITY)
     }
 
-    pub(crate) fn with_assignment_capacity(cfg: WorkerConfig, assignment_capacity: usize) -> Self {
+    pub fn with_assignment_capacity(cfg: WorkerConfig, assignment_capacity: usize) -> Self {
         assert!(assignment_capacity > 0, "assignment capacity must be positive");
         WorkerState {
             cfg,
@@ -411,6 +411,7 @@ impl WorkerState {
             let ids = self.active.iter().map(|j| j.job.id.clone()).collect();
             self.queue(protocol::migrate_jobs(ids));
         }
+        self.update_idle_target();
         self.send_worker_status();
     }
 
@@ -460,11 +461,15 @@ impl WorkerState {
         self.push(WorkerStateEffect::SampleLoad);
     }
 
-    fn on_load(&mut self, now: Ts, load: f32) {
-        self.worker_load = load;
+    fn update_idle_target(&mut self) {
         if let Some(target) = self.load_inputs().target_idle_processes() {
             self.push(WorkerStateEffect::SetTargetIdleProcesses(target));
         }
+    }
+
+    fn on_load(&mut self, now: Ts, load: f32) {
+        self.worker_load = load;
+        self.update_idle_target();
         let parked: Vec<Slot> = self.awaiting_load.drain(..).collect();
         for slot in parked {
             self.resume_availability(now, slot);
@@ -769,7 +774,7 @@ impl WorkerState {
 
 /// Reconnect budget and wake-up policy; the adapter only waits for the supplied deadline.
 #[derive(Debug)]
-pub(crate) struct ConnectionRetry {
+pub struct ConnectionRetry {
     max_retry: u32,
     retries: u32,
     wake_at: Option<Ts>,
@@ -781,16 +786,16 @@ pub fn retry_delay(retry_count: u32) -> Duration {
 }
 
 impl ConnectionRetry {
-    pub(crate) fn new(max_retry: u32) -> Self {
+    pub fn new(max_retry: u32) -> Self {
         Self { max_retry, retries: 0, wake_at: None }
     }
 
-    pub(crate) fn registered(&mut self) {
+    pub fn registered(&mut self) {
         self.retries = 0;
         self.wake_at = None;
     }
 
-    pub(crate) fn disconnected(&mut self, now: Ts) -> Result<Ts, u32> {
+    pub fn disconnected(&mut self, now: Ts) -> Result<Ts, u32> {
         if self.retries >= self.max_retry {
             self.wake_at = None;
             return Err(self.retries);
@@ -801,7 +806,7 @@ impl ConnectionRetry {
         Ok(at)
     }
 
-    pub(crate) fn wake_at(&self) -> Option<Ts> {
+    pub fn wake_at(&self) -> Option<Ts> {
         self.wake_at
     }
 }

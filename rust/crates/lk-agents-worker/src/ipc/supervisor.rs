@@ -51,28 +51,6 @@ pub enum MemoryError<E> {
     Interrupted,
 }
 
-/// What the supervisor needs from the host language: logging and the process handle.
-pub trait ProcHost: Send + Sync + 'static {
-    type Error: Send + 'static;
-
-    fn log(&self, level: Level, msg: &str, extra: Extra);
-    /// An error log with the failure's traceback.
-    fn log_exception(&self, msg: &str, err: Self::Error);
-    fn is_alive(&self) -> bool;
-    /// SIGKILL (`Process.kill`; a terminate on Windows).
-    fn kill(&self) -> Result<(), String>;
-    fn request_stack_dump(&self) -> Result<bool, String> {
-        Ok(false)
-    }
-    /// The process's footprint in MB and the metric it reflects (pss, uss or rss). Blocking: the
-    /// supervisor calls it off the runtime.
-    fn sample_memory(&self) -> Result<(f64, String), MemoryError<Self::Error>>;
-    /// The process exited and was reaped: the host's handle can go.
-    fn release(&self) {}
-    fn incomplete_cleanup(&self, _: CleanupObservation) {}
-    fn signal_failed(&self, _: SignalFailure) {}
-}
-
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
     pub pid: u32,
@@ -129,7 +107,7 @@ pub enum StartJobError {
     Timeout,
 }
 
-pub(crate) fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
+pub fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
     use prost::Message;
     livekit_protocol::Job::decode(job.job.as_slice())
         .map_err(|error| StartJobError::InvalidFields(format!("job protobuf: {error}")))?;
@@ -149,7 +127,7 @@ pub(crate) fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
 }
 
 /// Seconds as a `Duration`: zero when negative or NaN.
-pub(crate) fn secs(s: f64) -> Duration {
+pub fn secs(s: f64) -> Duration {
     if s.is_nan() || s <= 0.0 { Duration::ZERO } else { Duration::from_secs_f64(s.min(1e9)) }
 }
 
@@ -258,12 +236,12 @@ enum Close {
 
 /// Rate-limits the high memory warning: once per cooldown, or sooner when usage grew.
 #[derive(Default)]
-pub(crate) struct WarnGate {
+pub struct WarnGate {
     last: Option<(Duration, f64)>,
 }
 
 impl WarnGate {
-    pub(crate) fn should_warn(&mut self, memory_mb: f64, now: Duration) -> bool {
+    pub fn should_warn(&mut self, memory_mb: f64, now: Duration) -> bool {
         let emit = match self.last {
             None => true,
             Some((at, mb)) => {
@@ -940,7 +918,7 @@ impl Supervision {
         self.exited && self.reaped
     }
 
-    pub(crate) fn close_timeout(&self) -> f64 {
+    pub fn close_timeout(&self) -> f64 {
         self.opts.close_timeout
     }
 

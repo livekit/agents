@@ -28,7 +28,6 @@ lk-agents-rtc = { path = "../lk-agents-rtc", features = ["python"] }
 lk-agents-media = { path = "../lk-agents-media", features = ["resample", "images", "blingfire", "python"] }
 lk-agents-voice = { path = "../lk-agents-voice", features = ["native-audio", "python"] }
 lk-agents-inference = { path = "../lk-agents-inference", features = ["native-audio", "python"] }
-lk-agents-worker = { path = "../lk-agents-worker", features = ["python"] }
 # The runtime implements the declared classes the generated adapters (`src/generated/`) call.
 lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python", "media-resample"] }
 # The session storage client (plan 13.4). Host-neutral: its Python face is `src/storage.rs` here,

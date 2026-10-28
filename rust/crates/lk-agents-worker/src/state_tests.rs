@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use lk_agents_abi::{Clock, Ts, VirtualClock};
 
+use crate::HostError;
 use crate::config::*;
 use crate::protocol::*;
 use crate::state::*;
-use crate::worker::*;
 use crate::{AcceptArguments, JobDecision, WorkerPermissions};
 
 // rig

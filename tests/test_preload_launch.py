@@ -55,19 +55,17 @@ def test_forkserver_refuses_to_freeze_an_unsafe_or_uninspectable_image(
     assert frozen == []
 
 
-@pytest.mark.parametrize("exception_type", [ImportError, SystemExit])
 def test_preload_import_failure_preserves_module_and_cause(
     launch: types.ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    exception_type: type[BaseException],
 ) -> None:
     (tmp_path / "preload_first.py").write_text(
         "import builtins\nbuiltins.preload_order.append('first')"
     )
     (tmp_path / "preload_second.py").write_text(
         "import builtins\nbuiltins.preload_order.append('second')\n"
-        f"raise {exception_type.__name__}('missing weights')"
+        "raise ImportError('missing weights')"
     )
     (tmp_path / "preload_third.py").write_text(
         "raise AssertionError('must not import after failure')"
@@ -79,10 +77,25 @@ def test_preload_import_failure_preserves_module_and_cause(
     try:
         with pytest.raises(RuntimeError, match="preload_second.*missing weights") as caught:
             launch.load_preload_modules(["preload_first", "preload_second", "preload_third"])
-        assert isinstance(caught.value.__cause__, exception_type)
+        assert isinstance(caught.value.__cause__, ImportError)
         assert order == ["first", "second"]
     finally:
         sys.modules.pop("preload_first", None)
+
+
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_preload_does_not_convert_process_control_exceptions(
+    launch: types.ModuleType, monkeypatch: pytest.MonkeyPatch, exception_type: type[BaseException]
+) -> None:
+    signal = exception_type("stop preload")
+
+    def interrupted(_: str) -> None:
+        raise signal
+
+    monkeypatch.setattr(launch.importlib, "import_module", interrupted)
+    with pytest.raises(exception_type) as caught:
+        launch.load_preload_modules(["application.catalog"])
+    assert caught.value is signal
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows uses spawn")

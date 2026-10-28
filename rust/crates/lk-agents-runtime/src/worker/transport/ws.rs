@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};
-use crate::protocol::{self, WorkerMessage};
+use crate::worker::protocol::{self, WorkerMessage};
 
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -154,7 +154,7 @@ impl WorkerStream for WsStream {
                     return Err(TransportError::Closed(reason));
                 }
                 Some(Ok(Message::Text(t))) => {
-                    log::warn!(target: crate::LOG, ws_data = truncate_ws_data(&t).as_str();
+                    log::warn!(target: crate::worker::LOG, ws_data = truncate_ws_data(&t).as_str();
                         "unexpected message type");
                 }
                 // Tungstenite handles ping/pong internally.

@@ -1,3 +1,4 @@
+//! Runtime-owned host adapter, compiled by lk-agents-runtime through #[path].
 //! Python host boundary conversions and callback diagnostics.
 
 use super::ProcessLaunch;
@@ -93,7 +94,7 @@ fn queue_process_diagnostic(
     error: Option<PyErr>,
 ) {
     let message = message.to_owned();
-    crate::diagnostics::submit_host(move |dropped| {
+    crate::worker::diagnostics::submit_host(move |dropped| {
         if dropped > 0 {
             extra.push(("dropped_supervisor_logs", ExtraValue::Int(dropped as i64)));
         }
@@ -332,7 +333,7 @@ impl PoolHost for PyPoolHost {
     }
 
     fn cleanup_incomplete(&self, observation: super::super::pool::PoolCleanupObservation) {
-        crate::diagnostics::emit(
+        crate::worker::diagnostics::emit(
             log::Level::Error,
             format!("process pool cleanup incomplete: {observation:?}"),
         );
@@ -441,7 +442,6 @@ pub(super) fn closed(_: Closed) -> PyErr {
     pyo3::exceptions::PyConnectionError::new_err("the IPC socket is closed")
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 pub(super) fn run_process_owner<'py>(
     slf: Bound<'py, super::PyProcSupervisor>,
     joined: Py<PyAny>,
@@ -560,7 +560,7 @@ pub(super) fn run_process_owner<'py>(
                 }
                 Err(error) if !reported => {
                     reported = true;
-                    crate::diagnostics::emit(
+                    crate::worker::diagnostics::emit(
                         log::Level::Error,
                         format!(
                             "native process {} observation failed: {error}",

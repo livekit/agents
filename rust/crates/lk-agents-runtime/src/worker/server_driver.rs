@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
 use tokio::sync::{Mutex, watch};
 
-use crate::server::{self, ServerSettings, ServerStatus};
-use crate::server_lifecycle::{
+use crate::worker::server::{self, ServerSettings, ServerStatus};
+use crate::worker::server_lifecycle::{
     ServerEffect, ServerInput, ServerLifecycle, ServerPhase, ServerResource,
 };
-use crate::{
+use crate::worker::{
     Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification, WorkerRegistered,
 };
 
@@ -45,8 +45,8 @@ pub(crate) struct ServerStart {
     pub has_load_fnc: bool,
     pub has_on_request: bool,
     pub publisher: bool,
-    pub endpoints: Vec<crate::protocol::AgentEndpoint>,
-    pub transport: crate::TransportConfig,
+    pub endpoints: Vec<crate::worker::protocol::AgentEndpoint>,
+    pub transport: crate::worker::TransportConfig,
     pub worker_url: Option<String>,
 }
 
@@ -71,20 +71,21 @@ type Outcome = watch::Sender<Option<Result<(), String>>>;
 #[derive(Clone)]
 pub(crate) struct ServerRuntime<H: ServerHost> {
     host: H,
+    workers: Option<crate::media_workers::MediaWorkers>,
     control: watch::Sender<Control>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     receiver: Arc<Mutex<Option<watch::Receiver<Control>>>>,
     snapshot: watch::Sender<ServerSnapshot>,
     outcome: Outcome,
+    cleanup_outcome: Outcome,
     drain_outcome: Outcome,
 }
 
 impl<H: ServerHost> ServerRuntime<H> {
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    pub(crate) fn new(host: H) -> Self {
+    pub(crate) fn new(host: H, workers: Option<crate::media_workers::MediaWorkers>) -> Self {
         let (control, receiver) = watch::channel(Control::default());
         Self {
             host,
+            workers,
             control,
             receiver: Arc::new(Mutex::new(Some(receiver))),
             snapshot: watch::channel(ServerSnapshot {
@@ -97,6 +98,7 @@ impl<H: ServerHost> ServerRuntime<H> {
             })
             .0,
             outcome: watch::channel(None).0,
+            cleanup_outcome: watch::channel(None).0,
             drain_outcome: watch::channel(None).0,
         }
     }
@@ -105,17 +107,16 @@ impl<H: ServerHost> ServerRuntime<H> {
         self.snapshot.borrow().clone()
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     pub(crate) async fn run(&self, start: ServerStart) -> Result<(), String> {
         let receiver = self.receiver.lock().await.take().ok_or("worker is already running")?;
         let origin = tokio::time::Instant::now();
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
-        let process_cleanup = timeout * 3 + crate::ipc::supervisor::KILL_GRACE;
+        let process_cleanup = timeout * 3 + crate::worker::ipc::supervisor::KILL_GRACE;
         let connection_cleanup = if start.unregistered {
             Duration::ZERO
         } else {
-            crate::WorkerOptions::default().connection_timeout
+            crate::worker::WorkerOptions::default().connection_timeout
         };
         let mut state = ServerLifecycle::new(process_cleanup.max(connection_cleanup));
         let effects = state.handle(ServerInput::Start, Duration::ZERO);
@@ -126,7 +127,10 @@ impl<H: ServerHost> ServerRuntime<H> {
         wait_outcome(&self.outcome).await
     }
 
-    pub(crate) async fn simulate_job(&self, info: crate::RunningJobInfo) -> Result<(), String> {
+    pub(crate) async fn simulate_job(
+        &self,
+        info: crate::worker::RunningJobInfo,
+    ) -> Result<(), String> {
         if self.snapshot().phase != ServerPhase::Running {
             return Err("the server is not accepting jobs".into());
         }
@@ -136,7 +140,7 @@ impl<H: ServerHost> ServerRuntime<H> {
     pub(crate) async fn drain(&self, timeout: Option<Duration>) -> Result<(), String> {
         match self.snapshot().phase {
             ServerPhase::Idle | ServerPhase::Closed => return Ok(()),
-            ServerPhase::Closing => return wait_outcome(&self.outcome).await,
+            ServerPhase::Closing => return wait_outcome(&self.cleanup_outcome).await,
             _ => {}
         }
         self.control.send_if_modified(|control| {
@@ -160,7 +164,7 @@ impl<H: ServerHost> ServerRuntime<H> {
             control.close = true;
             true
         });
-        wait_outcome(&self.outcome).await
+        wait_outcome(&self.cleanup_outcome).await
     }
 
     fn publish(&self, state: &ServerLifecycle, effects: Vec<ServerEffect>) {
@@ -176,19 +180,26 @@ impl<H: ServerHost> ServerRuntime<H> {
                         true
                     });
                 }
-                ServerEffect::CloseFinished(result) => {
+                ServerEffect::CloseFinished { run_result, cleanup_result } => {
+                    self.cleanup_outcome.send_if_modified(|outcome| {
+                        if outcome.is_some() {
+                            return false;
+                        }
+                        *outcome = Some(cleanup_result.clone());
+                        true
+                    });
                     self.outcome.send_if_modified(|outcome| {
                         if outcome.is_some() {
                             return false;
                         }
-                        *outcome = Some(result.clone());
+                        *outcome = Some(run_result.clone());
                         true
                     });
                 }
                 ServerEffect::IncompleteCleanup { resources } => {
                     self.snapshot
                         .send_modify(|snapshot| snapshot.incomplete_cleanup = resources.clone());
-                    crate::diagnostics::emit(
+                    crate::worker::diagnostics::emit(
                         log::Level::Error,
                         format!(
                             "server cleanup deadline missed; runtime retains ownership resources={resources:?}"
@@ -200,8 +211,6 @@ impl<H: ServerHost> ServerRuntime<H> {
         }
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     async fn serve(
         self,
         start: ServerStart,
@@ -326,7 +335,7 @@ impl<H: ServerHost> ServerRuntime<H> {
                 result = closing.next() => {
                     if let Some((resource, result)) = result {
                         if let Err(error) = &result {
-                            crate::diagnostics::emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
+                            crate::worker::diagnostics::emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
                         }
                         let effects = state.handle(ServerInput::ResourceStopped { resource, result }, origin.elapsed());
                         self.publish(&state, effects);
@@ -336,8 +345,6 @@ impl<H: ServerHost> ServerRuntime<H> {
         }
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: runtime migration")]
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     async fn start(
         &self,
         start: &ServerStart,
@@ -361,31 +368,53 @@ impl<H: ServerHost> ServerRuntime<H> {
         );
         let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
-        let permit = crate::worker::WORKER_IO_SLOTS
-            .acquire()
-            .await
-            .expect("worker I/O admission stays open");
-        resources.setup = Some(tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            crate::diagnostics::initialize()?;
-            Ok((
-                server::prepare_prometheus_dir(configured.as_deref()),
-                discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
-            ))
-        }));
+        let workers = match &self.workers {
+            Some(workers) => workers.clone(),
+            None => crate::process::workers().map_err(|error| error.to_string())?,
+        };
+        let admission_deadline =
+            Duration::try_from_secs_f64(settings.initialize_process_timeout)
+                .map_err(|_| "initialization timeout must be finite and nonnegative")?;
+        let prepare = async {
+            loop {
+                match workers.try_admit(lk_agents_abi::utils::workers::WorkerClass::WorkerIo) {
+                    Ok(permit) => {
+                        break Ok(workers.spawn_admitted(permit, move || {
+                            crate::worker::diagnostics::initialize()?;
+                            Ok((
+                                server::prepare_prometheus_dir(configured.as_deref()),
+                                discover_cpus.then(|| crate::worker::CpuMonitor::new().cpu_count()),
+                            ))
+                        }));
+                    }
+                    Err(lk_agents_abi::utils::workers::WorkerError::Exhausted(_)) => {
+                        tokio::time::sleep(crate::worker::ipc::pool::REFILL_INTERVAL).await;
+                    }
+                    Err(error) => break Err(error.to_string()),
+                }
+            }
+        };
+        resources.setup = Some(
+            tokio::time::timeout(admission_deadline, prepare)
+                .await
+                .map_err(|_| "server setup capacity wait timed out".to_owned())??,
+        );
         let setup = resources.setup.as_mut().expect("setup owned before awaiting").await;
         resources.setup.take();
         let (directory, cpus) = setup.map_err(|error| error.to_string())??;
         settings.prometheus_multiproc_dir = directory;
         if let Some(cpus) = cpus {
             settings.num_idle_processes =
-                Some(crate::EnvOption::Split { dev: 0, prod: cpus.ceil() as u32 });
+                Some(crate::worker::EnvOption::Split { dev: 0, prod: cpus.ceil() as u32 });
         }
         if !start.has_rtc {
-            settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
+            settings.num_idle_processes = Some(crate::worker::EnvOption::Fixed(0));
         }
-        let server_type =
-            if start.publisher { crate::ServerType::Publisher } else { crate::ServerType::Room };
+        let server_type = if start.publisher {
+            crate::worker::ServerType::Publisher
+        } else {
+            crate::worker::ServerType::Room
+        };
         let status = Arc::new(ServerStatus::default());
         let probe = Arc::new(HostHealth(host.clone()));
         if !settings.simulation {
@@ -411,7 +440,7 @@ impl<H: ServerHost> ServerRuntime<H> {
                 Some(tokio::spawn(server::serve_metrics(listener, probe, stop.subscribe())));
         }
         if settings.multiprocessing_fallback {
-            crate::diagnostics::emit(
+            crate::worker::diagnostics::emit(
                 log::Level::Warn,
                 "the forkserver is used on Linux only, job processes are spawned".into(),
             );
@@ -423,16 +452,16 @@ impl<H: ServerHost> ServerRuntime<H> {
                 server_type,
                 start.endpoints.clone(),
                 match &start.transport {
-                    crate::TransportConfig::WebSocket { heartbeat } => {
-                        crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
+                    crate::worker::TransportConfig::WebSocket { heartbeat } => {
+                        crate::worker::TransportConfig::WebSocket { heartbeat: *heartbeat }
                     }
-                    crate::TransportConfig::WebTransport { insecure } => {
-                        crate::TransportConfig::WebTransport { insecure: *insecure }
+                    crate::worker::TransportConfig::WebTransport { insecure } => {
+                        crate::worker::TransportConfig::WebTransport { insecure: *insecure }
                     }
                 },
                 start.worker_url.clone(),
             );
-            let (mut worker, handle) = Worker::new(options, host.clone());
+            let (mut worker, handle) = Worker::new(options, host.clone(), workers.clone());
             resources.worker = Some(handle.clone());
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();
@@ -472,7 +501,7 @@ impl<H: ServerHost> ServerRuntime<H> {
         let (host, worker) = (self.host.clone(), resources.worker.clone());
         let readiness = status.ready.clone();
         resources.load = Some(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
+            let mut interval = tokio::time::interval(crate::worker::UPDATE_LOAD_INTERVAL);
             loop {
                 interval.tick().await;
                 if let Some(worker) = &worker {
@@ -488,7 +517,6 @@ impl<H: ServerHost> ServerRuntime<H> {
         Ok(readiness)
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn drain_resources(
         &self,
         worker: Option<WorkerHandle>,
@@ -524,7 +552,6 @@ async fn wait_outcome(outcome: &Outcome) -> Result<(), String> {
         .unwrap_or(Ok(()))
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 async fn deadline(delay: Option<Duration>) {
     match delay {
         Some(delay) => tokio::time::sleep(delay).await,
@@ -552,7 +579,7 @@ async fn pending_worker(
 
 #[derive(Default)]
 struct Resources {
-    setup: Option<tokio::task::JoinHandle<Result<(Option<String>, Option<f32>), String>>>,
+    setup: Option<crate::media_workers::MediaWorker<Result<(Option<String>, Option<f32>), String>>>,
     worker: Option<WorkerHandle>,
     connection: Option<tokio::task::JoinHandle<Result<(), String>>>,
     load: Option<tokio::task::JoinHandle<Result<(), String>>>,
@@ -642,7 +669,7 @@ impl<H: ServerHost> server::HealthProbe for HostHealth<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{JobDecision, JobRequest, RunningJobInfo};
+    use crate::worker::{JobDecision, JobRequest, RunningJobInfo};
 
     #[derive(Clone)]
     struct Host {
@@ -672,10 +699,13 @@ mod tests {
         async fn on_job_request(&self, _: JobRequest) -> JobDecision {
             JobDecision::Unanswered
         }
-        async fn launch_job(&self, _: RunningJobInfo) -> crate::HostResult<crate::JobId> {
+        async fn launch_job(
+            &self,
+            _: RunningJobInfo,
+        ) -> crate::worker::HostResult<crate::worker::JobId> {
             Ok("job".into())
         }
-        async fn terminate_job(&self, _: crate::JobId) -> crate::HostResult {
+        async fn terminate_job(&self, _: crate::worker::JobId) -> crate::worker::HostResult {
             Ok(())
         }
         async fn user_load(&self) -> Option<f32> {
@@ -728,7 +758,7 @@ mod tests {
         ServerStart {
             settings: ServerSettings {
                 simulation: true,
-                num_idle_processes: Some(crate::EnvOption::Fixed(0)),
+                num_idle_processes: Some(crate::worker::EnvOption::Fixed(0)),
                 ..Default::default()
             },
             devmode: true,
@@ -739,16 +769,18 @@ mod tests {
             has_on_request: false,
             publisher: false,
             endpoints: vec![],
-            transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
+            transport: crate::worker::TransportConfig::WebSocket {
+                heartbeat: crate::worker::HEARTBEAT_INTERVAL,
+            },
             worker_url: None,
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
     #[tokio::test]
     async fn server_drain_close_callers_join_without_holding_a_lifecycle_lock() {
         let host = Host::new();
-        let runtime = ServerRuntime::new(host.clone());
+        let runtime =
+            ServerRuntime::new(host.clone(), Some(crate::worker::test_support::native_workers()));
         let run = runtime.run(options());
         tokio::pin!(run);
         assert!(futures_util::poll!(&mut run).is_pending());
@@ -775,23 +807,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
+        let host = Host::new();
+        host.release_close.add_permits(1);
+        let runtime = ServerRuntime::new(host, Some(crate::worker::test_support::native_workers()));
+        let mut start = options();
+        start.unregistered = false;
+        start.settings.ws_url = "ws://127.0.0.1:1".into();
+        start.settings.api_key = "devkey".into();
+        start.settings.api_secret = "devsecret".into();
+        start.settings.max_retry = 0;
+        let failure = tokio::time::timeout(Duration::from_secs(10), runtime.run(start))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(failure.contains("connection failed after 0 retries"), "{failure}");
+        assert_eq!(runtime.close().await, Ok(()));
+        assert_eq!(runtime.close().await, Ok(()));
+        assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+    }
+
+    #[tokio::test]
     async fn server_startup_lifecycle_reports_warmup_failure_and_joins_cleanup() {
         let mut host = Host::new();
         host.fail_start = true;
         host.release_close.add_permits(1);
-        let runtime = ServerRuntime::new(host.clone());
+        let runtime =
+            ServerRuntime::new(host.clone(), Some(crate::worker::test_support::native_workers()));
         assert_eq!(runtime.run(options()).await, Err("pool warmup timed out".into()));
+        assert_eq!(runtime.close().await, Ok(()));
+        assert_eq!(runtime.close().await, Ok(()));
         assert!(host.started.notified().now_or_never().is_none());
         assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
     #[tokio::test]
     async fn server_shutdown_resources_reports_host_close_failure_to_every_caller() {
         let mut host = Host::new();
         host.fail_close = true;
         host.release_close.add_permits(1);
-        let runtime = ServerRuntime::new(host.clone());
+        let runtime =
+            ServerRuntime::new(host.clone(), Some(crate::worker::test_support::native_workers()));
         let run = runtime.run(options());
         tokio::pin!(run);
         assert!(futures_util::poll!(&mut run).is_pending());
@@ -800,11 +856,12 @@ mod tests {
         assert_eq!(run.await, Err("Host: host close failed".into()));
         assert_eq!(runtime.close().await, Err("Host: host close failed".into()));
     }
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+
     #[tokio::test]
     async fn server_cleanup_deadline_returns_while_the_actor_retains_the_host() {
         let host = Host::new();
-        let runtime = ServerRuntime::new(host.clone());
+        let runtime =
+            ServerRuntime::new(host.clone(), Some(crate::worker::test_support::native_workers()));
         let mut start = options();
         start.settings.shutdown_process_timeout = 0.02;
         let run = runtime.run(start);
@@ -825,5 +882,72 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn server_startup_waits_for_sampling_capacity() {
+        let workers = crate::worker::test_support::native_workers();
+        let mut held = Vec::new();
+        for _ in 0..4 {
+            held.push(
+                workers.try_admit(lk_agents_abi::utils::workers::WorkerClass::WorkerIo).unwrap(),
+            );
+        }
+        let host = Host::new();
+        host.release_close.add_permits(1);
+        let runtime = ServerRuntime::new(host.clone(), Some(workers.clone()));
+        let run = runtime.run(options());
+        tokio::pin!(run);
+        assert!(futures_util::poll!(&mut run).is_pending());
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(futures_util::poll!(&mut run).is_pending(), "sampling must not reject startup");
+        drop(held);
+        host.started.notified().await;
+        runtime.close().await.unwrap();
+        run.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn close_interrupts_a_server_waiting_for_sampling_capacity() {
+        let workers = crate::worker::test_support::native_workers();
+        let held: Vec<_> = (0..4)
+            .map(|_| {
+                workers.try_admit(lk_agents_abi::utils::workers::WorkerClass::WorkerIo).unwrap()
+            })
+            .collect();
+        let host = Host::new();
+        host.release_close.add_permits(1);
+        let runtime = ServerRuntime::new(host.clone(), Some(workers));
+        let run = runtime.run(options());
+        tokio::pin!(run);
+        assert!(futures_util::poll!(&mut run).is_pending());
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        runtime.close().await.unwrap();
+        run.await.unwrap();
+        assert!(host.started.notified().now_or_never().is_none());
+        assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+        drop(held);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn server_setup_capacity_timeout_keeps_close_successful() {
+        let workers = crate::worker::test_support::native_workers();
+        let held: Vec<_> = (0..4)
+            .map(|_| {
+                workers.try_admit(lk_agents_abi::utils::workers::WorkerClass::WorkerIo).unwrap()
+            })
+            .collect();
+        let host = Host::new();
+        host.release_close.add_permits(1);
+        let runtime = ServerRuntime::new(host.clone(), Some(workers));
+        let mut start = options();
+        start.settings.initialize_process_timeout = 0.01;
+        assert_eq!(runtime.run(start).await, Err("server setup capacity wait timed out".into()));
+        runtime.close().await.unwrap();
+        assert!(host.started.notified().now_or_never().is_none());
+        assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);
+        drop(held);
     }
 }

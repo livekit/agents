@@ -438,3 +438,91 @@ fn an_in_flight_ping_write_after_orderly_shutdown_does_not_fail_the_job() {
         "required protocol write failures keep their original cause"
     );
 }
+
+#[test]
+fn memory_warnings_include_the_job_baseline_and_rate_limit_growth() {
+    let mut state = Supervision::new(
+        SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..options() },
+        Duration::ZERO,
+    );
+    state.handle(
+        Duration::ZERO,
+        0,
+        Input::Initialize(Hello {
+            version: PROTOCOL_VERSION,
+            asyncio_debug: false,
+            http_proxy: None,
+            health_timeout_ms: None,
+        }),
+    );
+    state.handle(
+        Duration::ZERO,
+        0,
+        Input::Message(ToParent::Ready { version: PROTOCOL_VERSION, error: None }),
+    );
+    state.handle(Duration::ZERO, 0, Input::StartJob { request_id: 1, job: Box::default() });
+    state.handle(
+        Duration::ZERO,
+        0,
+        Input::Message(ToParent::JobAccepted { request_id: 1, error: None }),
+    );
+    state.handle(Duration::ZERO, 0, Input::Supervise);
+    let mut warnings = Vec::new();
+    for (seconds, memory) in [(0, 100.0), (5, 600.04), (10, 610.0), (15, 700.0)] {
+        let effects = state.handle(
+            Duration::from_secs(seconds),
+            seconds as i64 * 1000,
+            Input::Sampled(Sample::Mb(memory, "uss".into())),
+        );
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::BeginKill)));
+        warnings.extend(effects.into_iter().filter_map(|effect| match effect {
+            Effect::Log(Level::Warning, message, extra) => Some((message, extra)),
+            _ => None,
+        }));
+    }
+    let warning = "job process memory usage is above the warning threshold (advisory only, the process will not be terminated)";
+    assert_eq!(warnings.len(), 2);
+    assert_eq!(
+        warnings[0],
+        (
+            warning.into(),
+            vec![
+                ("memory_usage_mb", ExtraValue::Float(600.0)),
+                ("memory_metric", ExtraValue::Str("uss".into())),
+                ("memory_warn_mb", ExtraValue::Float(500.0)),
+                ("memory_limit_mb", ExtraValue::Float(0.0)),
+                ("uptime", ExtraValue::Float(5.0)),
+                ("has_running_job", ExtraValue::Bool(true)),
+                ("baseline_memory_mb", ExtraValue::Float(100.0)),
+                ("growth_memory_mb", ExtraValue::Float(500.0)),
+            ]
+        )
+    );
+    assert_eq!(warnings[1].0, warning);
+}
+
+#[test]
+fn unavailable_or_interrupted_memory_sampling_stops_without_retrying() {
+    for sample in [Sample::Unavailable("process no longer exists".into()), Sample::Interrupted] {
+        let unavailable = matches!(sample, Sample::Unavailable(_));
+        let mut state = Supervision::new(
+            SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..options() },
+            Duration::ZERO,
+        );
+        state.handle(Duration::ZERO, 0, Input::Supervise);
+        let effects = state.handle(Duration::ZERO, 0, Input::Sampled(sample));
+        assert_eq!(
+            effects.iter().filter(|effect| matches!(effect, Effect::Log(..))).count(),
+            usize::from(unavailable)
+        );
+        if unavailable {
+            assert!(effects.iter().any(|effect| matches!(effect, Effect::Log(Level::Warning, message, _) if message.contains("process no longer exists"))));
+        }
+        assert!(
+            !state
+                .tick(Duration::from_secs(30), 30_000)
+                .iter()
+                .any(|effect| matches!(effect, Effect::SampleMemory))
+        );
+    }
+}

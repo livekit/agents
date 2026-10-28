@@ -32,7 +32,6 @@ pub fn worker_token(api_key: &str, api_secret: &str) -> Result<String, TokenErro
 }
 
 /// The join token a simulated job's agent participant uses.
-#[lk_agents_abi::host(export)]
 pub fn agent_join_token(
     api_key: &str,
     api_secret: &str,
@@ -54,7 +53,6 @@ pub fn agent_join_token(
 
 /// Verify an SFU-issued join token and refresh its lifetime to [`RELOAD_EXTENSION`].
 /// Preserves all modelled claims and checks the issuer and expiration.
-#[lk_agents_abi::host(export)]
 pub fn extend_job_token(
     token: &str,
     api_key: &str,
@@ -80,7 +78,6 @@ pub fn extend_job_token(
 
 /// The `sub` of a token without verifying it. Only for `simulate_job`, where the caller supplied
 /// the token and is asking what identity it names.
-#[lk_agents_abi::host(export)]
 pub fn token_identity(token: &str) -> Result<String, TokenError> {
     Ok(Claims::from_unverified(token)?.sub)
 }
@@ -128,7 +125,7 @@ mod tests {
     }
 
     // Catches: the reload dropping the SFU's claims, or accepting a foreign-signed original.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+
     #[test]
     fn a_reloaded_token_keeps_the_sfus_claims_and_moves_exp() {
         let original = AccessToken::with_api_key(KEY, SECRET)

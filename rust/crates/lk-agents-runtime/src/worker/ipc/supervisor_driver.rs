@@ -10,6 +10,28 @@ use tokio::time::Instant;
 use super::supervisor::*;
 use super::wire::{self, Hello, StartJob, ToChild, ToParent, WireError};
 
+/// What the supervisor needs from the host language: logging and the process handle.
+pub trait ProcHost: Send + Sync + 'static {
+    type Error: Send + 'static;
+
+    fn log(&self, level: Level, msg: &str, extra: Extra);
+    /// An error log with the failure's traceback.
+    fn log_exception(&self, msg: &str, err: Self::Error);
+    fn is_alive(&self) -> bool;
+    /// SIGKILL (`Process.kill`; a terminate on Windows).
+    fn kill(&self) -> Result<(), String>;
+    fn request_stack_dump(&self) -> Result<bool, String> {
+        Ok(false)
+    }
+    /// The process's footprint in MB and the metric it reflects (pss, uss or rss). Blocking: the
+    /// supervisor calls it off the runtime.
+    fn sample_memory(&self) -> Result<(f64, String), MemoryError<Self::Error>>;
+    /// The process exited and was reaped: the host's handle can go.
+    fn release(&self) {}
+    fn incomplete_cleanup(&self, _: CleanupObservation) {}
+    fn signal_failed(&self, _: SignalFailure) {}
+}
+
 const QUEUE: usize = 16;
 
 pub fn time_ms() -> i64 {
@@ -53,11 +75,11 @@ pub struct ProcSupervisor {
 }
 
 impl ProcSupervisor {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn new<S: AsyncRead + AsyncWrite + Send + 'static, H: ProcHost>(
         stream: S,
         host: H,
         opts: SupervisorOptions,
+        workers: crate::media_workers::MediaWorkers,
     ) -> Self {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (messages_tx, messages) = mpsc::channel(QUEUE);
@@ -90,6 +112,7 @@ impl ProcSupervisor {
             state: Supervision::new(opts, Duration::ZERO),
             origin: Instant::now(),
             host: Arc::new(host),
+            workers,
             writes,
             init: None,
             job: None,
@@ -199,6 +222,7 @@ struct Driver<H: ProcHost> {
     state: Supervision,
     origin: Instant,
     host: Arc<H>,
+    workers: crate::media_workers::MediaWorkers,
     writes: mpsc::Sender<(u64, ToChild)>,
     init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
     job: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
@@ -206,11 +230,9 @@ struct Driver<H: ProcHost> {
     status: watch::Sender<Status>,
 }
 
-type Sampling<E> = Option<tokio::task::JoinHandle<Result<(f64, String), MemoryError<E>>>>;
+type Sampling<E> = Option<crate::media_workers::MediaWorker<Result<(f64, String), MemoryError<E>>>>;
 
 impl<H: ProcHost> Driver<H> {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[allow(clippy::too_many_arguments)]
     async fn run(
         mut self,
@@ -340,7 +362,6 @@ impl<H: ProcHost> Driver<H> {
         });
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn apply(&mut self, input: Input, sampling: &mut Sampling<H::Error>) {
         let effects =
             self.state.handle(Instant::now().duration_since(self.origin), time_ms(), input);
@@ -356,7 +377,6 @@ impl<H: ProcHost> Driver<H> {
         });
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn execute(&mut self, effects: Vec<Effect>, sampling: &mut Sampling<H::Error>) {
         let mut queue = std::collections::VecDeque::from(effects);
         while let Some(effect) = queue.pop_front() {
@@ -403,13 +423,11 @@ impl<H: ProcHost> Driver<H> {
                 Effect::SampleMemory => {
                     let host = self.host.clone();
                     // Try admission before creating any task; a saturated sampler retries at its next cadence.
-                    match crate::worker::WORKER_IO_SLOTS.try_acquire() {
-                        Ok(permit) => {
-                            *sampling = Some(tokio::task::spawn_blocking(move || {
-                                let _permit = permit;
-                                host.sample_memory()
-                            }))
-                        }
+                    match self.workers.try_spawn(
+                        lk_agents_abi::utils::workers::WorkerClass::WorkerIo,
+                        move || host.sample_memory(),
+                    ) {
+                        Ok(receipt) => *sampling = Some(receipt),
                         Err(_) => queue.extend(self.state.handle(
                             Instant::now().duration_since(self.origin),
                             time_ms(),

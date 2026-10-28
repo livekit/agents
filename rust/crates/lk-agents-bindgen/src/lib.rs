@@ -29,8 +29,8 @@ pub use stream::stream;
 pub use meta::{Meta, Metas, Value, doc, is_host, to_snake};
 use proc_macro2::{Span, TokenStream};
 
-/// Core crates whose `python` feature enables `pyo3` and `lk-agents-abi/python`; markers in any
-/// other file stay inert.
+/// Legacy declaration source locations with in-place bindings. The compiling crate's `python`
+/// feature enables them, including runtime-owned adapters included from these locations.
 pub const IN_PLACE_CRATES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/",
     "rust/crates/lk-agents-rtc/src/",
@@ -45,6 +45,18 @@ pub const IN_PLACE_CRATES: &[&str] = &[
 pub fn in_place(file: Option<&std::path::Path>) -> bool {
     let Some(file) = file else { return false };
     let file = file.to_string_lossy().replace('\\', "/");
+    // rustc preserves #[path] traversal in a source span. Ownership follows the resolved file.
+    let mut parts = Vec::new();
+    for part in file.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|part| *part != "..") => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let file = parts.join("/");
     IN_PLACE_CRATES.iter().any(|dir| {
         let tail = dir.strip_prefix("rust/").unwrap_or(dir);
         file.starts_with(tail) || file.contains(&format!("/{tail}"))

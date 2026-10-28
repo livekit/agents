@@ -5,27 +5,35 @@
 //! Every outcome is reported the way the data plane expects: a reset code before any response
 //! byte, `x-lk-completion`/`x-lk-error` trailers after (chunked responses only), FIN on success.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio_tungstenite::tungstenite::{
     self, Message,
     protocol::{CloseFrame, Role, WebSocket, WebSocketConfig, frame::coding::CloseCode},
 };
 
-use crate::LOG;
-use crate::transport::HttpStreamResetCode as Reset;
+use crate::worker::LOG;
+use crate::worker::transport::HttpStreamResetCode as Reset;
 use lk_agents_abi::worker::endpoint::EndpointLimits;
 
+#[path = "endpoint_admission.rs"]
+mod admission;
+use admission::{EndpointAdmission, EndpointReservation, MessageAdmission, MessageReservation};
+
+#[path = "endpoint_request.rs"]
+mod request;
+use request::{Head, HeadError, find, parse_head, read_head, scope_base};
+
 const READ_SIZE: usize = 64 * 1024;
+// Graceful close shares the bounded IPC flush budget; frame scheduling is a separate contract.
+const CLOSE_FLUSH_TIMEOUT: Duration = crate::worker::ipc::FLUSH_TIMEOUT;
 
 pub type Headers = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -144,27 +152,7 @@ pub trait AsgiApp: Send + Sync {
     async fn call(&self, scope: Scope, conn: Conn) -> Result<(), AppError>;
 }
 
-/// The open WebSockets, for draining.
-#[derive(Default)]
-pub struct Registry {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    next: AtomicU64,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    open: std::sync::Mutex<HashMap<u64, Weak<WsExchange>>>,
-}
-
-impl Registry {
-    /// A close frame to every open WebSocket, so clients reconnect to another worker.
-    pub async fn close_all(&self, code: u16, reason: &str) {
-        let open: Vec<_> = self.lock().values().filter_map(Weak::upgrade).collect();
-        futures_util::future::join_all(open.iter().map(|ws| ws.close(code, reason))).await;
-    }
-
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Weak<WsExchange>>> {
-        self.open.lock().unwrap_or_else(|p| p.into_inner())
-    }
-}
+pub use admission::Registry;
 
 /// Serve one exchange stream to completion.
 pub async fn serve(
@@ -173,7 +161,15 @@ pub async fn serve(
     app: &dyn AsgiApp,
     registry: &Registry,
 ) {
-    let buffered = match read_head(io.as_ref()).await {
+    let limits = registry.admission.limits;
+    let Some(exchange) = registry.admission.try_exchange(limits.request_head_bytes + READ_SIZE)
+    else {
+        log::warn!(target: LOG, requestId = info.request_id.as_str();
+            "endpoint worker admission exhausted");
+        io.reset(Reset::HsrRefused).await;
+        return;
+    };
+    let buffered = match read_head(io.as_ref(), limits.request_head_bytes).await {
         Ok(b) => b,
         Err(HeadError::Protocol(e)) => {
             log::warn!(target: LOG, requestId = info.request_id.as_str(), error = e.as_str();
@@ -197,155 +193,13 @@ pub async fn serve(
         }
     };
     if head.is_websocket_upgrade() {
-        serve_ws(io, info, head, app, registry).await;
+        serve_ws(io, info, head, app, registry, exchange).await;
     } else {
-        serve_http(io, info, head, app).await;
+        serve_http(io, info, head, app, exchange, limits).await;
     }
 }
 
 // ----------------------------------------------------------------------------- the head
-
-enum HeadError {
-    Protocol(String),
-    Gone,
-}
-
-/// Up to and including the blank line, plus whatever came after it.
-async fn read_head(io: &dyn StreamIo) -> Result<Vec<u8>, HeadError> {
-    let max = EndpointLimits::default().request_head_bytes;
-    let mut buf = Vec::new();
-    loop {
-        if let Some(end) = find(&buf, b"\r\n\r\n") {
-            if end + 4 > max {
-                return Err(HeadError::Protocol("request head exceeds 1 MiB".into()));
-            }
-            return Ok(buf);
-        }
-        if buf.len() >= max {
-            return Err(HeadError::Protocol("request head exceeds 1 MiB".into()));
-        }
-        let chunk = io.read(READ_SIZE.min(max - buf.len())).await.map_err(|_| HeadError::Gone)?;
-        if chunk.is_empty() {
-            return Err(HeadError::Protocol("stream ended before the request head".into()));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-}
-
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
-}
-
-struct Head {
-    method: String,
-    target: Vec<u8>,
-    http10: bool,
-    /// Names lowercased, as h11 iterates them.
-    headers: Headers,
-    /// The bytes after the head.
-    rest: Vec<u8>,
-}
-
-impl Head {
-    fn values<'a>(&'a self, name: &'a [u8]) -> impl Iterator<Item = &'a [u8]> + 'a {
-        self.headers.iter().filter(move |(k, _)| k == name).map(|(_, v)| v.as_slice())
-    }
-
-    fn tokens(&self, name: &[u8]) -> Vec<Vec<u8>> {
-        self.values(name)
-            .flat_map(|v| v.split(|b| *b == b','))
-            .map(|t| t.trim_ascii().to_ascii_lowercase())
-            .collect()
-    }
-
-    fn is_websocket_upgrade(&self) -> bool {
-        self.method == "GET"
-            && self.tokens(b"upgrade").iter().any(|t| t == b"websocket")
-            && self.tokens(b"connection").iter().any(|t| t == b"upgrade")
-    }
-}
-
-/// The request head as h11 takes it: HTTP/1.0 or 1.1, a `Host` on 1.1.
-fn parse_head(buf: &[u8]) -> Result<Head, String> {
-    let mut n = 64;
-    loop {
-        let mut slots = vec![httparse::EMPTY_HEADER; n];
-        let mut req = httparse::Request::new(&mut slots);
-        match req.parse(buf) {
-            Ok(httparse::Status::Complete(len)) => {
-                let http10 = req.version == Some(0);
-                let headers: Headers = req
-                    .headers
-                    .iter()
-                    .map(|h| (h.name.to_ascii_lowercase().into_bytes(), h.value.to_vec()))
-                    .collect();
-                if !http10 && !headers.iter().any(|(k, _)| k == b"host") {
-                    return Err("Missing mandatory Host: header".into());
-                }
-                return Ok(Head {
-                    method: req.method.unwrap_or_default().to_owned(),
-                    target: req.path.unwrap_or_default().as_bytes().to_vec(),
-                    http10,
-                    headers,
-                    rest: buf[len..].to_vec(),
-                });
-            }
-            Ok(httparse::Status::Partial) => return Err("incomplete request head".into()),
-            Err(httparse::Error::TooManyHeaders) if n < 8192 => n *= 4,
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-}
-
-fn scope_base(info: &RequestInfo, kind: &'static str, headers: Headers, target: &[u8]) -> Scope {
-    let (raw_path, query) = match target.iter().position(|b| *b == b'?') {
-        Some(i) => (&target[..i], &target[i + 1..]),
-        None => (target, &[][..]),
-    };
-    // `urllib.parse.unquote` of the latin-1 text: percent-escapes decode as UTF-8.
-    let latin1: String = raw_path.iter().map(|b| *b as char).collect();
-    Scope {
-        kind,
-        method: String::new(),
-        scheme: String::new(),
-        path: unquote(&latin1),
-        raw_path: raw_path.to_vec(),
-        query_string: query.to_vec(),
-        headers,
-        client: (!info.client_addr.is_empty()).then(|| (info.client_addr.clone(), 0)),
-        subprotocols: Vec::new(),
-    }
-}
-
-/// `urllib.parse.unquote` (UTF-8, invalid sequences replaced).
-fn unquote(s: &str) -> String {
-    if !s.contains('%') {
-        return s.to_owned();
-    }
-    let mut out = String::new();
-    let mut bytes = Vec::new();
-    let mut chars = s.char_indices().peekable();
-    let raw = s.as_bytes();
-    while let Some((i, c)) = chars.next() {
-        let hex = |j: usize| raw.get(j).and_then(|b| (*b as char).to_digit(16));
-        if c == '%'
-            && let (Some(h), Some(l)) = (hex(i + 1), hex(i + 2))
-        {
-            bytes.push((h * 16 + l) as u8);
-            chars.next();
-            chars.next();
-            continue;
-        }
-        if !bytes.is_empty() {
-            out.push_str(&String::from_utf8_lossy(&std::mem::take(&mut bytes)));
-        }
-        out.push(c);
-    }
-    if !bytes.is_empty() {
-        out.push_str(&String::from_utf8_lossy(&bytes));
-    }
-    out
-}
 
 /// `wire.sanitizeReason`: bounded, no control characters that would break trailer framing.
 fn sanitize(reason: &str) -> String {
@@ -434,22 +288,25 @@ struct ResponseSide {
 
 /// One HTTP exchange: request bytes in, ASGI `http` events to the app, response bytes out.
 pub struct HttpExchange {
+    _payload: EndpointReservation,
+    limits: EndpointLimits,
     io: Arc<dyn StreamIo>,
     is_head: bool,
     http10: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     req: Mutex<RequestSide>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     resp: Mutex<ResponseSide>,
     head_sent: watch::Sender<bool>,
     done: watch::Sender<bool>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     peer_gone: AtomicBool,
 }
 
 impl HttpExchange {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    fn new(io: Arc<dyn StreamIo>, head: &Head) -> Result<Self, String> {
+    fn new(
+        io: Arc<dyn StreamIo>,
+        head: &Head,
+        payload: EndpointReservation,
+        limits: EndpointLimits,
+    ) -> Result<Self, String> {
         let te = head.tokens(b"transfer-encoding");
         let body = if !te.is_empty() {
             if te.last().map(Vec::as_slice) != Some(b"chunked") {
@@ -477,6 +334,8 @@ impl HttpExchange {
             b => b,
         };
         Ok(HttpExchange {
+            _payload: payload,
+            limits,
             io,
             is_head: head.method == "HEAD",
             http10: head.http10,
@@ -533,10 +392,9 @@ impl HttpExchange {
                 Body::Chunked(state) => match *state {
                     ChunkState::Size => {
                         let end = find(&r.buf, b"\r\n");
-                        if end.map_or(
-                            r.buf.len() >= EndpointLimits::default().chunk_line_bytes,
-                            |i| i + 2 > EndpointLimits::default().chunk_line_bytes,
-                        ) {
+                        if end.map_or(r.buf.len() >= self.limits.chunk_line_bytes, |i| {
+                            i + 2 > self.limits.chunk_line_bytes
+                        }) {
                             return Err(());
                         }
                         if let Some(i) = end {
@@ -581,11 +439,9 @@ impl HttpExchange {
                             continue;
                         }
                         let end = find(&r.buf, b"\r\n\r\n");
-                        if end
-                            .map_or(r.buf.len() >= EndpointLimits::default().trailers_bytes, |i| {
-                                i + 4 > EndpointLimits::default().trailers_bytes
-                            })
-                        {
+                        if end.map_or(r.buf.len() >= self.limits.trailers_bytes, |i| {
+                            i + 4 > self.limits.trailers_bytes
+                        }) {
                             return Err(());
                         }
                         if let Some(i) = end {
@@ -739,10 +595,15 @@ fn kind_of(msg: &Sent) -> &str {
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-async fn serve_http(io: Arc<dyn StreamIo>, info: RequestInfo, head: Head, app: &dyn AsgiApp) {
-    let ex = match HttpExchange::new(io.clone(), &head) {
+async fn serve_http(
+    io: Arc<dyn StreamIo>,
+    info: RequestInfo,
+    head: Head,
+    app: &dyn AsgiApp,
+    payload: EndpointReservation,
+    limits: EndpointLimits,
+) {
+    let ex = match HttpExchange::new(io.clone(), &head, payload, limits) {
         Ok(ex) => Arc::new(ex),
         Err(e) => {
             log::warn!(target: LOG, requestId = info.request_id.as_str(), error = e.as_str();
@@ -856,23 +717,29 @@ impl Write for Pipe {
 /// After the upgrade request the stream is a byte pipe: frames in, ASGI `websocket` events to the
 /// app, frames out. The `101` is written here.
 pub struct WsExchange {
+    _payload: EndpointReservation,
+    _parser: EndpointReservation,
     io: Arc<dyn StreamIo>,
     key: Vec<u8>,
     subprotocols: Vec<String>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     ws: std::sync::Mutex<WebSocket<Pipe>>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
     /// Holds the order of writes: bytes are taken from the pipe and written under it.
     write_lock: Mutex<()>,
-    events: mpsc::Sender<Received>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    inbox: Mutex<mpsc::Receiver<Received>>,
+    events: mpsc::Sender<InboxEvent>,
+    inbox: Mutex<mpsc::Receiver<InboxEvent>>,
+    admission: EndpointAdmission,
+    inbox_admission: MessageAdmission,
+    write_admission: MessageAdmission,
     disconnect: watch::Sender<Option<u16>>,
     accept_ready: watch::Sender<bool>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     accepted: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     closed: AtomicBool,
+}
+
+struct InboxEvent {
+    event: Received,
+    _payload: Option<MessageReservation>,
 }
 
 impl WsExchange {
@@ -883,7 +750,7 @@ impl WsExchange {
     pub async fn receive(&self) -> Received {
         let mut inbox = self.inbox.lock().await;
         if let Ok(event) = inbox.try_recv() {
-            return event;
+            return event.event;
         }
         let mut disconnect = self.disconnect.subscribe();
         if let Some(code) = *disconnect.borrow() {
@@ -903,7 +770,8 @@ impl WsExchange {
                 }
             }
         };
-        next.unwrap_or(Received::WsDisconnect { code: (*disconnect.borrow()).unwrap_or(1006) })
+        next.map(|event| event.event)
+            .unwrap_or(Received::WsDisconnect { code: (*disconnect.borrow()).unwrap_or(1006) })
     }
 
     async fn write_raw(&self, data: &[u8]) -> Result<(), String> {
@@ -923,6 +791,13 @@ impl WsExchange {
     }
 
     async fn send_frame(&self, msg: Message) -> Result<(), String> {
+        if msg.len() > self.admission.limits.websocket_message_bytes {
+            return Err("websocket response exceeds message limit".into());
+        }
+        let _payload = self
+            .write_admission
+            .try_message(&self.admission, msg.len().max(READ_SIZE))
+            .ok_or("websocket response capacity exhausted")?;
         {
             let _w = self.write_lock.lock().await;
             let out = {
@@ -935,6 +810,22 @@ impl WsExchange {
             }
         }
         Ok(())
+    }
+
+    fn enqueue(&self, message: Message) -> Result<(), &'static str> {
+        let bytes = message.len();
+        let payload = self
+            .inbox_admission
+            .try_message(&self.admission, bytes)
+            .ok_or("websocket inbox byte limit exceeded")?;
+        let event = match message {
+            Message::Text(text) => Received::WsText(text.to_string()),
+            Message::Binary(bytes) => Received::WsBytes(bytes.to_vec()),
+            _ => unreachable!("only data messages enter the inbox"),
+        };
+        self.events
+            .try_send(InboxEvent { event, _payload: Some(payload) })
+            .map_err(|_| "websocket inbox item limit exceeded")
     }
 
     /// Frames from the peer, once accepted. `false` when the peer closed or broke the protocol.
@@ -951,15 +842,9 @@ impl WsExchange {
             }
             let next = self.ws().read();
             match next {
-                Ok(Message::Text(t)) => {
-                    if self.events.try_send(Received::WsText(t.to_string())).is_err() {
-                        self.close(1009, "websocket inbox limit exceeded").await;
-                        return false;
-                    }
-                }
-                Ok(Message::Binary(b)) => {
-                    if self.events.try_send(Received::WsBytes(b.to_vec())).is_err() {
-                        self.close(1009, "websocket inbox limit exceeded").await;
+                Ok(message @ (Message::Text(_) | Message::Binary(_))) => {
+                    if let Err(reason) = self.enqueue(message) {
+                        self.close(1009, reason).await;
                         return false;
                     }
                 }
@@ -1097,20 +982,22 @@ impl WsExchange {
         }
         let frame = CloseFrame { code: CloseCode::from(code), reason: reason.to_owned().into() };
         let _ = self.ws().close(Some(frame));
-        let _ = self.flush().await;
-        self.io.finish().await;
+        if tokio::time::timeout(CLOSE_FLUSH_TIMEOUT, self.flush()).await.is_err() {
+            self.io.reset(Reset::HsrAbort).await;
+        } else {
+            self.io.finish().await;
+        }
         self.disconnect.send_replace(Some(code));
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 async fn serve_ws(
     io: Arc<dyn StreamIo>,
     info: RequestInfo,
-    head: Head,
+    mut head: Head,
     app: &dyn AsgiApp,
     registry: &Registry,
+    mut payload: EndpointReservation,
 ) {
     // wsproto's checks on the upgrade request
     let version = head.values(b"sec-websocket-version").next();
@@ -1140,15 +1027,24 @@ async fn serve_ws(
     scope.scheme = if info.scheme == "https" { "wss" } else { "ws" }.into();
     scope.subprotocols = subprotocols.clone();
 
-    let limits = EndpointLimits::default();
+    let limits = registry.admission.limits;
+    let Some(parser) = registry.admission.try_payload(limits.websocket_message_bytes + READ_SIZE)
+    else {
+        io.reset(Reset::HsrRefused).await;
+        return;
+    };
     let config = WebSocketConfig::default()
         .max_message_size(Some(limits.websocket_message_bytes))
         .max_frame_size(Some(limits.websocket_frame_bytes));
     let mut pipe = Pipe::default();
-    pipe.inbound.extend(head.rest);
+    pipe.inbound.extend(std::mem::take(&mut head.rest));
+    drop(head);
+    payload.release_payload();
     let (events, inbox) = mpsc::channel(limits.websocket_inbox);
-    let _ = events.try_send(Received::WsConnect);
+    let _ = events.try_send(InboxEvent { event: Received::WsConnect, _payload: None });
     let ex = Arc::new(WsExchange {
+        _payload: payload,
+        _parser: parser,
         io,
         key,
         subprotocols,
@@ -1156,6 +1052,9 @@ async fn serve_ws(
         write_lock: Mutex::new(()),
         events,
         inbox: Mutex::new(inbox),
+        admission: registry.admission.clone(),
+        inbox_admission: MessageAdmission::new(limits.websocket_inbox_bytes),
+        write_admission: MessageAdmission::new(limits.websocket_outbox_bytes),
         disconnect: watch::channel(None).0,
         accept_ready: watch::channel(false).0,
         accepted: AtomicBool::new(false),
@@ -1200,3 +1099,7 @@ async fn serve_ws(
 #[cfg(test)]
 #[path = "endpoint_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "endpoint_profile.rs"]
+mod profile;

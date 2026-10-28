@@ -21,11 +21,20 @@ pub struct MediaWorkerLimits {
     pub images: usize,
     pub eot_models: usize,
     pub uploads: usize,
+    pub worker_io: usize,
 }
 
 impl Default for MediaWorkerLimits {
     fn default() -> Self {
-        Self { total: 64, decoders: 32, recordings: 16, images: 4, eot_models: 1, uploads: 2 }
+        Self {
+            total: 64,
+            decoders: 32,
+            recordings: 16,
+            images: 4,
+            eot_models: 1,
+            uploads: 2,
+            worker_io: 4,
+        }
     }
 }
 
@@ -33,11 +42,13 @@ impl Default for MediaWorkerLimits {
 pub struct MediaWorkers {
     handle: tokio::runtime::Handle,
     total: Arc<Semaphore>,
+    payload: Arc<Semaphore>,
     decoders: Arc<Semaphore>,
     recordings: Arc<Semaphore>,
     images: Arc<Semaphore>,
     eot_models: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
+    worker_io: Arc<Semaphore>,
 }
 
 /// A class reservation for an async I/O resource or a native job. Native jobs must retain this
@@ -45,6 +56,7 @@ pub struct MediaWorkers {
 pub struct MediaWorkerPermit {
     _class: OwnedSemaphorePermit,
     _total: OwnedSemaphorePermit,
+    _payload: Option<OwnedSemaphorePermit>,
 }
 
 /// An awaited completion receipt. Dropping the awaiter transfers the join and admission to the
@@ -99,6 +111,7 @@ impl MediaWorkers {
                 limits.images,
                 limits.eot_models,
                 limits.uploads,
+                limits.worker_io,
             ]
             .into_iter()
             .any(|limit| limit == 0 || limit > limits.total)
@@ -106,14 +119,18 @@ impl MediaWorkers {
         {
             return Err(MediaWorkerError::InvalidLimits);
         }
+        // Keep health sampling serviceable even when long-lived payload classes fill their caps.
+        let reserved = limits.worker_io.min(limits.total - 1);
         Ok(Self {
             handle,
             total: Arc::new(Semaphore::new(limits.total)),
+            payload: Arc::new(Semaphore::new(limits.total - reserved)),
             decoders: Arc::new(Semaphore::new(limits.decoders)),
             recordings: Arc::new(Semaphore::new(limits.recordings)),
             images: Arc::new(Semaphore::new(limits.images)),
             eot_models: Arc::new(Semaphore::new(limits.eot_models)),
             uploads: Arc::new(Semaphore::new(limits.uploads)),
+            worker_io: Arc::new(Semaphore::new(limits.worker_io)),
         })
     }
 
@@ -128,6 +145,17 @@ impl MediaWorkers {
             MediaWorkerClass::Image => &self.images,
             MediaWorkerClass::EotModel => &self.eot_models,
             MediaWorkerClass::Upload => &self.uploads,
+            MediaWorkerClass::WorkerIo => &self.worker_io,
+        };
+        let payload = if class == MediaWorkerClass::WorkerIo {
+            None
+        } else {
+            Some(
+                self.payload
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| MediaWorkerError::Exhausted(class))?,
+            )
         };
         let class_permit =
             capacity.clone().try_acquire_owned().map_err(|_| MediaWorkerError::Exhausted(class))?;
@@ -136,7 +164,7 @@ impl MediaWorkers {
             .clone()
             .try_acquire_owned()
             .map_err(|_| MediaWorkerError::Exhausted(class))?;
-        Ok(MediaWorkerPermit { _class: class_permit, _total: total_permit })
+        Ok(MediaWorkerPermit { _class: class_permit, _total: total_permit, _payload: payload })
     }
 
     /// Synchronous ingress refuses overload before retaining work. There is no admission queue.
@@ -145,13 +173,22 @@ impl MediaWorkers {
         class: MediaWorkerClass,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Result<MediaWorker<T>, MediaWorkerError> {
-        let permits = Arc::new(self.try_admit(class)?);
+        Ok(self.spawn_admitted(self.try_admit(class)?, work))
+    }
+
+    /// Launch work after reserving capacity, allowing callers to move owned state after admission.
+    pub fn spawn_admitted<T: Send + 'static>(
+        &self,
+        permit: MediaWorkerPermit,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> MediaWorker<T> {
+        let permits = Arc::new(permit);
         let held = permits.clone();
         let join = self.handle.spawn_blocking(move || {
             let _permits = held;
             work()
         });
-        Ok(MediaWorker { join: Some(join), runtime: self.handle.clone(), permits: Some(permits) })
+        MediaWorker { join: Some(join), runtime: self.handle.clone(), permits: Some(permits) }
     }
 }
 
@@ -169,9 +206,23 @@ mod tests {
                 images: 1,
                 eot_models: 1,
                 uploads: 1,
+                worker_io: 1,
             },
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn native_payload_saturation_reserves_health_sampling_capacity() {
+        let workers = workers(4);
+        let _decoder = workers.try_admit(MediaWorkerClass::Decoder).unwrap();
+        let _recording = workers.try_admit(MediaWorkerClass::Recording).unwrap();
+        let _image = workers.try_admit(MediaWorkerClass::Image).unwrap();
+        assert!(matches!(
+            workers.try_admit(MediaWorkerClass::EotModel),
+            Err(MediaWorkerError::Exhausted(MediaWorkerClass::EotModel))
+        ));
+        let _health = workers.try_admit(MediaWorkerClass::WorkerIo).unwrap();
     }
 
     #[tokio::test]
@@ -217,8 +268,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn models_and_uploads_share_the_media_total_ceiling() {
-        let workers = workers(2);
+    async fn models_and_uploads_share_the_payload_ceiling() {
+        let workers = workers(3);
         let (release_decoder, decoder_wait) = std::sync::mpsc::channel();
         let (release_model, model_wait) = std::sync::mpsc::channel();
         let decoder =
@@ -242,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_decoders_leave_other_class_capacity_available() {
-        let workers = workers(2);
+        let workers = workers(3);
         let (release, wait) = std::sync::mpsc::channel();
         let decoder = workers.try_spawn(MediaWorkerClass::Decoder, move || wait.recv()).unwrap();
         assert!(matches!(

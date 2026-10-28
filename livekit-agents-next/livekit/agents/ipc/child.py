@@ -162,6 +162,7 @@ class _JobProc:
         from . import _preload
 
         load_preload_modules(self._preload_modules)
+        _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
         if self._setup_fnc is not None:
             setup_fnc: Callable[[JobProcess], object] = self._setup_fnc

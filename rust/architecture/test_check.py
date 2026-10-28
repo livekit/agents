@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from check import (
     check_history,
@@ -29,6 +30,9 @@ def metadata(edges):
         },
     }
 
+
+# A scratch repository must not inherit the caller's repository or private index.
+_GIT_FREE_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 class DependencyContracts(unittest.TestCase):
     def test_cargo_all_features_exposes_optional_sdk_dependency(self):
@@ -110,6 +114,7 @@ class DependencyContracts(unittest.TestCase):
 
 
 class LengthContracts(unittest.TestCase):
+    @patch.dict(os.environ, _GIT_FREE_ENV, clear=True)
     def test_git_selection_checks_tracked_files_and_retires_working_deletions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -168,6 +173,7 @@ class BaselineContracts(unittest.TestCase):
         self.assertTrue(ratchet({"new"}, {"old"}))
         self.assertFalse(ratchet(set(), {"old"}))
 
+    @patch.dict(os.environ, _GIT_FREE_ENV, clear=True)
     def test_committed_baseline_cannot_be_expanded_or_reintroduced(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

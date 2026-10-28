@@ -158,14 +158,13 @@ class _LineHandler(logging.StreamHandler):  # type: ignore[type-arg]
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            line = (self.format(record) + self.terminator).encode(
-                getattr(self.stream, "encoding", None) or "utf-8", "backslashreplace"
-            )
+            encoding = getattr(self.stream, "encoding", None) or "utf-8"
+            line = (self.format(record) + self.terminator).encode(encoding, "backslashreplace")
             try:
                 fd = self.stream.fileno()
             except (AttributeError, OSError, ValueError):
                 # not a file (a captured stdout): written as a stream
-                self.stream.write(line.decode("utf-8", "replace"))
+                self.stream.write(line.decode(encoding))
                 self.flush()
                 return
             self.flush()  # what print() buffered goes first

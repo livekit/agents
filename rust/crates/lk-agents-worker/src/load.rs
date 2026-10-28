@@ -14,10 +14,8 @@ impl Default for DefaultLoadCalc {
     }
 }
 
-#[lk_agents_abi::host(export)]
 impl DefaultLoadCalc {
     /// Five samples at the load-update interval cover 2.5 seconds.
-    #[host(export(name = "default_load_window", pid = false))]
     pub const WINDOW: usize = 5;
 
     pub fn new() -> Self {

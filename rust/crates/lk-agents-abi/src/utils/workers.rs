@@ -11,6 +11,7 @@ pub enum WorkerClass {
     Image,
     EotModel,
     Upload,
+    WorkerIo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

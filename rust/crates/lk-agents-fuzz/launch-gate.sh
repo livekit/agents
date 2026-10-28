@@ -87,6 +87,8 @@ cargo check -q --workspace --all-targets
 
 step "worker core and real transport tests"
 cargo test -q -p lk-agents-worker
+cargo test -q -p lk-agents-runtime --lib worker::
+cargo test -q -p lk-agents-runtime --test ipc_frames
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}

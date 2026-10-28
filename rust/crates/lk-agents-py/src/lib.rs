@@ -17,7 +17,6 @@ extern crate lk_agents_inference as _;
 extern crate lk_agents_media as _;
 extern crate lk_agents_rtc as _;
 
-extern crate lk_agents_worker as _;
 
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
@@ -57,7 +56,7 @@ impl generated::Implementations for Selected {
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
-    type WorkerCli = lk_agents_worker::cli::WorkerCli;
+    type WorkerCli = lk_agents_runtime::worker::cli::WorkerCli;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;
     type EventRetention = lk_agents_runtime::telemetry::observation::EventRetention;

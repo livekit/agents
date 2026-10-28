@@ -14,7 +14,6 @@ struct Diagnostics {
 
 static DIAGNOSTICS: OnceLock<Result<Diagnostics, String>> = OnceLock::new();
 
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 fn service() -> Result<&'static Diagnostics, &'static String> {
     DIAGNOSTICS
         .get_or_init(|| {

@@ -2,21 +2,23 @@
 //! are cancelled when it stops; writes are ordered, bounded and per-connection, and a reconnect
 //! regenerates state rather than replaying.
 
-use crate::Slot;
-use crate::hw::cpu::CpuMonitor;
-use crate::protocol::{self, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage};
-use crate::state::ConnectionRetry;
-use crate::transport::{
+use crate::worker::Slot;
+use crate::worker::hw::cpu::CpuMonitor;
+use crate::worker::protocol::{
+    self, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage,
+};
+use crate::worker::state::ConnectionRetry;
+use crate::worker::transport::{
     Connected, EndpointStream, HttpStreamResetCode, StreamPreamble, TransportError, TransportEvent,
     WorkerSink, WorkerTransport,
 };
-use crate::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
-use crate::{JobDecision, JobRequest, RunningJobInfo};
+use crate::worker::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
+use crate::worker::{JobDecision, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lk_agents_abi::{Clock, RealClock, WallAnchor};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,8 +28,6 @@ use tokio::time::Instant;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 const MAX_PENDING_WRITES: usize = 64;
-// A cancelled waiter does not release a running sampler's admission.
-pub(crate) static WORKER_IO_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -41,7 +41,7 @@ pub enum RuntimeError {
     RetriesExhausted { retries: u32, source: Box<RuntimeError> },
 }
 
-pub use crate::state::retry_delay;
+pub use crate::worker::state::retry_delay;
 
 /// Connection events and host-operation completions are [`WorkerStateInput`]s instead.
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +69,6 @@ pub use lk_agents_abi::worker::worker::{
 pub struct WorkerHandle {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
     control: tokio::sync::watch::Sender<WorkerControl>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     snapshot: Arc<std::sync::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
@@ -156,20 +155,18 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     cfg: RuntimeConfig,
     state: WorkerState,
     host: Arc<P>,
+    pub(super) workers: crate::media_workers::MediaWorkers,
     clock: C,
     default_load: DefaultLoadCalc,
     cpu: Option<CpuMonitor>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
     control: tokio::sync::watch::Receiver<WorkerControl>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     snapshot: Arc<std::sync::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
     send_failure: Option<TransportError>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     requests: HashMap<Slot, AbortHandle>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     endpoints: HashMap<u64, AbortHandle>,
     next_endpoint: u64,
     closing: bool,
@@ -203,11 +200,11 @@ impl Outbox {
     fn new(timeout: Duration) -> Self {
         Self { pending: VecDeque::new(), timeout }
     }
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+
     fn push(&mut self, message: WorkerMessage) -> Result<(), TransportError> {
         use livekit_protocol::worker_message::Message as M;
         use prost::Message;
-        if message.encoded_len() > crate::transport::MAX_CONTROL_MESSAGE {
+        if message.encoded_len() > crate::worker::transport::MAX_CONTROL_MESSAGE {
             return Err(TransportError::Protocol("control message exceeds 1 MiB".into()));
         }
         // A status sample supersedes older unsent samples, including when entering drain.
@@ -243,7 +240,7 @@ enum ConnectionEvent {
     Registered(RegisterWorkerResponse),
     ServerMessage(ServerMessage),
     AvailabilitySent(String),
-    EndpointRequest(crate::EndpointStream),
+    EndpointRequest(crate::worker::EndpointStream),
     /// A write, retry timer or cleanup completed.
     Progress,
 }
@@ -269,7 +266,6 @@ struct ActiveConnection {
 }
 
 impl ConnectionIo {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn new(timeout: Duration) -> Self {
         Self {
             state: ConnectionState::Waiting(Instant::now()),
@@ -288,7 +284,6 @@ impl ConnectionIo {
         matches!(self.state, ConnectionState::Active(_))
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event<T: WorkerTransport + 'static>(
         &mut self,
         transport: Arc<T>,
@@ -300,7 +295,6 @@ impl ConnectionIo {
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn disconnect(&mut self) {
         let previous = std::mem::replace(&mut self.state, ConnectionState::Waiting(Instant::now()));
         self.outbox.clear();
@@ -317,7 +311,6 @@ impl ConnectionIo {
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn retry_after(&mut self, delay: Duration) {
         debug_assert!(matches!(self.state, ConnectionState::Waiting(_)));
         self.state = ConnectionState::Waiting(Instant::now() + delay);
@@ -330,7 +323,6 @@ impl ConnectionIo {
 }
 
 impl ConnectionState {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event<T: WorkerTransport + 'static>(
         &mut self,
         outbox: &mut Outbox,
@@ -357,7 +349,6 @@ impl ConnectionState {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn dial<T: WorkerTransport + 'static>(
     transport: Arc<T>,
     config: &RuntimeConfig,
@@ -367,9 +358,9 @@ fn dial<T: WorkerTransport + 'static>(
     let timeout = config.connection_timeout;
     let mut headers = config.headers.clone();
     if !config.api_key.is_empty() && !config.api_secret.is_empty() {
-        let jwt = crate::auth::worker_token(&config.api_key, &config.api_secret)
+        let jwt = crate::worker::auth::worker_token(&config.api_key, &config.api_secret)
             .map_err(|e| RuntimeError::Configuration(e.to_string()))?;
-        headers.push(crate::auth::authorization_header(&jwt));
+        headers.push(crate::worker::auth::authorization_header(&jwt));
     }
     Ok(async move {
         tokio::time::timeout(timeout, transport.connect(&url, token.as_deref(), headers))
@@ -380,7 +371,6 @@ fn dial<T: WorkerTransport + 'static>(
 }
 
 impl ActiveConnection {
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event(&mut self, outbox: &mut Outbox) -> Result<ConnectionEvent, RuntimeError> {
         if self.writing.is_none()
             && let Some(pending) = outbox.pop_front()
@@ -432,7 +422,6 @@ async fn await_write(
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 async fn wait_for_deadline(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -441,7 +430,6 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 }
 
 impl PendingWrite {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn send(self, sink: Arc<dyn WorkerSink>) -> Result<Option<String>, TransportError> {
         let accepted = match &self.message.message {
             Some(livekit_protocol::worker_message::Message::Availability(a)) if a.available => {
@@ -471,7 +459,11 @@ enum Completion {
 impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
     /// Resolves omitted options from the environment; starts nothing. Subscribe through the handle
     /// before awaiting [`Self::run`] to see registration.
-    pub fn new(options: crate::WorkerOptions, host: P) -> (Self, WorkerHandle) {
+    pub fn new(
+        options: crate::worker::WorkerOptions,
+        host: P,
+        workers: crate::media_workers::MediaWorkers,
+    ) -> (Self, WorkerHandle) {
         let (config, connection, transport) = options.resolve();
         Self::with_components(
             transport.build(),
@@ -479,12 +471,12 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
             WorkerState::new(config),
             host,
             RealClock::new(),
+            workers,
         )
     }
 }
 
 impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, P, C> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Explicit runtime components, for custom drivers and tests.
     pub fn with_components(
         transport: T,
@@ -492,6 +484,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         state: WorkerState,
         host: P,
         clock: C,
+        workers: crate::media_workers::MediaWorkers,
     ) -> (Self, WorkerHandle) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
@@ -509,6 +502,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 cfg,
                 state: state.with_wall(WallAnchor::of(&clock)),
                 host: Arc::new(host),
+                workers,
                 clock,
                 default_load: DefaultLoadCalc::new(),
                 cpu: None,
@@ -569,8 +563,6 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         result
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn run_loop(&mut self, connection: &mut ConnectionIo) -> Result<(), RuntimeError> {
         let mut commands_open = true;
         let mut retries = ConnectionRetry::new(self.cfg.max_retry);
@@ -694,12 +686,6 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
     /// One exchange stream: the preamble is read here, then the host serves the bytes. A stream
     /// aborted by a reconnect or shutdown is dropped, which quinn resets with code 0 (`HSR_ABORT`).
     fn serve_endpoint(&mut self, stream: EndpointStream) {
-        if self.endpoints.len()
-            >= lk_agents_abi::worker::endpoint::EndpointLimits::default().pending_handlers
-        {
-            stream.refuse();
-            return;
-        }
         let host = self.host.clone();
         let id = self.next_endpoint;
         self.next_endpoint = self.next_endpoint.wrapping_add(1);
@@ -765,7 +751,6 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         self.execute(effects, outbox);
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn complete(&mut self, completion: Completion, outbox: &mut Outbox) {
         match completion {
             Completion::Input(input) => {
@@ -779,22 +764,28 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 self.feed(WorkerStateInput::LoadSampled(load), outbox);
             }
             Completion::Load(None) => {
-                let cpu = self.cpu.take();
-                self.operations.push(
-                    async move {
-                        let permit = WORKER_IO_SLOTS.acquire().await.expect("sampler stays open");
-                        Completion::CpuSample(
-                            tokio::task::spawn_blocking(move || {
-                                let _permit = permit;
-                                let mut cpu = cpu.unwrap_or_default();
-                                let sample = cpu.cpu_percent();
-                                (cpu, sample)
-                            })
-                            .await,
-                        )
+                let workers = self.workers.clone();
+                let permit = match workers
+                    .try_admit(lk_agents_abi::utils::workers::WorkerClass::WorkerIo)
+                {
+                    Ok(permit) => permit,
+                    Err(error) => {
+                        self.load_pending = false;
+                        crate::worker::diagnostics::emit(
+                            log::Level::Debug,
+                            format!("worker CPU sample deferred error={error}"),
+                        );
+                        self.feed(WorkerStateInput::LoadSampled(self.default_load.get()), outbox);
+                        return;
                     }
-                    .boxed(),
-                );
+                };
+                let cpu = self.cpu.take();
+                let sample = workers.spawn_admitted(permit, move || {
+                    let mut cpu = cpu.unwrap_or_default();
+                    let sample = cpu.cpu_percent();
+                    (cpu, sample)
+                });
+                self.operations.push(async move { Completion::CpuSample(sample.await) }.boxed());
             }
             Completion::CpuSample(result) => {
                 self.load_pending = false;
@@ -805,7 +796,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                             self.default_load.add_sample(sample);
                         }
                     }
-                    Err(error) => crate::diagnostics::emit(
+                    Err(error) => crate::worker::diagnostics::emit(
                         log::Level::Error,
                         format!("worker CPU sampler failed error={error}"),
                     ),
@@ -825,7 +816,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
             match effect {
                 WorkerStateEffect::RolloverConnection => self.rollover_requested = true,
                 WorkerStateEffect::Diagnostic { level, message } => {
-                    crate::diagnostics::emit(level, message)
+                    crate::worker::diagnostics::emit(level, message)
                 }
                 WorkerStateEffect::Send(message) => {
                     if let Err(error) = outbox.push(message) {
@@ -873,7 +864,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 WorkerStateEffect::TerminateJob(id) => self.operations.push(
                     async move {
                         if let Err(error) = host.terminate_job(id.clone()).await {
-                            crate::diagnostics::emit(
+                            crate::worker::diagnostics::emit(
                                 log::Level::Error,
                                 format!("failed to terminate job job_id={id} error={error}"),
                             );
@@ -927,12 +918,11 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
 /// way to wait here; the node writes the preamble in the same call as the request head.
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 async fn serve_endpoint<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: EndpointStream) {
     let preamble = match tokio::time::timeout(PREAMBLE_TIMEOUT, stream.read_preamble()).await {
         Ok(Ok(preamble)) => preamble,
         Ok(Err(error)) => {
-            crate::diagnostics::emit(
+            crate::worker::diagnostics::emit(
                 log::Level::Warn,
                 format!("endpoint stream without a valid preamble error={error}"),
             );
@@ -940,7 +930,7 @@ async fn serve_endpoint<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: Endpoi
             return;
         }
         Err(_) => {
-            crate::diagnostics::emit(
+            crate::worker::diagnostics::emit(
                 log::Level::Warn,
                 "endpoint stream sent no preamble in time".into(),
             );
@@ -996,12 +986,14 @@ pub trait WorkerHost: Send + Sync {
 #[cfg(test)]
 mod write_tests {
     use super::*;
-    use crate::protocol;
+    use crate::worker::protocol;
 
     #[tokio::test(start_paused = true)]
     async fn pending_statuses_coalesce_but_availability_replies_keep_their_order() {
         let mut queue = Outbox::new(Duration::from_secs(10));
-        queue.push(protocol::update_worker(crate::WorkerStatus::Available, 0.1, 0)).unwrap();
+        queue
+            .push(protocol::update_worker(crate::worker::WorkerStatus::Available, 0.1, 0))
+            .unwrap();
         queue.push(protocol::availability_reject("first", false)).unwrap();
         queue.push(protocol::availability_reject("second", false)).unwrap();
         queue.push(protocol::update_worker_draining(0)).unwrap();
@@ -1018,7 +1010,6 @@ mod write_tests {
         assert!(queue.pop_front().is_none());
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test(start_paused = true)]
     async fn queue_capacity_and_write_age_are_bounded() {
         let mut queue = Outbox::new(Duration::from_secs(1));

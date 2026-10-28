@@ -57,7 +57,7 @@ def load_preload_modules(modules: Sequence[str]) -> None:
     for module in modules:
         try:
             importlib.import_module(module)
-        except BaseException as error:
+        except Exception as error:
             # multiprocessing's forkserver ignores ImportError from its preload list.
             raise RuntimeError(f"preload module {module!r} failed: {error}") from error
 

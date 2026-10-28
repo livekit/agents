@@ -1537,7 +1537,6 @@ dependencies = [
  "lk-agents-runtime",
  "lk-agents-storage",
  "lk-agents-voice",
- "lk-agents-worker",
  "pbjson-types",
  "pyo3",
  "pyo3-log",
@@ -1564,7 +1563,9 @@ dependencies = [
  "a2a-lf",
  "async-trait",
  "bytes",
+ "chrono",
  "futures-util",
+ "httparse",
  "livekit-api",
  "livekit-protocol",
  "livekit-token",
@@ -1576,9 +1577,11 @@ dependencies = [
  "lk-agents-storage",
  "log",
  "pbjson-types",
+ "postcard",
  "prost",
  "pyo3",
  "rand 0.9.5",
+ "rcgen",
  "reqwest 0.13.4",
  "rmcp",
  "rusqlite",
@@ -1586,12 +1589,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sse-stream",
+ "sysinfo",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tonic-types",
  "url",
+ "web-transport-quinn",
 ]
 
 [[package]]
@@ -1633,28 +1638,14 @@ dependencies = [
 name = "lk-agents-worker"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "chrono",
- "futures-util",
- "httparse",
- "libc",
  "livekit-protocol",
- "livekit-token",
  "lk-agents-abi",
  "log",
  "postcard",
  "prost",
- "pyo3",
- "rcgen",
- "rustls",
  "serde",
  "serde_json",
- "sysinfo",
  "thiserror 2.0.20",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "url",
- "web-transport-quinn",
 ]
 
 [[package]]

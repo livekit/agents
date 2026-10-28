@@ -59,3 +59,17 @@ def test_truthy_values_preload_both_models(
     _preload._local_inference_models()
 
     assert local_inference_calls == ["vad", "eot"]
+
+
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit])
+def test_framework_preload_preserves_process_control_exceptions(
+    exception_type: type[BaseException],
+) -> None:
+    signal = exception_type("stop preload")
+
+    def interrupted() -> None:
+        raise signal
+
+    with pytest.raises(exception_type) as caught:
+        _preload._step("application resources", interrupted)
+    assert caught.value is signal

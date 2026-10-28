@@ -12,14 +12,12 @@ pub const V1_USAGE: &[&str] =
     &["/sys/fs/cgroup/cpuacct/cpuacct.usage", "/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage"];
 
 /// Source of CPU capacity and usage measurements: `"cgroup_v2"`, `"cgroup_v1"` or `"default"`.
-#[lk_agents_abi::host(wire_enum)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CpuMonitorKind {
     CgroupV2,
     CgroupV1,
     Default,
 }
-
 
 /// `"max 100000"` or `"50000 100000"`. Malformed input means unrestricted; default period 100000.
 pub fn parse_cpu_max(contents: &str) -> (Option<u64>, u64) {
@@ -67,7 +65,6 @@ pub fn busy_fraction(usage_delta: i128, unit_per_sec: f64, interval: Duration, c
     }
     ((seconds / denom) as f32).clamp(0.0, 1.0)
 }
-
 
 pub fn first_existing(paths: &[&'static str]) -> Option<&'static str> {
     paths.iter().copied().find(|p| std::path::Path::new(p).exists())

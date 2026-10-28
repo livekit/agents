@@ -38,6 +38,21 @@ def _setup(process: JobProcess) -> None:
         events.write(json.dumps(["setup", os.getpid(), initial, process.pid]) + "\n")
 
 
+def _rtc_warmup_setup(process: JobProcess) -> None:
+    from livekit.rtc._ffi_client import FfiClient
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("process warmup reached the job event loop")
+    if FfiClient._instance is None:
+        raise AssertionError("RTC runtime would initialize inside the first job")
+    with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
+        events.write(json.dumps(["rtc-warm", process.pid]) + "\n")
+
+
 def _failed_setup(process: JobProcess) -> None:
     _setup(process)
     raise ValueError("per-process setup refused")
@@ -143,6 +158,21 @@ async def test_start_method_defaults_launch_the_expected_child(
     observations = [json.loads(line) for line in preload_events.read_text().splitlines()]
     assert observations == [
         ["method", process.pid, "forkserver" if sys.platform == "linux" else "spawn"]
+    ]
+    await asyncio.wait_for(process.aclose(), timeout=5)
+    await asyncio.wait_for(process.join(), timeout=5)
+    assert process.exitcode == 0
+
+
+@pytest.mark.asyncio
+async def test_rtc_runtime_is_warm_before_the_job_loop_and_readiness(
+    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
+) -> None:
+    process = _executor(own_executor, modules=(), setup=_rtc_warmup_setup)
+    await asyncio.wait_for(process.start(), timeout=20)
+    await asyncio.wait_for(process.initialize(), timeout=20)
+    assert [json.loads(line) for line in preload_events.read_text().splitlines()] == [
+        ["rtc-warm", process.pid]
     ]
     await asyncio.wait_for(process.aclose(), timeout=5)
     await asyncio.wait_for(process.join(), timeout=5)

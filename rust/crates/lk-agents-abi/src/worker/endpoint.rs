@@ -33,7 +33,11 @@ pub struct EndpointLimits {
     pub websocket_frame_bytes: usize,
     pub websocket_message_bytes: usize,
     pub websocket_inbox: usize,
+    pub websocket_inbox_bytes: usize,
+    pub websocket_outbox_bytes: usize,
     pub pending_handlers: usize,
+    /// Logical endpoint payload reservations, excluding application-owned results and transport TLS.
+    pub worker_payload_bytes: usize,
 }
 
 impl Default for EndpointLimits {
@@ -45,7 +49,10 @@ impl Default for EndpointLimits {
             websocket_frame_bytes: 1 << 20,
             websocket_message_bytes: 4 << 20,
             websocket_inbox: 16,
+            websocket_inbox_bytes: 8 << 20,
+            websocket_outbox_bytes: 8 << 20,
             pending_handlers: 256,
+            worker_payload_bytes: 512 << 20,
         }
     }
 }

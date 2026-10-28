@@ -1,3 +1,4 @@
+//! Runtime-owned host adapter, compiled by lk-agents-runtime through #[path].
 //! `_core.Worker` and `_core.EndpointStream`: the worker as Python drives it (plan 13.4).
 //!
 //! `Worker(options, host)` owns the `/agent` connection; `host.open(kind, args)` is the one
@@ -25,20 +26,19 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3_async_runtimes::TaskLocals;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::transport::{
+use crate::worker::transport::{
     AgentEndpointKind, EndpointControl, EndpointReader, EndpointWriter, HttpStreamResetCode,
 };
-use crate::{
+use crate::worker::{
     EndpointRequest, EnvOption, HEARTBEAT_INTERVAL, HostError, JobDecision, JobId, TransportConfig,
     WorkerCommand, WorkerHost, protocol,
 };
 
 // --------------------------------------------------------------------- EndpointStream
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 type Half<T> = Arc<tokio::sync::Mutex<Option<T>>>;
 
 /// One exchange stream after its preamble, as Python reads and writes it. The two directions are
@@ -148,7 +148,7 @@ impl PyEndpointStream {
 
 // --------------------------------------------------------------------- EndpointServer
 
-use crate::endpoint::{
+use crate::worker::endpoint::{
     self, AppError, AsgiApp, Conn as AsgiConn, Received, RequestInfo, Scope, Sent, StreamIo,
 };
 use lk_agents_abi::python::{CancellingHandle, HostBridge};
@@ -539,7 +539,7 @@ impl PyWorkerHost {
 
 #[async_trait]
 impl WorkerHost for PyWorkerHost {
-    async fn on_job_request(&self, req: crate::JobRequest) -> JobDecision {
+    async fn on_job_request(&self, req: crate::worker::JobRequest) -> JobDecision {
         if let Some(decision) = server::own_decision(&req, self.has_rtc, self.has_on_request) {
             return decision;
         }
@@ -554,7 +554,7 @@ impl WorkerHost for PyWorkerHost {
         }
     }
 
-    async fn launch_job(&self, info: crate::RunningJobInfo) -> Result<JobId, HostError> {
+    async fn launch_job(&self, info: crate::worker::RunningJobInfo) -> Result<JobId, HostError> {
         let v = self.open("launch_job", |py| Ok(info.into_pyobject(py)?.into_any())).await?;
         Python::attach(|py| v.extract::<String>(py))
             .map_err(|e| HostError::new(format!("launch_job returned a non-str job id: {e}")))
@@ -574,7 +574,6 @@ impl WorkerHost for PyWorkerHost {
         Python::attach(|py| v.extract::<Option<f32>>(py).ok()).flatten()
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     async fn serve_endpoint(&self, request: EndpointRequest) {
         let EndpointRequest { preamble, stream } = request;
         let request_id = preamble.request_id.clone();
@@ -611,7 +610,7 @@ impl WorkerHost for PyWorkerHost {
             } else {
                 HttpStreamResetCode::HsrRefused
             };
-            crate::diagnostics::emit(
+            crate::worker::diagnostics::emit(
                 log::Level::Warn,
                 format!(
                     "endpoint request failed in the host request_id={request_id} error={error}"
@@ -633,10 +632,10 @@ impl WorkerHost for PyWorkerHost {
 fn parse_decision(py: Python<'_>, v: &Bound<'_, PyAny>) -> Result<JobDecision, String> {
     let d = v.cast::<PyDict>().map_err(|_| "expected a dict".to_string())?;
     let host_err = |e: PyErr| capture_host(py, &e).to_string();
-    let raw: crate::RawJobDecision = d.as_any().extract().map_err(host_err)?;
+    let raw: crate::worker::RawJobDecision = d.as_any().extract().map_err(host_err)?;
     JobDecision::from_wire(
         &raw.decision,
-        || d.as_any().extract::<crate::AcceptArguments>().map_err(host_err),
+        || d.as_any().extract::<crate::worker::AcceptArguments>().map_err(host_err),
         || raw.error.clone().unwrap_or_default(),
     )
 }
@@ -672,7 +671,6 @@ fn endpoint_from_py(item: &Bound<'_, PyAny>) -> PyResult<protocol::AgentEndpoint
     Ok(protocol::AgentEndpoint { path, methods, kind: kind as i32, public })
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).unwrap_or_default().to_lowercase().as_str(), "1" | "true" | "yes")
 }
@@ -689,7 +687,7 @@ fn transport_for(routes: bool) -> TransportConfig {
 
 // --------------------------------------------------------------------- ServerConfig
 
-use crate::server::{self, ServerSettings};
+use crate::worker::server::{self, ServerSettings};
 
 /// `AgentServer._endpoint_url_base`.
 #[pyfunction]
@@ -703,9 +701,7 @@ lk_agents_abi::register_host!(fn endpoint_url_base);
 /// where an option was left empty. Writable until the server starts.
 #[pyclass(name = "ServerConfig", module = "livekit.agents._core")]
 pub struct PyServerConfig {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     settings: Arc<std::sync::Mutex<ServerSettings>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     running: Arc<AtomicBool>,
 }
 
@@ -717,8 +713,6 @@ impl PyServerConfig {
 
 #[pymethods]
 impl PyServerConfig {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `options`: `AgentServer`'s arguments by name; `http_proxy` left out reads `HTTPS_PROXY`,
     /// else `HTTP_PROXY`.
     #[new]
@@ -797,7 +791,7 @@ fn empty(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 }
 
 #[async_trait]
-impl crate::server_driver::ServerHost for PyWorkerHost {
+impl crate::worker::server_driver::ServerHost for PyWorkerHost {
     fn configured(&self, has_rtc: bool, has_on_request: bool, user_load: bool) -> Self {
         Self { has_rtc, has_on_request, user_load, ..self.clone() }
     }
@@ -845,7 +839,7 @@ impl crate::server_driver::ServerHost for PyWorkerHost {
         self.open("started", empty).await.map(|_| ()).map_err(|error| error.to_string())
     }
 
-    async fn registered(&self, info: crate::WorkerRegistered) -> Result<(), String> {
+    async fn registered(&self, info: crate::worker::WorkerRegistered) -> Result<(), String> {
         self.open("registered", move |py| Ok(info.into_pyobject(py)?.into_any()))
             .await
             .map(|_| ())
@@ -893,12 +887,11 @@ impl crate::server_driver::ServerHost for PyWorkerHost {
 
 #[pyclass(name = "ServerRuntime", module = "livekit.agents._core")]
 pub struct PyServer {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     settings: Arc<std::sync::Mutex<ServerSettings>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     /// Seals configuration when the server starts; lifecycle lives in `ServerLifecycle`.
     running: Arc<AtomicBool>,
-    runtime: crate::server_driver::ServerRuntime<PyWorkerHost>,
+    runtime: crate::worker::server_driver::ServerRuntime<PyWorkerHost>,
 }
 
 impl PyServer {
@@ -913,7 +906,6 @@ impl PyServer {
 
 #[pymethods]
 impl PyServer {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     fn new(py: Python<'_>, config: &PyServerConfig, host: Py<PyAny>) -> PyResult<Self> {
         check_pid()?;
@@ -931,7 +923,7 @@ impl PyServer {
         Ok(Self {
             settings: config.settings.clone(),
             running: config.running.clone(),
-            runtime: crate::server_driver::ServerRuntime::new(host),
+            runtime: crate::worker::server_driver::ServerRuntime::new(host, None),
         })
     }
 
@@ -942,7 +934,7 @@ impl PyServer {
 
     #[getter]
     fn draining(&self) -> bool {
-        self.runtime.snapshot().phase == crate::server_lifecycle::ServerPhase::Draining
+        self.runtime.snapshot().phase == crate::worker::server_lifecycle::ServerPhase::Draining
     }
 
     #[getter]
@@ -950,7 +942,6 @@ impl PyServer {
         self.runtime.snapshot().http_port
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, publisher, routes, has_load_fnc, has_on_request))]
     #[allow(clippy::too_many_arguments)]
     fn run<'py>(
@@ -968,7 +959,7 @@ impl PyServer {
         check_pid()?;
         let endpoints =
             routes.iter().map(|item| endpoint_from_py(&item)).collect::<PyResult<Vec<_>>>()?;
-        let start = crate::server_driver::ServerStart {
+        let start = crate::worker::server_driver::ServerStart {
             settings: self.settings(),
             devmode,
             unregistered,
@@ -1024,7 +1015,7 @@ impl PyServer {
         };
         if let Some(worker) = self.runtime.snapshot().worker {
             if worker.send(WorkerCommand::JobStatus { job_id: job_id.clone(), status }).is_err() {
-                crate::diagnostics::emit(
+                crate::worker::diagnostics::emit(
                     log::Level::Error,
                     format!("worker job status admission failed job_id={job_id}"),
                 );
@@ -1046,7 +1037,7 @@ impl PyServer {
         if !self.runtime.snapshot().has_rtc {
             return Err(PyRuntimeError::new_err("a server with no rtc_session runs no job"));
         }
-        if self.runtime.snapshot().phase != crate::server_lifecycle::ServerPhase::Running {
+        if self.runtime.snapshot().phase != crate::worker::server_lifecycle::ServerPhase::Running {
             return Err(PyRuntimeError::new_err("the server is not accepting jobs"));
         }
         let room_info = room_info

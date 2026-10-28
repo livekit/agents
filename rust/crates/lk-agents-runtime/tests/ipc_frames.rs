@@ -4,7 +4,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::Duration;
 
-use lk_agents_worker::ipc::{StartJob, ToChild, ToParent, WireError, wire};
+use lk_agents_runtime::worker::ipc::{StartJob, ToChild, ToParent, WireError, wire};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -132,7 +132,7 @@ async fn real_ipc_frame_fault_matrix() {
 
 #[tokio::test]
 async fn real_ipc_saturation_preserves_health_and_settles_slow_writes_on_close() {
-    use lk_agents_worker::ipc::{FLUSH_TIMEOUT, Hello, IpcClient, PROTOCOL_VERSION};
+    use lk_agents_runtime::worker::ipc::{FLUSH_TIMEOUT, Hello, IpcClient, PROTOCOL_VERSION};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -193,7 +193,7 @@ async fn real_ipc_saturation_preserves_health_and_settles_slow_writes_on_close()
         for _ in 0..1000 {
             client.send(ToParent::Exiting { reason: "x".repeat(64 << 10) }).await?;
         }
-        Ok::<_, lk_agents_worker::ipc::Closed>(())
+        Ok::<_, lk_agents_runtime::worker::ipc::Closed>(())
     };
     tokio::pin!(sending);
     assert!(

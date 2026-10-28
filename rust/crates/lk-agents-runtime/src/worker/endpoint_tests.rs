@@ -3,13 +3,9 @@ use super::*;
 /// The node's side of one stream, in memory.
 #[derive(Default)]
 struct Fake {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     inbox: std::sync::Mutex<VecDeque<Vec<u8>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     out: std::sync::Mutex<Vec<u8>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     finished: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     reset: std::sync::Mutex<Option<Reset>>,
 }
 
@@ -64,7 +60,6 @@ struct Echo {
 
 #[async_trait]
 impl AsgiApp for Echo {
-    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     async fn call(&self, scope: Scope, conn: Conn) -> Result<(), AppError> {
         assert_eq!(scope.kind, "http");
         let mut n = 0;
@@ -248,4 +243,180 @@ async fn endpoint_limit_vectors_refuse_websocket_message_and_inbox_overflow() {
         serve(io.clone(), info(0), &WaitForWebsocketLimit, &Registry::default()).await;
         assert!(io.finished.load(Ordering::Acquire));
     }
+}
+
+struct StalledWebsocket;
+
+#[async_trait]
+impl AsgiApp for StalledWebsocket {
+    async fn call(&self, _: Scope, conn: Conn) -> Result<(), AppError> {
+        assert_eq!(conn.receive().await, Received::WsConnect);
+        conn.send(Sent::WsAccept { subprotocol: None, headers: vec![] }).await.unwrap();
+        let Conn::Ws(exchange) = conn else { unreachable!() };
+        let mut closed = exchange.disconnect.subscribe();
+        closed.wait_for(|code| code.is_some()).await.unwrap();
+        assert_eq!(*closed.borrow(), Some(1009));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn stalled_websocket_is_refused_by_bytes_before_item_capacity() {
+    let mut request = b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec();
+    for _ in 0..9 {
+        request.extend([0x82, 0xff]);
+        request.extend((1_u64 << 20).to_be_bytes());
+        request.extend([0_u8; 4]);
+        request.extend(vec![b'x'; 1 << 20]);
+    }
+    let io = Fake::with(&request);
+    serve(io.clone(), info(0), &StalledWebsocket, &Registry::default()).await;
+    assert!(io.finished.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn endpoint_worker_ceiling_refuses_before_read_and_recovers_after_cancel() {
+    for limits in [
+        EndpointLimits { pending_handlers: 1, ..Default::default() },
+        EndpointLimits {
+            worker_payload_bytes: EndpointLimits::default().request_head_bytes + READ_SIZE,
+            ..Default::default()
+        },
+    ] {
+        let registry = Arc::new(Registry::new(limits));
+        let stalled = Arc::new(Fake::default());
+        let task = {
+            let (registry, stalled) = (registry.clone(), stalled.clone());
+            tokio::spawn(async move { serve(stalled, info(0), &ECHO, &registry).await })
+        };
+        while registry.occupancy().handlers == 0 {
+            tokio::task::yield_now().await;
+        }
+        let refused = Fake::with(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n");
+        serve(refused.clone(), info(0), &ECHO, &registry).await;
+        assert_eq!(*refused.reset.lock().unwrap(), Some(Reset::HsrRefused));
+        assert!(!refused.inbox.lock().unwrap().is_empty(), "admission precedes reads");
+        tokio::time::timeout(Duration::from_millis(2), registry.close_all(1001, "closed"))
+            .await
+            .unwrap();
+        task.abort();
+        let _ = task.await;
+        assert_eq!(registry.occupancy().handlers, 0);
+        assert_eq!(registry.occupancy().payload_bytes, 0);
+        let accepted = Fake::with(b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n");
+        serve(accepted.clone(), info(0), &ECHO, &registry).await;
+        assert_eq!(*accepted.reset.lock().unwrap(), None);
+        assert!(accepted.finished.load(Ordering::Acquire));
+    }
+}
+
+struct StalledWriter {
+    input: Fake,
+    writes: std::sync::atomic::AtomicUsize,
+    writing: tokio::sync::Notify,
+    reset: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl StreamIo for StalledWriter {
+    async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
+        self.input.read(max).await
+    }
+    async fn write(&self, _: &[u8]) -> Result<(), String> {
+        if self.writes.fetch_add(1, Ordering::AcqRel) == 0 {
+            return Ok(());
+        }
+        self.writing.notify_one();
+        self.reset.notified().await;
+        Err("stream reset".into())
+    }
+    async fn finish(&self) {}
+    async fn reset(&self, _: Reset) {
+        self.reset.notify_waiters();
+    }
+    async fn stop(&self, _: Reset) {}
+}
+
+struct SendOnWebsocket;
+
+#[async_trait]
+impl AsgiApp for SendOnWebsocket {
+    async fn call(&self, _: Scope, conn: Conn) -> Result<(), AppError> {
+        assert_eq!(conn.receive().await, Received::WsConnect);
+        conn.send(Sent::WsAccept { subprotocol: None, headers: vec![] }).await.unwrap();
+        let _ = conn.send(Sent::WsBytes(vec![b'x'; 1024])).await;
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn websocket_drain_does_not_wait_for_a_stalled_data_write() {
+    let input = Fake::default();
+    input.inbox.lock().unwrap().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
+    let io = Arc::new(StalledWriter {
+        input,
+        writes: std::sync::atomic::AtomicUsize::new(0),
+        writing: tokio::sync::Notify::new(),
+        reset: tokio::sync::Notify::new(),
+    });
+    let registry = Arc::new(Registry::default());
+    let task = {
+        let (io, registry) = (io.clone(), registry.clone());
+        tokio::spawn(async move { serve(io, info(0), &SendOnWebsocket, &registry).await })
+    };
+    io.writing.notified().await;
+    let outcome = tokio::time::timeout(
+        crate::worker::ipc::FLUSH_TIMEOUT + Duration::from_secs(1),
+        registry.close_all(1001, "worker draining"),
+    )
+    .await;
+    io.reset(Reset::HsrAbort).await;
+    task.abort();
+    let _ = task.await;
+    assert!(outcome.is_ok(), "drain must not wait for a data write");
+}
+
+struct SlowWriter(Arc<Fake>);
+
+#[async_trait]
+impl StreamIo for SlowWriter {
+    async fn read(&self, max: usize) -> Result<Vec<u8>, String> {
+        self.0.read(max).await
+    }
+    async fn write(&self, bytes: &[u8]) -> Result<(), String> {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        self.0.write(bytes).await
+    }
+    async fn finish(&self) {
+        self.0.finish().await;
+    }
+    async fn reset(&self, code: Reset) {
+        self.0.reset(code).await;
+    }
+    async fn stop(&self, code: Reset) {
+        self.0.stop(code).await;
+    }
+}
+
+struct CloseAfterAccept;
+
+#[async_trait]
+impl AsgiApp for CloseAfterAccept {
+    async fn call(&self, _: Scope, conn: Conn) -> Result<(), AppError> {
+        assert_eq!(conn.receive().await, Received::WsConnect);
+        conn.send(Sent::WsAccept { subprotocol: None, headers: vec![] }).await.unwrap();
+        conn.send(Sent::WsClose { code: 1001, reason: String::new() }).await.unwrap();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_slow_peer_still_receives_the_graceful_websocket_close() {
+    let input = Arc::new(Fake::default());
+    input.inbox.lock().unwrap().push_back(b"GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec());
+    let io = Arc::new(SlowWriter(input.clone()));
+    serve(io, info(0), &CloseAfterAccept, &Registry::default()).await;
+    assert_eq!(*input.reset.lock().unwrap(), None);
+    assert!(input.out.lock().unwrap().ends_with(&[0x88, 2, 3, 0xe9]));
+    assert!(input.finished.load(Ordering::Acquire));
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ServerPhase {
+pub enum ServerPhase {
     Idle,
     Starting,
     Running,
@@ -14,7 +14,7 @@ pub(crate) enum ServerPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum ServerResource {
+pub enum ServerResource {
     Setup,
     Host,
     Worker,
@@ -24,7 +24,7 @@ pub(crate) enum ServerResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ServerInput {
+pub enum ServerInput {
     Start,
     ResourceStarted(ServerResource),
     StartupFinished(Result<(), String>),
@@ -36,51 +36,53 @@ pub(crate) enum ServerInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ServerEffect {
+pub enum ServerEffect {
     Start,
     Started,
     Drain,
     Close,
     DrainFinished(Result<(), String>),
-    CloseFinished(Result<(), String>),
+    CloseFinished { run_result: Result<(), String>, cleanup_result: Result<(), String> },
     IncompleteCleanup { resources: Vec<ServerResource> },
 }
 
 #[derive(Debug)]
-pub(crate) struct ServerLifecycle {
+pub struct ServerLifecycle {
     phase: ServerPhase,
     resources: BTreeSet<ServerResource>,
     drain_requested: bool,
     drain_result: Option<Result<(), String>>,
     failure: Option<String>,
+    cleanup_failure: Option<String>,
     cleanup_timeout: Duration,
     cleanup_deadline: Option<Duration>,
     close_reported: bool,
 }
 
 impl ServerLifecycle {
-    pub(crate) fn new(cleanup_timeout: Duration) -> Self {
+    pub fn new(cleanup_timeout: Duration) -> Self {
         Self {
             phase: ServerPhase::Idle,
             resources: BTreeSet::new(),
             drain_requested: false,
             drain_result: None,
             failure: None,
+            cleanup_failure: None,
             cleanup_timeout,
             cleanup_deadline: None,
             close_reported: false,
         }
     }
 
-    pub(crate) fn phase(&self) -> ServerPhase {
+    pub fn phase(&self) -> ServerPhase {
         self.phase
     }
 
-    pub(crate) fn wake_at(&self) -> Option<Duration> {
+    pub fn wake_at(&self) -> Option<Duration> {
         self.cleanup_deadline
     }
 
-    pub(crate) fn handle(&mut self, event: ServerInput, now: Duration) -> Vec<ServerEffect> {
+    pub fn handle(&mut self, event: ServerInput, now: Duration) -> Vec<ServerEffect> {
         let mut effects = self.tick(now);
         match event {
             ServerInput::Start if self.phase == ServerPhase::Idle => {
@@ -114,18 +116,22 @@ impl ServerLifecycle {
                 effects.push(ServerEffect::DrainFinished(result));
             }
             ServerInput::Close => self.close(now, &mut effects),
-            ServerInput::ResourceStopped { resource, result } => {
-                if self.resources.remove(&resource) {
-                    if let Err(error) = result {
-                        self.failure.get_or_insert(format!("{resource:?}: {error}"));
+            ServerInput::ResourceStopped { resource, result }
+                if self.resources.remove(&resource) =>
+            {
+                if let Err(error) = result {
+                    let error = format!("{resource:?}: {error}");
+                    if self.phase == ServerPhase::Closing {
+                        self.cleanup_failure.get_or_insert(error.clone());
                     }
-                    if self.resources.is_empty() && self.phase == ServerPhase::Closing {
-                        self.phase = ServerPhase::Closed;
-                        self.cleanup_deadline = None;
-                        if !self.close_reported {
-                            self.close_reported = true;
-                            effects.push(ServerEffect::CloseFinished(self.result()));
-                        }
+                    self.failure.get_or_insert(error);
+                }
+                if self.resources.is_empty() && self.phase == ServerPhase::Closing {
+                    self.phase = ServerPhase::Closed;
+                    self.cleanup_deadline = None;
+                    if !self.close_reported {
+                        self.close_reported = true;
+                        effects.push(self.finished());
                     }
                 }
             }
@@ -134,7 +140,7 @@ impl ServerLifecycle {
         effects
     }
 
-    pub(crate) fn tick(&mut self, now: Duration) -> Vec<ServerEffect> {
+    pub fn tick(&mut self, now: Duration) -> Vec<ServerEffect> {
         if self.cleanup_deadline.is_some_and(|deadline| now >= deadline) {
             self.cleanup_deadline = None;
             self.close_reported = true;
@@ -142,10 +148,17 @@ impl ServerLifecycle {
                 ServerEffect::IncompleteCleanup {
                     resources: self.resources.iter().copied().collect(),
                 },
-                ServerEffect::CloseFinished(self.result()),
+                self.finished(),
             ];
         }
         Vec::new()
+    }
+
+    fn finished(&self) -> ServerEffect {
+        ServerEffect::CloseFinished {
+            run_result: self.result(),
+            cleanup_result: self.cleanup_failure.clone().map_or(Ok(()), Err),
+        }
     }
 
     fn result(&self) -> Result<(), String> {
@@ -166,7 +179,7 @@ impl ServerLifecycle {
         if self.resources.is_empty() {
             self.phase = ServerPhase::Closed;
             self.close_reported = true;
-            effects.push(ServerEffect::CloseFinished(self.result()));
+            effects.push(self.finished());
         } else {
             self.cleanup_deadline = Some(now.saturating_add(self.cleanup_timeout));
         }
@@ -192,9 +205,10 @@ mod tests {
             ServerInput::ResourceStopped { resource: ServerResource::Host, result: Ok(()) },
             Duration::ZERO,
         );
-        assert!(
-            effects.contains(&ServerEffect::CloseFinished(Err("pool warmup timed out".into())))
-        );
+        assert!(effects.contains(&ServerEffect::CloseFinished {
+            run_result: Err("pool warmup timed out".into()),
+            cleanup_result: Ok(())
+        }));
     }
 
     #[test]
@@ -230,7 +244,7 @@ mod tests {
             state.tick(Duration::from_secs(1)),
             vec![
                 ServerEffect::IncompleteCleanup { resources: vec![ServerResource::Host] },
-                ServerEffect::CloseFinished(Ok(())),
+                ServerEffect::CloseFinished { run_result: Ok(()), cleanup_result: Ok(()) },
             ]
         );
         assert_eq!(state.phase(), ServerPhase::Closing);

@@ -15,7 +15,7 @@ use web_transport_quinn::{RecvStream, SendStream};
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};
-use crate::protocol::{self, WorkerMessage};
+use crate::worker::protocol::{self, WorkerMessage};
 
 use super::MAX_CONTROL_MESSAGE;
 pub use livekit_protocol::agent_http::{AgentEndpointKind, HttpStreamResetCode, StreamPreamble};

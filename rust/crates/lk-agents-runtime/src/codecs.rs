@@ -448,6 +448,7 @@ mod tests {
                 images: 1,
                 eot_models: 1,
                 uploads: 1,
+                worker_io: 1,
             },
         )
         .unwrap()

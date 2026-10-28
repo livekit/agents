@@ -1,13 +1,13 @@
 //! CPU capacity and usage: the default load calculator's input and the basis of
-//! `num_idle_processes`' prod default. cgroup monitors live in [`crate::hw::cgroup`]; the bare-host
+//! `num_idle_processes`' prod default. cgroup monitors live in [`crate::worker::hw::cgroup`]; the bare-host
 //! one uses `sysinfo`, so it works on macOS and Windows.
 
-use crate::hw::cgroup::read_first_int;
-pub use crate::hw::cgroup::{
+use crate::worker::hw::cgroup::read_first_int;
+pub use crate::worker::hw::cgroup::{
     CpuMonitorKind, busy_fraction, cpu_count_v1, cpu_count_v2, detect, parse_cpu_max,
     parse_usage_usec,
 };
-use crate::hw::cgroup::{V1_PERIOD, V1_QUOTA, V1_USAGE, first_existing};
+use crate::worker::hw::cgroup::{V1_PERIOD, V1_QUOTA, V1_USAGE, first_existing};
 
 /// Overrides every other answer in all three monitors.
 pub const NUM_CPUS_ENV: &str = "NUM_CPUS";
@@ -31,7 +31,6 @@ pub fn system_cpu_count() -> f32 {
 ///
 /// Samples CPU busy-ness across calls; one per worker. Uses `Instant`, not `Ts`, because the
 /// sampling interval is the caller's, not the machine's.
-#[lk_agents_abi::class(name = "CpuMonitor", mutable)]
 pub struct CpuMonitor {
     kind: CpuMonitorKind,
     cpus: f32,
@@ -45,9 +44,7 @@ enum Source {
 }
 
 /// `utils/hw/cpu.py`'s three monitors as one. Starts no threads, so it is safe before core init.
-#[lk_agents_abi::host(object(pid = false))]
 impl CpuMonitor {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         let kind = detect();
         let env = cpu_count_from_env(std::env::var(NUM_CPUS_ENV).ok().as_deref());
@@ -82,18 +79,15 @@ impl CpuMonitor {
     }
 
     /// Which monitor was picked.
-    #[host(getter)]
     pub fn kind(&self) -> CpuMonitorKind {
         self.kind
     }
 
     /// `cpu_count()`: logical CPUs, fractional under a cgroup quota.
-    #[host(method)]
     pub fn cpu_count(&self) -> f32 {
         self.cpus
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Busy fraction since the previous call, `0.0..=1.0`, non-blocking. `None` on the first
     /// sample or an unreadable cgroup counter: keep the previous estimate.
     pub fn cpu_percent(&mut self) -> Option<f32> {

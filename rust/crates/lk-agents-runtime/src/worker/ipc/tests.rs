@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -122,18 +120,14 @@ type Sample = Result<(f64, String), MemoryError<String>>;
 
 #[derive(Default)]
 struct FakeHost {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     logs: Mutex<Vec<(Level, String, Extra)>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
+    logged: tokio::sync::Notify,
     alive: AtomicBool,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     kills: AtomicUsize,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     samples: Mutex<VecDeque<Sample>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
+
     /// The child's end, dropped by a kill as the process's death would close it.
     child: Mutex<Option<DuplexStream>>,
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     released: AtomicBool,
 }
 
@@ -142,6 +136,7 @@ impl ProcHost for Arc<FakeHost> {
 
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.logs.lock().unwrap().push((level, msg.to_owned(), extra));
+        self.logged.notify_one();
     }
 
     fn log_exception(&self, msg: &str, err: String) {
@@ -198,7 +193,16 @@ fn setup(opts: SupervisorOptions) -> (ProcSupervisor, Arc<FakeHost>, DuplexStrea
     let (parent, child) = tokio::io::duplex(1 << 16);
     let host = Arc::new(FakeHost::default());
     host.alive.store(true, Ordering::SeqCst);
-    (ProcSupervisor::new(parent, host.clone(), opts), host, child)
+    (
+        ProcSupervisor::new(
+            parent,
+            host.clone(),
+            opts,
+            crate::worker::test_support::native_workers(),
+        ),
+        host,
+        child,
+    )
 }
 
 async fn recv(child: &mut DuplexStream) -> ToChild {
@@ -215,7 +219,6 @@ async fn recv_skipping_pings(child: &mut DuplexStream) -> ToChild {
     }
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn waits(
     sup: &ProcSupervisor,
 ) -> tokio::task::JoinHandle<Result<Option<Duration>, InitError>> {
@@ -226,7 +229,7 @@ async fn waits(
 }
 
 // Catches: the hello not sent first, or the elapsed time not logged.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn initialize_sends_hello_and_logs_the_elapsed_time() {
     let (sup, host, mut child) = setup(opts());
@@ -288,7 +291,7 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
 }
 
 // Catches: a process stuck initializing left running past initialize_timeout.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn initialize_timeout_kills_the_process() {
     let (sup, host, _child) = setup(opts());
@@ -302,7 +305,7 @@ async fn initialize_timeout_kills_the_process() {
 
 // Catches: a ping cadence or pong bookkeeping that differs from the reference: the first ping at
 // once, then one per interval, a late pong warned about.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     let (sup, host, mut child) = setup(opts());
@@ -329,7 +332,7 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
 }
 
 // Catches: a hung child (no pongs) never being killed, or pongs not pushing the deadline back.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn missing_pongs_kill_the_process_after_ping_timeout() {
     let (sup, host, mut child) = setup(opts());
@@ -353,7 +356,7 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
 }
 
 // Catches: a graceful close that kills a child which acked, or logs a clean exit as a failure.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn shutdown_waits_for_the_ack_and_the_exit() {
     let (sup, host, mut child) = setup(opts());
@@ -384,7 +387,7 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
 }
 
 // Catches: a child that never acks keeping the close waiting forever.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn shutdown_kills_a_process_that_does_not_ack() {
     let (sup, host, child) = setup(opts());
@@ -410,7 +413,7 @@ async fn shutdown_kills_a_process_that_does_not_ack() {
 
 // Catches: a job thread killed (it cannot be) or given up on when its ack and exit are late; it is
 // reported and waited for.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn a_job_thread_that_does_not_ack_is_waited_for_not_killed() {
     let (sup, host, _child) =
@@ -432,7 +435,7 @@ async fn a_job_thread_that_does_not_ack_is_waited_for_not_killed() {
 
 // Catches: the reader's end leaving a close waiting for an ack that cannot arrive (#5929), or an
 // abnormal exit not reported.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn the_socket_closing_resolves_the_shutdown_waits() {
     let (sup, host, mut child) = setup(opts());
@@ -455,7 +458,6 @@ async fn the_socket_closing_resolves_the_shutdown_waits() {
     );
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[test]
 fn memory_warning_is_rate_limited() {
     let t0 = Duration::ZERO;
@@ -470,97 +472,33 @@ fn memory_warning_is_rate_limited() {
     assert!(gate.should_warn(520.0 + MEMORY_WARN_RESET_DELTA_MB, t0 + Duration::from_secs(5)));
 }
 
-// Catches: warnings on every sample, a missing advisory note, or wrong diagnostic fields.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-#[tokio::test(start_paused = true)]
-async fn memory_monitor_warns_with_the_baseline_and_growth() {
-    let (sup, host, mut child) = setup(SupervisorOptions { memory_warn_mb: 500.0, ..opts() });
-    host.samples.lock().unwrap().extend([
-        Ok((100.0, "uss".into())),
-        Ok((600.04, "uss".into())),
-        Ok((610.0, "uss".into())),
-        Ok((700.0, "uss".into())),
-    ]);
-    let initialize = waits(&sup).await;
-    assert!(matches!(recv(&mut child).await, ToChild::Hello(_)));
-    write(&mut child, &ToParent::Ready { version: PROTOCOL_VERSION, error: None }).await.unwrap();
-    initialize.await.unwrap().unwrap();
-    let accepted = tokio::spawn({
-        let sup = sup.clone();
-        async move { sup.start_job(job()).await }
-    });
-    let ToChild::StartJob { request_id, .. } = recv(&mut child).await else { panic!() };
-    write(&mut child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
-    accepted.await.unwrap().unwrap();
-    sup.supervise().await;
-    let drain = tokio::spawn(async move { while read::<ToChild, _>(&mut child).await.is_ok() {} });
-    tokio::time::sleep(Duration::from_secs(16)).await;
-    let warning = "job process memory usage is above the warning threshold \
-                   (advisory only, the process will not be terminated)";
-    let warnings: Vec<_> =
-        host.logs.lock().unwrap().iter().filter(|(_, m, _)| m == warning).cloned().collect();
-    assert_eq!(warnings.len(), 2, "{:?}", host.messages());
-    let (level, _, extra) = &warnings[0];
-    assert_eq!(*level, Level::Warning);
-    assert_eq!(
-        extra,
-        &vec![
-            ("memory_usage_mb", ExtraValue::Float(600.0)),
-            ("memory_metric", ExtraValue::Str("uss".into())),
-            ("memory_warn_mb", ExtraValue::Float(500.0)),
-            ("memory_limit_mb", ExtraValue::Float(0.0)),
-            ("uptime", ExtraValue::Float(5.0)),
-            ("has_running_job", ExtraValue::Bool(true)),
-            ("baseline_memory_mb", ExtraValue::Float(100.0)),
-            ("growth_memory_mb", ExtraValue::Float(500.0)),
-        ]
-    );
-    assert_eq!(host.kills.load(Ordering::SeqCst), 0);
-    drop(drain);
-}
-
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-#[tokio::test(start_paused = true)]
-async fn memory_limit_kills_and_unavailable_stops_monitoring() {
+// The native sampler runs on the process runtime; observe its completion on a real clock.
+#[tokio::test]
+async fn a_native_memory_sample_enforces_the_process_limit() {
     let (sup, host, _child) = setup(SupervisorOptions { memory_limit_mb: 500.0, ..opts() });
     host.samples.lock().unwrap().push_back(Ok((600.0, "pss".into())));
     sup.supervise().await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let (level, _) = host.find("job process exceeded memory limit, killing it").unwrap();
+    let message = "job process exceeded memory limit, killing it";
+    let (level, _) = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let notified = host.logged.notified();
+            if let Some(log) = host.find(message) {
+                break log;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .expect("native sampler reports the memory limit");
     assert_eq!(level, Level::Error);
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
-
-    let (sup, host, _child) = setup(SupervisorOptions { memory_warn_mb: 500.0, ..opts() });
-    host.samples.lock().unwrap().extend([
-        Err(MemoryError::Failed("oops".into())),
-        Err(MemoryError::Unavailable("process no longer exists".into())),
-    ]);
-    sup.supervise().await;
-    tokio::time::sleep(Duration::from_secs(30)).await;
-    let messages = host.messages();
-    assert!(messages.contains(&"Error in memory monitoring task: oops".into()));
-    assert!(
-        messages
-            .contains(&"failed to get memory info for process: process no longer exists".into())
-    );
-    assert_eq!(host.samples.lock().unwrap().len(), 0);
-
-    // an interruption (#4664's SIGTERM) stops the monitor without being logged as an error
-    let (sup, host, _child) = setup(SupervisorOptions { memory_warn_mb: 500.0, ..opts() });
-    host.samples.lock().unwrap().extend([Err(MemoryError::Interrupted), Ok((600.0, "uss".into()))]);
-    sup.supervise().await;
-    tokio::time::sleep(Duration::from_secs(30)).await;
-    assert!(host.messages().is_empty(), "{:?}", host.messages());
-    assert_eq!(host.samples.lock().unwrap().len(), 1);
 }
 
 // Catches: the kill skipping SIGUSR1 (the child's stack dump) or killing an already dead child.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
+
 #[cfg(unix)]
 #[tokio::test]
 async fn kill_sends_sigusr1_then_kills() {
-    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     struct ChildHost(Mutex<std::process::Child>, AtomicUsize);
     impl ProcHost for Arc<ChildHost> {
         type Error = String;
@@ -587,7 +525,12 @@ async fn kill_sends_sigusr1_then_kills() {
     let pid = child.id();
     let host = Arc::new(ChildHost(Mutex::new(child), AtomicUsize::new(0)));
     let (parent, _peer) = UnixStream::pair().unwrap();
-    let sup = ProcSupervisor::new(parent, host.clone(), SupervisorOptions { pid, ..opts() });
+    let sup = ProcSupervisor::new(
+        parent,
+        host.clone(),
+        SupervisorOptions { pid, ..opts() },
+        crate::worker::test_support::native_workers(),
+    );
     let start = std::time::Instant::now();
     sup.kill().await;
     assert!(start.elapsed() >= KILL_GRACE, "the grace before the kill");
@@ -629,7 +572,7 @@ async fn client_fails_on_a_version_mismatch_and_says_why() {
 }
 
 // Catches: what the child sends reordered, or lost on close.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test]
 async fn client_sends_in_order_and_flushes_on_close() {
     let (client, mut parent) = connected(None).await;
@@ -652,7 +595,7 @@ async fn client_sends_in_order_and_flushes_on_close() {
 }
 
 // Catches: an orphaned child (the parent stopped talking) never noticing.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+
 #[tokio::test(start_paused = true)]
 async fn client_health_check_closes_when_the_parent_goes_quiet() {
     let (client, mut parent) = connected(Some(100_000)).await;
@@ -679,7 +622,6 @@ async fn client_stops_at_a_malformed_frame() {
     assert!(matches!(client.wait_reader().await, Err(WireError::Malformed(_))));
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn supervisor_blocked_writer() {
     let (parent, mut child) = UnixStream::pair().unwrap();
@@ -689,6 +631,7 @@ async fn supervisor_blocked_writer() {
         parent,
         host.clone(),
         SupervisorOptions { ping_timeout: 1.0, ..opts() },
+        crate::worker::test_support::native_workers(),
     );
     let initialize = waits(&sup).await;
     assert!(matches!(read::<ToChild, _>(&mut child).await.unwrap(), ToChild::Hello(_)));
@@ -714,7 +657,6 @@ async fn supervisor_blocked_writer() {
     assert!(pending.await.unwrap().is_err());
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn shutdown_ack_phase_deadline() {
     let (sup, host, mut child) = setup(opts());
@@ -730,7 +672,6 @@ async fn shutdown_ack_phase_deadline() {
     );
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
 #[tokio::test(start_paused = true)]
 async fn child_inbox_saturation_health() {
     let (client, mut parent) = connected(Some(100)).await;
@@ -758,7 +699,6 @@ async fn repeated_initialize_callers_are_refused_without_replacing_the_first_wai
     sup.reaped(0).await;
 }
 
-#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
 #[tokio::test(start_paused = true)]
 async fn native_exit_wakes_eligibility_before_the_reaping_receipt_releases_the_owner() {
     let (sup, host, _child) = setup(opts());

@@ -3,8 +3,8 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use crate::worker::cli::{EXIT_ESCALATION_TIMEOUT, ExitSignals, LOOP_CLOSE_TIMEOUT};
 use lk_agents_abi::worker::cli::CliSignals as CliSignalsPort;
-use lk_agents_worker::cli::{EXIT_ESCALATION_TIMEOUT, ExitSignals, LOOP_CLOSE_TIMEOUT};
 
 pub struct CliSignals {
     state: Arc<(Mutex<ExitSignals>, Condvar)>,

@@ -49,6 +49,143 @@
       "measurement": "Separate external native stack sampling, typed per-thread inclusive counts and original raw call tree",
       "exact_stall_max_ms": null,
       "limitation": "Parked workers are normal; aggregate call trees have no consecutive-sample order. Sampling cannot derive heartbeat lateness, exact poll duration or per-step CPU."
+    },
+    "worker_endpoint": {
+      "profile_command": "cargo test -p lk-agents-runtime --lib endpoint_resource_profile -- --ignored --nocapture",
+      "workload": {
+        "transport": "real TCP loopback, WebSocket upgrade and masked binary frames",
+        "sessions": [
+          1,
+          8,
+          32,
+          64
+        ],
+        "seconds_per_case": 2,
+        "incoming_messages_per_exchange": 8,
+        "incoming_message_bytes": 16384,
+        "outgoing_messages_per_exchange": 1,
+        "outgoing_message_bytes": 16384,
+        "runtime_threads": 4,
+        "heartbeat_ms": 1
+      },
+      "limits": {
+        "worker_payload_bytes": 536870912,
+        "pending_handlers": 256,
+        "request_head_bytes": 1048576,
+        "chunk_line_bytes": 8192,
+        "trailers_bytes": 65536,
+        "websocket_frame_bytes": 1048576,
+        "websocket_message_bytes": 4194304,
+        "websocket_inbox_items": 16,
+        "websocket_inbox_bytes": 8388608,
+        "minimum_outgoing_charge_bytes": 65536,
+        "admission_waiters": 0,
+        "websocket_close_flush_ms": 2000,
+        "websocket_outbox_bytes": 8388608
+      },
+      "accounting": {
+        "unit": "logical payload reservations, including parser head/read bounds, queued messages and outgoing serialization",
+        "http_exchange_reservation_bytes": 1114112,
+        "websocket_exchange_reservation_bytes": 4259840,
+        "reservation_lifetime": "HTTP head/read reservation is released after upgrade; parser reservation, handler admission, queued messages and pending writes stay owned through cancellation and cleanup.",
+        "excluded": "application-owned request/response values, TLS/kernel buffers, codec allocation overhead, Python conversion copies and allocator retention"
+      },
+      "derivation": "64 upgraded peers each reserve a4MiB parser plus64KiB read, eight16KiB queued inputs and a minimum64KiB output:272MiB.512MiB leaves1.88x capacity for this workload. During upgrade an additional1MiB head plus64KiB read is reserved, then released after transferring the request scope.8MiB inbox/outbox quotas each admit two maximum-size messages; the worker ceiling may refuse full queues before their local limits. Graceful close uses the existing2s IPC flush budget; stop/reset admission has a separate frame-cadence contract.",
+      "overload": {
+        "exchange": "HSR_REFUSED before reads",
+        "inbox": "WebSocket close 1009, before copying into the inbox",
+        "outgoing": "explicit send error before encoding or waiting for serialization",
+        "cleanup": "permits remain owned until retained payloads and pending writes settle; close/reset does not wait for data capacity"
+      },
+      "evidence_limits": [
+        "This row qualifies endpoint payload admission only; IPC, process pool, native-worker and telemetry ceilings remain owned by their separate interfaces.",
+        "The real-TCP profile measures delivered bytes and loop-lag, plus zero settled logical reservations. It does not establish RSS or allocator high-water bounds.",
+        "The supported workload fits under the ceiling; simultaneous maximum-size payloads may be explicitly refused.",
+        "Shared macOS host timings do not qualify Linux CPU quotas or Windows."
+      ],
+      "measurement": {
+        "platform": "macOS arm64, shared development host",
+        "results": [
+          {
+            "sessions": 1,
+            "batches": 1156,
+            "delivered_bytes": 151519232,
+            "elapsed_seconds": 2.003,
+            "loop_lag_p999_us": 4761,
+            "loop_lag_max_us": 4948,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 8,
+            "batches": 583,
+            "delivered_bytes": 611319808,
+            "elapsed_seconds": 2.004,
+            "loop_lag_p999_us": 4300,
+            "loop_lag_max_us": 11959,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 32,
+            "batches": 172,
+            "delivered_bytes": 721420288,
+            "elapsed_seconds": 2.004,
+            "loop_lag_p999_us": 9770,
+            "loop_lag_max_us": 10314,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          },
+          {
+            "sessions": 64,
+            "batches": 84,
+            "delivered_bytes": 704643072,
+            "elapsed_seconds": 2.009,
+            "loop_lag_p999_us": 18650,
+            "loop_lag_max_us": 20844,
+            "retained_handlers": 0,
+            "retained_payload_bytes": 0
+          }
+        ],
+        "frame_cadence_ms": 10,
+        "loop_lag_p999_gate_us": 2000,
+        "loop_lag_max_exclusive_gate_us": 5000,
+        "frame_cadence_qualified": false,
+        "result": "Delivery and reservation release passed. Frame-cadence gates remain unqualified on the shared macOS host."
+      }
+    },
+    "worker_native_io": {
+      "service": "process-wide native WorkerService, WorkerClass::WorkerIo",
+      "limits": {
+        "running_and_queued": 4,
+        "shared_native_total": 64,
+        "reserved_control_slots": 4,
+        "shared_payload_total": 60,
+        "native_service_admission_waiters": 0,
+        "startup_waiters_per_server": 1
+      },
+      "consumers": [
+        "worker CPU/cgroup sampler",
+        "process memory sampler",
+        "server diagnostics/Prometheus-directory/CPU setup"
+      ],
+      "derivation": "The shared total reserves min(worker_io, total - 1) slots for WorkerIo, leaving at least one payload slot in explicitly tiny pools. Production total64/WorkerIo4 therefore caps all payload classes together at60, independently of the sum of their class ceilings. CPU sampling runs at500ms cadence; memory sampling at5s cadence. Exact fleet throughput and CPU-quota calibration remain unmeasured.",
+      "overload": {
+        "cpu_sample": "retain cached load and retry at the next sample cadence",
+        "process_memory_sample": "typed Sample::Failed and retry at the next cadence",
+        "server_setup": "owned startup future retries at the existing100ms pool-refill cadence, bounded by initialize_process_timeout; close cancels the wait before native work is retained"
+      },
+      "ownership": "The admitted native receipt keeps its class and total permits until actual completion, including cancelled callers and setup/sampling cleanup. Worker/server/supervisor drivers receive the service explicitly; production shares the process service and test fixtures own a service on their runtime.",
+      "checks": [
+        "worker_sampler_off_loop saturates the shared WorkerIo class while registration/drain/close stay serviceable",
+        "cancelled_caller_does_not_release_a_running_worker covers the reused native admission mechanism",
+        "native_payload_saturation_reserves_health_sampling_capacity exhausts payload admission while a health sample still enters the same shared pool",
+        "server_startup_waits_for_sampling_capacity, close_interrupts_a_server_waiting_for_sampling_capacity and server_setup_capacity_timeout_keeps_close_successful use fixture-owned services"
+      ],
+      "evidence_limits": [
+        "This change integrates the existing ceiling; it does not qualify native I/O throughput across Linux CPU quotas or Windows.",
+        "Worker control/outbox, IPC and process-pool byte ceilings still need their own aggregate calibration; endpoint payload admission and native running-work admission do not establish those bounds."
+      ]
     }
   },
   "evidence_limits": [

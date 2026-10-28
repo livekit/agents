@@ -587,3 +587,14 @@ fn a_native_trait_takes_its_native_first_then_refuses_or_goes_through_its_adapte
     assert!(out.contains("PyTypeError :: new_err (\"only native\")"), "{out}");
     assert!(crate::native(quote!(native), &tr).is_err());
 }
+
+#[test]
+fn included_source_uses_the_declaration_files_ownership() {
+    use std::path::Path;
+    assert!(crate::in_place(Some(Path::new(
+        "crates/lk-agents-runtime/src/worker/../../../lk-agents-worker/src/cli.rs"
+    ))));
+    assert!(!crate::in_place(Some(Path::new(
+        "crates/lk-agents-worker/src/../../lk-agents-runtime/src/worker/cli.rs"
+    ))));
+}

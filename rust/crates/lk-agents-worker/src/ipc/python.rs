@@ -1,3 +1,4 @@
+//! Runtime-owned host adapter, compiled by lk-agents-runtime through #[path].
 //! `_core.ipc_pair`, `_core.ProcSupervisor`, `_core.IpcClient`, `_core.ProcPool` and
 //! `_core.JobRun`: the job processes as `ipc/__init__.py` (the worker's side) and `ipc/child.py`
 //! (a process's) drive them.
@@ -6,12 +7,9 @@
 //! Rust owns launch completion, native signals, exit observation and the start-method reaping
 //! receipt. The host supplies bootstrap and receives queued diagnostics and completion callbacks.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::Mutex;
-
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -21,12 +19,12 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
+#[path = "python/host.rs"]
 mod host;
 use host::*;
 
 use super::pool::{LaunchError, PoolEvent, PoolHost, PoolOptions, ProcPool};
 use super::process::{ProcessControl, ProcessLaunch, ProcessResource, StartMethod};
-
 use super::{
     Closed, Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, IpcClient, Level, MemoryError,
     PROTOCOL_VERSION, ProcHost, ProcSupervisor, StartJob, SupervisorOptions, ToChild, ToParent,
@@ -34,7 +32,7 @@ use super::{
 };
 
 /// The `SupervisedProc` as the supervisor's host, until the process exited.
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
 struct PyProcHost {
     object: Mutex<Option<Arc<Py<PyAny>>>>,
     process: watch::Receiver<Option<Arc<ProcessControl>>>,
@@ -87,7 +85,6 @@ impl PyProcSupervisor {
 
 #[pymethods]
 impl PyProcSupervisor {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (
         fd, host, *, pid, initialize_timeout, close_timeout, memory_warn_mb,
@@ -109,7 +106,7 @@ impl PyProcSupervisor {
     ) -> PyResult<Self> {
         check_pid()?;
         // Thread runners and direct supervisors need diagnostics before any OS launch.
-        crate::diagnostics::initialize().map_err(PyRuntimeError::new_err)?;
+        crate::worker::diagnostics::initialize().map_err(PyRuntimeError::new_err)?;
         let _rt = pyo3_async_runtimes::tokio::get_runtime().enter();
         let opts = SupervisorOptions {
             pid,
@@ -133,6 +130,8 @@ impl PyProcSupervisor {
                 socket(fd)?,
                 PyProcHost { object: Mutex::new(Some(Arc::new(host))), process: native },
                 opts,
+                crate::process::workers()
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
             ),
             health_timeout_ms,
             initialized: watch::channel(None).0,
@@ -200,7 +199,6 @@ impl PyProcSupervisor {
         Ok(())
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// Own launch/bootstrap before invoking multiprocessing; native exit and reaping continue
     /// even if the Python caller cancels this future or its event loop stops responding.
     fn run<'py>(
@@ -283,7 +281,7 @@ struct Child {
     client: IpcClient,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     /// The job the parent started, once it did.
     run: Mutex<Option<Py<PyJobRun>>>,
     asyncio_debug: bool,
@@ -291,7 +289,6 @@ struct Child {
 
 #[pymethods]
 impl PyIpcClient {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The handshake on the parent's socket `fd`, blocking: the parent's `Hello`, then
     /// `initialize(http_proxy)` and `Ready` (with the error it raised, re-raised here). Once
     /// initialized, the child calls itself orphaned when the parent goes quiet past the health
@@ -325,7 +322,12 @@ impl PyIpcClient {
                 }))
             })
             .map_err(failed)?;
-        let initialized = initialize.call1((hello.http_proxy.clone(),));
+        let initialized = initialize.call1((hello.http_proxy.clone(),)).and_then(|value| {
+            // The host callback warms Python SDKs; only runtime can construct this native client.
+            // Both complete under this bootstrap barrier before Ready or a job loop.
+            py.detach(crate::http::GatewayHttp::shared).map_err(PyRuntimeError::new_err)?;
+            Ok(value)
+        });
         let error = initialized.as_ref().err().map(|e| e.value(py).to_string());
         let ready = ToParent::Ready { version: PROTOCOL_VERSION, error };
         let sent = py.detach(|| rt.block_on(client.send(ready)));
@@ -348,7 +350,6 @@ impl PyIpcClient {
         self.0.asyncio_debug
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Serve the parent's messages until the channel closes, the shutdown ends the process, or
     /// `stop()`. `host` (on the running loop) runs `_core_start_job(fields)` (returning the job's
     /// `JobRun`) and `_core_dump_stacks()`, each a coroutine.
@@ -570,7 +571,7 @@ struct JobRunState {
     user_shutdown: bool,
     /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
     entrypoints: Vec<(Py<PyAny>, Vec<i32>)>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     /// The participant entrypoints running, by participant and entrypoint, each its run's number.
     participant_runs: HashMap<(String, usize), u64>,
     runs: u64,
@@ -616,10 +617,9 @@ struct JobRunInner {
     observability_url: Option<String>,
     /// The server asked for the job's recording.
     recording: bool,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<JobRunState>,
     ended: watch::Sender<bool>,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
     /// Held while the room connects, so a second `connect()` waits for the first.
     connecting: tokio::sync::Mutex<()>,
     /// Set once the job ends: the API calls still running are cancelled.
@@ -651,7 +651,6 @@ impl JobRunInner {
         py_log(level, msg, exc);
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// The entrypoints of `kind` start for the participant, each in the caller's context; one
     /// still running for an earlier participant of the same identity is warned about.
     fn participant_joined(
@@ -730,7 +729,6 @@ impl JobRunInner {
         }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// One step run inside a span of its own: `error_msg` is logged with a failure.
     async fn spanned(
         &self,
@@ -1038,7 +1036,6 @@ impl PyJobRun {
         self.0.participant_joined(py, &ctx, &participant, &identity, kind)
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A participant left: a simulator leaving ends the job.
     fn participant_left(&self, attributes: HashMap<String, String>) {
         if attributes.contains_key(ATTRIBUTE_SIMULATOR) {
@@ -1107,7 +1104,6 @@ impl PyJobRun {
         })
     }
 
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `ctx.init_recording(options)`: the redaction to record with when the cloud upload is to be
     /// set up now, `None` when not (set up already, nothing to upload, or no observability
     /// endpoint). Audio without its transcript under redaction is refused.

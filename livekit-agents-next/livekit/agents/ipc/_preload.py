@@ -34,7 +34,7 @@ def _step(name: str, fnc: Callable[[], Any]) -> None:
     try:
         if fnc() is False:
             return
-    except BaseException as error:
+    except Exception as error:
         raise RuntimeError(f"preload {name!r} failed: {error}") from error
     logger.debug("preloaded %s", name, extra={"elapsed": round(time.perf_counter() - started, 3)})
 
@@ -76,6 +76,13 @@ def _rtc_native_library() -> None:
     from livekit.rtc._ffi_client import get_ffi_lib
 
     get_ffi_lib()
+
+
+def _rtc_runtime() -> None:
+    # Active native state belongs to the launched process, never the forkserver image.
+    from livekit.rtc._ffi_client import FfiClient
+
+    _ = FfiClient.instance
 
 
 def _openai_resources() -> None:
