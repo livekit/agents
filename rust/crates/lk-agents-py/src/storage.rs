@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use lk_agents_abi::python::{check_pid, pyo3_async_runtimes, value_from_py};
+use lk_agents_abi::python::{check_pid, value_from_py};
 use lk_agents_runtime::storage::{QueuedStreams, StreamRead};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -59,7 +59,7 @@ impl PyStreams {
         check_pid()?;
         let streams = self.inner.clone();
         let ttl = ttl_seconds.map(std::time::Duration::from_secs);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let info = streams.create(ttl).await.map_err(to_py_err)?;
             Python::attach(|py| Ok(crate::generated::records::storage_class::stream_info_to_py(py, info)?.unbind()))
         })
@@ -76,7 +76,7 @@ impl PyStreams {
     fn close<'py>(&self, py: Python<'py>, stream_id: String) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let streams = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             streams.close(&stream_id).await.map_err(to_py_err)
         })
     }
@@ -84,7 +84,7 @@ impl PyStreams {
     fn delete<'py>(&self, py: Python<'py>, stream_id: String) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let streams = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             streams.delete(&stream_id).await.map_err(to_py_err)
         })
     }
@@ -111,7 +111,7 @@ impl PyStreamReader {
     fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let reader = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let record = reader.lock().await.next().await.map_err(to_py_err)?;
             Python::attach(|py| Ok(record.map(|r| PyBytes::new(py, &r).into_any().unbind())))
         })
@@ -120,7 +120,7 @@ impl PyStreamReader {
     /// The offset to resume from after the frames returned so far. Awaitable.
     fn next_offset<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let reader = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             Ok(reader.lock().await.next_offset().to_owned())
         })
     }

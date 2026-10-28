@@ -78,7 +78,7 @@ impl PyThread {
     fn lanes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let thread = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let lanes = thread.lanes().await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, lanes, crate::generated::records::storage_class::lane_row_to_py)
@@ -96,7 +96,7 @@ impl PyThread {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let thread = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let events = thread.events(after_id, limit).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, events, crate::generated::records::storage_class::event_row_to_py)
@@ -108,7 +108,7 @@ impl PyThread {
     fn history<'py>(&self, py: Python<'py>, lane: &str) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let items = lane.history().await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, items, crate::generated::records::storage_class::item_row_to_py)
@@ -121,7 +121,7 @@ impl PyThread {
     fn tasks<'py>(&self, py: Python<'py>, lane: &str, limit: i64) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let tasks = lane.tasks(None, limit).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, tasks, crate::generated::records::storage_class::task_record_to_py)
@@ -134,7 +134,7 @@ impl PyThread {
     fn task<'py>(&self, py: Python<'py>, task_id: String) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let thread = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let record = thread.task(&task_id).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 one(py, record, crate::generated::records::storage_class::task_record_to_py)
@@ -160,7 +160,7 @@ impl PyThread {
         let status = status.and_then(|s| TaskState::parse(s.as_str()));
         let query = TaskQuery { status, updated_after, page_size, page_token };
         let thread = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let page = thread.list_tasks(&query).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 Ok(crate::generated::records::storage_class::task_page_to_py(
@@ -176,7 +176,7 @@ impl PyThread {
     fn lane_info<'py>(&self, py: Python<'py>, lane: &str) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let info = lane.info().await.map_err(to_py_err)?;
             Python::attach(|py| {
                 one(py, info, crate::generated::records::storage_class::lane_row_to_py)
@@ -195,7 +195,7 @@ impl PyThread {
     ) -> PyResult<Bound<'py, PyAny>> {
         check_pid()?;
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let rows = lane.db().inbox(pending).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 records(py, rows, crate::generated::records::storage_class::inbox_row_to_py)
@@ -218,7 +218,7 @@ impl PyThread {
             _ => return Err(PyValueError::new_err("metadata must be a dict")),
         };
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let record = lane.cancel_task(&task_id, metadata).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 one(py, record, crate::generated::records::storage_class::task_record_to_py)
@@ -244,7 +244,7 @@ impl PyThread {
                 .map_err(|e| PyValueError::new_err(format!("wait_timeout: {e}")))?;
         }
         let lane = self.inner.lane(lane);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let run = lane.open(opts).await.map_err(to_py_err)?;
             Ok(PyRun {
                 version: run.version(),
@@ -342,7 +342,7 @@ impl PyRun {
             .collect::<PyResult<_>>()?;
         let state = state.map(|s| value_from_py(s, "state")).transpose()?;
         let run = self.run.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let mut run = run.lock().await;
             run.history = history;
             run.scope_writes = scope_writes.unwrap_or_default();
@@ -365,7 +365,7 @@ impl PyRun {
         let outcome = RunOutcome::from_wire(outcome)
             .ok_or_else(|| PyValueError::new_err(format!("unknown outcome {outcome}")))?;
         let run = self.run.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             run.lock().await.abandon(outcome, reason).await.map_err(to_py_err)
         })
     }
@@ -424,7 +424,7 @@ impl PyTurn {
         let message = value_from_py(message, "message")?;
         let context = crate::host::capture_context(py)?;
         let turn = self.inner.as_ref().clone().with_context(context);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::host::future_into_py(py, async move {
             let out = turn.run(message, task_id).await.map_err(to_py_err)?;
             Python::attach(|py| {
                 Ok(crate::generated::records::storage_turn::turn_result_to_py(
