@@ -125,11 +125,8 @@ class _TextRun(Generic[Context_T]):
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
-        self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
+        self.runner: _core.AgentRunner | None = None
         self._history = history
-        self.execution_id: str | None = None
-        self.frame_id: Any = None
-        self.context_scope: str | None = None
         self._toolsets: list[Toolset] = []
 
     @property
