@@ -8,6 +8,7 @@
 mod agent;
 mod llm;
 mod storage;
+mod telemetry;
 
 /// `obj` is not an instance of the model(s) `expected` names.
 fn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {

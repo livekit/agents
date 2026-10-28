@@ -22,7 +22,6 @@ extern crate lk_agents_worker as _;
 /// The declared classes' pyo3 adapters, written by `lk-agents-codegen`.
 pub mod generated;
 /// `init(role)` and the registration table.
-pub mod loop_monitor;
 pub mod runtime;
 /// `Streams` and `StreamReader`, and the record helpers of `turn.rs`.
 pub mod storage;
@@ -42,6 +41,10 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type TelemetryWorker = lk_agents_runtime::telemetry::work::SdkWorker;
+    type SessionReportUpload = lk_agents_runtime::telemetry::upload::SessionReportUploader;
+    type LoopMonitor = lk_agents_runtime::telemetry::loop_monitor::python::LoopMonitor;
+    type LoopMonitorThresholds = lk_agents_runtime::telemetry::loop_monitor::LoopMonitorOptions;
     type AgentRunner = lk_agents_runtime::agent_run::Runner;
     type InferenceAvatar = lk_agents_runtime::avatar::GatewayAvatar;
     type InferenceLlm = lk_agents_runtime::llm::GatewayLlm;

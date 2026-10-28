@@ -1,6 +1,8 @@
 from . import loop_monitor, metrics, trace_types, utils
 from .traces import (
     DescribesOptions,
+    RedactingLogExporter,
+    RedactingSpanExporter,
     _setup_cloud_tracer,
     _upload_session_report,
     capture_content_enabled,
@@ -11,6 +13,8 @@ from .traces import (
 
 __all__ = [
     "DescribesOptions",
+    "RedactingSpanExporter",
+    "RedactingLogExporter",
     "tracer",
     "metrics",
     "trace_types",

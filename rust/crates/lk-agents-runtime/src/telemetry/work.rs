@@ -1,0 +1,525 @@
+//! A fixed SDK worker pool. Admission covers queued and executing callbacks until settlement,
+//! even when flush times out. No SDK or user callback executes under the admission lock.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use lk_agents_abi::HostRef;
+use lk_agents_abi::telemetry::work::{
+    TelemetryWorkObservation, TelemetryWorkOutcome, TelemetryWorker,
+};
+
+const WORKERS: usize = 4;
+const JOBS: usize = 64;
+const BYTES: usize = 8 * 1024 * 1024;
+const UPLOADS: usize = 2;
+const MONITORS: usize = 32;
+
+static PROCESS_WORK: OnceLock<Arc<Work>> = OnceLock::new();
+
+type Callback = Box<dyn FnOnce() -> bool + Send>;
+
+struct Pending {
+    bytes: usize,
+    admitted_at: Instant,
+    upload: bool,
+    monitor: bool,
+    timeout_reported: bool,
+}
+
+struct State {
+    queue: VecDeque<(Callback, WorkPermit)>,
+    sdk_available: bool,
+    pending: BTreeMap<String, Pending>,
+    bytes: usize,
+    uploads: usize,
+    monitors: usize,
+    reserved: BTreeMap<String, (usize, Instant)>,
+    observations: VecDeque<TelemetryWorkObservation>,
+    observation_drops: u64,
+    reserved_bytes: usize,
+    conflicts: u64,
+    next_upload: u64,
+    dropped: u64,
+    failed: u64,
+    completed: u64,
+    incomplete_cleanup: u64,
+}
+
+struct Work {
+    pid: u32,
+    started_at: Instant,
+    state: Mutex<State>,
+    metrics: Mutex<super::metrics::MetricSeries>,
+    changed: Condvar,
+    settled: tokio::sync::Notify,
+}
+
+/// Capacity belongs to the work, including across caller cancellation.
+pub struct WorkPermit {
+    work: Arc<Work>,
+    key: String,
+}
+
+impl Drop for WorkPermit {
+    fn drop(&mut self) {
+        let mut state = self.work.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(pending) = state.pending.remove(&self.key) {
+            state.bytes -= pending.bytes;
+            state.uploads -= usize::from(pending.upload);
+            state.monitors -= usize::from(pending.monitor);
+            state.completed += 1;
+            observe(&mut state, &self.key, TelemetryWorkOutcome::Settled, &self.work);
+        }
+        drop(state);
+        self.work.changed.notify_all();
+        self.work.settled.notify_waiters();
+    }
+}
+
+impl Work {
+    fn start(workers: usize) -> Arc<Self> {
+        let work = Arc::new(Self {
+            pid: std::process::id(),
+            started_at: Instant::now(),
+            state: Mutex::new(State {
+                queue: VecDeque::new(),
+                sdk_available: workers == 0,
+                pending: BTreeMap::new(),
+                bytes: 0,
+                uploads: 0,
+                monitors: 0,
+                reserved: BTreeMap::new(),
+                observations: VecDeque::new(),
+                observation_drops: 0,
+                reserved_bytes: 0,
+                conflicts: 0,
+                next_upload: 0,
+                dropped: 0,
+                failed: 0,
+                completed: 0,
+                incomplete_cleanup: 0,
+            }),
+            metrics: Mutex::new(super::metrics::MetricSeries::default()),
+            changed: Condvar::new(),
+            settled: tokio::sync::Notify::new(),
+        });
+        // Starting host SDK workers starts native process work, so the existing runtime fork
+        // guard must observe this before a child could inherit dead worker handles.
+        if crate::process::handle().is_err() {
+            work.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
+            return work;
+        }
+        for worker in 0..workers {
+            let owned = work.clone();
+            if std::thread::Builder::new()
+                .name(format!("lk-telemetry-{worker}"))
+                .spawn(move || owned.run())
+                .is_err()
+            {
+                work.state.lock().unwrap_or_else(|p| p.into_inner()).failed += 1;
+            } else {
+                work.state.lock().unwrap_or_else(|p| p.into_inner()).sdk_available = true;
+            }
+        }
+        work
+    }
+
+    fn admit(
+        self: &Arc<Self>,
+        key: String,
+        bytes: usize,
+        upload: bool,
+        monitor: bool,
+    ) -> Option<WorkPermit> {
+        if self.pid != std::process::id() {
+            return None;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let retained = bytes.checked_add(key.len());
+        if key.len() > 128
+            || state.pending.contains_key(&key)
+            || state.pending.len() >= JOBS
+            || retained.is_none_or(|bytes| bytes > BYTES.saturating_sub(state.bytes))
+            || (upload && state.uploads >= UPLOADS)
+            || (monitor && state.monitors >= MONITORS)
+        {
+            state.dropped += 1;
+            return None;
+        }
+        let bytes = retained.expect("validated above");
+        state.bytes += bytes;
+        state.uploads += usize::from(upload);
+        state.monitors += usize::from(monitor);
+        state.pending.insert(
+            key.clone(),
+            Pending {
+                bytes,
+                admitted_at: Instant::now(),
+                upload,
+                monitor,
+                timeout_reported: false,
+            },
+        );
+        Some(WorkPermit { work: self.clone(), key })
+    }
+
+    fn submit(self: &Arc<Self>, key: String, bytes: usize, callback: Callback) -> bool {
+        if self.pid != std::process::id() {
+            return false;
+        }
+        {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if !state.sdk_available {
+                state.dropped += 1;
+                return false;
+            }
+        }
+        let Some(permit) = self.admit(key, bytes, false, false) else { return false };
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).queue.push_back((callback, permit));
+        self.changed.notify_one();
+        true
+    }
+
+    fn run(&self) {
+        loop {
+            let (callback, permit) = {
+                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                loop {
+                    if let Some(queued) = state.queue.pop_front() {
+                        break queued;
+                    }
+                    state = self.changed.wait(state).unwrap_or_else(|p| p.into_inner());
+                }
+            };
+            if !std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).unwrap_or(false) {
+                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                state.failed += 1;
+                observe(&mut state, &permit.key, TelemetryWorkOutcome::Failed, self);
+            }
+            drop(permit);
+        }
+    }
+
+    fn timeout(&self, key: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(pending) = state.pending.get_mut(key) {
+            if !pending.timeout_reported {
+                pending.timeout_reported = true;
+                state.incomplete_cleanup += 1;
+                observe(&mut state, key, TelemetryWorkOutcome::IncompleteCleanup, self);
+            }
+        }
+    }
+
+    fn wait(&self, key: &str, timeout: f64) -> bool {
+        if self.pid != std::process::id() {
+            return false;
+        }
+        let Some(timeout) = duration(timeout) else { return false };
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, timeout, |s| s.pending.contains_key(key))
+            .unwrap_or_else(|p| p.into_inner());
+        let done = !state.pending.contains_key(key);
+        drop(state);
+        if !done {
+            self.timeout(key);
+        }
+        done
+    }
+
+    async fn wait_async(&self, key: &str, timeout: f64) -> bool {
+        if self.pid != std::process::id() {
+            return false;
+        }
+        let Some(timeout) = duration(timeout) else { return false };
+        let wait = async {
+            loop {
+                let notified = self.settled.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if !self.state.lock().unwrap_or_else(|p| p.into_inner()).pending.contains_key(key) {
+                    return;
+                }
+                notified.await;
+            }
+        };
+        if tokio::time::timeout(timeout, wait).await.is_ok() {
+            true
+        } else {
+            self.timeout(key);
+            false
+        }
+    }
+}
+
+fn observe(state: &mut State, key: &str, outcome: TelemetryWorkOutcome, work: &Work) {
+    if state.observations.len() == JOBS {
+        state.observations.pop_front();
+        state.observation_drops = state.observation_drops.saturating_add(1);
+    }
+    state.observations.push_back(TelemetryWorkObservation {
+        key: key.to_owned(),
+        monotonic_ns: work.started_at.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+        outcome,
+    });
+}
+
+fn duration(seconds: f64) -> Option<Duration> {
+    if seconds.is_finite() && seconds >= 0.0 && seconds <= 3600.0 {
+        Some(Duration::from_secs_f64(seconds))
+    } else {
+        None
+    }
+}
+
+fn process_work() -> &'static Arc<Work> {
+    PROCESS_WORK.get_or_init(|| Work::start(WORKERS))
+}
+
+/// Session report uploads share process admission, with an independent two-request ceiling.
+pub fn try_admit_upload(retained_bytes: usize) -> Option<WorkPermit> {
+    let work = process_work();
+    if work.pid != std::process::id() {
+        return None;
+    }
+    let key = {
+        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.next_upload = state.next_upload.wrapping_add(1);
+        format!("upload/{}", state.next_upload)
+    };
+    work.admit(key, retained_bytes, true, false)
+}
+
+/// Watchdogs use the same admission owner and retain capacity until their thread settles.
+pub fn try_admit_monitor() -> Option<WorkPermit> {
+    let work = process_work();
+    if work.pid != std::process::id() {
+        return None;
+    }
+    let key = {
+        let mut state = work.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.next_upload = state.next_upload.wrapping_add(1);
+        format!("monitor/{}", state.next_upload)
+    };
+    work.admit(key, 0, false, true)
+}
+
+pub fn record_incomplete_cleanup() {
+    process_work().state.lock().unwrap_or_else(|p| p.into_inner()).incomplete_cleanup += 1;
+}
+
+pub struct SdkWorker;
+
+#[async_trait::async_trait]
+impl TelemetryWorker for SdkWorker {
+    fn new() -> Self {
+        Self
+    }
+
+    fn submit(&self, key: String, callback: HostRef, retained_bytes: usize) -> bool {
+        #[cfg(feature = "python")]
+        let work: Callback = Box::new(move || {
+            use pyo3::prelude::*;
+            Python::attach(|py| -> PyResult<bool> {
+                let callback = lk_agents_abi::python::resolve_key(py, callback.id())?;
+                let result = callback.bind(py).call0()?;
+                // SDK force_flush reports failure with False; shutdown/report callbacks return None.
+                if result.is_instance_of::<pyo3::types::PyBool>() {
+                    result.extract()
+                } else {
+                    Ok(true)
+                }
+            })
+            .unwrap_or(false)
+        });
+        #[cfg(not(feature = "python"))]
+        let work: Callback = Box::new(move || {
+            drop(callback);
+            false
+        });
+        process_work().submit(key, retained_bytes, work)
+    }
+
+    fn reserve(&self, key: String, retained_bytes: usize) -> bool {
+        if process_work().pid != std::process::id() {
+            return false;
+        }
+        let mut state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
+        let bytes = retained_bytes.checked_add(key.len());
+        if key.len() > 128
+            || state.reserved.contains_key(&key)
+            || state.reserved.len() >= JOBS
+            || bytes.is_none_or(|bytes| bytes > BYTES.saturating_sub(state.reserved_bytes))
+        {
+            state.dropped += 1;
+            return false;
+        }
+        let bytes = bytes.expect("validated above");
+        state.reserved_bytes += bytes;
+        state.reserved.insert(key, (bytes, Instant::now()));
+        true
+    }
+
+    fn release(&self, key: String) {
+        if process_work().pid != std::process::id() {
+            return;
+        }
+        let mut state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((bytes, _)) = state.reserved.remove(&key) {
+            state.reserved_bytes -= bytes;
+        }
+    }
+
+    fn record_drop(&self, kind: String, count: u64) {
+        if process_work().pid != std::process::id() {
+            return;
+        }
+        let mut state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
+        let counter = match kind.as_str() {
+            "dropped" | "oversize" | "capacity" => &mut state.dropped,
+            "failed" | "export_failed" => &mut state.failed,
+            "conflict" => &mut state.conflicts,
+            _ => return,
+        };
+        *counter = counter.saturating_add(count);
+    }
+
+    fn admit_metric(&self, name: String, attributes: Vec<(String, String)>) -> bool {
+        let work = process_work();
+        if work.pid != std::process::id() {
+            return false;
+        }
+        if attributes.len() > 8 || name.len() > 128 {
+            work.state.lock().unwrap_or_else(|p| p.into_inner()).dropped += 1;
+            return false;
+        }
+        let admitted = work
+            .metrics
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .admit(&name, attributes.into_iter().collect());
+        if !admitted {
+            work.state.lock().unwrap_or_else(|p| p.into_inner()).dropped += 1;
+        }
+        admitted
+    }
+
+    fn wait(&self, key: String, timeout: f64) -> bool {
+        #[cfg(feature = "python")]
+        {
+            pyo3::Python::attach(|py| py.detach(move || process_work().wait(&key, timeout)))
+        }
+        #[cfg(not(feature = "python"))]
+        {
+            process_work().wait(&key, timeout)
+        }
+    }
+
+    async fn wait_async(&self, key: String, timeout: f64) -> bool {
+        process_work().wait_async(&key, timeout).await
+    }
+
+    fn drain_observations(&self) -> Vec<TelemetryWorkObservation> {
+        let work = process_work();
+        if work.pid != std::process::id() {
+            return Vec::new();
+        }
+        work.state.lock().unwrap_or_else(|p| p.into_inner()).observations.drain(..).collect()
+    }
+
+    fn diagnostics(&self) -> Vec<(String, u64)> {
+        if process_work().pid != std::process::id() {
+            return vec![("foreign_process".into(), 1)];
+        }
+        let state = process_work().state.lock().unwrap_or_else(|p| p.into_inner());
+        [
+            ("dropped", state.dropped),
+            ("observation_drops", state.observation_drops),
+            ("failed", state.failed),
+            ("completed", state.completed),
+            ("incomplete_cleanup", state.incomplete_cleanup),
+            ("conflicts", state.conflicts),
+            ("reserved_records", state.reserved.len() as u64),
+            ("reserved_bytes", state.reserved_bytes as u64),
+            ("pending", state.pending.len() as u64),
+            ("retained_bytes", state.bytes as u64),
+            (
+                "oldest_work_age_ms",
+                state
+                    .pending
+                    .values()
+                    .map(|p| p.admitted_at.elapsed().as_millis() as u64)
+                    .max()
+                    .unwrap_or(0),
+            ),
+            (
+                "oldest_record_age_ms",
+                state
+                    .reserved
+                    .values()
+                    .map(|(_, at)| at.elapsed().as_millis() as u64)
+                    .max()
+                    .unwrap_or(0),
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timed_out_work_stays_admitted_and_reports_cleanup_once() {
+        let work = Work::start(1);
+        let (send, recv) = std::sync::mpsc::channel();
+        assert!(work.submit("blocked".into(), BYTES - 7, Box::new(move || recv.recv().is_ok())));
+        let start = Instant::now();
+        for _ in 0..10 {
+            assert!(!work.wait("blocked", 0.001));
+        }
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(!work.submit("extra".into(), 1, Box::new(|| true)));
+        assert!(!work.submit("blocked".into(), 0, Box::new(|| true)));
+        let state = work.state.lock().unwrap();
+        assert_eq!(state.incomplete_cleanup, 1);
+        assert_eq!(state.observations.len(), 1);
+        assert_eq!(state.observations[0].key, "blocked");
+        assert_eq!(state.observations[0].outcome, TelemetryWorkOutcome::IncompleteCleanup);
+        drop(state);
+        send.send(()).unwrap();
+        assert!(work.wait("blocked", 1.0));
+        assert!(work.submit("extra".into(), 1, Box::new(|| true)));
+        assert!(work.wait("extra", 1.0));
+    }
+
+    #[tokio::test]
+    async fn slow_sdk_work_does_not_stop_async_progress_or_other_workers() {
+        let work = Work::start(2);
+        let (send, recv) = std::sync::mpsc::channel();
+        assert!(work.submit("blocked".into(), 0, Box::new(move || recv.recv().is_ok())));
+        assert!(work.submit("fast".into(), 0, Box::new(|| false)));
+        assert!(work.wait_async("fast", 1.0).await);
+        assert_eq!(work.state.lock().unwrap().failed, 1);
+        assert!(!work.wait_async("blocked", 0.001).await);
+        send.send(()).unwrap();
+        assert!(work.wait_async("blocked", 1.0).await);
+    }
+
+    #[test]
+    fn no_worker_can_turn_queue_saturation_into_unbounded_retention() {
+        let work = Work::start(0);
+        for index in 0..JOBS {
+            assert!(work.submit(index.to_string(), 1, Box::new(|| true)));
+        }
+        assert!(!work.submit("over".into(), 1, Box::new(|| true)));
+        assert_eq!(work.state.lock().unwrap().pending.len(), JOBS);
+    }
+}

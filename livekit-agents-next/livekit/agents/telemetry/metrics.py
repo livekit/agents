@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import prometheus_client
 import psutil
@@ -10,9 +10,11 @@ from opentelemetry import metrics as metrics_api
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
 from .. import _core, utils
+from ._export import worker
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
+    from ..metrics import AgentMetrics
 
 PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",
@@ -85,18 +87,12 @@ def exposition() -> tuple[str, str]:
     return CONTENT_TYPE_LATEST, generate_latest(registry).decode()
 
 
-_meter = metrics_api.get_meter("livekit-agents")
-
-
-_event_loop_blocked = _meter.create_histogram(
-    "lk.agents.event_loop.blocked_duration",
-    unit="s",
-    description="Duration of synchronous blocks detected on an agent event loop",
-)
+_meter_provider = metrics_api.get_meter_provider()
+_meter = _meter_provider.get_meter("livekit-agents")
 
 
 @functools.cache
-def _histogram(name: str) -> Any:
+def _histogram(name: str) -> metrics_api.Histogram:
     return _meter.create_histogram(name, unit="s")
 
 
@@ -108,29 +104,46 @@ def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Record the per-turn latency histograms of the history; called at session end."""
     for msg in chat_ctx.messages():
         for name, _, value, attrs in _core.otel_turn_records(dict(msg.metrics)):
-            _histogram(name).record(value, attributes=attrs)
+            _record(name, "histogram", value, attrs)
 
 
 @functools.cache
-def _counter(name: str) -> Any:
+def _counter(name: str) -> metrics_api.Counter:
     # the durations count seconds; the token and request counters have no unit
     return _meter.create_counter(name, unit="s" if name.endswith("_duration") else "")
 
 
-def collect_usage(metrics: Any) -> None:
+def collect_usage(metrics: AgentMetrics) -> None:
     """Record the usage counters (and connection timing) one metrics event carries."""
     for name, kind, value, attrs in _core.otel_usage_records(metrics):
-        if kind == "counter":
-            _counter(name).add(value, attributes=attrs)
-        else:
-            _histogram(name).record(value, attributes=attrs)
+        _record(name, kind, value, attrs)
 
 
-def record_span_metric(name: str, value: float, attributes: dict[str, Any]) -> None:
+def record_span_metric(name: str, value: float, attributes: dict[str, str]) -> None:
     """A duration the core measured with one of its spans (``gen_ai.invoke_agent.duration``,
     ``gen_ai.execute_tool.duration``)."""
-    _histogram(name).record(value, attributes=attributes)
+    _record(name, "histogram", value, attributes)
 
 
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
-    _event_loop_blocked.record(duration, attributes={"severity": severity})
+    _record("lk.agents.event_loop.blocked_duration", "histogram", duration, {"severity": severity})
+
+
+def _adopt_meter_provider(provider: metrics_api.MeterProvider) -> None:
+    """Resolve instruments at setup against the application's current provider."""
+    global _meter, _meter_provider
+    if provider is _meter_provider:
+        return
+    _meter_provider = provider
+    _meter = provider.get_meter("livekit-agents")
+    _histogram.cache_clear()
+    _counter.cache_clear()
+
+
+def _record(name: str, kind: str, value: float, attributes: dict[str, str]) -> None:
+    if not worker().admit_metric(name, list(attributes.items())):
+        return
+    if kind == "counter":
+        _counter(name).add(value, attributes=attributes)
+    else:
+        _histogram(name).record(value, attributes=attributes)

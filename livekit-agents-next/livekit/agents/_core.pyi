@@ -20,6 +20,12 @@ from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
+from ._generated._core_telemetry import *  # noqa: F401, F403
+from ._generated._core_telemetry import (
+    _core_SessionReportUpload as _core_SessionReportUpload,
+    _core_TelemetryWorker as _core_TelemetryWorker,
+    _core_loop_monitor_thresholds_from_env as _core_loop_monitor_thresholds_from_env,
+)
 from ._generated._core_storage import *  # noqa: F401, F403
 from ._generated.storage import EventRow, InboxRow, StreamInfo
 from ._generated.storage_run import ItemRow, LaneRow, TaskPage, TaskRow

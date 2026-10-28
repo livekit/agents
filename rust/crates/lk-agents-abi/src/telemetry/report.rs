@@ -1,13 +1,13 @@
 //! `telemetry/traces.py`'s `_upload_session_report` records, its `_UploadGate`, and
 //! `observability.py`'s `Tagger`. The records are [`crate::telemetry`]'s `LogRecord`.
 
-use std::collections::BTreeSet;
 use crate::ChatItem;
 use crate::Clock;
 use crate::evals::EvaluationResult;
 use crate::metrics::ModelUsage;
 use lk_agents_host_derive::Host;
 use serde_json::{Map, Value, json};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -21,7 +21,6 @@ use super::{HrTime, LogRecord, Severity, epoch_nanos, hr_time, hr_wall};
 // `recording_enabled` (hence `job.py:320`'s `recording_enabled(..) or has_evals`). Buffered early
 // logs (`job.py:265`) are the log handler's.
 
-
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoggerName {
@@ -32,7 +31,13 @@ pub enum LoggerName {
 
 /// A report record: `SeverityNumber.ERROR` / `"error"` when `error`, else `UNSPECIFIED` /
 /// `"unspecified"` -- the report's own lowercase spelling, not the log handler's.
-fn record(logger: LoggerName, body: &str, timestamp: HrTime, attributes: Value, error: bool) -> LogRecord {
+fn record(
+    logger: LoggerName,
+    body: &str,
+    timestamp: HrTime,
+    attributes: Value,
+    error: bool,
+) -> LogRecord {
     let (severity_number, severity_text) =
         if error { (Severity::Error as u8, "error") } else { (0, "unspecified") };
     LogRecord {
@@ -72,7 +77,16 @@ pub struct RecordingOptions {
     derive(Clone, Copy, Default)
 ))]
 impl RecordingOptions {
-    #[host(new(kw_only, defaults(audio = false, traces = false, logs = false, transcript = false, redaction = false)))]
+    #[host(new(
+        kw_only,
+        defaults(
+            audio = false,
+            traces = false,
+            logs = false,
+            transcript = false,
+            redaction = false
+        )
+    ))]
     pub fn new(audio: bool, traces: bool, logs: bool, transcript: bool, redaction: bool) -> Self {
         RecordingOptions { audio, traces, logs, transcript, redaction }
     }
@@ -214,12 +228,14 @@ pub fn session_records(
     report: &crate::worker::worker::SessionReportInput,
     tagger: &Tagger,
     project_item: &dyn Fn(&ChatItem) -> Value,
+    capture_content: bool,
 ) -> Vec<LogRecord> {
     if gate.disabled() {
         return Vec::new();
     }
     let mut out = Vec::new();
     let opts = report.recording_options;
+    let capture_content = capture_content && !opts.redaction;
 
     if opts.recording_enabled() {
         // An `or` chain: a `started_at` of exactly 0.0 falls through to `timestamp`.
@@ -227,9 +243,9 @@ pub fn session_records(
             Some(s) if s != 0.0 => s,
             _ => report.timestamp,
         };
-        let tags = tagger.sorted_tags();
+        let tags = if capture_content { tagger.sorted_tags() } else { Vec::new() };
         let summary = json!({
-            "session.options": report.options,
+            "session.options": if capture_content { report.options.clone() } else { Value::Null },
             "session.report_timestamp": report.timestamp,
             // An empty tag set is `None`, not `[]`.
             "session.tags": if tags.is_empty() { Value::Null } else { json!(tags) },
@@ -242,49 +258,94 @@ pub fn session_records(
                 Value::Array(report.model_usage.iter().map(usage_attributes).collect())
             },
         });
-        out.push(record(LoggerName::ChatHistory, "session report", hr_seconds(seconds), summary, false));
+        out.push(record(
+            LoggerName::ChatHistory,
+            "session report",
+            hr_seconds(seconds),
+            summary,
+            false,
+        ));
     }
 
-    if opts.transcript {
+    if opts.transcript && capture_content {
         for item in &report.chat_history {
             let attributes = json!({ "chat.item": project_item(item) });
             let at = hr_wall(item.created_at());
-            out.push(record(LoggerName::ChatHistory, "chat item", at, attributes, chat_item_is_error(item)));
+            out.push(record(
+                LoggerName::ChatHistory,
+                "chat item",
+                at,
+                attributes,
+                chat_item_is_error(item),
+            ));
         }
     }
 
     for e in tagger.evaluations() {
         let mut m = Map::new();
         for (k, v) in e.attributes() {
-            m.insert(k.into(), Value::String(v.into()));
+            if capture_content || !matches!(k, "reasoning" | "instructions") {
+                m.insert(k.into(), Value::String(v.into()));
+            }
         }
         let attributes = json!({ "evaluation": m });
         let at = hr_seconds(report.timestamp);
-        out.push(record(LoggerName::Evaluations, "evaluation", at, attributes, e.verdict == "fail"));
+        out.push(record(
+            LoggerName::Evaluations,
+            "evaluation",
+            at,
+            attributes,
+            e.verdict == "fail",
+        ));
     }
 
     for (name, entry) in tagger.entries() {
+        if !capture_content {
+            continue;
+        }
         let Some(metadata) = entry.metadata.as_ref() else { continue };
         // `if entry.metadata:` -- an *empty* dict is falsy in Python and emits nothing.
         if metadata.as_object().is_some_and(|o| o.is_empty()) {
             continue;
         }
         let attributes = json!({ "tag": { "name": name, "metadata": metadata } });
-        out.push(record(LoggerName::Evaluations, "tag", hr_wall(entry.timestamp), attributes, false));
+        out.push(record(
+            LoggerName::Evaluations,
+            "tag",
+            hr_wall(entry.timestamp),
+            attributes,
+            false,
+        ));
     }
 
     if let Some(outcome) = tagger.outcome() {
         let mut m = Map::new();
         m.insert("outcome".into(), Value::String(outcome.as_str().into()));
         // `if tagger.outcome_reason:` -- an empty reason is falsy and omits the key entirely.
-        if let Some(r) = tagger.outcome_reason().filter(|r| !r.is_empty()) {
+        if let Some(r) = tagger.outcome_reason().filter(|r| capture_content && !r.is_empty()) {
             m.insert("reason".into(), Value::String(r.into()));
         }
         let attributes = json!({ "outcome": m });
         let at = hr_seconds(report.timestamp);
-        out.push(record(LoggerName::Evaluations, "outcome", at, attributes, outcome == Outcome::Fail));
+        out.push(record(
+            LoggerName::Evaluations,
+            "outcome",
+            at,
+            attributes,
+            outcome == Outcome::Fail,
+        ));
     }
 
+    // Attribution belongs to the report snapshot, independent of the host exporter thread.
+    for record in &mut out {
+        let attributes = record.attributes.as_object_mut().expect("report attributes are objects");
+        attributes.insert("job_id".into(), report.job_id.clone().into());
+        attributes.insert("room_id".into(), report.room_id.clone().into());
+        attributes.insert("room".into(), report.room.clone().into());
+        attributes.insert("lk.telemetry.capture_content".into(), capture_content.into());
+        // These bodies are protocol discriminators; free-form content lives in gated attributes.
+        attributes.insert("lk.telemetry.safe_body".into(), true.into());
+    }
     out
 }
 
@@ -355,13 +416,14 @@ impl UploadGate {
 /// reference host media.
 #[cfg(feature = "python")]
 #[pyo3::pyfunction]
-#[pyo3(name = "session_records", signature = (gate, report, tagger, project_item))]
+#[pyo3(name = "session_records", signature = (gate, report, tagger, project_item, capture_content=false))]
 pub fn host_session_records<'py>(
     py: pyo3::Python<'py>,
     gate: &UploadGate,
     report: pyo3::Bound<'py, pyo3::types::PyDict>,
     tagger: &Tagger,
     project_item: pyo3::Bound<'py, pyo3::PyAny>,
+    capture_content: bool,
 ) -> pyo3::PyResult<Vec<pyo3::Bound<'py, pyo3::types::PyDict>>> {
     use pyo3::prelude::*;
     crate::python::check_pid()?;
@@ -374,7 +436,10 @@ pub fn host_session_records<'py>(
         if failure.borrow().is_some() {
             return Value::Null;
         }
-        match project_item.call1((item.clone(),)).and_then(|v| crate::python::value_from_py(&v, "project_item(...)")) {
+        match project_item
+            .call1((item.clone(),))
+            .and_then(|v| crate::python::value_from_py(&v, "project_item(...)"))
+        {
             Ok(v) => v,
             Err(e) => {
                 *failure.borrow_mut() = Some(e);
@@ -383,7 +448,7 @@ pub fn host_session_records<'py>(
         }
     };
 
-    let out = session_records(gate, &input, tagger, &project);
+    let out = session_records(gate, &input, tagger, &project, capture_content);
     if let Some(e) = failure.borrow_mut().take() {
         return Err(e);
     }
@@ -664,7 +729,13 @@ impl Tagger {
 
     /// One judgment of a judge group's result: its `lk.judge.<name>:<verdict>` tag and record.
     #[host(method(name = "_core_record_judgment"))]
-    pub fn record_judgment(&mut self, name: &str, verdict: &str, reasoning: &str, instructions: &str) {
+    pub fn record_judgment(
+        &mut self,
+        name: &str,
+        verdict: &str,
+        reasoning: &str,
+        instructions: &str,
+    ) {
         let tag = format!("lk.judge.{name}:{verdict}");
         self.put(&tag, None);
         self.evaluation_results.push(EvaluationRecord {
@@ -712,7 +783,7 @@ pub struct SpanUpdateAttrsWire {
 
 #[cfg(test)]
 mod tests {
-    
+
     use std::time::{Duration, SystemTime};
 
     use lk_agents_abi::evals::{EvaluationResult, JudgmentResult, Verdict};
@@ -727,7 +798,11 @@ mod tests {
     // records
     // ============================================================================================
 
-    fn view(usage: &[ModelUsage], items: &[ChatItem], opts: RecordingOptions) -> SessionReportInput {
+    fn view(
+        usage: &[ModelUsage],
+        items: &[ChatItem],
+        opts: RecordingOptions,
+    ) -> SessionReportInput {
         SessionReportInput {
             job_id: "J1".into(),
             room_id: "RM_1".into(),
@@ -744,7 +819,13 @@ mod tests {
     }
 
     fn all_on() -> RecordingOptions {
-        RecordingOptions { audio: true, traces: true, logs: true, transcript: true, redaction: false }
+        RecordingOptions {
+            audio: true,
+            traces: true,
+            logs: true,
+            transcript: true,
+            redaction: false,
+        }
     }
 
     fn tagger() -> Tagger {
@@ -790,6 +871,47 @@ mod tests {
         assert_eq!(o.len(), 3, "only type, provider, model: {o:?}");
     }
 
+    #[test]
+    fn denied_content_never_reaches_session_projection_or_report_records() {
+        let mut t = tagger();
+        t.add("customer-tag", Some(json!({"private": "customer metadata"})));
+        t.fail(Some("customer outcome reason"));
+        let mut evaluation = EvaluationResult::new();
+        evaluation.insert("booking", JudgmentResult::new(Verdict::Fail, "customer reasoning"));
+        t.record_evaluation(&evaluation);
+        let at = SystemTime::UNIX_EPOCH;
+        let items =
+            [ChatItem::Message(ChatMessage::text("i", Role::User, "customer transcript", at))];
+        for (capture_content, redaction) in [(false, false), (true, true)] {
+            let mut report = view(&[], &items, RecordingOptions { redaction, ..all_on() });
+            report.options = json!({"instructions": "customer prompt"});
+            let records = session_records(
+                &UploadGate::new(),
+                &report,
+                &t,
+                &|_| panic!("content policy must run before projecting the transcript"),
+                capture_content,
+            );
+            let rendered = format!("{records:?}");
+            for private in [
+                "customer metadata",
+                "customer outcome reason",
+                "customer reasoning",
+                "customer prompt",
+                "customer transcript",
+            ] {
+                assert!(!rendered.contains(private), "{private} leaked before export");
+            }
+            assert!(records.iter().all(|record| {
+                record.attributes["job_id"] == "J1"
+                    && record.attributes["room_id"] == "RM_1"
+                    && record.attributes["lk.telemetry.capture_content"] == false
+                    && record.attributes["lk.telemetry.safe_body"] == true
+            }));
+            let evaluations = find(&records, "evaluation");
+            assert_eq!(attr(evaluations[0], "evaluation")["verdict"], "fail");
+        }
+    }
 
     // Catches: a failing judge at the same severity as a passing one.
     #[test]
@@ -801,7 +923,13 @@ mod tests {
         r.insert("unsure", JudgmentResult::new(Verdict::Maybe, "hmm"));
         t.record_evaluation(&r);
 
-        let recs = session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &t,
+            &|_| json!({}),
+            true,
+        );
         let evals = find(&recs, "evaluation");
         assert_eq!(evals.len(), 3);
         assert_eq!(
@@ -818,7 +946,13 @@ mod tests {
     fn a_failed_outcome_bumps_severity_and_an_empty_reason_is_omitted() {
         let mut t = tagger();
         t.fail(Some("user hung up"));
-        let recs = session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &t,
+            &|_| json!({}),
+            true,
+        );
         let o = find(&recs, "outcome");
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].severity_number, 17);
@@ -826,7 +960,13 @@ mod tests {
 
         let mut t = tagger();
         t.success(None::<String>);
-        let recs = session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &t,
+            &|_| json!({}),
+            true,
+        );
         let o = find(&recs, "outcome");
         assert_eq!(o[0].severity_number, 0);
         assert_eq!(attr(o[0], "outcome"), &json!({"outcome": "success"}));
@@ -835,8 +975,13 @@ mod tests {
     // Catches: emitting `[]` for an empty tag set or usage list instead of `None`.
     #[test]
     fn empty_tags_and_usage_are_null_not_empty_lists() {
-        let recs =
-            session_records(&UploadGate::new(), &view(&[], &[], all_on()), &tagger(), &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &tagger(),
+            &|_| json!({}),
+            true,
+        );
         let s = find(&recs, "session report")[0];
         assert_eq!(attr(s, "session.tags"), &Value::Null);
         assert_eq!(attr(s, "usage"), &Value::Null);
@@ -849,7 +994,13 @@ mod tests {
         t.add("zebra:1", None);
         t.add("apple:2", None);
         t.add("mango:3", None);
-        let recs = session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &t,
+            &|_| json!({}),
+            true,
+        );
         let s = find(&recs, "session report")[0];
         assert_eq!(attr(s, "session.tags"), &json!(["apple:2", "mango:3", "zebra:1"]));
     }
@@ -861,10 +1012,13 @@ mod tests {
         let items = vec![ChatItem::Message(ChatMessage::text("i", Role::User, "hi", t))];
         let logs_only = RecordingOptions { logs: true, ..Default::default() };
         assert!(logs_only.recording_enabled());
-        let recs =
-            session_records(&UploadGate::new(), &view(&[], &items, logs_only), &tagger(), &|_| {
-                json!({})
-            });
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &items, logs_only),
+            &tagger(),
+            &|_| json!({}),
+            true,
+        );
         assert_eq!(find(&recs, "session report").len(), 1);
         assert_eq!(find(&recs, "chat item").len(), 0);
 
@@ -874,6 +1028,7 @@ mod tests {
             &view(&[], &items, RecordingOptions::default()),
             &tagger(),
             &|_| json!({}),
+            true,
         );
         assert!(recs.is_empty(), "{recs:?}");
     }
@@ -889,6 +1044,7 @@ mod tests {
             &view(&[], &[], RecordingOptions::default()),
             &t,
             &|_| json!({}),
+            true,
         );
         assert_eq!(find(&recs, "session report").len(), 0);
         assert_eq!(find(&recs, "tag").len(), 1);
@@ -903,7 +1059,13 @@ mod tests {
         t.add("plain:1", None);
         t.add("empty:1", Some(json!({})));
         t.add("rich:1", Some(json!({"k": "v"})));
-        let recs = session_records(&UploadGate::new(), &view(&[], &[], all_on()), &t, &|_| json!({}));
+        let recs = session_records(
+            &UploadGate::new(),
+            &view(&[], &[], all_on()),
+            &t,
+            &|_| json!({}),
+            true,
+        );
         let tags = find(&recs, "tag");
         assert_eq!(tags.len(), 1, "{tags:?}");
         assert_eq!(attr(tags[0], "tag"), &json!({"name": "rich:1", "metadata": {"k": "v"}}));
@@ -913,14 +1075,13 @@ mod tests {
     #[test]
     fn the_summary_timestamp_falls_through_a_zero_started_at() {
         let mut v = view(&[], &[], all_on());
-        let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}));
+        let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}), true);
         assert_eq!(find(&recs, "session report")[0].timestamp, (100, 0));
 
         v.started_at = Some(0.0);
-        let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}));
+        let recs = session_records(&UploadGate::new(), &v, &tagger(), &|_| json!({}), true);
         assert_eq!(find(&recs, "session report")[0].timestamp, (200, 0));
     }
-
 
     // ============================================================================================
     // tagger
@@ -948,7 +1109,6 @@ mod tests {
         assert_eq!(names, vec!["a:1", "b:1"]);
         assert_eq!(t.entries().next().unwrap().1.metadata, Some(json!({"v": 3})));
     }
-
 
     // Catches: judge tags not landing in the tag set.
     #[test]
@@ -1005,7 +1165,10 @@ mod python_tests {
             let bad = py.eval(c"object()", None, None).unwrap();
             let kwargs = pyo3::types::PyDict::new(py);
             kwargs.set_item("metadata", bad).unwrap();
-            assert!(t.call_method("add", ("c",), Some(&kwargs)).is_err(), "metadata must be JSON, not coerced");
+            assert!(
+                t.call_method("add", ("c",), Some(&kwargs)).is_err(),
+                "metadata must be JSON, not coerced"
+            );
         });
     }
 }

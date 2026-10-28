@@ -52,13 +52,16 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import threading
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
 
 from opentelemetry import context as otel_context, trace
+from opentelemetry.util.types import AttributeValue
 
 from .. import _core
+from .._generated.telemetry import BlockedReport, LoopMonitorEmission
 from ..log import logger
 from .metrics import record_event_loop_blocked
 from .traces import primary_session, session_root_context, tracer
@@ -81,28 +84,8 @@ class LoopMonitorThresholds:
         """Thresholds from ``LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS`` and ``_ERROR_MS``, or ``None``
         when monitoring is disabled (a warn threshold of 0). Invalid values fall back to the
         defaults with a warning rather than disabling silently."""
-        thresholds = _core.LoopMonitor.thresholds_from_env()
+        thresholds = _core._core_loop_monitor_thresholds_from_env()
         return cls(*thresholds) if thresholds is not None else None
-
-
-@dataclass
-class BlockedReport:
-    duration: float
-    started_at: float
-    warn_threshold: float
-    severity: str
-    gc_time: float
-    cpu_time: float
-    watchdog_gap: float
-    process_descheduled: bool
-    task_name: str | None
-    stacks: list[str]
-    importing: str | None = None
-    """The module a lazy import was loading when the loop thread was sampled."""
-    parent_span_context: trace.SpanContext | None = None
-    """The span current in the blocked task when sampled; the stall span nests under it."""
-    location: str | None = None
-    """The innermost frame of the last sample that is not the import machinery."""
 
 
 class EventLoopMonitor:
@@ -121,6 +104,12 @@ class EventLoopMonitor:
         """``tick_interval`` defaults to a fifth of the warn threshold, within bounds; a warn
         threshold below the smallest tick is then raised to it. ``emit_spans=False`` on the
         worker loop: no job to attach spans to."""
+        owner = weakref.ref(self)
+
+        def report(emission: LoopMonitorEmission) -> None:
+            if (monitor := owner()) is not None:
+                monitor._report(emission)
+
         self._core = _core.LoopMonitor(
             loop,
             warn_threshold=warn_threshold,
@@ -128,7 +117,7 @@ class EventLoopMonitor:
             tick_interval=tick_interval,
             name=name,
             emit_spans=emit_spans,
-            report=self._report,
+            report=report,
             span_of=_current_span_in,
         )
         self._report_context: contextvars.Context | None = None
@@ -137,11 +126,11 @@ class EventLoopMonitor:
 
     @property
     def warn_threshold(self) -> float:
-        return self._core.warn_threshold  # type: ignore[no-any-return]
+        return self._core.warn_threshold
 
     @property
     def error_threshold(self) -> float:
-        return self._core.error_threshold  # type: ignore[no-any-return]
+        return self._core.error_threshold
 
     def set_report_context(self, ctx: contextvars.Context | None) -> None:
         """Emit reports inside ``ctx``, a copy of the job's context taken inside ``job_entrypoint``:
@@ -157,9 +146,8 @@ class EventLoopMonitor:
         """Stop the heartbeat and the watchdog. Idempotent."""
         self._core.stop()
 
-    def _report(self, raw: dict[str, Any]) -> None:
-        span, log, reported = raw.pop("span"), raw.pop("log"), raw.pop("reported")
-        report = BlockedReport(**raw)
+    def _report(self, emission: LoopMonitorEmission) -> None:
+        report = emission.report
 
         def _emit() -> None:
             # the metric counts every stall, including the ones the limiters drop
@@ -173,11 +161,15 @@ class EventLoopMonitor:
                     report.duration,
                     timestamp_ns=int((report.started_at + report.duration) * 1_000_000_000),
                 )
-            if span is not None:
-                _emit_span(report, *span)
-            if log is not None:
-                logger.warning(log[0], extra=log[1])
-            if reported and self._on_report is not None:
+            if emission.span is not None:
+                _emit_span(
+                    report,
+                    cast(dict[str, AttributeValue], emission.span.attributes),
+                    emission.span.error,
+                )
+            if emission.log is not None:
+                logger.warning(emission.log.message, extra=emission.log.extra)
+            if emission.reported and self._on_report is not None:
                 self._on_report(report)
 
         try:
@@ -189,7 +181,9 @@ class EventLoopMonitor:
             logger.exception("failed to report a blocked event loop")
 
 
-def _emit_span(report: BlockedReport, attributes: dict[str, Any], error: str | None) -> None:
+def _emit_span(
+    report: BlockedReport, attributes: dict[str, AttributeValue], error: str | None
+) -> None:
     from ..job import get_job_context
 
     if get_job_context(required=False) is None:
@@ -198,7 +192,7 @@ def _emit_span(report: BlockedReport, attributes: dict[str, Any], error: str | N
     # (job_entrypoint); the heartbeat's own context predates all of them
     if report.parent_span_context is not None:
         parent: otel_context.Context | None = trace.set_span_in_context(
-            trace.NonRecordingSpan(report.parent_span_context)
+            trace.NonRecordingSpan(cast(trace.SpanContext, report.parent_span_context))
         )
     else:
         parent = session_root_context()

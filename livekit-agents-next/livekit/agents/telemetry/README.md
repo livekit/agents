@@ -1,0 +1,34 @@
+# Telemetry integration
+
+Configure application providers before starting jobs. The framework adopts the current
+tracer provider at setup and adds its Cloud destination without replacing the global
+provider, sampler, resource or application exporters. Job close flushes framework work;
+process exit closes framework-owned resources.
+
+For an explicit provider, select it with `set_tracer_provider(provider)`. Instrument
+child work through `trace.get_tracer(name, tracer_provider=provider)`. HostInvoker enters
+the invocation's captured context around callbacks and restores it on return or cancel.
+
+Wrap each application exporter in `RedactingSpanExporter(exporter)` or
+`RedactingLogExporter(exporter)` before adding its SDK processor. Each destination gets
+its own snapshot. `allow_pii=True` also requires content capture opt-in. Set
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` to opt in. Consent is captured at
+creation; records without captured consent stay redacted. Project redaction
+withholds raw audio and transcripts. Providers already configured with exporters must
+add their own destination wrappers; a provider-wide redaction request reports a conflict.
+
+An existing application meter provider keeps its readers. Cloud metrics require a reader
+registered at provider construction; an incompatible existing provider reports a conflict.
+Cloud tracing and logs remain independently available.
+
+Framework SDK queues admit records by count and estimated bytes before batching. Native
+cleanup work retains capacity until settlement, including after timeout. Read
+`_core._core_TelemetryWorker().diagnostics` for nonrecursive drop/failure/cleanup counters.
+`drain_observations()` returns typed cleanup outcomes with captured work identity.
+The native runtime's `telemetry/budgets.json` records the limits and validation workloads.
+
+Run `uv run pytest tests/test_telemetry_destinations.py --unit` for destination isolation,
+capture consent and provider behavior. Run `cargo test -p lk-agents-runtime telemetry`
+from `rust/` for supplied-time policy, saturation, streaming uploads and bounded cleanup.
+The Python-feature runtime tests additionally check actual OTel parent IDs through
+HostInvoker, including failures and cancellation.

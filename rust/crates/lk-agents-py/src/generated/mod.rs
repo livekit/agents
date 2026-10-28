@@ -11,6 +11,7 @@ pub mod agent;
 pub mod inference;
 pub mod llm;
 pub mod storage;
+pub mod telemetry;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
@@ -20,6 +21,10 @@ pub trait Implementations: 'static {
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
     type Storage: ::lk_agents_abi::storage::Storage;
+    type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
+    type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
+    type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
+    type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
 }
 
 /// Adds every declared class to `_core`.
@@ -32,5 +37,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::LlmChoiceParser>()?;
     m.add_function(wrap_pyfunction!(llm::llm_usage_chunk, m)?)?;
     m.add_class::<storage::Storage>()?;
+    m.add_class::<telemetry::LoopMonitor>()?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;
+    m.add_class::<telemetry::_core_SessionReportUpload>()?;
+    m.add_class::<telemetry::_core_TelemetryWorker>()?;
     Ok(())
 }

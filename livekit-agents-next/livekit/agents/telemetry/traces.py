@@ -23,27 +23,26 @@ import inspect
 import json
 import logging
 import os
-import random
 import threading
-import time
+import warnings
 import weakref
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence, Set
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from copy import copy
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
-import aiofiles
 import aiohttp
 import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context, metrics as metrics_api, trace, trace as trace_api
-from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider, set_logger_provider
+from opentelemetry._logs import LogRecord as OTelLogRecord, get_logger_provider
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.metrics._internal import _ProxyMeterProvider
 from opentelemetry.sdk import trace as trace_sdk
 from opentelemetry.sdk._logs import (
@@ -54,7 +53,6 @@ from opentelemetry.sdk._logs import (
     ReadWriteLogRecord,
 )
 from opentelemetry.sdk._logs.export import (
-    BatchLogRecordProcessor,
     LogRecordExporter,
     LogRecordExportResult,
 )
@@ -69,14 +67,14 @@ from opentelemetry.sdk.metrics import (
 )
 from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import ReadableSpan, Span as SdkSpan, SpanProcessor
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
-from opentelemetry.trace import Span, Status, StatusCode, Tracer
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.util.instrumentation import InstrumentationScope
+from opentelemetry.trace import Link, Span, Status, StatusCode, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import AttributeValue
+from opentelemetry.util.types import AnyValue, AttributeValue
 
-from livekit import api, rtc
-from livekit.protocol import metrics as proto_metrics
+from livekit import rtc
 
 from .. import _core
 from .._proto import encode_chat_item
@@ -84,6 +82,16 @@ from ..log import TRACE_LEVEL, logger
 from ..types import ATTRIBUTE_REDACTION_ENABLED, ATTRIBUTE_SIMULATION_ENABLED
 from ..utils import is_given
 from . import trace_types, utils as telemetry_utils
+from ._export import (
+    BoundedLogRecordProcessor,
+    BoundedSpanProcessor,
+    GuardedMetricExporter,
+    attribute_bytes,
+    exporting,
+    run_bounded,
+    span_key,
+    worker,
+)
 from .utils import REDACTED_EXCEPTION_MESSAGE
 
 if TYPE_CHECKING:
@@ -189,18 +197,26 @@ _START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_spa
 def _with_conversation_id(
     attributes: Mapping[str, AttributeValue] | None,
 ) -> Mapping[str, AttributeValue] | None:
+    captured = {
+        "lk.telemetry.capture_content": capture_content_enabled(),
+        **(attributes or {}),
+    }
     if (conversation_id := _conversation_id()) is None:
-        return attributes
-    return {trace_types.ATTR_GEN_AI_CONVERSATION_ID: conversation_id, **(attributes or {})}
+        return captured
+    return {trace_types.ATTR_GEN_AI_CONVERSATION_ID: conversation_id, **captured}
 
 
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
+        self._explicit_provider = False
         self._tracer_provider: trace_api.TracerProvider = trace_api.get_tracer_provider()
         self._tracer = trace_api.get_tracer(instrumenting_module_name)
 
-    def set_provider(self, tracer_provider: trace_api.TracerProvider) -> None:
+    def set_provider(
+        self, tracer_provider: trace_api.TracerProvider, *, explicit: bool = True
+    ) -> None:
+        self._explicit_provider = explicit
         self._tracer_provider = tracer_provider
         self._tracer = trace_api.get_tracer(
             self._instrumenting_module_name,
@@ -284,7 +300,7 @@ class _UploadGate:
 
     @property
     def disabled(self) -> bool:
-        return self._core.disabled  # type: ignore[no-any-return]
+        return self._core.disabled
 
     def disable(self) -> None:
         if self._core.disable():
@@ -337,12 +353,19 @@ class _JobTelemetry:
     concurrently on the shared providers (THREAD executor)."""
 
     # the job's identity and session metadata, stamped on every span/log/metric
-    attributes: dict[str, AttributeValue]
+    attributes: Mapping[str, AttributeValue]
     traces_enabled: bool
     logs_enabled: bool
 
+    def __post_init__(self) -> None:
+        snapshot = {
+            key: tuple(value) if isinstance(value, (list, tuple)) else value
+            for key, value in self.attributes.items()
+        }
+        object.__setattr__(self, "attributes", MappingProxyType(snapshot))
 
-def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
+
+def _job_stamp_attributes() -> Mapping[str, AttributeValue] | None:
     """The attributes stamped on telemetry created by the job on this context,
     or None outside any job context.
 
@@ -363,64 +386,71 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    """Stamps provider metadata and the current job's attributes on every span.
-
-    The last configured job's metadata is only a fallback outside a job context.
-    """
+    """Stamp the identity captured by the current invocation, never the last configured job."""
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
-        self._provider_metadata = dict(metadata) if metadata else {}
-        self._fallback_metadata: dict[str, AttributeValue] = {}
+        self._provider_metadata = dict(metadata or {})
 
-    def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
-        """Set the fallback for spans created outside a job context."""
-        # rebind rather than mutate: on_start may read it from another thread
-        self._fallback_metadata = dict(metadata)
-
-    def clear_metadata(self) -> None:
-        self._fallback_metadata = {}
-
-    def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        attributes = _job_stamp_attributes()
-        if attributes is None:
-            attributes = self._fallback_metadata
-        if self._provider_metadata:
-            attributes = {**self._provider_metadata, **attributes}
+    def on_start(
+        self, span: trace_sdk.Span, parent_context: otel_context.Context | None = None
+    ) -> None:
+        attributes = {
+            **self._provider_metadata,
+            **(_job_stamp_attributes() or {}),
+            "lk.telemetry.capture_content": (span.attributes or {}).get(
+                "lk.telemetry.capture_content", capture_content_enabled()
+            ),
+        }
         if attributes:
-            span.set_attributes(attributes)
+            existing = span.attributes or {}
+            span.set_attributes(
+                {key: value for key, value in attributes.items() if key not in existing}
+            )
+
+
+_metadata_processors: weakref.WeakKeyDictionary[
+    trace_sdk.TracerProvider, _MetadataSpanProcessor
+] = weakref.WeakKeyDictionary()
+_provider_setup_lock = threading.Lock()
+
+
+def _install_metadata(
+    provider: trace_sdk.TracerProvider, metadata: Mapping[str, AttributeValue] | None = None
+) -> _MetadataSpanProcessor:
+    with _provider_setup_lock:
+        processor = _metadata_processors.get(provider)
+        if processor is None:
+            processor = _MetadataSpanProcessor(dict(metadata or {}))
+            provider.add_span_processor(processor)
+            _metadata_processors[provider] = processor
+        elif metadata is not None:
+            processor._provider_metadata = dict(metadata)
+        return processor
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
-    """Log counterpart of :class:`_MetadataSpanProcessor` — same per-job
-    resolution with the process-wide slot as fallback."""
+    """Stamp log identity on the emitting invocation before asynchronous export."""
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
-        self._metadata = dict(metadata) if metadata else {}
-
-    def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
-        self._metadata = dict(metadata)
-
-    def clear_metadata(self) -> None:
-        self._metadata = {}
+        self._metadata = dict(metadata or {})
 
     def on_emit(self, log_data: ReadWriteLogRecord) -> None:
-        stamped: dict[str, AttributeValue]
-        if (attributes := _job_stamp_attributes()) is not None:
-            stamped = dict(attributes)
-        else:
-            stamped = dict(self._metadata)
-
-        if log_data.log_record.attributes:
-            log_data.log_record.attributes.update(stamped)  # type: ignore
-        elif stamped:
-            log_data.log_record.attributes = stamped
-
+        supplied = log_data.log_record.attributes or {}
+        stamped = {
+            **self._metadata,
+            **(
+                {}
+                if "lk.telemetry.capture_content" in supplied
+                else (_job_stamp_attributes() or {})
+            ),
+            "lk.telemetry.capture_content": (log_data.log_record.attributes or {}).get(
+                "lk.telemetry.capture_content", capture_content_enabled()
+            ),
+        }
         if log_data.instrumentation_scope:
-            if log_data.log_record.attributes is None:
-                log_data.log_record.attributes = {}
-            log_data.log_record.attributes.update(  # type: ignore
-                {"logger.name": log_data.instrumentation_scope.name}
-            )
+            stamped["logger.name"] = log_data.instrumentation_scope.name
+        if stamped:
+            log_data.log_record.attributes = {**stamped, **(log_data.log_record.attributes or {})}
 
     def shutdown(self) -> None:
         pass
@@ -448,7 +478,7 @@ def _job_export_state(
     return export_jobs.get(job_id)
 
 
-_MAX_PENDING_SPANS_PER_JOB = 1024
+_MAX_PENDING_SPANS_PER_JOB = 64
 
 
 class _GatedSpanExporter(SpanExporter):
@@ -492,7 +522,11 @@ class _GatedSpanExporter(SpanExporter):
         with self._lock:
             self._open_jobs.discard(job_id)
             held = self._pending.pop(job_id, [])
-        if not held or not traces_enabled:
+        if not traces_enabled:
+            for span in held:
+                worker().release(span_key(span))
+            return
+        if not held:
             return
         if redacted:
             held = [redact(s) for s in held]
@@ -500,13 +534,22 @@ class _GatedSpanExporter(SpanExporter):
             for s in held:
                 self._requeue(s)
         else:
-            self._inner.export([restore_pii(s) for s in held])
+            worker().record_drop("capacity", len(held))
+            for span in held:
+                worker().release(span_key(span))
 
     def close_job(self, job_id: str) -> None:
         """The job ended; anything still held was never meant to upload."""
         with self._lock:
             self._open_jobs.discard(job_id)
-            self._pending.pop(job_id, None)
+            held = self._pending.pop(job_id, [])
+        for span in held:
+            worker().release(span_key(span))
+
+    def holds(self, span: ReadableSpan) -> bool:
+        job_id = (span.attributes or {}).get("job_id")
+        with self._lock:
+            return isinstance(job_id, str) and span in self._pending.get(job_id, ())
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         exportable: list[ReadableSpan] = []
@@ -515,17 +558,29 @@ class _GatedSpanExporter(SpanExporter):
                 state = _job_export_state(self._export_jobs, s.attributes)
                 if state is not None:
                     if state.traces_enabled:
-                        # PII filtered for third-party exporters is put back here: what
-                        # LiveKit Cloud may receive is the project's setting, applied at its
-                        # collector. restore_pii is a no-op once that setting mandates
-                        # redaction.
-                        exportable.append(restore_pii(s))
+                        # Cloud gets its own snapshot; application destinations are untouched.
+                        exportable.append(
+                            _span_snapshot(
+                                s,
+                                redacted=(
+                                    _redact_content(
+                                        s.attributes,
+                                        allow_pii=True,
+                                        project_redaction=bool(
+                                            state.attributes.get(ATTRIBUTE_REDACTION_ENABLED)
+                                        ),
+                                    )
+                                ),
+                            )
+                        )
                     continue
                 job_id = (s.attributes or {}).get("job_id")
                 if isinstance(job_id, str) and job_id in self._open_jobs:
                     held = self._pending.setdefault(job_id, [])
                     if len(held) < _MAX_PENDING_SPANS_PER_JOB:
                         held.append(s)
+                    else:
+                        worker().record_drop("capacity", 1)
         if not exportable:
             return SpanExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -545,12 +600,19 @@ class _GatedLogExporter(LogRecordExporter):
         self._export_jobs = export_jobs
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
-        exportable = [
-            r
-            for r in batch
-            if (state := _job_export_state(self._export_jobs, r.log_record.attributes)) is not None
-            and state.logs_enabled
-        ]
+        exportable: list[ReadableLogRecord] = []
+        for record in batch:
+            attrs = record.log_record.attributes
+            state = _job_export_state(self._export_jobs, attrs)
+            if state is None or not state.logs_enabled:
+                continue
+            exportable.append(
+                _log_snapshot(
+                    record,
+                    allow_pii=True,
+                    project_redaction=bool(state.attributes.get(ATTRIBUTE_REDACTION_ENABLED)),
+                )
+            )
         if not exportable:
             return LogRecordExportResult.SUCCESS
         return self._inner.export(exportable)
@@ -560,18 +622,81 @@ class _GatedLogExporter(LogRecordExporter):
 
     def shutdown(self) -> None:
         # LogRecordExporter.shutdown is untyped in the OTel SDK
-        self._inner.shutdown()  # type: ignore[no-untyped-call]
+        cast(Callable[[], None], self._inner.shutdown)()
+
+
+_LOG_RECORD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
 
 
 class _BufferingHandler(logging.Handler):
-    """Buffers log records in memory for later replay through OTLP."""
+    """Retain early logs only within native telemetry admission."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.buffer: list[logging.LogRecord] = []
+        self._records: deque[tuple[str, logging.LogRecord]] = deque()
+        self._keys: set[str] = set()
+        self._sequence = 0
+        self._finalizer: weakref.finalize | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.buffer.append(record)
+        if exporting():
+            return
+        runtime = worker()
+        if attribute_bytes(record.__dict__) > 64 * 1024:
+            runtime.record_drop("oversize", 1)
+            return
+        record = copy(record)
+        captured = capture_content_enabled()
+        identity = _job_stamp_attributes() or {}
+        if not captured or telemetry_utils.redaction_enabled(identity):
+            extras = filter_attributes(
+                {
+                    key: value
+                    for key, value in record.__dict__.items()
+                    if key not in _LOG_RECORD_FIELDS and key != "message"
+                }
+            )
+            for key in record.__dict__.keys() - _LOG_RECORD_FIELDS:
+                del record.__dict__[key]
+            record.__dict__.update(extras)
+            record.msg = "log body redacted"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+            identity = filter_attributes(identity)
+        record.__dict__.update(identity)
+        record.__dict__["lk.telemetry.capture_content"] = captured
+        charge = attribute_bytes(record.__dict__)
+        self._sequence += 1
+        key = f"prelog:{id(self):x}:{self._sequence}"
+        if runtime.reserve(key, charge):
+            self._keys.add(key)
+            self._records.append((key, record))
+            if self._finalizer is None:
+                self._finalizer = weakref.finalize(self, _release_early_logs, runtime, self._keys)
+
+    @property
+    def buffer(self) -> Iterator[logging.LogRecord]:
+        while self._records:
+            key, record = self._records.popleft()
+            try:
+                yield record
+            finally:
+                worker().release(key)
+                self._keys.discard(key)
+
+    def close(self) -> None:
+        if self._finalizer is not None:
+            self._finalizer()
+        self._records.clear()
+        super().close()
+
+
+def _release_early_logs(runtime: _core._core_TelemetryWorker, keys: set[str]) -> None:
+    for key in keys:
+        runtime.release(key)
+    keys.clear()
 
 
 class _TraceLevelLoggingHandler(LoggingHandler):
@@ -580,6 +705,10 @@ class _TraceLevelLoggingHandler(LoggingHandler):
     The default OTel LoggingHandler maps any log level < 10 to UNSPECIFIED,
     but we want TRACE_LEVEL (5) to map to TRACE for proper severity in exports.
     """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not exporting():
+            super().emit(record)
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
@@ -601,72 +730,23 @@ class _TraceLevelLoggingHandler(LoggingHandler):
         return log_record
 
 
-def _prepend_span_processor(provider: trace_sdk.TracerProvider, processor: SpanProcessor) -> None:
-    """Attach ``processor`` ahead of every processor already on ``provider``.
-
-    ``on_end`` is dispatched in registration order over a single shared span snapshot,
-    so a processor that rewrites the snapshot only protects the exporters registered
-    after it. Redaction has to come first, including ahead of exporters the integrator
-    attached before handing us their provider.
-    """
-    provider.add_span_processor(processor)
-
-    multi = getattr(provider, "_active_span_processor", None)
-    processors = getattr(multi, "_span_processors", None)
-    if not isinstance(processors, tuple) or processor not in processors:
-        # a provider shape we don't recognise: the plain append above still covers
-        # every exporter the framework attaches itself
-        return
-
-    lock = getattr(multi, "_lock", None)
-    reordered = (processor, *(p for p in processors if p is not processor))
-    if lock is not None:
-        with lock:
-            multi._span_processors = reordered  # type: ignore[union-attr]
-    else:
-        multi._span_processors = reordered  # type: ignore[union-attr]
-
-
-_pii_redaction_installed: weakref.WeakSet[trace_sdk.TracerProvider] = weakref.WeakSet()
-
-
-def _prepend_log_processor(provider: LoggerProvider, processor: LogRecordProcessor) -> None:
-    """Log counterpart of :func:`_prepend_span_processor` — same dispatch-order reasoning."""
-    provider.add_log_record_processor(processor)
-
-    multi = getattr(provider, "_multi_log_record_processor", None)
-    processors = getattr(multi, "_log_record_processors", None)
-    if not isinstance(processors, tuple) or processor not in processors:
-        return
-
-    lock = getattr(multi, "_lock", None)
-    reordered = (processor, *(p for p in processors if p is not processor))
-    if lock is not None:
-        with lock:
-            multi._log_record_processors = reordered  # type: ignore[union-attr]
-    else:
-        multi._log_record_processors = reordered  # type: ignore[union-attr]
+_pii_redaction_installed: weakref.WeakSet[trace_api.TracerProvider] = weakref.WeakSet()
 
 
 def _install_pii_redaction(
     tracer_provider: trace_api.TracerProvider, *, allow_pii: bool | None = None
 ) -> None:
-    """Install in-process PII stripping on an SDK provider, at most once per provider."""
-    if not isinstance(tracer_provider, trace_sdk.TracerProvider):
-        # processors can only be attached to an SDK provider; a no-op/proxy provider
-        # exports nothing, so there is nothing to strip
-        return
-    if tracer_provider in _pii_redaction_installed:
-        return
-    _pii_redaction_installed.add(tracer_provider)
+    """Report provider-wide redaction requests; destination wrappers own filtering."""
     if allow_pii is None:
         allow_pii = telemetry_utils.allow_pii_from_env()
-    _prepend_span_processor(
-        tracer_provider,
-        # PII flows to every exporter unless withheld: the GenAI conventions are only
-        # useful to a backend that can render the conversation
-        _PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
-    )
+    if allow_pii is False and tracer_provider not in _pii_redaction_installed:
+        _pii_redaction_installed.add(tracer_provider)
+        warnings.warn(
+            "Provider-wide PII filtering cannot modify application processors. Wrap each "
+            "application exporter in RedactingSpanExporter before adding it to the provider.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def set_tracer_provider(
@@ -675,116 +755,41 @@ def set_tracer_provider(
     metadata: dict[str, AttributeValue] | None = None,
     allow_pii: bool | None = None,
 ) -> None:
-    """Set the tracer provider for the livekit-agents.
+    """Select the provider used by framework spans without changing the OTel global.
 
-    Args:
-        tracer_provider (TracerProvider): The tracer provider to set.
-        metadata (dict[str, AttributeValue] | None, optional): Metadata to set on all spans. Defaults to None.
-        allow_pii (bool | None, optional): Whether the exporters on this provider *other
-            than LiveKit Cloud's* may receive conversational content, tool payloads and
-            other user data. What LiveKit Cloud receives is the project's PII setting in
-            the dashboard, which this cannot widen or narrow. Defaults to
-            ``True`` (or ``LIVEKIT_TELEMETRY_ALLOW_PII``, when set), since a GenAI
-            backend can only render the conversation if it receives it. Pass ``False``
-            to strip PII in-process before every exporter but LiveKit Cloud's, leaving
-            them the non-content attributes. Ignored when the project mandates redaction
-            — that setting is not weakened from here.
+    For child instrumentation with an explicit provider, call the standard host API as
+    ``trace.get_tracer(name, tracer_provider=provider)``. Invocation parentage uses the
+    current OTel context in either case. Application exporters keep their own policy;
+    use :class:`RedactingSpanExporter` to filter one destination. ``allow_pii=False``
+    reports the migration from the former provider-wide filtering mechanism.
     """
-    if metadata and isinstance(tracer_provider, trace_sdk.TracerProvider):
-        tracer_provider.add_span_processor(_MetadataSpanProcessor(metadata))
-
+    if isinstance(tracer_provider, trace_sdk.TracerProvider):
+        _install_metadata(tracer_provider, metadata)
     _install_pii_redaction(tracer_provider, allow_pii=allow_pii)
     tracer.set_provider(tracer_provider)
 
 
-_TOKEN_TTL = timedelta(hours=6)
-
-
-_TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
-
-
 class _AuthHeaderProvider:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._auth_header = ""
-        self._expires_at = datetime.min.replace(tzinfo=timezone.utc)
-        self._refresh()
+    """OTLP SDK adapter; credential construction and lifetime are runtime-owned."""
 
-    def _refresh(self) -> None:
-        access_token = (
-            api.AccessToken()
-            .with_observability_grants(api.ObservabilityGrants(write=True))
-            .with_ttl(_TOKEN_TTL)
+    def __init__(self) -> None:
+        self._uploader = _core._core_SessionReportUpload(
+            os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
         )
-        self._auth_header = f"Bearer {access_token.to_jwt()}"
-        self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
 
     def __call__(self) -> dict[str, str]:
-        now = datetime.now(timezone.utc)
-        if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
-            with self._lock:
-                if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
-                    self._refresh()
-        return {"Authorization": self._auth_header}
+        return {"Authorization": f"Bearer {self._uploader.bearer()}"}
 
 
 _TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
 
 
-def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], timeout: float) -> None:
-    """Run each target on its own daemon thread with a hard wall-clock bound.
+_run_bounded = run_bounded
 
-    ``provider.shutdown()`` internally joins its exporter worker with a 30s
-    default timeout per provider (and ``force_flush`` ignores its timeout arg
-    in the current SDK — see #4623). Across tracer/logger/meter that's up to
-    ~90s, enough to stall the caller's event loop past the supervisor's 60s
-    ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
 
-    Each target runs in its *own* daemon thread, in parallel. That matters for
-    two reasons:
-      1) Main-thread wait is bounded by ``max`` of the targets, not the ``sum``.
-      2) ``BatchProcessor.shutdown()`` sets ``_shutdown = True`` as its first
-         action; running in parallel guarantees that flag gets set on every
-         processor within milliseconds, even if one hangs in
-         ``worker_thread.join``. Any later re-entry (e.g. Python's
-         ``logging.shutdown()`` may spawn a *non-daemon* thread via
-         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
-         PR #4636) then short-circuits instead of hanging process exit.
-
-    Any unfinished work stays on the daemon threads and is discarded at
-    process exit.
-
-    Upstream context:
-    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
-      (TracerProvider.shutdown() has no configurable timeout — still open)
-    """
-    if not targets:
-        return
-
-    def _run_one(name: str, fn: Callable[[], Any]) -> None:
-        try:
-            fn()
-        except Exception:
-            logger.exception("telemetry %s failed (%s)", action, name)
-
-    threads = [
-        threading.Thread(
-            target=_run_one,
-            args=(name, fn),
-            name=f"livekit-telemetry-{action}-{name}",
-            daemon=True,
-        )
-        for name, fn in targets
-    ]
-    for t in threads:
-        t.start()
-
-    deadline = time.monotonic() + timeout
-    for t in threads:
-        t.join(max(0.0, deadline - time.monotonic()))
-
-    if any(t.is_alive() for t in threads):
-        logger.warning("telemetry %s exceeded %.1fs; continuing", action, timeout)
+def _report_configuration_conflicts(messages: Sequence[str]) -> None:
+    for message in messages:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
 
 
 class _CloudTelemetry:
@@ -817,9 +822,7 @@ class _CloudTelemetry:
     The ``Resource`` on a framework-created tracer/logger provider is built by
     the first configuring job; the meter provider's resource carries only
     process-stable identity, with per-job attribution on each measurement.
-    Telemetry emitted outside any job context is stamped from a fallback slot
-    holding the most recently configured job's attributes, cleared once no job
-    remains registered.
+    Telemetry emitted outside a captured job invocation has no job attribution.
     """
 
     def __init__(self) -> None:
@@ -830,6 +833,8 @@ class _CloudTelemetry:
         # dict, so it is mutated in place, never rebound.
         self._export_jobs: dict[str, _JobTelemetry] = {}
         self._atexit_registered = False
+        self._closed = False
+        self._admitted_jobs: set[str] = set()
         self._session: _AuthRefreshingSession | None = None
         self._observability_url: str | None = None
 
@@ -841,22 +846,26 @@ class _CloudTelemetry:
 
         # traces
         self._trace_provider_attached: trace_sdk.TracerProvider | None = None
+        self._owned_trace_provider: trace_sdk.TracerProvider | None = None
         self._span_metadata_processor: _MetadataSpanProcessor | None = None
-        self._span_batch_processor: BatchSpanProcessor | None = None
+        self._span_batch_processor: BoundedSpanProcessor | None = None
         # every span processor attached so far: a provider replaced mid-process keeps its
         # processor, since spans still open on it (the job's root) end there
-        self._span_batch_processors: list[BatchSpanProcessor] = []
+        self._span_batch_processors: list[BoundedSpanProcessor] = []
         self._span_gate: _GatedSpanExporter | None = None
+        self._span_pipelines: dict[
+            trace_sdk.TracerProvider, tuple[BoundedSpanProcessor, _GatedSpanExporter]
+        ] = {}
 
         # logs
         self._logger_provider: LoggerProvider | None = None
         self._log_metadata_processor: _MetadataLogProcessor | None = None
-        self._log_batch_processor: BatchLogRecordProcessor | None = None
+        self._log_batch_processor: BoundedLogRecordProcessor | None = None
         self._log_handler: _TraceLevelLoggingHandler | None = None
 
         # metrics
         self._owned_meter_provider: SdkMeterProvider | None = None
-        self._metrics_unavailable = False
+        self._meter_conflict_provider: metrics_api.MeterProvider | None = None
 
     @property
     def logger_provider(self) -> LoggerProvider | None:
@@ -885,19 +894,33 @@ class _CloudTelemetry:
                 self._observability_url = observability_url
             if self._session is None:
                 self._session = _AuthRefreshingSession(_AuthHeaderProvider())
-            resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
-            self._ensure_trace_pipeline(resource, self._observability_url)
-            if self._span_gate is not None:
+            resource = Resource.create({SERVICE_NAME: "livekit-agents"})
+            conflict = self._ensure_trace_pipeline(resource, self._observability_url)
+            if self._admit_job(job_id) and self._span_gate is not None:
                 self._span_gate.open_job(job_id)
             if not self._atexit_registered:
                 self._atexit_registered = True
                 atexit.register(self.shutdown_at_exit)
+            selected_provider = tracer._tracer_provider
+
+        _install_pii_redaction(selected_provider)
+        _report_configuration_conflicts([conflict] if conflict else [])
+
+    def _admit_job(self, job_id: str) -> bool:
+        if job_id in self._admitted_jobs:
+            return True
+        if worker().reserve(f"job:{job_id}", 64 * 1024):
+            self._admitted_jobs.add(job_id)
+            return True
+        return False
 
     def discard(self, job_id: str) -> None:
         """A job ended without ever registering: drop whatever the gate held for it."""
         with self._lock:
-            if self._span_gate is not None:
-                self._span_gate.close_job(job_id)
+            for _, gate in self._span_pipelines.values():
+                gate.close_job(job_id)
+            self._admitted_jobs.discard(job_id)
+        worker().release(f"job:{job_id}")
 
     def configure(
         self,
@@ -926,17 +949,26 @@ class _CloudTelemetry:
             base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
         if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
             base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
+        base_valid = attribute_bytes(base_metadata) <= 64 * 1024
+        if not base_valid:
+            base_metadata = {}
+        metadata_valid = base_valid and attribute_bytes(metadata) <= 64 * 1024
         session_metadata = dict(base_metadata)
-        if metadata:
+        if metadata_valid and metadata:
             session_metadata.update(metadata)
+        if attribute_bytes(session_metadata) > 64 * 1024:
+            metadata_valid = False
+            session_metadata = dict(base_metadata)
+        if not metadata_valid:
+            worker().record_drop("oversize", 1)
 
+        conflicts: list[str] = []
         with self._lock:
             if self._observability_url is None:
                 self._observability_url = observability_url
             elif observability_url != self._observability_url:
-                logger.warning(
-                    "observability endpoint changed across jobs; keeping %s",
-                    self._observability_url,
+                conflicts.append(
+                    f"observability endpoint changed across jobs; keeping {self._observability_url}"
                 )
             url = self._observability_url
 
@@ -945,10 +977,8 @@ class _CloudTelemetry:
 
             resource = Resource.create({SERVICE_NAME: "livekit-agents", **base_metadata})
 
-            if enable_traces:
-                self._ensure_trace_pipeline(resource, url)
-                if self._span_metadata_processor is not None:
-                    self._span_metadata_processor.set_metadata(session_metadata)
+            if conflict := self._ensure_trace_pipeline(resource, url):
+                conflicts.append(conflict)
 
             # Always set up the logger provider — it's needed for session reports,
             # evaluations, and chat history, not just Python log export.
@@ -956,20 +986,12 @@ class _CloudTelemetry:
 
             if enable_logs:
                 self._ensure_log_pipeline(url)
-                if self._log_metadata_processor is not None:
-                    self._log_metadata_processor.set_metadata(session_metadata)
-                if self._log_handler is not None:
-                    root = logging.getLogger()
-                    if self._log_handler not in root.handlers:
-                        root.addHandler(self._log_handler)
 
             # The meter provider outlives the job. Keep its resource process-stable;
             # per-job identity belongs on traces, never on metric measurements.
-            process_metadata = {
-                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
-            }
-            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
-            self._ensure_meter_provider(meter_resource, url)
+            meter_resource = Resource.create({SERVICE_NAME: "livekit-agents"})
+            if conflict := self._ensure_meter_provider(meter_resource, url):
+                conflicts.append(conflict)
 
             if not self._atexit_registered:
                 self._atexit_registered = True
@@ -977,73 +999,92 @@ class _CloudTelemetry:
 
             state = _JobTelemetry(
                 attributes=session_metadata,
-                traces_enabled=enable_traces,
-                logs_enabled=enable_logs,
+                traces_enabled=enable_traces and metadata_valid,
+                logs_enabled=enable_logs and metadata_valid,
             )
-            self._export_jobs[job_id] = state
-            if self._span_gate is not None:
-                # release what the gate held for this job, or drop it
-                self._span_gate.job_registered(
-                    job_id,
-                    traces_enabled=enable_traces,
-                    redacted=bool((metadata or {}).get(ATTRIBUTE_REDACTION_ENABLED, False)),
+            if metadata_valid and self._admit_job(job_id):
+                self._export_jobs[job_id] = state
+            gates = [gate for _, gate in self._span_pipelines.values()]
+            registered = job_id in self._export_jobs
+            log_provider = self._logger_provider
+            log_handler = self._log_handler
+            selected_provider = tracer._tracer_provider
+        _install_pii_redaction(selected_provider)
+        _report_configuration_conflicts(conflicts)
+        if enable_logs and log_provider is not None:
+            if log_handler is None:
+                created_handler = _TraceLevelLoggingHandler(
+                    level=logging.NOTSET, logger_provider=log_provider
                 )
-
+                with self._lock:
+                    if self._log_handler is None:
+                        self._log_handler = created_handler
+                    log_handler = self._log_handler
+            logging.getLogger().addHandler(log_handler)
+        for gate in gates:
+            gate.job_registered(
+                job_id,
+                traces_enabled=enable_traces and registered,
+                redacted=bool((metadata or {}).get(ATTRIBUTE_REDACTION_ENABLED, False)),
+            )
         return state
 
-    def _ensure_trace_pipeline(self, resource: Resource, url: str) -> None:
-        # Check if a tracer provider is not set and set one up
-        # below shows how the ProxyTracerProvider is returned when none have been setup
-        # https://github.com/open-telemetry/opentelemetry-python/blob/0018c0030bac9bdce4487fe5fcb3ec6a542ec904/opentelemetry-api/src/opentelemetry/trace/__init__.py#L555
-        provider: trace_api.TracerProvider
-        if isinstance(
-            tracer._tracer_provider,
-            (trace_api.ProxyTracerProvider, trace_api.NoOpTracerProvider),
-        ):
-            owned = trace_sdk.TracerProvider(resource=resource, shutdown_on_exit=False)
-            # shutting the provider down also shuts down every processor attached
-            # to it (processor shutdown is idempotent, so overlap is harmless)
-            self._exit_targets.append(("TracerProvider", owned.shutdown))
-            set_tracer_provider(owned)
-            provider = owned
-        else:
-            # the integrator's provider (or ours, from an earlier job)
-            provider = tracer._tracer_provider
-
+    def _ensure_trace_pipeline(self, resource: Resource, url: str) -> str | None:
+        provider = (
+            tracer._tracer_provider
+            if tracer._explicit_provider
+            else trace_api.get_tracer_provider()
+        )
+        if isinstance(provider, trace_api.ProxyTracerProvider):
+            if self._owned_trace_provider is None:
+                self._owned_trace_provider = trace_sdk.TracerProvider(
+                    resource=Resource.create({SERVICE_NAME: "livekit-agents"}),
+                    shutdown_on_exit=False,
+                )
+                self._exit_targets.append(
+                    (
+                        f"tracer:{id(self._owned_trace_provider):x}",
+                        self._owned_trace_provider.shutdown,
+                    )
+                )
+            provider = self._owned_trace_provider
+        tracer.set_provider(provider, explicit=tracer._explicit_provider)
         if not isinstance(provider, trace_sdk.TracerProvider):
-            # processors can only be attached to an SDK provider
-            return
+            self._span_gate = None
+            return None
 
-        _install_pii_redaction(provider)
+        if provider in self._span_pipelines:
+            self._span_batch_processor, self._span_gate = self._span_pipelines[provider]
+            self._trace_provider_attached = provider
+            return None
 
-        if provider is self._trace_provider_attached:
-            return
-
-        if self._trace_provider_attached is not None:
-            # the provider was replaced mid-process (set_tracer_provider from an entrypoint):
-            # attach to the new one. The old processor stays: spans still open on the old
-            # provider, the job's root among them, end there and are exported through the
-            # same gate. It shuts down with the rest at process exit.
-            logger.info("tracer provider changed; attaching the LiveKit Cloud span exporter")
-            if self._span_metadata_processor is not None:
-                self._span_metadata_processor.clear_metadata()
-
-        assert self._session is not None
-        if self._span_gate is None:
-            span_exporter = OTLPSpanExporter(
-                endpoint=f"{url}/observability/traces/otlp/v0",
-                compression=Compression.Gzip,
-                session=self._session,
+        if len(self._span_batch_processors) >= 4:
+            worker().record_drop("conflict", 1)
+            return (
+                "Cloud tracing is limited to four provider registrations per process; "
+                "the newly selected application provider remains active."
             )
-            self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
-        self._span_metadata_processor = _MetadataSpanProcessor()
-        self._span_batch_processor = BatchSpanProcessor(self._span_gate)
+        assert self._session is not None
+        span_exporter = OTLPSpanExporter(
+            endpoint=f"{url}/observability/traces/otlp/v0",
+            compression=Compression.Gzip,
+            session=self._session,
+        )
+        self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
+        self._span_metadata_processor = _install_metadata(provider)
+        self._span_batch_processor = BoundedSpanProcessor(
+            self._span_gate, holds=self._span_gate.holds
+        )
         self._span_batch_processors.append(self._span_batch_processor)
-        self._span_gate._requeue = self._span_batch_processor.on_end
-        self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
-        provider.add_span_processor(self._span_metadata_processor)
+        self._span_gate._requeue = self._span_batch_processor.requeue
+        self._span_pipelines[provider] = (self._span_batch_processor, self._span_gate)
+        if provider is not self._owned_trace_provider:
+            self._exit_targets.append(
+                (f"spans:{id(self._span_batch_processor):x}", self._span_batch_processor.shutdown)
+            )
         provider.add_span_processor(self._span_batch_processor)
         self._trace_provider_attached = provider
+        return None
 
     def _ensure_logger_provider(self) -> None:
         if self._logger_provider is not None:
@@ -1054,12 +1095,8 @@ class _CloudTelemetry:
             self._logger_provider = current
         else:
             owned = LoggerProvider(shutdown_on_exit=False)
-            self._exit_targets.append(("LoggerProvider", owned.shutdown))
-            set_logger_provider(owned)
+            self._exit_targets.append((f"logger:{id(owned):x}", owned.shutdown))
             self._logger_provider = owned
-
-        # ahead of any exporter already on the provider, as for spans
-        _prepend_log_processor(self._logger_provider, _PIIFilteringLogProcessor())
 
     def _ensure_log_pipeline(self, url: str) -> None:
         if self._log_batch_processor is not None or self._logger_provider is None:
@@ -1071,63 +1108,63 @@ class _CloudTelemetry:
             session=self._session,
         )
         self._log_metadata_processor = _MetadataLogProcessor()
-        self._log_batch_processor = BatchLogRecordProcessor(
+        self._log_batch_processor = BoundedLogRecordProcessor(
             _GatedLogExporter(log_exporter, self._export_jobs)
         )
-        self._exit_targets.append(("BatchLogRecordProcessor", self._log_batch_processor.shutdown))
+        self._exit_targets.append(
+            (f"logs:{id(self._log_batch_processor):x}", self._log_batch_processor.shutdown)
+        )
         self._logger_provider.add_log_record_processor(self._log_metadata_processor)
         self._logger_provider.add_log_record_processor(self._log_batch_processor)
-        self._log_handler = _TraceLevelLoggingHandler(
-            level=logging.NOTSET, logger_provider=self._logger_provider
-        )
 
-    def _ensure_meter_provider(self, resource: Resource, url: str) -> None:
-        if self._owned_meter_provider is not None or self._metrics_unavailable:
-            return
+    def _ensure_meter_provider(self, resource: Resource, url: str) -> str | None:
+        from .metrics import _adopt_meter_provider
+
         current = metrics_api.get_meter_provider()
-        if not isinstance(current, (_ProxyMeterProvider, NoOpMeterProvider)):
-            # the integrator configured their own meter provider; the metrics API
-            # has no way to attach a reader to it, so Cloud metrics are skipped
-            self._metrics_unavailable = True
-            return
+        if not isinstance(current, _ProxyMeterProvider):
+            _adopt_meter_provider(current)
+            if current is self._meter_conflict_provider:
+                return None
+            self._meter_conflict_provider = current
+            return (
+                "Cloud metrics require a reader registered at application MeterProvider setup; "
+                "the existing provider and its readers were preserved."
+            )
+        if self._owned_meter_provider is not None:
+            _adopt_meter_provider(self._owned_meter_provider)
+            return None
         assert self._session is not None
-        metric_exporter = OTLPMetricExporter(
-            endpoint=f"{url}/observability/metrics/otlp/v0",
-            compression=Compression.Gzip,
-            session=self._session,
-            preferred_temporality={
-                SdkCounter: AggregationTemporality.DELTA,
-                SdkUpDownCounter: AggregationTemporality.DELTA,
-                SdkHistogram: AggregationTemporality.DELTA,
-                SdkObservableCounter: AggregationTemporality.DELTA,
-                SdkObservableUpDownCounter: AggregationTemporality.DELTA,
-                SdkObservableGauge: AggregationTemporality.DELTA,
-            },
+        temporality: dict[type[object], AggregationTemporality] = {
+            SdkCounter: AggregationTemporality.DELTA,
+            SdkUpDownCounter: AggregationTemporality.DELTA,
+            SdkHistogram: AggregationTemporality.DELTA,
+            SdkObservableCounter: AggregationTemporality.DELTA,
+            SdkObservableUpDownCounter: AggregationTemporality.DELTA,
+            SdkObservableGauge: AggregationTemporality.DELTA,
+        }
+        metric_exporter = GuardedMetricExporter(
+            OTLPMetricExporter(
+                endpoint=f"{url}/observability/metrics/otlp/v0",
+                compression=Compression.Gzip,
+                session=self._session,
+                preferred_temporality=temporality,
+            ),
+            preferred_temporality=temporality,
         )
         reader = PeriodicExportingMetricReader(metric_exporter, export_interval_millis=30000)
         provider = SdkMeterProvider(
             resource=resource, metric_readers=[reader], shutdown_on_exit=False
         )
-        metrics_api.set_meter_provider(provider)
-        if metrics_api.get_meter_provider() is not provider:
-            # the set-once global was already consumed (e.g. by a NoOp provider):
-            # no instrument would ever reach our provider, so don't leave its
-            # periodic reader running
-            threading.Thread(
-                target=provider.shutdown,
-                name="livekit-telemetry-orphan-meter-shutdown",
-                daemon=True,
-            ).start()
-            self._metrics_unavailable = True
-            return
-        self._exit_targets.append(("MeterProvider", provider.shutdown))
+        self._exit_targets.append((f"meter:{id(provider):x}", provider.shutdown))
         self._owned_meter_provider = provider
+        _adopt_meter_provider(provider)
+        return None
 
     def release(self, job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
         """Per-job teardown: flush the framework's exporters (bounded) while the
         job is still registered, then remove it from the exportable-jobs
         registry — records stamped with its id no longer upload. When no job
-        remains, the fallback stamp is cleared and the log handler detached.
+        remains, the framework log handler is detached.
 
         Nothing is shut down here: providers (ours or the integrator's) and the
         batch processors keep running for the next job in the process. Final
@@ -1139,26 +1176,34 @@ class _CloudTelemetry:
 
             flush_targets: list[tuple[str, Callable[[], Any]]] = []
             for processor in self._span_batch_processors:
-                flush_targets.append(("spans", processor.force_flush))
+                flush_targets.append((f"spans:{id(processor):x}", processor.force_flush))
             if self._log_batch_processor is not None:
-                flush_targets.append(("logs", self._log_batch_processor.force_flush))
+                flush_targets.append(
+                    (
+                        f"logs:{id(self._log_batch_processor):x}",
+                        self._log_batch_processor.force_flush,
+                    )
+                )
             if self._owned_meter_provider is not None:
-                flush_targets.append(("metrics", self._owned_meter_provider.force_flush))
+                flush_targets.append(
+                    (
+                        f"meter:{id(self._owned_meter_provider):x}",
+                        self._owned_meter_provider.force_flush,
+                    )
+                )
 
         # flush before unregistering, so the job's remaining telemetry is exported
         _run_bounded("flush", flush_targets, timeout)
 
         with self._lock:
             self._export_jobs.pop(job_id, None)
-            if self._span_gate is not None:
-                self._span_gate.close_job(job_id)
+            self._admitted_jobs.discard(job_id)
+            worker().release(f"job:{job_id}")
+            for _, gate in self._span_pipelines.values():
+                gate.close_job(job_id)
             if self._export_jobs:
                 # another job is still running in this process; keep exporting
                 return
-            if self._span_metadata_processor is not None:
-                self._span_metadata_processor.clear_metadata()
-            if self._log_metadata_processor is not None:
-                self._log_metadata_processor.clear_metadata()
             handler = self._log_handler
 
         if handler is not None:
@@ -1177,7 +1222,11 @@ class _CloudTelemetry:
         never in the list.
         """
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             targets = list(self._exit_targets)
+            self._exit_targets.clear()
             handler = self._log_handler
 
         if handler is not None:
@@ -1232,34 +1281,6 @@ def _chat_item_span_attribute(item: ChatItem) -> dict:
     return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
 
 
-def _parse_retry_delay(body: bytes) -> float | None:
-    """Return the delay from a protobuf ``RetryInfo`` detail, if present."""
-    from google.rpc import error_details_pb2, status_pb2  # type: ignore[import-untyped]
-
-    try:
-        status = status_pb2.Status()
-        status.ParseFromString(body)
-        for detail in status.details:
-            retry_info = error_details_pb2.RetryInfo()
-            if detail.Unpack(retry_info):
-                delay = retry_info.retry_delay
-                return float(delay.seconds + delay.nanos / 1e9)
-    except Exception:
-        pass
-
-    return None
-
-
-_RECORDING_UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=900, sock_connect=30)
-
-
-_RECORDING_UPLOAD_MAX_RETRIES = 3
-
-
-def _recording_upload_retry_delay(attempt: int) -> float:
-    return random.uniform(0.0, min(2.0**attempt, 8.0))
-
-
 async def _upload_session_report(
     *,
     agent_name: str,
@@ -1269,172 +1290,114 @@ async def _upload_session_report(
     http_session: aiohttp.ClientSession,
     metadata: dict[str, AttributeValue] | None = None,
 ) -> None:
-    if _upload_gate.disabled:
-        return
-    metadata = metadata or {}
-
-    def _get_logger(name: str) -> Any:
-        # prefer the provider the framework exports through; the OTel global may
-        # have been claimed by an integrator provider we could not adopt
-        provider = _cloud.logger_provider or get_logger_provider()
-        return provider.get_logger(
-            name=name,
-            attributes={
-                "room_id": report.room_id,
-                "job_id": report.job_id,
-                "room": report.room,
-                **metadata,
-            },
-        )
-
+    """Project host objects on admitted SDK work; the native runtime uploads the recording."""
     from .._core_view import from_core_item, to_core_items
 
-    recording_options = report.options["recording_options"]
-    records = _core.session_records(
-        _upload_gate._core,
-        {
-            "agent_name": agent_name,
-            "sdk_version": report.sdk_version,
-            "started_at": report.started_at,
-            "timestamp": report.timestamp,
-            "options": _serialize_session_options(report.options),
-            "recording_options": _core.RecordingOptions(**recording_options),
-            "model_usage": [u.model_dump() for u in report.model_usage or []],
-            "chat_history": to_core_items(report.chat_history.items),
-        },
-        tagger,
-        lambda item: _chat_item_span_attribute(from_core_item(item)),
+    metadata = dict(metadata or {})
+    emission_context = otel_context.get_current()
+    uploader = _core._core_SessionReportUpload(
+        os.environ.get("LIVEKIT_API_KEY", ""), os.environ.get("LIVEKIT_API_SECRET", "")
     )
-    loggers: dict[str, Any] = {}
-    for r in records:
-        if (otel_logger := loggers.get(r["logger"])) is None:
-            otel_logger = loggers[r["logger"]] = _get_logger(r["logger"])
-        otel_logger.emit(
-            body=r["body"],
-            timestamp=r["timestamp_nanos"],
-            attributes=r["attributes"],
-            severity_number=SeverityNumber(r["severity_number"]),
-            severity_text=r["severity_text"],
-        )
+    report_options = report.options
+    options = (
+        _core.RecordingOptions(**report_options["recording_options"])
+        if report_options is not None
+        else _core.RecordingOptions()
+    )
+    capture_content = capture_content_enabled()
+    redacted = options.redaction or telemetry_utils.redaction_enabled(metadata)
+    transcript_allowed, audio_allowed = uploader.content_policy(
+        options.transcript, options.audio, capture_content, redacted
+    )
+    report_content_allowed, _ = uploader.content_policy(True, False, capture_content, redacted)
+    prepared: list[list[_core.ChatItem]] = []
+    failures: list[Exception] = []
 
-    has_audio = (
-        recording_options["audio"]
-        and report.audio_recording_path
-        and report.audio_recording_started_at
-    )
-    if not recording_options["transcript"] and not has_audio:
+    def _prepare() -> None:
+        try:
+            native_items = to_core_items(report.chat_history.items) if transcript_allowed else []
+            records = _core.session_records(
+                _upload_gate._core,
+                {
+                    "agent_name": agent_name,
+                    "job_id": report.job_id,
+                    "room_id": report.room_id,
+                    "room": report.room,
+                    "sdk_version": report.sdk_version,
+                    "started_at": report.started_at,
+                    "timestamp": report.timestamp,
+                    "options": (
+                        _serialize_session_options(report_options)
+                        if report_content_allowed and report_options is not None
+                        else {}
+                    ),
+                    "recording_options": _core.RecordingOptions(
+                        audio=audio_allowed,
+                        traces=options.traces,
+                        logs=options.logs,
+                        transcript=transcript_allowed,
+                        redaction=redacted,
+                    ),
+                    "model_usage": [u.model_dump() for u in report.model_usage or []],
+                    "chat_history": native_items,
+                },
+                tagger,
+                lambda item: _chat_item_span_attribute(from_core_item(item)),
+                capture_content=capture_content,
+            )
+            provider = _cloud.logger_provider or get_logger_provider()
+            loggers: dict[str, Any] = {}
+            for record in records:
+                if (otel_logger := loggers.get(record["logger"])) is None:
+                    otel_logger = loggers[record["logger"]] = provider.get_logger(
+                        name=record["logger"],
+                        attributes={
+                            "room_id": report.room_id,
+                            "job_id": report.job_id,
+                            "room": report.room,
+                            **metadata,
+                        },
+                    )
+                otel_logger.emit(
+                    body=record["body"],
+                    timestamp=record["timestamp_nanos"],
+                    context=emission_context,
+                    attributes={**metadata, **record["attributes"]},
+                    severity_number=SeverityNumber(record["severity_number"]),
+                    severity_text=record["severity_text"],
+                )
+            prepared.append(native_items)
+        except Exception as error:
+            failures.append(error)
+
+    worker = _core._core_TelemetryWorker()
+    key = f"session-report/{report.job_id}"
+    if not worker.reserve(key, 4 * 1024 * 1024):
         return
-
-    # emit recording
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
+    try:
+        if not worker.submit(key, _prepare, 4 * 1024 * 1024):
+            return
+        if not await worker.wait_async(key, 900.0):
+            return
+        if failures:
+            raise failures[0]
+        transcript = await uploader.transcript(prepared.pop()) if transcript_allowed else None
+    finally:
+        prepared.clear()
+        worker.release(key)
+    enabled = await uploader.upload(
+        observability_url,
+        report.room_id,
+        report.job_id,
+        bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
+        redacted,
+        int((report.audio_recording_started_at or 0) * 1000),
+        transcript,
+        str(report.audio_recording_path) if audio_allowed and report.audio_recording_path else None,
+        _upload_gate.disabled,
     )
-    jwt = access_token.to_jwt()
-
-    header_msg = proto_metrics.MetricsRecordingHeader(
-        room_id=report.room_id,
-        job_id=report.job_id,
-        simulated=bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
-        redaction_enabled=bool(metadata.get(ATTRIBUTE_REDACTION_ENABLED, False)),
-    )
-    header_msg.start_time.FromMilliseconds(int((report.audio_recording_started_at or 0) * 1000))
-    header_bytes = header_msg.SerializeToString()
-
-    chat_history_json = ""
-    if recording_options["transcript"]:
-        chat_history_json = json.dumps(report.chat_history.to_dict(exclude_timestamp=False))
-
-    audio_bytes = b""
-    if has_audio and report.audio_recording_path:
-        try:
-            async with aiofiles.open(report.audio_recording_path, "rb") as f:
-                audio_bytes = await f.read()
-        except Exception as e:
-            audio_bytes = b""
-            logger.warning(
-                "failed to read audio recording for session report upload, "
-                "uploading without the audio part (path=%s)",
-                report.audio_recording_path,
-                exc_info=e,
-            )
-
-    url = f"{observability_url}/observability/recordings/v0"
-
-    def _build_multipart() -> aiohttp.MultipartWriter:
-        mp = aiohttp.MultipartWriter("form-data")
-
-        part = mp.append(header_bytes)
-        part.set_content_disposition("form-data", name="header", filename="header.binpb")
-        part.headers["Content-Type"] = "application/protobuf"
-        part.headers["Content-Length"] = str(len(header_bytes))
-
-        if recording_options["transcript"]:
-            part = mp.append(chat_history_json)
-            part.set_content_disposition(
-                "form-data", name="chat_history", filename="chat_history.json"
-            )
-            part.headers["Content-Type"] = "application/json"
-            part.headers["Content-Length"] = str(len(chat_history_json))
-
-        if audio_bytes:
-            part = mp.append(audio_bytes)
-            part.set_content_disposition("form-data", name="audio", filename="recording.ogg")
-            part.headers["Content-Type"] = "audio/ogg"
-            part.headers["Content-Length"] = str(len(audio_bytes))
-
-        return mp
-
-    for attempt in range(_RECORDING_UPLOAD_MAX_RETRIES + 1):
-        mp = _build_multipart()
-        headers = {
-            "Authorization": f"Bearer {jwt}",
-            "Content-Type": mp.content_type,
-        }
-
-        logger.debug("uploading session report to LiveKit Cloud")
-        retry: tuple[float, str] | None = None
-        try:
-            async with http_session.post(
-                url,
-                data=mp,
-                headers=headers,
-                timeout=_RECORDING_UPLOAD_TIMEOUT,
-            ) as resp:
-                if resp.status < 400:
-                    break
-
-                body = await resp.read()
-                if _upload_gate.is_disabled_response(resp.status, body):
-                    _upload_gate.disable()
-                    return
-
-                retry_delay = _parse_retry_delay(body)
-                if retry_delay is None or attempt == _RECORDING_UPLOAD_MAX_RETRIES:
-                    resp.raise_for_status()
-                else:
-                    retry = (retry_delay, f"status {resp.status}")
-        except aiohttp.ClientSSLError:
-            raise
-        except (aiohttp.ConnectionTimeoutError, aiohttp.ClientConnectorError) as e:
-            if attempt == _RECORDING_UPLOAD_MAX_RETRIES:
-                raise
-            retry = (_recording_upload_retry_delay(attempt), type(e).__name__)
-
-        if retry is None:
-            break
-        retry_delay, failure = retry
-        logger.warning(
-            "recording upload failed (%s, attempt %d/%d), retrying in %.1fs",
-            failure,
-            attempt + 1,
-            _RECORDING_UPLOAD_MAX_RETRIES + 1,
-            retry_delay,
-        )
-        await asyncio.sleep(retry_delay)
-
-    logger.debug("finished uploading")
+    if not enabled:
+        _upload_gate.disable()
 
 
 def _shutdown_telemetry(job_id: str, timeout: float = _TELEMETRY_SHUTDOWN_TIMEOUT) -> None:
@@ -1558,178 +1521,174 @@ def is_pii_attribute(key: str) -> bool:
 
 
 def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not attributes:
-        return {}
+    return _attribute_snapshot(attributes, redacted=True)
 
-    redacted: dict[str, Any] = {}
-    for key, value in attributes.items():
-        if is_pii_attribute(key):
-            continue
-        if key == trace_types.ATTR_EXCEPTION_TRACE:
-            continue
-        if key == trace_types.ATTR_EXCEPTION_MESSAGE:
-            # `error.type` still names the class; only the free-form message goes
-            redacted[key] = REDACTED_EXCEPTION_MESSAGE
-            continue
-        redacted[key] = value
-    return redacted
+
+def _attribute_snapshot(attributes: Mapping[str, Any] | None, *, redacted: bool) -> dict[str, Any]:
+    filtered = _filter_attribute_value(attributes or {}, depth=0, redacted=redacted)
+    assert isinstance(filtered, dict)
+    return filtered
+
+
+def _filter_attribute_value(value: object, *, depth: int, redacted: bool) -> AnyValue:
+    if depth > 4:
+        return None
+    if isinstance(value, Mapping):
+        filtered: dict[str, AnyValue] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or (redacted and is_pii_attribute(key)):
+                continue
+            if redacted and key == trace_types.ATTR_EXCEPTION_TRACE:
+                continue
+            if redacted and key == trace_types.ATTR_EXCEPTION_MESSAGE:
+                filtered[key] = REDACTED_EXCEPTION_MESSAGE
+            else:
+                filtered[key] = _filter_attribute_value(item, depth=depth + 1, redacted=redacted)
+        return filtered
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_filter_attribute_value(item, depth=depth + 1, redacted=redacted) for item in value]
+    return value if value is None or isinstance(value, (str, bool, int, float, bytes)) else None
 
 
 def _contains_pii(attributes: Mapping[str, Any] | None) -> bool:
     return any(is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES for k in attributes or ())
 
 
-_RAW_ATTRIBUTES = "_lk_raw_attributes"
+def _redact_content(
+    attributes: Mapping[str, AttributeValue] | None,
+    *,
+    allow_pii: bool,
+    project_redaction: bool = False,
+) -> bool:
+    attributes = attributes or {}
+    return (
+        not allow_pii
+        or attributes.get("lk.telemetry.capture_content") is not True
+        or project_redaction
+        or bool(attributes.get(ATTRIBUTE_REDACTION_ENABLED))
+    )
 
 
-_RAW_EVENTS = "_lk_raw_events"
+def _log_snapshot(
+    record: ReadableLogRecord, *, allow_pii: bool, project_redaction: bool = False
+) -> ReadableLogRecord:
+    data = copy(record.log_record)
+    redacted = _redact_content(
+        data.attributes, allow_pii=allow_pii, project_redaction=project_redaction
+    )
+    safe_body = (data.attributes or {}).get("lk.telemetry.safe_body") is True
+    attributes = _attribute_snapshot(data.attributes, redacted=redacted)
+    attributes.pop("lk.telemetry.export_key", None)
+    attributes.pop("lk.telemetry.safe_body", None)
+    data.attributes = attributes
+    data.body = (
+        "log body redacted"
+        if redacted and not safe_body
+        else _filter_attribute_value(data.body, depth=0, redacted=False)
+    )
+    return replace(
+        record,
+        log_record=data,
+        resource=_resource_snapshot(record.resource, redacted=redacted),
+        instrumentation_scope=_scope_snapshot(record.instrumentation_scope, redacted=redacted),
+    )
 
 
-_RAW_STATUS = "_lk_raw_status"
+class RedactingLogExporter(LogRecordExporter):
+    """Apply capture and redaction policy to one application's log destination."""
 
-
-class _PIIFilteringSpanProcessor(SpanProcessor):
-    """Drops PII attributes so they never reach an exporter that is not LiveKit Cloud's.
-
-    Must be registered **before** any exporting processor: ``on_end`` is dispatched in
-    registration order over one shared :class:`ReadableSpan` snapshot, so rewriting the
-    snapshot here is what the downstream processors go on to export.
-
-    LiveKit Cloud is exempt — its PII handling is the project's setting in the dashboard,
-    not ours to second-guess — so the original attributes are stashed on the snapshot for
-    :func:`restore_pii` to put back on that one export path. When the project does mandate
-    redaction, nothing is stashed and Cloud is stripped along with everyone else.
-
-    ``allow_pii`` lifts the stripping for a provider whose exporters the integrator has
-    explicitly granted PII (``set_tracer_provider(..., allow_pii=True)``).
-    """
-
-    def __init__(self, *, allow_pii: bool = False) -> None:
+    def __init__(self, inner: LogRecordExporter, *, allow_pii: bool = False) -> None:
+        self._inner = inner
         self._allow_pii = allow_pii
 
-    def on_start(self, span: SdkSpan, parent_context: otel_context.Context | None = None) -> None:
-        pass
-
-    def on_end(self, span: ReadableSpan) -> None:
-        from .utils import redaction_enabled
-
-        attributes = span.attributes
-        # the flag stamped at span start keeps this correct for a span ended off the
-        # job's thread, and when concurrent jobs share the providers (THREAD executor)
-        project_redaction = redaction_enabled(attributes)
-        if self._allow_pii and not project_redaction:
-            return
-
-        events = span.events
-        filtered_events = _filter_events(events)
-        if not _contains_pii(attributes) and filtered_events is None:
-            return
-
-        if not project_redaction:
-            # LiveKit Cloud still receives what the project allows
-            setattr(span, _RAW_ATTRIBUTES, dict(attributes or {}))
-            setattr(span, _RAW_EVENTS, tuple(events))
-            setattr(span, _RAW_STATUS, span.status)
-
-        # rebind rather than mutate: the snapshot's BoundedAttributes is shared with the
-        # live span, and is immutable once the span has ended
-        span._attributes = filter_attributes(attributes)
-        if filtered_events is not None:
-            span._events = filtered_events
-        # record_exception also puts the message in the span status
-        if span.status.status_code is StatusCode.ERROR and span.status.description:
-            span._status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
+    def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
+        return self._inner.export(
+            [_log_snapshot(record, allow_pii=self._allow_pii) for record in batch]
+        )
 
     def shutdown(self) -> None:
-        pass
+        cast(Callable[[], None], self._inner.shutdown)()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return True
+        return self._inner.force_flush(timeout_millis)
 
 
-def redact(span: ReadableSpan) -> ReadableSpan:
-    """A snapshot of ``span`` with PII stripped, whatever ``on_end`` stashed for restore.
+def _resource_snapshot(resource: Resource, *, redacted: bool) -> Resource:
+    attributes = filter_attributes(resource.attributes) if redacted else dict(resource.attributes)
+    return Resource(attributes, schema_url=resource.schema_url)
 
-    For a span that ended before its job decided on redaction (the gate held it): the
-    processor saw redaction off at the time, so the attributes may be intact or stashed."""
-    events = _filter_events(span.events)
+
+def _scope_snapshot(
+    scope: InstrumentationScope | None, *, redacted: bool
+) -> InstrumentationScope | None:
+    if scope is None:
+        return None
+    attributes = _attribute_snapshot(scope.attributes, redacted=redacted)
+    return InstrumentationScope(
+        scope.name, version=scope.version, schema_url=scope.schema_url, attributes=attributes
+    )
+
+
+def _span_snapshot(span: ReadableSpan, *, redacted: bool) -> ReadableSpan:
+    events = _filter_events(span.events) if redacted else None
     status = span.status
-    if status.status_code is StatusCode.ERROR and status.description:
+    if redacted and status.status_code is StatusCode.ERROR and status.description:
         status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
     return ReadableSpan(
         name=span.name,
         context=span.context,
         parent=span.parent,
-        resource=span.resource,
-        attributes=filter_attributes(span.attributes),
-        events=events if events is not None else span.events,
-        links=span.links,
+        resource=_resource_snapshot(span.resource, redacted=redacted),
+        attributes=_attribute_snapshot(span.attributes, redacted=redacted),
+        events=tuple(events if events is not None else span.events),
+        links=tuple(
+            Link(
+                link.context,
+                attributes=_attribute_snapshot(link.attributes, redacted=redacted),
+            )
+            for link in span.links
+        ),
         kind=span.kind,
         status=status,
         start_time=span.start_time,
         end_time=span.end_time,
-        instrumentation_scope=span.instrumentation_scope,
+        instrumentation_scope=_scope_snapshot(span.instrumentation_scope, redacted=redacted),
     )
 
 
-def restore_pii(span: ReadableSpan) -> ReadableSpan:
-    """The span as it was before PII was stripped for third-party exporters.
-
-    Only LiveKit Cloud's own exporter calls this; every other destination sees the
-    redacted snapshot. Returns ``span`` unchanged when nothing was stashed.
-    """
-    attributes = getattr(span, _RAW_ATTRIBUTES, None)
-    if attributes is None:
-        return span
-
-    from .utils import redaction_enabled
-
-    # nothing is stashed once the project mandates redaction, so this is belt-and-braces:
-    # it keeps a change to that upstream check from turning into a leak here
-    if redaction_enabled(span.attributes):
-        return span
-
-    return ReadableSpan(
-        name=span.name,
-        context=span.context,
-        parent=span.parent,
-        resource=span.resource,
-        attributes=attributes,
-        events=getattr(span, _RAW_EVENTS, span.events),
-        links=span.links,
-        kind=span.kind,
-        status=getattr(span, _RAW_STATUS, span.status),
-        start_time=span.start_time,
-        end_time=span.end_time,
-        instrumentation_scope=span.instrumentation_scope,
-    )
+def redact(span: ReadableSpan) -> ReadableSpan:
+    """Return an independent destination snapshot with content and exception details removed."""
+    return _span_snapshot(span, redacted=True)
 
 
-class _PIIFilteringLogProcessor(LogRecordProcessor):
-    """Log counterpart of :class:`_PIIFilteringSpanProcessor`.
+class RedactingSpanExporter(SpanExporter):
+    """Apply capture and redaction policy to this destination's independent span snapshots.
 
-    ``_TraceLevelLoggingHandler`` redacts the records the framework's own handler creates;
-    this covers every other emitter on the logger provider, including the exporters an
-    integrator attached before handing us the provider.
+    Register this around an application exporter before attaching its processor. Explicit
+    ``allow_pii=True`` also requires content capture opt-in; project redaction always wins.
+    Select the provider with ``set_tracer_provider`` before spans start to capture consent.
+    A span without captured consent is redacted. Other exporters retain their own policy.
     """
 
-    def on_emit(self, log_data: ReadWriteLogRecord) -> None:
-        # on_emit runs synchronously on the emitting thread, so the ambient job context is
-        # the right source here — unlike spans, a log record has no earlier stamp to read
-        from .utils import redaction_enabled
+    def __init__(self, inner: SpanExporter, *, allow_pii: bool = False) -> None:
+        self._inner = inner
+        self._allow_pii = allow_pii
 
-        if not redaction_enabled():
-            return
-
-        record = log_data.log_record
-        if _contains_pii(record.attributes):
-            record.attributes = filter_attributes(record.attributes)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        snapshots = [
+            _span_snapshot(
+                span,
+                redacted=(_redact_content(span.attributes, allow_pii=self._allow_pii)),
+            )
+            for span in spans
+        ]
+        return self._inner.export(snapshots)
 
     def shutdown(self) -> None:
-        pass
+        self._inner.shutdown()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        return True
+        return self._inner.force_flush(timeout_millis)
 
 
 def _filter_events(events: Sequence[Event]) -> list[Event] | None:
@@ -1774,7 +1733,7 @@ def session_root_context(job_ctx: JobContext | None = None) -> otel_context.Cont
     """The primary agent session's root span context, if a session is running."""
     session = primary_session(job_ctx)
     if session is not None and session._root_span_context is not None:
-        return session._root_span_context
+        return cast(otel_context.Context, session._root_span_context)
     return None
 
 
