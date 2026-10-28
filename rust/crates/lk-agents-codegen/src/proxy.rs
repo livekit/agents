@@ -166,6 +166,11 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     for q in m.params.iter().filter(|q| q.ty != Ty::CallContext) {
         moved.push_str(&format!("        let {}_arg = {};\n", q.name, owned(q)));
         let value = to_host(&format!("{}_arg", q.name), &q.ty, &at)?;
+        if m.kind == ProxyCall::Notify
+            && matches!(&q.ty, Ty::Optional(t) if matches!(**t, Ty::Error(_)))
+        {
+            return Err(format!("{at}: a notice takes its error, not an optional one"));
+        }
         if m.kind == ProxyCall::Notify && matches!(q.ty, Ty::Error(_)) {
             // A later raise may consume the captured host exception before this notice drains.
             moved.push_str(&format!(
@@ -363,6 +368,10 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
             "match &{v} {{ None => py.None().into_bound(py), Some(x) => {} }}",
             to_host("x", t, at)?
         ),
+        // The failure an observer records: the host's own exception while it is retained.
+        Ty::Optional(t) if matches!(**t, Ty::Error(_)) => format!(
+            "match {v} {{ None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? }}"
+        ),
         Ty::Unit
         | Ty::This
         | Ty::Proxy { .. }
@@ -386,9 +395,10 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         Ty::Optional(t) if **t == Ty::Duration => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({v}.map(|d| d.as_secs_f64()), py)?")
         }
-        Ty::Optional(t) | Ty::List(t)
-            if matches!(**t, Ty::Json | Ty::JsonObject | Ty::Error(_)) =>
-        {
+        Ty::Optional(t) | Ty::List(t) if matches!(**t, Ty::Json | Ty::JsonObject) => {
+            return Err(format!("{at}: `{}` has no host conversion yet", ty.rust()));
+        }
+        Ty::List(t) if matches!(**t, Ty::Error(_)) => {
             return Err(format!("{at}: `{}` has no host conversion yet", ty.rust()));
         }
         ty if crate::records::holds_record(ty) => crate::records::emit(ty, v)?,

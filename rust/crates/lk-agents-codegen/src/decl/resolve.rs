@@ -247,8 +247,10 @@ impl Resolver<'_> {
             }
             value => value.is_some(),
         };
-        if detach && !matches!(kind, MethodKind::Call | MethodKind::Function) {
-            return Err(format!("{at}: detach requires a synchronous call or function"));
+        if detach && !matches!(kind, MethodKind::New | MethodKind::Call | MethodKind::Function) {
+            return Err(format!(
+                "{at}: detach requires a synchronous constructor, call or function"
+            ));
         }
         let receiver = f.sig.receiver();
         let shape_ok = match kind {
@@ -1041,6 +1043,8 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_output(at, t)),
         Ty::Maybe(_) => Err(format!("{at}: omission is an input state, not an output value")),
+        // Handed back as the host object it was taken from (`check_handed_back`).
+        Ty::Proxy { declared: Some(_), boxed: false, .. } => Ok(()),
         Ty::Proxy { .. } | Ty::Native { .. } => {
             Err(format!("{at}: a host proxy is not returned to the host"))
         }

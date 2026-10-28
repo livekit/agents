@@ -48,6 +48,10 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Duration => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}.as_secs_f64(), py)?")
         }
+        // The host object a declared proxy was taken from.
+        Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {
+            format!("crate::generated::{family}::{name}Proxy::to_host(py, {x})?")
+        }
         other => return Err(format!("`{}` is not a record field", other.rust())),
     })
 }

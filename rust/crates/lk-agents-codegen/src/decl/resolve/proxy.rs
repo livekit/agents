@@ -394,21 +394,26 @@ fn check_argument(at: &str, ty: &Ty) -> Result<(), String> {
 /// A declared proxy passed back to the host is of a trait declaring `Any`: its proxy is found
 /// behind the `Arc<dyn ..>` (trait upcasting) to hand back the host object it was taken from.
 pub(super) fn check_handed_back(decls: &Declarations) -> Result<(), String> {
-    for p in &decls.proxies {
-        for m in &p.methods {
-            for q in &m.params {
-                let ty = match &q.ty {
-                    Ty::Optional(t) => &**t,
-                    t => t,
-                };
-                let Ty::Proxy { declared: Some((_, name)), .. } = ty else { continue };
-                if !decls.proxies.iter().any(|o| &o.rust_name == name && o.handed_back) {
-                    return Err(format!(
-                        "{}::{}({}): `{name}` is handed back to the host: declare it `{name}: Any + Send + Sync`",
-                        p.trait_path, m.rust_name, q.name
-                    ));
-                }
-            }
+    let arguments = decls.proxies.iter().flat_map(|p| {
+        p.methods.iter().flat_map(move |m| {
+            m.params
+                .iter()
+                .map(move |q| (format!("{}::{}({})", p.trait_path, m.rust_name, q.name), &q.ty))
+        })
+    });
+    let results = decls.classes.iter().flat_map(|c| {
+        c.methods.iter().map(move |m| (format!("{}::{}", c.name, m.rust_name), &m.ret.ok))
+    });
+    for (at, ty) in arguments.chain(results) {
+        let ty = match ty {
+            Ty::Optional(t) | Ty::List(t) => &**t,
+            t => t,
+        };
+        let Ty::Proxy { declared: Some((_, name)), .. } = ty else { continue };
+        if !decls.proxies.iter().any(|o| &o.rust_name == name && o.handed_back) {
+            return Err(format!(
+                "{at}: `{name}` is handed back to the host: declare it `{name}: Any + Send + Sync`"
+            ));
         }
     }
     Ok(())
