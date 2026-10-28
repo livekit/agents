@@ -150,6 +150,8 @@ class LLM(llm.LLM):
             use_websocket=use_websocket,
         )
         self._ws: ResponsesWebsocket | None = None
+        self._retired_ws: set[_GatewayResponsesWebsocket] = set()
+        self._ws_close_tasks: set[asyncio.Task[None]] = set()
         # the gateway bounds upstream silence, so reads only need to outlast its keepalives
         self._stream_idle_timeout: float | None = None
         self._active_streams: int = 0
@@ -159,18 +161,21 @@ class LLM(llm.LLM):
         self._pending_tool_calls = set[str]()
         self._client: openai.AsyncClient | None = None
         if use_websocket:
-            self._ws = _GatewayResponsesWebsocket(
-                base_url=self._opts.base_url,
-                model=self._opts.model,
-                api_key=self._opts.api_key,
-                api_secret=self._opts.api_secret,
-                provider=self._opts.provider,
-                inference_class=self._opts.inference_class,
-                extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
-                timeout=None,
-            )
+            self._ws = self._make_ws()
         else:
             self._client = self._make_client()
+
+    def _make_ws(self) -> _GatewayResponsesWebsocket:
+        return _GatewayResponsesWebsocket(
+            base_url=self._opts.base_url,
+            model=self._opts.model,
+            api_key=self._opts.api_key,
+            api_secret=self._opts.api_secret,
+            provider=self._opts.provider,
+            inference_class=self._opts.inference_class,
+            extra_headers=lambda: dict(self._opts.extra_kwargs.get("extra_headers") or {}),
+            timeout=None,
+        )
 
     def _make_client(self) -> openai.AsyncClient:
         return openai.AsyncClient(
@@ -196,6 +201,11 @@ class LLM(llm.LLM):
         await super().aclose()
         if self._ws is not None:
             await self._ws.aclose()
+        for ws in self._retired_ws:
+            await ws.aclose()
+        self._retired_ws.clear()
+        if self._ws_close_tasks:
+            await asyncio.gather(*self._ws_close_tasks, return_exceptions=True)
         if self._client is not None:
             await self._client.close()
 
@@ -210,13 +220,15 @@ class LLM(llm.LLM):
 
         Each option is read on the next ``chat()`` call. ``extra_kwargs`` *replaces* the
         persistent kwargs dict rather than merging; pass ``{}`` to clear it. Over WebSocket a
-        new ``model`` or new ``extra_headers`` invalidates the pool, since both are bound to
-        the socket at the upgrade; a turn already streaming keeps its socket.
+        new ``model`` gets a new pool and new ``extra_headers`` invalidate it, since both are
+        bound to the socket at the upgrade. A turn created before a model swap keeps the old
+        model's pool, so its retries dial the model it sends.
         """
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             if isinstance(self._ws, _GatewayResponsesWebsocket):
-                self._ws._set_model(model)
+                self._retire_ws(self._ws)
+                self._ws = self._make_ws()
         if is_given(extra_kwargs):
             old_headers = self._opts.extra_kwargs.get("extra_headers")
             self._opts.extra_kwargs = dict(extra_kwargs)
@@ -226,6 +238,26 @@ class LLM(llm.LLM):
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
+
+    def _retire_ws(self, ws: _GatewayResponsesWebsocket) -> None:
+        ws._pool.invalidate()
+        self._retired_ws.add(ws)
+        self._close_retired_ws(ws)
+
+    def _release_ws(self, ws: _GatewayResponsesWebsocket) -> None:
+        ws._holders -= 1
+        self._close_retired_ws(ws)
+
+    def _close_retired_ws(self, ws: _GatewayResponsesWebsocket) -> None:
+        if ws not in self._retired_ws or ws._holders > 0:
+            return
+        try:
+            task = asyncio.get_running_loop().create_task(ws.aclose())
+        except RuntimeError:
+            return  # no loop to close on; aclose() closes it
+        self._retired_ws.discard(ws)
+        self._ws_close_tasks.add(task)
+        task.add_done_callback(self._ws_close_tasks.discard)
 
     @property
     def model(self) -> str:
@@ -298,7 +330,7 @@ class LLM(llm.LLM):
                     },
                 )
 
-        return _GatewayResponsesLLMStream(
+        stream = _GatewayResponsesLLMStream(
             self,
             model=self._opts.model,
             strict_tool_schema=True,
@@ -310,6 +342,11 @@ class LLM(llm.LLM):
             full_chat_ctx=chat_ctx,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
+        if isinstance(self._ws, _GatewayResponsesWebsocket):
+            ws = self._ws
+            ws._holders += 1
+            stream._task.add_done_callback(lambda _: self._release_ws(ws))
+        return stream
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
         setting = self._opts.prompt_cache_breakpoints
@@ -329,6 +366,8 @@ def _to_responses_tool_choice(tool_choice: Any) -> response_create_params.ToolCh
 
 
 def _to_text_format(response_format: Any) -> dict[str, Any]:
+    if isinstance(response_format, dict):
+        return _dict_to_text_format(response_format)
     chat_format = llm_utils.to_openai_response_format(response_format)
     schema = chat_format["json_schema"]
     return {
@@ -337,6 +376,24 @@ def _to_text_format(response_format: Any) -> dict[str, Any]:
         "schema": schema["schema"],
         "strict": schema["strict"],
     }
+
+
+def _dict_to_text_format(response_format: dict[str, Any]) -> dict[str, Any]:
+    # accepts the Chat Completions shape, with the schema nested under "json_schema", or
+    # a dict already in the Responses text.format shape
+    fmt_type = response_format.get("type")
+    if fmt_type in ("text", "json_object"):
+        return dict(response_format)
+    if fmt_type != "json_schema":
+        raise TypeError(f"unsupported response_format type: {fmt_type!r}")
+    schema = response_format.get("json_schema", response_format)
+    if not isinstance(schema, dict) or "name" not in schema or "schema" not in schema:
+        raise TypeError("a json_schema response_format needs a name and a schema")
+    text_format = {"type": "json_schema", "name": schema["name"], "schema": schema["schema"]}
+    for key in ("strict", "description"):
+        if key in schema:
+            text_format[key] = schema[key]
+    return text_format
 
 
 class _GatewayResponsesWebsocket(ResponsesWebsocket):
@@ -364,10 +421,8 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         self._provider = provider
         self._inference_class = inference_class
         self._extra_headers = extra_headers
-
-    def _set_model(self, model: str) -> None:
-        self._base_url = self._resolve_url(self._endpoint, model)
-        self._pool.invalidate()
+        # streams bound to this transport that have not finished
+        self._holders = 0
 
     async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         token = create_access_token(self._lk_api_key, self._lk_api_secret)
