@@ -25,7 +25,7 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::effects::{AudioOp, Effect, GateOp, StreamKind};
 use lk_agents_voice::agent_session::{
     Command, Driver, DriverError, Event, HookOutcome, HostEvent, Input, Now, OpeningLegs,
-    PeerHandle, QueueOwner, ReplyTo, RequestId, Rx, SessionCores, SessionExecutor, SessionShared,
+    PeerHandle, QueueOwner, ReplyTo, RequestId, SessionCores, SessionExecutor, SessionShared,
     SystemTap, Tx,
 };
 use lk_agents_voice::audio::{AUDIO_IN_LEG, AudioChannel, ChannelEnd, VideoForwarderParts};
@@ -818,7 +818,10 @@ impl Executor {
     }
 
     /// A source's events into the queue until `Closing`.
-    fn forward<T: Into<Event> + Send + 'static>(&self, mut rx: Rx<T>) {
+    fn forward<T: Into<Event> + Send + 'static>(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
+    ) {
         let tx = self.reports.clone();
         let mut closing = self.shared.closing.subscribe();
         self.shared.spawner.spawn_unboxed(async move {

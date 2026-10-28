@@ -7,7 +7,7 @@ use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{BoxFuture, SpawnerExt, Stt, Vad};
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{
-    DriverError, Event, Input, OpeningLegs, QueueOwner, Rx, SessionCores, SessionExecutor, Tx,
+    DriverError, Event, Input, OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Tx,
 };
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
@@ -147,7 +147,10 @@ impl Runtime {
     }
 
     /// Forwards a source's events into the queue until `Closing`.
-    pub(super) fn forward<T: Into<Event> + Send + 'static>(&self, mut rx: Rx<T>) {
+    pub(super) fn forward<T: Into<Event> + Send + 'static>(
+        &self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
+    ) {
         let tx = self.reports.clone();
         let mut closing = self.shared.closing.subscribe();
         self.shared.spawner.spawn_unboxed(async move {

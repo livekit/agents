@@ -4,7 +4,6 @@
 //! `transcription_node` and `realtime_audio_output_node`: [`OutputNodes`].
 
 use super::api::NodeFactory;
-use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{
@@ -96,7 +95,7 @@ impl<T: Send + 'static> StreamSource<T> for Final<T> {
         self: Box<Self>,
         deadline: Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
-        Box::pin(async move { self.0.close(deadline).await })
+        self.0.close(deadline)
     }
 
     fn started_time(&self) -> Option<f64> {
@@ -125,7 +124,6 @@ fn duplex<I, T: Send + 'static>(
     Ok((sink, Box::new(Final(source))))
 }
 
-#[async_trait]
 impl Llm for Node<dyn Llm> {
     fn label(&self) -> String {
         self.below.label()
@@ -147,13 +145,22 @@ impl Llm for Node<dyn Llm> {
         self.below.failed(error, recoverable);
     }
 
-    async fn chat(&self, req: &ChatRequest) -> Result<LlmStream, ProviderError> {
-        let stream = self.host.llm_node(req).await.map_err(final_error)?;
-        Ok(Box::new(Final(stream)))
+    fn chat<'a, 'b, 'call>(
+        &'a self,
+        req: &'b ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'call, Result<LlmStream, ProviderError>>
+    where
+        'a: 'call,
+        'b: 'call,
+        Self: 'call,
+    {
+        Box::pin(async move {
+            let stream = self.host.llm_node(req).await.map_err(final_error)?;
+            Ok(Box::new(Final(stream)) as LlmStream)
+        })
     }
 }
 
-#[async_trait]
 impl Tts for Node<dyn Tts> {
     fn label(&self) -> String {
         self.below.label()
@@ -197,19 +204,34 @@ impl Tts for Node<dyn Tts> {
     }
 
     /// One text, through the node all the same.
-    async fn synthesize(&self, text: &str) -> Result<TtsSource, ProviderError> {
-        let (sink, source) = self.stream().await?;
-        sink.push(text.to_owned()).map_err(final_error)?;
-        sink.end_input();
-        Ok(source)
+    fn synthesize<'a, 'b, 'call>(
+        &'a self,
+        text: &'b str,
+    ) -> lk_agents_abi::BoxFuture<'call, Result<TtsSource, ProviderError>>
+    where
+        'a: 'call,
+        'b: 'call,
+        Self: 'call,
+    {
+        Box::pin(async move {
+            let (sink, source) = self.stream().await?;
+            sink.push(text.to_owned()).map_err(final_error)?;
+            sink.end_input();
+            Ok(source)
+        })
     }
 
-    async fn stream(&self) -> Result<(TtsSink, TtsSource), ProviderError> {
-        duplex(self.host.tts_node().await)
+    fn stream<'a, 'call>(
+        &'a self,
+    ) -> lk_agents_abi::BoxFuture<'call, Result<(TtsSink, TtsSource), ProviderError>>
+    where
+        'a: 'call,
+        Self: 'call,
+    {
+        Box::pin(async move { duplex(self.host.tts_node().await) })
     }
 }
 
-#[async_trait]
 impl Stt for Node<dyn Stt> {
     fn label(&self) -> String {
         self.below.label()
@@ -240,20 +262,31 @@ impl Stt for Node<dyn Stt> {
     }
 
     /// `stt_node` is a stream; a batch recognition is the provider's.
-    async fn recognize(
-        &self,
-        buffer: &[AudioFrame],
-        language: Option<&LanguageCode>,
-    ) -> Result<SpeechEvent, ProviderError> {
-        self.below.recognize(buffer, language).await
+    fn recognize<'a, 'b, 'c, 'call>(
+        &'a self,
+        buffer: &'b [AudioFrame],
+        language: Option<&'c LanguageCode>,
+    ) -> lk_agents_abi::BoxFuture<'call, Result<SpeechEvent, ProviderError>>
+    where
+        'a: 'call,
+        'b: 'call,
+        'c: 'call,
+        Self: 'call,
+    {
+        Box::pin(async move { self.below.recognize(buffer, language).await })
     }
 
-    async fn stream(
-        &self,
-        _language: Option<&LanguageCode>,
+    fn stream<'a, 'b, 'call>(
+        &'a self,
+        _language: Option<&'b LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> Result<Option<(SttSink, SttSource)>, ProviderError> {
-        duplex(self.host.stt_node().await).map(Some)
+    ) -> lk_agents_abi::BoxFuture<'call, Result<Option<(SttSink, SttSource)>, ProviderError>>
+    where
+        'a: 'call,
+        'b: 'call,
+        Self: 'call,
+    {
+        Box::pin(async move { duplex(self.host.stt_node().await).map(Some) })
     }
 }
 
@@ -264,13 +297,20 @@ mod tests {
 
     struct Below;
 
-    #[async_trait]
     impl Llm for Below {
         fn label(&self) -> String {
             "below".to_owned()
         }
 
-        async fn chat(&self, _req: &ChatRequest) -> Result<LlmStream, ProviderError> {
+        fn chat<'a, 'b, 'call>(
+            &'a self,
+            _req: &'b ChatRequest,
+        ) -> lk_agents_abi::BoxFuture<'call, Result<LlmStream, ProviderError>>
+        where
+            'a: 'call,
+            'b: 'call,
+            Self: 'call,
+        {
             unreachable!("the node makes the request")
         }
     }

@@ -159,7 +159,7 @@ pub struct SessionHandle {
 }
 
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
+pub(super) type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 /// The loop's one queue: every source sends on it, so the loop receives one [`Event`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
