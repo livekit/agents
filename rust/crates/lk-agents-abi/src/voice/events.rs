@@ -54,14 +54,12 @@ pub enum AgentState {
 
 #[derive(Debug, Clone, PartialEq, Host, Serialize, Deserialize)]
 #[python(pydantic, name = "UserStateChangedEvent", tag = "type", tag_value = "user_state_changed")]
-// Also read back from the remote session's `kind`-keyed dict (`remote_session.py:_send_wire`).
-#[binding(emit, extract, from_items, read_tag = "kind")]
+#[binding(emit)]
 pub struct UserStateChanged {
     pub old_state: UserState,
     pub new_state: UserState,
     // Not skipped: the driver back-dates this to the speech boundary it reports, and the binding
     // converts that instant through the session's wall anchor.
-    #[binding(extract_skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -73,12 +71,12 @@ pub struct UserStateChanged {
     tag = "type",
     tag_value = "agent_state_changed"
 )]
-#[binding(emit, extract, from_items, read_tag = "kind")]
+#[binding(emit)]
 pub struct AgentStateChanged {
     pub old_state: AgentState,
     pub new_state: AgentState,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip, extract_skip)]
+    #[binding(skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -90,22 +88,18 @@ pub struct AgentStateChanged {
     tag = "type",
     tag_value = "user_input_transcribed"
 )]
-// The remote session reads it back (`language` too, which its host never sends).
-#[binding(emit, extract, from_items, read_tag = "kind")]
+#[binding(emit)]
 pub struct UserInputTranscribed {
     pub transcript: String,
     pub is_final: bool,
     /// Provider-specific ID for the transcribed input item, when available.
-    #[binding(extract_skip)]
     #[python(default = "None")]
     pub item_id: Option<String>,
-    #[binding(extract_skip)]
     #[python(default = "None")]
     pub speaker_id: Option<String>,
-    #[binding(default)]
     #[python(ty = "LanguageCode | None", import = ".language:LanguageCode", default = "None")]
     pub language: Option<String>,
-    #[binding(skip, extract_skip)]
+    #[binding(skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -133,8 +127,7 @@ pub struct UserTranscriptionTimeout {
 
 #[derive(Debug, Clone, PartialEq, Host)]
 #[python(pydantic, name = "EotPredictionEvent", tag = "type", tag_value = "eot_prediction")]
-// Read back by the remote session, whose proto narrows the two probabilities to `f32`.
-#[binding(emit, extract, from_items, read_tag = "kind")]
+#[binding(emit)]
 pub struct EotPrediction {
     pub probability: f64,
     pub threshold: f64,
@@ -144,7 +137,7 @@ pub struct EotPrediction {
     /// VAD-backdated last_speaking_time.
     pub delay: f64,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip, extract_skip)]
+    #[binding(skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -185,12 +178,12 @@ pub struct AgentBackchannelOpportunityEvent {
     tag = "type",
     tag_value = "agent_false_interruption"
 )]
-#[binding(emit, extract, from_items, read_tag = "kind")]
+#[binding(emit)]
 pub struct AgentFalseInterruption {
     /// Whether the false interruption was resumed automatically.
     pub resumed: bool,
     // The host stamps this; the core has no wall clock.
-    #[binding(skip, extract_skip)]
+    #[binding(skip)]
     #[python(default_factory = "time.time")]
     pub created_at: f64,
 }
@@ -344,7 +337,7 @@ impl<'py> pyo3::IntoPyObject<'py> for &ToolCallStarted {
     tag = "type",
     tag_const = TYPE
 )]
-#[binding(emit, extract, from_items, default)]
+#[binding(emit)]
 pub struct ToolCallUpdated {
     /// Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred.
     pub id: String,
@@ -364,7 +357,7 @@ impl ToolCallUpdated {
     tag = "type",
     tag_const = TYPE
 )]
-#[binding(emit, extract, from_items, default)]
+#[binding(emit)]
 pub struct ToolCallEnded {
     /// Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred.
     pub id: String,
@@ -390,7 +383,7 @@ impl ToolCallEnded {
     tag = "type",
     tag_const = TYPE
 )]
-#[binding(emit, extract, from_items, default)]
+#[binding(emit)]
 pub struct ToolReplyUpdated {
     /// ``ToolCallUpdated.id`` values this reply covers.
     pub update_ids: Vec<String>,
@@ -626,34 +619,22 @@ pub struct EndOfSpeechEvent {
     pub silence_duration: f64,
 }
 
-/// `conversation_item_added`'s payload, read back by the remote session (its `item` only).
+/// `conversation_item_added`'s payload.
 #[derive(Debug, Clone, PartialEq, Host)]
-#[binding(
-    emit,
-    extract,
-    from_items,
-    read_tag = "kind",
-    tag = "type",
-    tag_value = "conversation_item_added"
-)]
+#[binding(emit, tag = "type", tag_value = "conversation_item_added")]
 pub struct ItemAddedWire {
     /// The `_core.ChatItem`; the host rebuilds its `llm.ChatMessage` with `ChatContext._from_core`.
     pub item: crate::ChatItem,
     /// Which agent's frame produced it, as the opaque id the host gave the core.
-    #[binding(extract_skip)]
     pub agent: String,
     /// Which host projections take the item: `"both"` (`chat_ctx` and `session.history`) or
     /// `"history"` (the handoff record).
-    #[binding(extract_skip)]
     pub visibility: String,
     /// The open run's host object when an owned speech produced it or it is the handoff
     /// record, else `None`.
-    #[binding(extract_skip)]
     pub run: Option<crate::HostRef>,
     /// A handoff record's two `Agent`s, as the host installed them.
-    #[binding(extract_skip)]
     pub old_agent_host: Option<crate::HostRef>,
-    #[binding(extract_skip)]
     pub new_agent_host: Option<crate::HostRef>,
 }
 

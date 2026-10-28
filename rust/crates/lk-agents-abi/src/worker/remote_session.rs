@@ -1,12 +1,10 @@
 //! Native payloads the voice driver encodes as `AgentSessionEvent`, and the host session port
 //! remote clients call. Protocol encoding lives in `lk-agents-voice/src/remote_session.rs`.
 
-pub use crate::ChatItem;
-pub use crate::voice::amd::AmdCategory;
-pub use crate::voice::events::{AgentState, UserState};
-// Payloads shared with the session event stream.
-pub use crate::metrics::usage::AgentSessionUsage;
-pub use crate::voice::events::{
+use crate::ChatItem;
+use crate::metrics::usage::AgentSessionUsage;
+use crate::voice::amd::AmdCategory;
+use crate::voice::events::{
     AgentFalseInterruption, AgentStateChanged, EotPrediction, ItemAddedWire, ToolCallEnded,
     ToolCallUpdated, ToolReplyUpdated, UserInputTranscribed, UserStateChanged,
 };
