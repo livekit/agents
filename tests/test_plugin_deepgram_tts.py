@@ -106,10 +106,9 @@ def _make_stream(ws: _FakeWS):  # noqa: ANN201
     from livekit.plugins.deepgram.tts_v2 import SynthesizeStreamv2
 
     stream = SimpleNamespace(
-        _tts=SimpleNamespace(_pool=_FakePool(ws)),
-        _conn_options=SimpleNamespace(timeout=5.0),
-        _FLUSH_MSG=SynthesizeStreamv2._FLUSH_MSG,
-        _mark_started=lambda: None,
+        _pool=_FakePool(ws),
+        _conn_options=APIConnectOptions(read_timeout=5.0),
+        mark_started=lambda: None,
     )
     stream._run_ws = SynthesizeStreamv2._run_ws.__get__(stream)
     return stream
@@ -257,6 +256,8 @@ async def test_stream_run_rejects_non_linear16_encoding():
 
 
 class _RecordingSession:
+    json_serialize = staticmethod(json.dumps)
+
     """Records the URLs the v1 TTS connects and posts to, without touching the network."""
 
     def __init__(self) -> None:
@@ -266,6 +267,9 @@ class _RecordingSession:
     async def ws_connect(self, url: str, **kwargs):  # noqa: ANN201
         self.urls.append(url)
         return SimpleNamespace(_response=SimpleNamespace(headers={}))
+
+    def request(self, method: str, url: str, **kwargs):
+        return self.post(url, **kwargs)
 
     def post(self, url: str, **kwargs):  # noqa: ANN201
         self.urls.append(url)
@@ -282,8 +286,9 @@ async def _request_urls(tts) -> list[str]:  # noqa: ANN001
     stream = SimpleNamespace(
         _tts=tts,
         _opts=tts._opts,
+        _get_session=tts._ensure_session,
         _input_text="hello",
-        _conn_options=SimpleNamespace(timeout=5.0),
+        _conn_options=DEFAULT_API_CONNECT_OPTIONS,
     )
     with pytest.raises(APIConnectionError):
         await ChunkedStream._run.__get__(stream)(_FakeEmitter())

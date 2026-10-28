@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -227,12 +228,25 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            sentence_tokenizer=self._sentence_tokenizer,
+            stream_pacer=self._stream_pacer,
+            pool=self._pool,
+            opts=replace(self._opts),
+            tts=self,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -247,17 +261,26 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize chunked text using the http streaming output endpoint"""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 self._opts.get_http_url("/v1/speech/stream"),
                 headers={API_AUTH_HEADER: self._opts.api_key},
@@ -298,10 +321,22 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        stream_pacer: tts.SentenceStreamPacer | None,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._sentence_tokenizer = sentence_tokenizer
+        self._stream_pacer = stream_pacer
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -315,9 +350,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         input_sent_event = asyncio.Event()
 
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
-        if self._tts._stream_pacer:
-            sent_tokenizer_stream = self._tts._stream_pacer.wrap(
+        sent_tokenizer_stream = self._sentence_tokenizer.stream()
+        if self._stream_pacer:
+            sent_tokenizer_stream = self._stream_pacer.wrap(
                 sent_stream=sent_tokenizer_stream,
                 audio_emitter=output_emitter,
             )
@@ -384,7 +419,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Murf message", extra={"lk.pii.data": data})
 
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

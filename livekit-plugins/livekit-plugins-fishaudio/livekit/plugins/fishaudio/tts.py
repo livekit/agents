@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -357,14 +358,26 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            pool=self._pool,
+            sentence_tokenizer=self._sentence_tokenizer,
+            opts=replace(self._opts),
+            tts=self,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -427,17 +440,26 @@ def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize via the Fish Audio HTTP /v1/tts endpoint."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         payload = _build_tts_request(self._opts, text=self._input_text)
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 self._opts.get_http_url("/v1/tts"),
                 headers={
@@ -475,10 +497,20 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS via the Fish Audio /v1/tts/live WebSocket endpoint."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
+        self._sentence_tokenizer = sentence_tokenizer
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -492,7 +524,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=request_id)
 
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 await self._run_ws(ws, output_emitter)
 
         except asyncio.TimeoutError:
@@ -518,7 +550,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # for `chunk_length` characters to accumulate. The result is much smoother
         # audio: gaps line up with sentence breaks (where pauses are natural)
         # rather than mid-clause.
-        sent_stream = self._tts._sentence_tokenizer.stream()
+        sent_stream = self._sentence_tokenizer.stream()
 
         async def input_task() -> None:
             try:

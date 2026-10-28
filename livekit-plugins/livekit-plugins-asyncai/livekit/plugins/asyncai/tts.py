@@ -219,7 +219,13 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            sentence_tokenizer=self._sentence_tokenizer,
+            pool=self._pool,
+            opts=replace(self._opts),
+            tts=self,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -237,10 +243,20 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._sentence_tokenizer = sentence_tokenizer
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if self._conn_options.read_timeout == 0:
@@ -261,7 +277,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         input_sent_event = asyncio.Event()
         sent_tokens = deque[str]()
 
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        sent_tokenizer_stream = self._sentence_tokenizer.stream()
 
         async def _sentence_stream_task(
             ws: aiohttp.ClientWebSocketResponse, asyncai_context_id: str
@@ -338,7 +354,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async_context_id = str(uuid.uuid4())
         try:
-            async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+            async with self._pool.connection(conn_options=self._conn_options) as ws:
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),

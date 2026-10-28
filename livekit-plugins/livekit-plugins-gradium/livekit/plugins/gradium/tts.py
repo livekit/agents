@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -154,12 +155,20 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        return SynthesizeStream(
+            connect_ws=self._connect_ws,
+            model_name=self._model_name,
+            opts=replace(self._opts),
+            tts=self,
+            conn_options=conn_options,
+        )
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         return ChunkedStream(
+            connect_ws=self._connect_ws,
+            opts=replace(self._opts),
             tts=self,
             api_key=self._api_key,
             input_text=text,
@@ -173,6 +182,8 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
+        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        opts: _TTSOptions,
         tts: TTS,
         api_key: str,
         model_endpoint: str,
@@ -190,12 +201,13 @@ class ChunkedStream(tts.ChunkedStream):
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._model_name = model_name
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._connect_ws = connect_ws
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
-            ws = await self._tts._connect_ws(self._conn_options)
+            ws = await self._connect_ws(self._conn_options)
             async with ws:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
@@ -266,10 +278,20 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Stream-based text-to-speech synthesis using Gradium WebSocket API."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        model_name: str,
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._connect_ws = connect_ws
+        self._model_name = model_name
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         segments_ch = utils.aio.Chan[tokenize.WordStream]()
@@ -291,7 +313,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_stream = self._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -330,7 +352,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             setup_msg: dict[str, JsonValue] = {
                 "type": "setup",
-                "model_name": self._tts._model_name,
+                "model_name": self._model_name,
                 "output_format": "pcm",
             }
             if self._opts.voice is not None:
@@ -382,7 +404,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
-        ws = await self._tts._connect_ws(self._conn_options)
+        ws = await self._connect_ws(self._conn_options)
         async with ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),

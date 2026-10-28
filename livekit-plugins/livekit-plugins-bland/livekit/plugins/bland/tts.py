@@ -18,10 +18,12 @@ import asyncio
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
+from pydantic import BaseModel, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -264,7 +266,14 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            api_key=self._api_key,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -274,7 +283,9 @@ class TTS(tts.TTS):
                 "streaming is disabled on this Bland TTS instance; construct it with "
                 "`streaming=True`, or wrap it in a `tts.StreamAdapter`"
             )
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            pool=self._pool, opts=replace(self._opts), tts=self, conn_options=conn_options
+        )
         self._streams.add(stream)
         return stream
 
@@ -294,10 +305,21 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Synthesize a complete string over HTTP."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        api_key: str,
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
+        self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         body: dict[str, Any] = {
@@ -310,11 +332,11 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 f"{self._opts.base_url}/tts",
                 headers={
-                    "authorization": self._tts._api_key,
+                    "authorization": self._api_key,
                     "content-type": "application/json",
                 },
                 json=body,
@@ -355,14 +377,20 @@ class SynthesizeStream(tts.SynthesizeStream):
     threshold, and no flush after every fragment.
     """
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         # `TTS.stream()` refuses to build one of these without a pool, so this is
         # always present — bound once here rather than re-narrowed at each use.
-        assert tts._pool is not None
-        self._pool = tts._pool
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # One stream is one segment, which is one Bland turn: the socket carries a
@@ -579,9 +607,19 @@ def _controls(opts: _TTSOptions) -> dict[str, float]:
     return controls
 
 
-def _api_error(data: dict[str, Any]) -> APIError:
-    code = data.get("code")
-    message = data.get("message") or "Bland returned an error"
+class _ErrorDetails(BaseModel):
+    code: str | int | None = None
+    message: str | None = None
+
+
+class _ErrorEnvelope(BaseModel):
+    error: _ErrorDetails | None = None
+
+
+def _api_error(data: object) -> APIError:
+    error = _ErrorDetails.model_validate(data)
+    code = error.code
+    message = error.message or "Bland returned an error"
     return APIError(
         f"{code}: {message}" if code else message,
         body=data,
@@ -596,11 +634,13 @@ async def _error_message(resp: aiohttp.ClientResponse) -> str:
     except Exception:
         return resp.reason or "request failed"
 
-    error = payload.get("error") if isinstance(payload, dict) else None
-    if isinstance(error, dict):
-        code, message = error.get("code"), error.get("message")
-        if code and message:
-            return f"{code}: {message}"
-        if message:
-            return str(message)
+    try:
+        error = _ErrorEnvelope.model_validate(payload).error
+    except ValidationError:
+        return str(payload)
+    if error is not None:
+        if error.code and error.message:
+            return f"{error.code}: {error.message}"
+        if error.message:
+            return error.message
     return str(payload)

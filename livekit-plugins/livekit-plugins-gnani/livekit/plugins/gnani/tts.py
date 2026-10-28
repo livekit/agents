@@ -30,6 +30,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -182,15 +183,29 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
         if self._opts.synthesize_method == "sse":
-            return SSEChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+            return SSEChunkedStream(
+                get_session=self._ensure_session,
+                opts=replace(self._opts),
+                tts=self,
+                input_text=text,
+                conn_options=conn_options,
+            )
         if self._opts.synthesize_method == "websocket":
-            return WebSocketChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-        return RESTChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+            return WebSocketChunkedStream(
+                opts=replace(self._opts), tts=self, input_text=text, conn_options=conn_options
+            )
+        return RESTChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        return SynthesizeStream(opts=replace(self._opts), tts=self, conn_options=conn_options)
 
     def update_options(
         self,
@@ -260,15 +275,24 @@ def _mime_type(opts: GnaniTTSOptions) -> str:
 class RESTChunkedStream(tts.ChunkedStream):
     """REST-based chunked TTS — POST /api/v1/tts/inference."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: GnaniTTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 url=f"{self._opts.base_url}/api/v1/tts/inference",
                 json=_build_payload(self._opts, self._input_text),
@@ -318,16 +342,25 @@ class SSEChunkedStream(tts.ChunkedStream):
     PCM stream.
     """
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: GnaniTTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 url=f"{self._opts.base_url}/api/v1/tts/sse",
                 json=_build_payload(self._opts, self._input_text),
@@ -415,10 +448,12 @@ class WebSocketChunkedStream(tts.ChunkedStream):
     ``AudioStreamDecoder`` decodes and re-frames them for LiveKit playback.
     """
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self, *, opts: GnaniTTSOptions, tts: TTS, input_text: str, conn_options: APIConnectOptions
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
 
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
@@ -506,10 +541,10 @@ class WebSocketChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """WebSocket-based streaming TTS — wss://api.vachana.ai/api/v1/tts."""
 
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(self, *, opts: GnaniTTSOptions, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
 
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
@@ -537,7 +572,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async for data in self.input:
             if isinstance(data, str):
                 text_parts.append(data)
-            elif isinstance(data, self.Flush):
+            else:
                 break
 
         full_text = "".join(text_parts).strip()

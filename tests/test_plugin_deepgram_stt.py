@@ -442,3 +442,81 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+async def test_vad_channel_pairs_start_and_end_speech_over_websocket() -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.agents import APIConnectOptions, stt
+    from livekit.plugins import deepgram
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "SpeechStarted", "channel": [0, 1], "timestamp": 0.5})
+        await ws.send_json({"type": "UtteranceEnd", "channel": [0, 1], "last_word_end": 1.5})
+        async for _ in ws:
+            pass
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/listen", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        model = deepgram.STT(
+            api_key="test",
+            base_url=str(server.make_url("/listen")),
+            http_session=session,
+            utterance_end_ms=1000,
+        )
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            events = [await asyncio.wait_for(anext(stream), 0.5) for _ in range(2)]
+            assert [event.type for event in events] == [
+                stt.SpeechEventType.START_OF_SPEECH,
+                stt.SpeechEventType.END_OF_SPEECH,
+            ]
+        await model.aclose()
+
+
+async def test_batch_recognition_rejects_nontext_transcript() -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from pydantic import ValidationError
+
+    from livekit import rtc
+    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.plugins import deepgram
+
+    async def recognize(request: web.Request) -> web.Response:
+        await request.read()
+        return web.json_response(
+            {
+                "metadata": {"request_id": "request"},
+                "results": {
+                    "channels": [
+                        {"alternatives": [{"transcript": 42, "confidence": 0.9, "words": []}]}
+                    ]
+                },
+            }
+        )
+
+    app = web.Application()
+    app.router.add_post("/{path:.*}", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        model = deepgram.STT(
+            api_key="test", base_url=str(server.make_url("/recognize")), http_session=session
+        )
+        try:
+            frame = rtc.AudioFrame.create(
+                sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            with pytest.raises(APIConnectionError) as failure:
+                await model.recognize(frame, conn_options=APIConnectOptions(max_retry=0))
+            assert isinstance(failure.value.__cause__, ValidationError)
+            assert any(
+                error["loc"][-1] == "transcript" for error in failure.value.__cause__.errors()
+            )
+        finally:
+            await model.aclose()

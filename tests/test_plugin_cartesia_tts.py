@@ -222,6 +222,9 @@ async def test_ws_url_carries_the_updated_api_version():
     captured: dict[str, str] = {}
 
     class _Session:
+        json_serialize = staticmethod(json.dumps)
+        trace_configs: list[object] = []
+
         def ws_connect(self_, url, **kwargs):  # noqa: ANN001, N805
             captured["url"] = str(url)
             raise ConnectionError("stop here, the URL is what matters")
@@ -255,13 +258,19 @@ async def test_rest_request_sends_the_configured_api_version_header():
             return False
 
     class _Session:
+        json_serialize = staticmethod(json.dumps)
+        trace_configs: list[object] = []
+
+        def request(self_, method, url, **kwargs):
+            return self_.post(url, **kwargs)
+
         def post(self_, url, *, headers, **kwargs):  # noqa: ANN001, N805
             captured["headers"] = headers
             return _Resp()
 
     tts._ensure_session = lambda: _Session()  # type: ignore[method-assign]
 
-    stream = tts.synthesize("hello")
+    stream = tts.synthesize("hello", conn_options=APIConnectOptions(max_retry=0))
     with pytest.raises(APIConnectionError):
         async for _ in stream:
             pass

@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal, TypedDict
@@ -230,14 +231,29 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         utterance: Utterance = {
@@ -267,7 +283,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 self._opts.http_url(STREAM_PATH),
                 headers={**DEFAULT_HEADERS, API_AUTH_HEADER: self._opts.api_key},

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 TTSModels = Literal[
     "eleven_monolingual_v1",
@@ -88,3 +88,32 @@ class STTBatchResponse(BaseModel):
     text: str
     language_code: str | None = None
     words: list[STTWord] | None = None
+
+
+class TTSAlignment(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    chars: list[str] | None = None
+    starts_ms: list[float] | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "charStartTimesMs", "charsStartTimesMs", "char_start_times_ms"
+        ),
+    )
+    durations_ms: list[float] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("charDurationsMs", "charsDurationsMs", "char_durations_ms"),
+    )
+
+
+class TTSFrame(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    context_id: str | None = None
+    camel_context_id: str | None = Field(default=None, alias="contextId")
+    audio: str | None = None
+    error: str | None = None
+    is_final: bool = False
+    is_final_legacy: bool = Field(default=False, alias="isFinal")
+    alignment: TTSAlignment | None = None
+    normalized_alignment: TTSAlignment | None = Field(default=None, alias="normalizedAlignment")

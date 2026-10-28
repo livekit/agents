@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import math
 import weakref
 from collections import deque
@@ -29,7 +28,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 import aiohttp
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
@@ -91,8 +90,24 @@ def _session_update(model: str, language: str | None) -> dict[str, object]:
     }
 
 
-def _string(event: dict[str, object], key: str, *, nonempty: bool = False) -> str:
-    value = event.get(key)
+class _ProviderError(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status_code: object = None
+    code: object = None
+
+
+class _Event(BaseModel):
+    model_config = ConfigDict(strict=True)
+    type: str
+    error: _ProviderError | None = None
+    event_id: object = None
+    item_id: object = None
+    intermediate: object = None
+    delta: object = None
+    transcript: object = None
+
+
+def _string(value: object, key: str, *, nonempty: bool = False) -> str:
     if not isinstance(value, str) or (nonempty and not value):
         raise APIError(f"Microsoft AI STT event requires a string {key}", retryable=False)
     if len(value) > _MAX_TEXT_LENGTH:
@@ -100,14 +115,12 @@ def _string(event: dict[str, object], key: str, *, nonempty: bool = False) -> st
     return value
 
 
-def _provider_error(event: dict[str, object]) -> APIError:
-    error = event.get("error")
-    if isinstance(error, dict):
-        error = TypeAdapter(dict[str, object]).validate_python(error)
-        status = error.get("status_code")
+def _provider_error(error: _ProviderError | None) -> APIError:
+    if error is not None:
+        status = error.status_code
         if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
             return status_error("STT", status)
-        code = error.get("code")
+        code = error.code
         if isinstance(code, str):
             status = {
                 "invalid_api_key": 401,
@@ -229,7 +242,14 @@ class STT(stt.STT):
         selected_language = language if utils.is_given(language) else self._language
         if selected_language is not None and not selected_language.strip():
             raise ValueError("language must be nonempty when supplied")
-        stream = SpeechStream(stt=self, language=selected_language, conn_options=conn_options)
+        stream = SpeechStream(
+            stt=self,
+            client=self._client,
+            max_buffered_audio=self._max_buffered_audio,
+            vad=self._vad,
+            language=selected_language,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -242,13 +262,25 @@ class STT(stt.STT):
 class SpeechStream(stt.RecognizeStream):
     """A socket with ordered audio/commit writes and concurrent transcript reception."""
 
-    def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        client: HTTPClient,
+        max_buffered_audio: float,
+        vad: VAD | None,
+        language: str | None,
+        conn_options: APIConnectOptions,
+    ) -> None:
         # Core resets its retry budget after a long attempt. Own a finite, connect-only
         # budget instead: replaying already-consumed audio could lose or duplicate words.
         super().__init__(
             stt=stt, conn_options=replace(conn_options, max_retry=0), sample_rate=SAMPLE_RATE
         )
         self._stt: STT = stt
+        self._client = client
+        self._max_buffered_audio = max_buffered_audio
+        self._vad = vad
         self._connect_options = conn_options
         self._language_hint = language
         self._language = LanguageCode(language or "")
@@ -274,7 +306,7 @@ class SpeechStream(stt.RecognizeStream):
         if frame.samples_per_channel <= 0 or frame.sample_rate <= 0:
             raise ValueError("Microsoft AI STT requires nonempty audio frames")
         buffered = self._input_duration - self._processed_samples / SAMPLE_RATE
-        if buffered + frame.duration > self._stt._max_buffered_audio or self.input.qsize() >= 1024:
+        if buffered + frame.duration > self._max_buffered_audio or self.input.qsize() >= 1024:
             self._input_error = APIConnectionError(
                 "Microsoft AI STT audio buffer is full; pace input or raise max_buffered_audio",
                 retryable=False,
@@ -358,23 +390,23 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _handshake(self) -> None:
         ws = await utils.http_context.ws_connect(
-            self._stt._client.session(),
-            self._stt._client.url,
-            headers=self._stt._client.headers,
+            self._client.session(),
+            self._client.url,
+            headers=self._client.headers,
             heartbeat=10.0,
             max_msg_size=1024 * 1024,
             conn_options=self._conn_options,
         )
         self._ws = ws
         created = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)
-        if created.get("type") != "session.created":
+        if created.type != "session.created":
             raise APIError("Microsoft AI STT expected session.created", retryable=False)
         await self._write(ws, _session_update(self._stt.model, self._language_hint))
         updated = await asyncio.wait_for(self._receive_event(ws), self._conn_options.read_timeout)
-        if updated.get("type") != "session.updated":
+        if updated.type != "session.updated":
             raise APIError("Microsoft AI STT expected session.updated", retryable=False)
 
-    async def _receive_event(self, ws: _WebSocket) -> dict[str, object]:
+    async def _receive_event(self, ws: _WebSocket) -> _Event:
         message = await ws.receive()
         if message.type in (
             aiohttp.WSMsgType.CLOSE,
@@ -386,13 +418,11 @@ class SpeechStream(stt.RecognizeStream):
         if message.type != aiohttp.WSMsgType.TEXT or not isinstance(message.data, (str, bytes)):
             raise APIError("Microsoft AI STT expected a JSON text event", retryable=False)
         try:
-            event = TypeAdapter(dict[str, object]).validate_json(message.data)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise APIError("Microsoft AI STT sent malformed JSON", retryable=False) from None
-        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-            raise APIError("Microsoft AI STT sent an invalid event", retryable=False)
-        if event["type"] in ("error", _TRANSCRIPTION + "failed"):
-            raise _provider_error(event)
+            event = _Event.model_validate_json(message.data)
+        except ValidationError as exc:
+            raise APIError("Microsoft AI STT sent malformed JSON", retryable=False) from exc
+        if event.type in ("error", _TRANSCRIPTION + "failed"):
+            raise _provider_error(event.error)
         return event
 
     async def _write(self, ws: _WebSocket, data: dict[str, object]) -> None:
@@ -430,7 +460,7 @@ class SpeechStream(stt.RecognizeStream):
         buffer = utils.audio.AudioByteStream(
             sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS, samples_per_channel=800
         )
-        if self._stt._vad is None:
+        if self._vad is None:
             async for data in self.input:
                 if self._input_error is not None:
                     raise self._input_error
@@ -442,7 +472,7 @@ class SpeechStream(stt.RecognizeStream):
                         await self._append(ws, frame)
         else:
             while True:
-                await self._send_vad_segment(ws, buffer, self._stt._vad)
+                await self._send_vad_segment(ws, buffer, self._vad)
                 if self.input.closed and self.input.empty():
                     break
         if self._input_error is not None:
@@ -508,7 +538,7 @@ class SpeechStream(stt.RecognizeStream):
                     retryable=False,
                 )
             samples = sum(frame.samples_per_channel for frame in event.frames)
-            if samples > int(self._stt._max_buffered_audio * SAMPLE_RATE):
+            if samples > int(self._max_buffered_audio * SAMPLE_RATE):
                 raise APIError(
                     "Microsoft AI STT VAD start prefix exceeds max_buffered_audio",
                     retryable=False,
@@ -596,21 +626,18 @@ class SpeechStream(stt.RecognizeStream):
     async def _receive(self, ws: _WebSocket) -> None:
         while True:
             event = await self._receive_event(ws)
-            if "event_id" in event:
-                event_id = _string(event, "event_id", nonempty=True)
+            if "event_id" in event.model_fields_set:
+                event_id = _string(event.event_id, "event_id", nonempty=True)
                 if event_id in self._event_ids:
                     continue
                 self._event_ids.append(event_id)
-            event_type = event["type"]
+            event_type = event.type
             if not (
-                isinstance(event_type, str)
-                and (
-                    event_type.startswith(_TRANSCRIPTION)
-                    or event_type == "input_audio_buffer.committed"
-                )
+                event_type.startswith(_TRANSCRIPTION)
+                or event_type == "input_audio_buffer.committed"
             ):
                 continue
-            item_id = _string(event, "item_id", nonempty=True)
+            item_id = _string(event.item_id, "item_id", nonempty=True)
             if item_id in self._finished_items:
                 continue
             if self._item is None:
@@ -625,14 +652,14 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 self._committed_item_id = item_id
             elif event_type == _TRANSCRIPTION + "intermediate":
-                item.hypothesis = _string(event, "intermediate")
+                item.hypothesis = _string(event.intermediate, "intermediate")
                 self._interim(item)
             elif event_type == _TRANSCRIPTION + "delta":
-                item.finalized += _string(event, "delta")
+                item.finalized += _string(event.delta, "delta")
                 item.hypothesis = ""
                 self._interim(item)
             elif event_type == _TRANSCRIPTION + "completed":
-                self._complete(item, _string(event, "transcript"))
+                self._complete(item, _string(event.transcript, "transcript"))
             else:
                 raise APIError(
                     "Microsoft AI STT sent an unsupported transcription event", retryable=False

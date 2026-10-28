@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -35,6 +36,10 @@ NUM_CHANNELS = 1
 # with a 400, which on the WebSocket path surfaces only as a failed handshake.
 MIN_SPEED = 0.7
 MAX_SPEED = 1.5
+
+
+_FLUSH_MSG = json.dumps({"type": "Flush"})
+_CLOSE_MSG = json.dumps({"type": "Close"})
 
 
 @dataclass
@@ -162,8 +167,8 @@ class TTS(tts.TTS):
         try:
             # Send Flush and Close messages to ensure Deepgram processes all remaining audio
             # and properly terminates the session, preventing lingering TTS sessions
-            await ws.send_str(SynthesizeStream._FLUSH_MSG)
-            await ws.send_str(SynthesizeStream._CLOSE_MSG)
+            await ws.send_str(_FLUSH_MSG)
+            await ws.send_str(_CLOSE_MSG)
 
             # Wait for server acknowledgment to prevent race conditions and ensure
             # proper cleanup, avoiding 429 Too Many Requests errors from lingering sessions
@@ -230,12 +235,20 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            pool=self._pool, opts=replace(self._opts), tts=self, conn_options=conn_options
+        )
         self._streams.add(stream)
         return stream
 
@@ -252,10 +265,19 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -271,7 +293,7 @@ class ChunkedStream(tts.ChunkedStream):
             if self._opts.speed is not None:
                 http_params["speed"] = self._opts.speed
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 _to_deepgram_url(http_params, self._opts.base_url, websocket=False),
                 headers={
@@ -306,13 +328,18 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    _FLUSH_MSG: str = json.dumps({"type": "Flush"})
-    _CLOSE_MSG: str = json.dumps({"type": "Close"})
-
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        pool: utils.ConnectionPool[aiohttp.ClientWebSocketResponse],
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._pool = pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         segments_ch = utils.aio.Chan[tokenize.WordStream]()
@@ -334,7 +361,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         word_stream = self._opts.word_tokenizer.stream()
                         segments_ch.send_nowait(word_stream)
                     word_stream.push_text(input)
-                elif isinstance(input, self.Flush):
+                else:
                     if word_stream:
                         word_stream.end_input()
                     word_stream = None
@@ -415,7 +442,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning("Unknown Deepgram message type", extra={"lk.pii.data": resp})
 
-        async with self._tts._pool.connection(conn_options=self._conn_options) as ws:
+        async with self._pool.connection(conn_options=self._conn_options) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

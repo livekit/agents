@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,22 +28,20 @@ def test_stt_custom_language():
     assert stt._opts.language == "fr"
 
 
-def test_stream_language_overrides_stream_options():
+async def test_stream_language_overrides_stream_options():
     """stream language overrides the copied stream config."""
     from livekit.plugins.gradium import STT
 
     stt = STT(api_key="test-key", language="fr", http_session=MagicMock())
 
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        task = MagicMock()
-        return task
+    from livekit.plugins.gradium.stt import SpeechStream
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+    with patch.object(SpeechStream, "_run", new_callable=AsyncMock):
         stream = stt.stream(language="de")
 
     assert stream._opts.language == "de"
     assert stt._opts.language == "fr"
+    await stream.aclose()
 
 
 @pytest.mark.asyncio
@@ -60,18 +58,15 @@ async def test_speech_stream_sends_language_in_json_config():
             sent_messages.append(message)
 
     class FakeSession:
-        async def ws_connect(self, url, headers):
+        trace_configs: list[object] = []
+
+        async def ws_connect(self, url, headers, **kwargs):
             return FakeWebSocket()
 
     stt = STT(api_key="test-key")
     opts = STTOptions(language=LanguageCode("pt"), temperature=0.3)
 
-    def _fake_create_task(coro, *args, **kwargs):
-        coro.close()
-        task = MagicMock()
-        return task
-
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+    with patch.object(SpeechStream, "_run", new_callable=AsyncMock):
         stream = SpeechStream(
             stt=stt,
             opts=opts,
@@ -84,5 +79,6 @@ async def test_speech_stream_sends_language_in_json_config():
 
     await stream._connect_ws()
 
+    await stream.aclose()
     setup_msg = json.loads(sent_messages[0])
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}

@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 DeepgramModels = Literal[
     "nova-general",
@@ -204,6 +204,35 @@ class TranscriptionResponse(BaseModel):
     results: TranscriptionResults = Field(default_factory=TranscriptionResults)
     is_final: bool = False
     speech_final: bool = False
+
+
+class LiveTranscriptionResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: Literal["Results"]
+    metadata: TranscriptionMetadata = Field(default_factory=TranscriptionMetadata)
+    channel: TranscriptionChannel = Field(default_factory=TranscriptionChannel)
+    is_final: bool = False
+    speech_final: bool = False
+
+
+class SpeechBoundaryResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    type: Literal["SpeechStarted", "UtteranceEnd"]
+    channel: list[int] = Field(default_factory=list[int])
+    timestamp: float | None = None
+    last_word_end: float | None = None
+
+
+class MetadataResponse(BaseModel):
+    type: Literal["Metadata"]
+
+
+StreamResponse = LiveTranscriptionResponse | SpeechBoundaryResponse | MetadataResponse
+STREAM_RESPONSE: TypeAdapter[StreamResponse] = TypeAdapter(
+    Annotated[StreamResponse, Field(discriminator="type")]
+)
 
 
 class FluxResponse(BaseModel):

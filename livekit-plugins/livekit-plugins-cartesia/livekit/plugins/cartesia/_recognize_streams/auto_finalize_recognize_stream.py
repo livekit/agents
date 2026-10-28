@@ -271,7 +271,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
                         for frame in audio_bstream.write(data.data.tobytes()):
                             self._speech_duration += frame.duration
                             await ws.send_bytes(frame.data.tobytes())
-                    elif isinstance(data, self.Flush):
+                    else:
                         if not self.input.closed:
                             logger.warning(
                                 "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."

@@ -42,13 +42,6 @@ class _FakeEmitter:
         self.timed_transcript_pushes += 1
 
 
-class _FakeStream:
-    def __init__(self) -> None:
-        self._text_buffer = ""
-        self._start_times_ms: list[int] = []
-        self._durations_ms: list[int] = []
-
-
 class _FakeConnection:
     def __init__(self, context_id: str, messages: list[object]) -> None:
         self._closed = False
@@ -61,7 +54,7 @@ class _FakeConnection:
         self._context_data = {
             context_id: elevenlabs_tts._StreamData(
                 emitter=self.emitter,
-                stream=_FakeStream(),
+                alignment=elevenlabs_tts._AlignmentBuffer(),
                 waiter=self.waiter,
             )
         }
@@ -109,7 +102,7 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
         self: object,
     ) -> tuple[SimpleNamespace, float, bool]:
         opened.set()
-        return SimpleNamespace(_recv_task=None), 0.0, False
+        return SimpleNamespace()
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
 
@@ -128,9 +121,11 @@ async def test_option_update_during_connect_discards_stale_socket(
     connections: list[object] = []
 
     class _StubConnection:
-        def __init__(self, opts: object, session: object) -> None:
+        def __init__(self, opts: object, session: object, conn_options: object) -> None:
             self._opts = opts
+            self._conn_options = conn_options
             self._closed = False
+            self.has_active_contexts = False
             self.is_current = True
             self._recv_task = None
             connections.append(self)
@@ -155,7 +150,7 @@ async def test_option_update_during_connect_discards_stale_socket(
 
         tts.update_options(voice_id="new")
         resume_connect.set()
-        connection, _, _ = await asyncio.wait_for(connection_task, timeout=1)
+        connection = await asyncio.wait_for(connection_task, timeout=1)
 
         assert len(connections) == 2
         assert connections[0]._closed  # pyright: ignore[reportAttributeAccessIssue]
@@ -177,16 +172,17 @@ async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.Monk
         raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-    monkeypatch.setattr(
-        elevenlabs_tts.asyncio,
-        "sleep",
-        lambda _delay: finished.set(),
-    )
+
+    async def unexpected_retry(_delay: float) -> None:
+        finished.set()
+
+    original_sleep = asyncio.sleep
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", unexpected_retry)
 
     tts = elevenlabs_tts.TTS(api_key="test-key")
     tts.prewarm()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await original_sleep(0)
+    await original_sleep(0)
     assert attempts == 1
     assert not finished.is_set()
     await tts.aclose()
@@ -207,7 +203,7 @@ async def test_prewarm_retries_with_exponential_backoff(
         if attempts <= 3:
             raise ConnectionError("temporary failure")
         ready.set()
-        return SimpleNamespace(_recv_task=None), 0.0, False
+        return SimpleNamespace()
 
     async def _sleep(delay: float) -> None:
         delays.append(delay)
@@ -237,7 +233,11 @@ async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
         connections.append(recv_task)
         if len(connections) == 2:
             reconnected.set()
-        return SimpleNamespace(_recv_task=recv_task), 0.0, False
+
+        async def wait_closed() -> None:
+            await asyncio.wait({recv_task})
+
+        return SimpleNamespace(wait_closed=wait_closed)
 
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
 
@@ -495,7 +495,8 @@ async def test_send_loop_arms_timeout_on_close_context(connection_cls: type, mod
         connection._ws = _RecordingWs()
         ctx = elevenlabs_tts._StreamData(
             emitter=_FakeEmitter(),  # type: ignore[arg-type]
-            stream=SimpleNamespace(_conn_options=SimpleNamespace(read_timeout=60)),  # type: ignore[arg-type]
+            alignment=elevenlabs_tts._AlignmentBuffer(),
+            read_timeout=60,
             waiter=asyncio.get_event_loop().create_future(),
         )
         connection._context_data["ctx-1"] = ctx
@@ -530,10 +531,11 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 ) -> None:
     """Regression for #6929: a cancelled run must stop routing audio to its emitter."""
     calls: list[str] = []
+    registered = asyncio.Event()
 
     class _StubConnection:
-        def register_stream(self, stream: object, emitter: object, waiter: object) -> None:
-            pass
+        def register_stream(self, **kwargs: object) -> None:
+            registered.set()
 
         def send_content(self, content: object) -> None:
             calls.append("send_content")
@@ -546,8 +548,8 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
 
     connection = _StubConnection()
 
-    async def _current_connection(self: object) -> tuple[object, float, bool]:
-        return connection, 0.0, True
+    async def _current_connection(self: object, **kwargs: object) -> object:
+        return connection
 
     original_end_segment = agents_tts.AudioEmitter.end_segment
 
@@ -558,11 +560,16 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
     monkeypatch.setattr(agents_tts.AudioEmitter, "end_segment", _end_segment)
 
-    tts = elevenlabs_tts.TTS(api_key="test-key")
-    stream = tts.stream()
+    tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000")
+    stream = tts.stream(conn_options=agents_tts.DEFAULT_API_CONNECT_OPTIONS)
     stream.push_text("hello world. ")
-    await asyncio.sleep(0.1)  # let the run reach `await waiter`
-    await stream.aclose()  # the interruption
+    consumer = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(registered.wait(), timeout=1)
+    await stream.aclose()
+    try:
+        await consumer
+    except (StopAsyncIteration, asyncio.CancelledError):
+        pass
 
     assert calls.index("unregister_stream") < calls.index("end_segment")
     assert "close_context" in calls
@@ -958,9 +965,8 @@ async def test_disabled_response_timeout_keeps_pending_context() -> None:
     context_id = "pending-context"
     ctx = elevenlabs_tts._StreamData(
         emitter=_FakeEmitter(),  # type: ignore[arg-type]
-        stream=SimpleNamespace(  # type: ignore[arg-type]
-            _conn_options=SimpleNamespace(timeout=0, read_timeout=None)
-        ),
+        alignment=elevenlabs_tts._AlignmentBuffer(),
+        read_timeout=None,
         waiter=waiter,
     )
     connection._context_data = {context_id: ctx}

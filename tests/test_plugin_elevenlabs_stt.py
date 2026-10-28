@@ -10,7 +10,6 @@ import time
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
 
 import aiohttp
 import pytest
@@ -64,18 +63,21 @@ def _new_stream(
         previous_text=None,
     )
 
-    def do_not_start(coro, *args, **kwargs):
-        coro.close()
-        return MagicMock()
+    # These synchronous parser tests do not run the stream lifecycle or own tasks.
+    # Initialize its provider state and retry counter without replacing the scheduler.
+    from livekit.agents import _bindings
 
-    with patch("asyncio.create_task", side_effect=do_not_start):
-        stream = elevenlabs_stt.SpeechStream(
-            stt=elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime"),
-            opts=opts,
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
-            language=LanguageCode(language) if language else None,
-            http_session=MagicMock(),
-        )
+    stream = object.__new__(elevenlabs_stt.SpeechStream)
+    stream._stt = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    stream._opts = opts
+    stream._conn_options = DEFAULT_API_CONNECT_OPTIONS
+    stream._language = LanguageCode(language) if language else None
+    stream._speaking = False
+    stream._last_partial_text = ""
+    stream._start_time_offset = 0.0
+    stream._core_attempts = _bindings.Attempts(
+        "stt_stream", DEFAULT_API_CONNECT_OPTIONS, stream._emit_error
+    )
     stream._event_ch = _EventSink()
     return stream
 
@@ -758,3 +760,35 @@ async def test_recognize_does_not_retry_a_client_error(
     assert exc_info.value.message == message
     assert exc_info.value.body == parsed
     assert requests == 1
+
+
+async def test_batch_recognition_rejects_nontext_transcript() -> None:
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    from pydantic import ValidationError
+
+    from livekit import rtc
+    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.plugins import elevenlabs
+
+    async def recognize(request: web.Request) -> web.Response:
+        await request.read()
+        return web.json_response({"text": 42, "language_code": "en", "words": []})
+
+    app = web.Application()
+    app.router.add_post("/{path:.*}", recognize)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        model = elevenlabs.STT(
+            api_key="test", base_url=str(server.make_url("/")), http_session=session
+        )
+        try:
+            frame = rtc.AudioFrame.create(
+                sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            with pytest.raises(APIConnectionError) as failure:
+                await model.recognize(frame, conn_options=APIConnectOptions(max_retry=0))
+            assert isinstance(failure.value.__cause__, ValidationError)
+            assert any(error["loc"][-1] == "text" for error in failure.value.__cause__.errors())
+        finally:
+            await model.aclose()

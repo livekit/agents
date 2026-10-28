@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 import aiohttp
 
@@ -42,11 +43,22 @@ from .models import (
     NUM_CHANNELS,
     OutputFormat,
     SpeechModel,
-    _TTSOptions,
 )
 
 API_BASE_URL = "https://client.camb.ai/apis"
 API_KEY_HEADER = "x-api-key"
+
+
+@dataclass
+class _TTSOptions:
+    """Internal TTS configuration options."""
+
+    voice_id: int
+    language: str
+    speech_model: str
+    output_format: str
+    user_instructions: str | None
+    enhance_named_entities: bool
 
 
 class TTS(tts.TTS):
@@ -156,7 +168,15 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     async def aclose(self) -> None:
         pass
@@ -166,13 +186,20 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        api_key: str | None,
+        base_url: str,
+        opts: _TTSOptions,
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
+        self._api_key = api_key
+        self._base_url = base_url
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         logger.debug(
@@ -206,13 +233,13 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             headers: dict[str, str] = {"Content-Type": "application/json"}
-            if self._tts._api_key:
-                headers[API_KEY_HEADER] = self._tts._api_key
+            if self._api_key:
+                headers[API_KEY_HEADER] = self._api_key
 
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
-                f"{self._tts._base_url}/tts-stream",
+                f"{self._base_url}/tts-stream",
                 headers=headers,
                 json=payload,
                 conn_options=self._conn_options,
@@ -228,7 +255,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=self._tts._sample_rate,
+                    sample_rate=self._tts.sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type=mime_type,
                 )

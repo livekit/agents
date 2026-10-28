@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal
 
 # Speech models supported by Camb.ai MARS series
@@ -39,18 +38,6 @@ OutputFormat = Literal[
     "flac",  # Lossless compression
     "adts",  # Streaming format
 ]
-
-
-@dataclass
-class _TTSOptions:
-    """Internal TTS configuration options."""
-
-    voice_id: int
-    language: str
-    speech_model: str
-    output_format: str
-    user_instructions: str | None
-    enhance_named_entities: bool
 
 
 # Constants

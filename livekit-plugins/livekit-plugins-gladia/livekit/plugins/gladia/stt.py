@@ -108,7 +108,7 @@ class LanguageConfiguration:
 @dataclass
 class TranslationConfiguration:
     enabled: bool = False
-    target_languages: list[str] = dataclasses.field(default_factory=list)
+    target_languages: list[str] = dataclasses.field(default_factory=list[str])
     model: str = "base"
     match_original_utterances: bool = True
     lipsync: bool = True
@@ -373,7 +373,8 @@ class STT(stt.STT):
             receive_timeout = conn_options.read_timeout
             async with self._ensure_session().ws_connect(
                 session_url,
-                timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),
+                # aiohttp's attrs-generated timeout constructor is absent from pyright's SDK view.
+                timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),  # pyright: ignore[reportCallIssue]
             ) as ws:
                 # Combine audio frames to get a single frame with all raw PCM data
                 combined_frame = rtc.combine_audio_frames(buffer)
@@ -503,7 +504,7 @@ class STT(stt.STT):
         self, utterances: list[TranscriptionUtterance], session_id: str, languages: list[str] | None
     ) -> stt.SpeechEvent:
         """Create a SpeechEvent from Gladia's transcript data."""
-        alternatives = []
+        alternatives: list[stt.SpeechData] = []
 
         # Process each utterance into a SpeechData object
         for utterance in utterances:
@@ -981,7 +982,7 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = True
                     elif state == AudioEnergyFilter.State.SILENCE:
                         last_frame = data
-                elif isinstance(data, self.Flush):
+                else:
                     frames = audio_bstream.flush()
                     has_ended = True
 

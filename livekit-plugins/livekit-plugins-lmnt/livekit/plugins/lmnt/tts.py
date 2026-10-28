@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -149,6 +150,8 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> ChunkedStream:
         return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
             tts=self,
             input_text=text,
             conn_options=conn_options,
@@ -208,13 +211,16 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
         tts: TTS,
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         data = {
@@ -230,7 +236,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 LMNT_BASE_URL,
                 headers={

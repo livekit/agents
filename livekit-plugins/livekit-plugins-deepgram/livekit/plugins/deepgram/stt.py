@@ -46,7 +46,15 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
-from .models import DeepgramLanguages, DeepgramModels, TranscriptionResponse, TranscriptionWord
+from .models import (
+    STREAM_RESPONSE,
+    DeepgramLanguages,
+    DeepgramModels,
+    LiveTranscriptionResponse,
+    StreamResponse,
+    TranscriptionResponse,
+    TranscriptionWord,
+)
 
 
 @dataclass
@@ -437,11 +445,7 @@ class STT(stt.STT):
         merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
         self._opts.keyterm = merged
         for stream in self._streams:
-            if stream._speaking:
-                # defer the reconnect to the end of the utterance so we don't cut it off
-                stream._pending_keyterm = merged
-            else:
-                stream.update_options(keyterm=merged)
+            stream.update_session_keyterms(merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -585,6 +589,12 @@ class SpeechStream(stt.SpeechStream):
 
         self._reconnect_event.set()
 
+    def update_session_keyterms(self, keyterms: list[str]) -> None:
+        if self._speaking:
+            self._pending_keyterm = keyterms
+        else:
+            self.update_options(keyterm=keyterms)
+
     def _on_end_of_speech(self) -> None:
         if self._pending_keyterm is not None:
             self.update_options(keyterm=self._pending_keyterm)
@@ -632,7 +642,7 @@ class SpeechStream(stt.SpeechStream):
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self.Flush):
+                    else:
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 
@@ -693,7 +703,7 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    self._process_stream_event(STREAM_RESPONSE.validate_json(msg.data))
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
@@ -832,8 +842,7 @@ class SpeechStream(stt.SpeechStream):
         )
         self.send(usage_event)
 
-    def _process_stream_event(self, data: object) -> None:
-        event = TranscriptionResponse.model_validate(data)
+    def _process_stream_event(self, event: StreamResponse) -> None:
         assert self._opts.language is not None
 
         if event.type == "SpeechStarted":
@@ -858,7 +867,7 @@ class SpeechStream(stt.SpeechStream):
             is_endpoint = event.speech_final
             self._request_id = request_id
 
-            alts = live_transcription_to_speech_data(
+            alts = _live_transcription_to_speech_data(
                 self._opts.language,
                 event,
                 is_final=is_final_transcript,
@@ -907,7 +916,9 @@ class SpeechStream(stt.SpeechStream):
         elif event.type == "Metadata":
             pass  # metadata is too noisy
         else:
-            logger.warning("received unexpected message from deepgram", extra={"lk.pii.data": data})
+            logger.warning(
+                "received unexpected message from deepgram", extra={"lk.pii.data": event}
+            )
 
 
 def _word_text(word: object, *, use_punctuated_word: bool) -> str:
@@ -922,7 +933,9 @@ def _word_text(word: object, *, use_punctuated_word: bool) -> str:
     `punctuate or smart_format` rather than either alone. Falls back to `word` if the key
     is missing, which is what Deepgram sends when neither option is set.
     """
-    parsed_word = TranscriptionWord.model_validate(word)
+    parsed_word = (
+        word if isinstance(word, TranscriptionWord) else TranscriptionWord.model_validate(word)
+    )
     raw = parsed_word.word
     if not use_punctuated_word:
         return raw
@@ -938,10 +951,26 @@ def live_transcription_to_speech_data(
     start_time_offset: float,
     use_punctuated_word: bool = True,
 ) -> list[stt.SpeechData]:
-    response = TranscriptionResponse.model_validate(data)
+    return _live_transcription_to_speech_data(
+        language,
+        TranscriptionResponse.model_validate(data),
+        is_final=is_final,
+        start_time_offset=start_time_offset,
+        use_punctuated_word=use_punctuated_word,
+    )
+
+
+def _live_transcription_to_speech_data(
+    language: str,
+    response: TranscriptionResponse | LiveTranscriptionResponse,
+    *,
+    is_final: bool,
+    start_time_offset: float,
+    use_punctuated_word: bool,
+) -> list[stt.SpeechData]:
     dg_alts = response.channel.alternatives
 
-    speech_data = []
+    speech_data: list[stt.SpeechData] = []
     for alt in dg_alts:
         if is_final:
             speakers = [word.speaker for word in alt.words if word.speaker is not None]

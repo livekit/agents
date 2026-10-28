@@ -25,6 +25,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
+from pydantic import TypeAdapter
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -222,7 +223,7 @@ def _parse_ws_message(
         raise _protocol_error(f"invalid JSON during {phase}") from None
     if not isinstance(message, dict):
         raise _protocol_error(f"non-object message during {phase}")
-    return message
+    return TypeAdapter(dict[str, object]).validate_python(message)
 
 
 async def _close_quietly(ws: aiohttp.ClientWebSocketResponse) -> None:

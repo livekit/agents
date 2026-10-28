@@ -1059,6 +1059,10 @@ async def test_malformed_json_events_are_terminal(body: str) -> None:
         with pytest.raises(APIError) as caught:
             await collect(stream)
         assert not caught.value.retryable
+        if body in ("{", "[]"):
+            from pydantic import ValidationError
+
+            assert isinstance(caught.value.__cause__, ValidationError)
     assert socket.closed
 
 

@@ -50,6 +50,21 @@ _WAV_FORMATS = {
 }
 
 
+def _validate_limits(sample_rate: object, max_text_length: object, max_audio_bytes: object) -> None:
+    if (
+        isinstance(sample_rate, bool)
+        or not isinstance(sample_rate, int)
+        or sample_rate not in _WAV_FORMATS
+    ):
+        raise ValueError("sample_rate must be one of 8000, 22050, 24000, 44100, 48000")
+    for name, value in (
+        ("max_text_length", max_text_length),
+        ("max_audio_bytes", max_audio_bytes),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+
+
 @dataclass(frozen=True)
 class _TTSOptions:
     model: str
@@ -159,18 +174,7 @@ class TTS(tts.TTS):
                 sample_rate = int(config.get("MICROSOFT_AI_TTS_SAMPLE_RATE") or "")
             except ValueError:
                 raise ValueError("Set MICROSOFT_AI_TTS_SAMPLE_RATE or pass sample_rate") from None
-        if (
-            isinstance(sample_rate, bool)
-            or not isinstance(sample_rate, int)
-            or sample_rate not in _WAV_FORMATS
-        ):
-            raise ValueError("sample_rate must be one of 8000, 22050, 24000, 44100, 48000")
-        for name, value in (
-            ("max_text_length", max_text_length),
-            ("max_audio_bytes", max_audio_bytes),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
+        _validate_limits(sample_rate, max_text_length, max_audio_bytes)
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
@@ -240,7 +244,14 @@ class TTS(tts.TTS):
             raise ValueError("Microsoft AI TTS text exceeds max_text_length")
         if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", text):
             raise ValueError("Microsoft AI TTS text contains characters invalid in XML")
-        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = ChunkedStream(
+            tts=self,
+            opts=self._opts,
+            client=self._client,
+            max_audio_bytes=self._max_audio_bytes,
+            input_text=text,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -253,19 +264,31 @@ class TTS(tts.TTS):
 class ChunkedStream(tts.ChunkedStream):
     """Validate a complete WAV before exposing audio, so failed attempts emit nothing."""
 
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        client: HTTPClient,
+        max_audio_bytes: int,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
+        self._opts = opts
+        self._client = client
+        self._max_audio_bytes = max_audio_bytes
         self._closed = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             async with utils.http_context.request(
-                self._tts._client.session(),
+                self._client.session(),
                 "POST",
-                self._tts._client.url,
-                headers=self._tts._client.headers,
-                data=_ssml(self.input_text, self._tts._opts),
+                self._client.url,
+                headers=self._client.headers,
+                data=_ssml(self.input_text, self._opts),
                 conn_options=self._conn_options,
                 allow_redirects=False,
             ) as response:
@@ -273,7 +296,7 @@ class ChunkedStream(tts.ChunkedStream):
                     raise status_error("TTS", response.status)
                 if response.content_type not in ("audio/wav", "audio/x-wav", "audio/wave"):
                     raise APIError("Microsoft AI TTS expected a WAV response", retryable=False)
-                limit = self._tts._max_audio_bytes
+                limit = self._max_audio_bytes
                 if response.content_length is not None and response.content_length > limit:
                     raise APIError(
                         "Microsoft AI TTS response exceeds max_audio_bytes", retryable=False

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -373,12 +374,26 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            get_session=self._ensure_session,
+            opts=replace(self._opts),
+            tts=self,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            sentence_tokenizer=self._sentence_tokenizer,
+            stream_pacer=self._stream_pacer,
+            connect_ws=self._connect_ws,
+            close_ws=self._close_ws,
+            opts=replace(self._opts),
+            tts=self,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -390,10 +405,24 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        stream_pacer: tts.SentenceStreamPacer | None,
+        connect_ws: Callable[[APIConnectOptions], Awaitable[aiohttp.ClientWebSocketResponse]],
+        close_ws: Callable[[aiohttp.ClientWebSocketResponse], Awaitable[None]],
+        opts: _TTSOptions,
+        tts: TTS,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._sentence_tokenizer = sentence_tokenizer
+        self._stream_pacer = stream_pacer
+        self._connect_ws = connect_ws
+        self._close_ws = close_ws
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Initialize with temporary ID, will be updated from WebSocket messages
@@ -408,9 +437,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        sentence_stream = self._tts._sentence_tokenizer.stream()
-        if self._tts._stream_pacer:
-            sentence_stream = self._tts._stream_pacer.wrap(
+        sentence_stream = self._sentence_tokenizer.stream()
+        if self._stream_pacer:
+            sentence_stream = self._stream_pacer.wrap(
                 sent_stream=sentence_stream,
                 audio_emitter=output_emitter,
             )
@@ -526,7 +555,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
-            ws = await self._tts._connect_ws(self._conn_options)
+            ws = await self._connect_ws(self._conn_options)
             tasks = [
                 asyncio.create_task(_input_task()),
                 asyncio.create_task(_sentence_stream_task(ws)),
@@ -536,7 +565,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await self._tts._close_ws(ws)
+                await self._close_ws(ws)
                 await sentence_stream.aclose()
                 await utils.aio.gracefully_cancel(*tasks)
 
@@ -572,10 +601,19 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        get_session: Callable[[], aiohttp.ClientSession],
+        opts: _TTSOptions,
+        tts: TTS,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if not self._input_text.strip():
@@ -594,7 +632,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         try:
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
                 url,
                 headers={

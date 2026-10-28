@@ -19,13 +19,13 @@ import base64
 import json
 import os
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
@@ -230,6 +230,10 @@ class STT(stt.STT):
     ) -> SpeechStream:
         stream = SpeechStream(
             stt=self,
+            opts=self._opts,
+            get_session=self._ensure_session,
+            base_url=self._base_url,
+            authorization=self._authorization,
             conn_options=conn_options,
             language=language if utils.is_given(language) else self._opts.language,
         )
@@ -242,11 +246,19 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         stt: STT,
+        opts: _STTOptions,
+        get_session: Callable[[], aiohttp.ClientSession],
+        base_url: str,
+        authorization: str,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         language: str = DEFAULT_LANGUAGE,
     ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._opts.sample_rate)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._stt: STT = stt
+        self._opts = opts
+        self._get_session = get_session
+        self._base_url = base_url
+        self._authorization = authorization
         self._language = language
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
@@ -257,13 +269,8 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._stt._http_session:
-            self._stt._http_session = utils.http_context.http_session()
-        return self._stt._http_session
-
     def _build_transcribe_config(self) -> dict[str, object]:
-        opts = self._stt._opts
+        opts = self._opts
         config: dict[str, object] = {
             "modelId": opts.model,
             "audioEncoding": "LINEAR16",
@@ -290,13 +297,13 @@ class SpeechStream(stt.SpeechStream):
         return config
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        ws_url = self._stt._base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = ws_url.rstrip("/") + "/" + WS_ENDPOINT
 
         ws = await utils.http_context.ws_connect(
-            self._ensure_session(),
+            self._get_session(),
             ws_url,
-            headers={"Authorization": self._stt._authorization},
+            headers={"Authorization": self._authorization},
             conn_options=self._conn_options,
         )
 
@@ -348,6 +355,8 @@ class SpeechStream(stt.SpeechStream):
             except aiohttp.ClientError as e:
                 logger.error(f"Inworld STT connection error: {e}")
                 raise APIConnectionError(f"Inworld STT connection error: {e}") from e
+            except APIConnectionError:
+                raise
             except Exception as e:
                 logger.exception(f"Unexpected error in Inworld STT: {e}")
                 raise APIConnectionError(f"Unexpected error: {e}") from e
@@ -368,7 +377,7 @@ class SpeechStream(stt.SpeechStream):
                 except Exception as e:
                     logger.error(f"Error sending endTurn: {e}")
                     break
-            elif isinstance(data, rtc.AudioFrame):
+            else:
                 self._audio_duration_collector.push(data.duration)
                 pcm_bytes = data.data.tobytes()
                 audio_b64 = base64.b64encode(pcm_bytes).decode()
@@ -404,10 +413,12 @@ class SpeechStream(stt.SpeechStream):
             async for msg in self._ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
-                        data = json.loads(msg.data)
-                    except json.JSONDecodeError:
-                        continue
-                    self._process_stream_event(data)
+                        event = _StreamEvent.model_validate_json(msg.data)
+                    except ValidationError as exc:
+                        raise APIConnectionError(
+                            "Inworld STT sent an invalid event", retryable=False
+                        ) from exc
+                    self._process_stream_event(event)
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -424,8 +435,8 @@ class SpeechStream(stt.SpeechStream):
             logger.error(f"Unexpected error receiving messages: {e}")
             raise
 
-    def _process_stream_event(self, data: object) -> None:
-        result = _StreamEvent.model_validate(data).result
+    def _process_stream_event(self, event: _StreamEvent) -> None:
+        result = event.result
 
         if "speech_started" in result.model_fields_set and not self._speaking:
             self._speaking = True

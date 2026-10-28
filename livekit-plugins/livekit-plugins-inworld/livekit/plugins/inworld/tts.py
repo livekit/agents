@@ -21,7 +21,7 @@ import os
 import time
 import uuid
 import weakref
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Literal, cast, get_args
@@ -174,6 +174,10 @@ class _InworldConnection:
 
     MAX_CONTEXTS = 5
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -295,14 +299,14 @@ class _InworldConnection:
         await self.connect(conn_options=conn_options)
 
         # Fail fast if connection is closed
-        if self._closed or self._ws is None:
+        if self._closed:
             raise APIConnectionError("Connection is closed")
 
         start_time = time.time()
 
         while True:
             # Check closed state at start of each iteration
-            if self._closed or self._ws is None:
+            if self._closed:
                 raise APIConnectionError("Connection is closed")
 
             # Use lock to ensure atomic capacity check + context creation
@@ -340,7 +344,7 @@ class _InworldConnection:
                 self._context_available.clear()
 
                 # Check closed state after waking
-                if self._closed or self._ws is None:
+                if self._closed:
                     raise APIConnectionError("Connection is closed")
             except asyncio.TimeoutError:
                 raise APITimeoutError() from None
@@ -432,7 +436,7 @@ class _InworldConnection:
                     pkt = {"flush_context": {}, "contextId": msg.context_id}
                     await self._ws.send_str(json.dumps(pkt))
 
-                elif isinstance(msg, _CloseContextMsg):
+                else:
                     pkt = {"close_context": {}, "contextId": msg.context_id}
                     await self._ws.send_str(json.dumps(pkt))
 
@@ -657,6 +661,10 @@ class _ConnectionPool:
     Idle connections are automatically cleaned up after idle_timeout seconds.
     """
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -712,11 +720,11 @@ class _ConnectionPool:
                     self._cleanup_task = asyncio.create_task(self._cleanup_idle_connections())
 
                 # Prune closed connections first
-                self._connections = [c for c in self._connections if not c._closed]
+                self._connections = [c for c in self._connections if not c.closed]
 
                 # First, try to find a connection with capacity
                 for existing in self._connections:
-                    if not existing._closed and existing.has_capacity:
+                    if not existing.closed and existing.has_capacity:
                         conn = existing
                         break
 
@@ -1002,7 +1010,7 @@ class TTS(tts.TTS):
     async def _get_pool(self) -> _ConnectionPool:
         """Get the connection pool, creating if needed."""
         async with self._pool_lock:
-            if self._pool is None or self._pool._closed:
+            if self._pool is None or self._pool.closed:
                 self._pool = _ConnectionPool(
                     session=self._ensure_session(),
                     ws_url=self._ws_url,
@@ -1115,12 +1123,26 @@ class TTS(tts.TTS):
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        return ChunkedStream(
+            tts=self,
+            opts=replace(self._opts),
+            get_session=self._ensure_session,
+            base_url=self._base_url,
+            authorization=self._authorization,
+            input_text=text,
+            conn_options=conn_options,
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(
+            tts=self,
+            opts=replace(self._opts),
+            sentence_tokenizer=self._sentence_tokenizer,
+            get_pool=self._get_pool,
+            conn_options=conn_options,
+        )
         self._streams.add(stream)
         return stream
 
@@ -1175,10 +1197,23 @@ class TTS(tts.TTS):
 
 
 class ChunkedStream(tts.ChunkedStream):
-    def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        get_session: Callable[[], aiohttp.ClientSession],
+        base_url: str,
+        authorization: str,
+        input_text: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._get_session = get_session
+        self._base_url = base_url
+        self._authorization = authorization
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         x_request_id = str(uuid.uuid4())
@@ -1208,11 +1243,11 @@ class ChunkedStream(tts.ChunkedStream):
             body_params["timestampTransportStrategy"] = self._opts.timestamp_transport_strategy
 
             async with utils.http_context.request(
-                self._tts._ensure_session(),
+                self._get_session(),
                 "POST",
-                urljoin(self._tts._base_url, "/tts/v1/voice:stream"),
+                urljoin(self._base_url, "/tts/v1/voice:stream"),
                 headers={
-                    "Authorization": self._tts._authorization,
+                    "Authorization": self._authorization,
                     "X-User-Agent": USER_AGENT,
                     "X-Request-Id": x_request_id,
                 },
@@ -1273,14 +1308,24 @@ class ChunkedStream(tts.ChunkedStream):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+    def __init__(
+        self,
+        *,
+        tts: TTS,
+        opts: _TTSOptions,
+        sentence_tokenizer: tokenize.SentenceTokenizer,
+        get_pool: Callable[[], Awaitable[_ConnectionPool]],
+        conn_options: APIConnectOptions,
+    ):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._opts = replace(tts._opts)
+        self._opts = opts
+        self._sentence_tokenizer = sentence_tokenizer
+        self._get_pool = get_pool
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
-        sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        sent_tokenizer_stream = self._sentence_tokenizer.stream()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -1290,7 +1335,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        pool = await self._tts._get_pool()
+        pool = await self._get_pool()
         context_id, waiter, connection = await pool.acquire_context(
             emitter=output_emitter,
             opts=self._opts,

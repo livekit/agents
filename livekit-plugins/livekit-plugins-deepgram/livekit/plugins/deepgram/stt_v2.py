@@ -476,7 +476,7 @@ class SpeechStreamv2(stt.SpeechStream):
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self.Flush):
+                    else:
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 

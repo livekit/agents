@@ -22,10 +22,11 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 from urllib.parse import quote
 
 import aiohttp
+from pydantic import BaseModel
 
 from livekit import rtc
 from livekit.agents import (
@@ -49,6 +50,31 @@ from .models import STTBatchResponse, STTRealtimeSampleRates, STTResponse, STTWo
 
 API_BASE_URL_V1 = "https://api.elevenlabs.io/v1"
 AUTHORIZATION_HEADER = "xi-api-key"
+
+
+class _HTTPErrorDetails(BaseModel):
+    message: object | None = None
+
+
+class _HTTPErrorBody(BaseModel):
+    detail: object | None = None
+
+
+def _http_error_detail(body: object) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    detail = _HTTPErrorBody.model_validate(body).detail
+    rendered = str(detail) if detail else None
+    if isinstance(detail, dict):
+        message = _HTTPErrorDetails.model_validate(detail).message
+        if message:
+            return str(message)
+    return rendered
+
+
+def _validate_audio_chunk_duration(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("audio_chunk_duration_ms must be a positive integer")
 
 
 def _speech_confidence(words: Sequence[object] | None) -> float:
@@ -170,12 +196,7 @@ class STT(stt.STT):
                 audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
         """
 
-        if (
-            isinstance(audio_chunk_duration_ms, bool)
-            or not isinstance(audio_chunk_duration_ms, int)
-            or audio_chunk_duration_ms <= 0
-        ):
-            raise ValueError("audio_chunk_duration_ms must be a positive integer")
+        _validate_audio_chunk_duration(audio_chunk_duration_ms)
 
         if is_given(model_id):
             if is_given(model):
@@ -309,12 +330,10 @@ class STT(stt.STT):
                     # check the status first: an error body may be empty or not JSON
                     text = await response.text()
                     try:
-                        body: Any = json.loads(text)
+                        body: object = json.loads(text)
                     except ValueError:
                         body = text
-                    detail = body.get("detail") if isinstance(body, dict) else None
-                    if isinstance(detail, dict):
-                        detail = detail.get("message", detail)
+                    detail = _http_error_detail(body)
                     raise APIStatusError(
                         message=str(detail or text or "Unknown ElevenLabs error"),
                         status_code=response.status,
@@ -570,7 +589,7 @@ class SpeechStream(stt.SpeechStream):
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif isinstance(data, self.Flush):
+                    else:
                         frames.extend(audio_bstream.flush())
                         has_ended = True
 
