@@ -3,6 +3,7 @@
 //! once. The state lives in the history: calls carry [`APPROVAL_KEY`] (`asked`, `granted`) and the
 //! [`APPROVAL_IDENTITY_KEY`] of the validated arguments they were decided on.
 
+use lk_agents_abi::agent::ArgumentIdentity;
 use lk_agents_abi::llm::tool_executor::{Approval, WAITING_PREFIX};
 use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::Value;
@@ -26,21 +27,11 @@ pub fn answered_text(tool: &str, answer: &str) -> String {
     )
 }
 
-/// The validated arguments a call is identified by, as the host prepared them: their JSON, or a
-/// fingerprint the host declares for a value JSON cannot represent.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ArgumentIdentity {
-    Json(Value),
-    Fingerprint(String),
-}
-
-impl ArgumentIdentity {
-    /// One string per identity: equal validated arguments compare equal whatever their key order.
-    pub fn canonical(&self) -> String {
-        match self {
-            ArgumentIdentity::Json(value) => canonical_json(value),
-            ArgumentIdentity::Fingerprint(fingerprint) => format!("fingerprint:{fingerprint}"),
-        }
+/// One string per identity: equal validated arguments compare equal whatever their key order.
+pub fn canonical(identity: &ArgumentIdentity) -> String {
+    match identity {
+        ArgumentIdentity::Json(value) => canonical_json(value),
+        ArgumentIdentity::Fingerprint(fingerprint) => format!("fingerprint:{fingerprint}"),
     }
 }
 
@@ -197,8 +188,8 @@ mod tests {
             ArgumentIdentity::Json(json!({"b": 1, "a": {"y": [1, {"d": 1, "c": 2}], "x": "s"}}));
         let b =
             ArgumentIdentity::Json(json!({"a": {"x": "s", "y": [1, {"c": 2, "d": 1}]}, "b": 1}));
-        assert_eq!(a.canonical(), b.canonical());
-        assert_ne!(a.canonical(), ArgumentIdentity::Fingerprint(a.canonical()).canonical());
+        assert_eq!(canonical(&a), canonical(&b));
+        assert_ne!(canonical(&a), canonical(&ArgumentIdentity::Fingerprint(canonical(&a))));
     }
 
     // Catches: the read-back losing its first-sentence form or showing JSON instead of the

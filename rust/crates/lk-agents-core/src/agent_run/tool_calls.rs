@@ -12,9 +12,10 @@ use lk_agents_abi::{ChatItem, FunctionCall};
 use serde_json::{Map, Value};
 
 use super::result::{CallId, StreamEvent, ToolResultStatus};
-use super::{Effect, ReadBackAnswer};
+use super::Effect;
 use crate::agent::{Agent, FINAL_RESULT_TOOL, OutputSpec, ReadBack, WRAPPED_RESULT_KEY};
-use crate::approval::{self, ArgumentIdentity};
+use crate::approval;
+use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer};
 use crate::tool_outcome;
 
 /// The parameter the model sets to re-assert a call of an `on_duplicate="confirm"` tool.
@@ -163,7 +164,7 @@ impl ToolCalls {
     ) {
         let Some(call) = self.call_mut(id) else { return };
         let Phase::ReadingBack { prepared, ref identity } = call.phase else { return };
-        let canonical = identity.canonical();
+        let canonical = approval::canonical(identity);
         fx.push(Effect::ToolArgumentsRelease { prepared });
         let outcome = match answer {
             Ok(ReadBackAnswer::Question(question)) => {
@@ -290,7 +291,7 @@ impl ToolCalls {
             return;
         };
         let identity = identity.clone();
-        let canonical = identity.canonical();
+        let canonical = approval::canonical(&identity);
         if let Some(read_back) = tool.needs_approval {
             // The history and this step's earlier decisions, the read-backs' answers included.
             let mut decided: Vec<ChatItem> = history.to_vec();

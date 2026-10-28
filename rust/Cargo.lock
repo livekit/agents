@@ -1541,6 +1541,7 @@ dependencies = [
  "futures-util",
  "livekit-token",
  "lk-agents-abi",
+ "lk-agents-core",
  "lk-agents-inference",
  "log",
  "pyo3",

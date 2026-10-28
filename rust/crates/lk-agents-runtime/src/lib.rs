@@ -8,7 +8,11 @@
 //! - [`http`]: the gateway's HTTPS exchange, reporting transport observations.
 //! - [`llm`]: the gateway LLM, executing the LLM request core's effects.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
+//! - [`host`]: `HostInvoker`, the lifecycle of host callbacks under their captured invocation.
+//! - [`agent_run`]: one agent invocation, the core's `AgentRun` executed.
 
+pub mod agent_run;
+pub mod host;
 pub mod http;
 pub mod llm;
 pub mod process;

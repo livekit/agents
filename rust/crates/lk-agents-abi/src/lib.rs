@@ -13,6 +13,7 @@ pub use lk_agents_host_derive::host;
 /// resolve in ABI as in every other crate.
 extern crate self as lk_agents_abi;
 
+pub mod agent;
 pub mod errors;
 pub mod evals;
 pub mod inference;

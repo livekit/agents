@@ -28,7 +28,7 @@ use lk_agents_abi::{
 use serde_json::{Map, Value};
 
 use crate::agent::{Agent, AgentError, OutputSpec, first_string_parameter};
-use crate::approval::ArgumentIdentity;
+use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_outcome;
 use model_step::{ModelStep, Purpose};
@@ -64,17 +64,6 @@ pub struct RunInput {
     pub cleanup_timeout: Duration,
 }
 
-/// What a read-back function returned.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ReadBackAnswer {
-    Question(String),
-    /// A detail is missing before there is anything to approve.
-    InputRequired {
-        question: String,
-        verbatim: bool,
-    },
-}
-
 /// The host's verdict on an output candidate.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputVerdict {
@@ -84,14 +73,6 @@ pub enum OutputVerdict {
     Retry(String),
     /// A validator or output function failed outright.
     Failed(String),
-}
-
-/// An output candidate for the host to validate.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputCandidate {
-    Text(String),
-    /// `final_result`'s value, unwrapped.
-    Value(Value),
 }
 
 /// Inputs from the queue owner.
