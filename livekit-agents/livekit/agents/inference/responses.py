@@ -360,7 +360,7 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
                     "param": None,
                 }
             )
-        if event_type in ("gateway.connected", "gateway.session_expiring"):
+        if event_type in ("gateway.connected", "gateway.session_expiring", "gateway.keepalive"):
             return None
         return super()._parse_ws_event(event)
 

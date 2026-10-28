@@ -253,6 +253,17 @@ async def test_ws_per_call_inference_class_warns(caplog: pytest.LogCaptureFixtur
     await llm_model.aclose()
 
 
+async def test_ws_keepalive_mid_stream_is_ignored() -> None:
+    llm_model = _make_llm()
+    created, *rest = _TEXT_FRAMES
+    _use_connection(
+        llm_model, _ScriptedWs([_CONNECTED, created, {"type": "gateway.keepalive"}, *rest])
+    )
+
+    assert await _drain(llm_model) == "hi"
+    await llm_model.aclose()
+
+
 async def test_ws_receive_uses_stream_idle_timeout() -> None:
     llm_model = _make_llm(stream_idle_timeout=30.0)
     ws = _ScriptedWs([_CONNECTED, *_TEXT_FRAMES])
