@@ -182,6 +182,8 @@ class _ResponsesOptions(Protocol):
 
 
 class ResponsesLLMHost(Protocol):
+    """State that ResponsesLLMStream reads from the LLM that created it."""
+
     _opts: _ResponsesOptions
     _ws: ResponsesWebsocket | None
     _provider_tool_type: type[llm.ProviderTool]
