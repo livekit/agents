@@ -7,6 +7,8 @@
 //! - [`IpcClient`]: the job process's side, with the self health check. The child answers pings
 //!   from its own event loop, so a pong still measures that loop's responsiveness.
 //! - [`pool`]: the warm processes. Spawning them stays with the host language.
+//! - [`ProcessOwner`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
+//!   drives them through, calling back into it only through declared proxies.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -16,15 +18,25 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+pub mod child;
+pub mod job_run;
+pub mod owner;
 pub mod pool;
 pub mod process;
+pub mod process_pool;
 pub mod supervisor;
 #[cfg(test)]
 mod tests;
 pub mod wire;
 
+pub use child::ChildChannel;
+pub use job_run::JobRun;
+pub use owner::ProcessOwner;
+pub use process_pool::ProcessPool;
 pub use supervisor::secs;
-pub use supervisor::{Extra, ExtraValue, InitError, Level, StartJobError, SupervisorOptions};
+pub use supervisor::{
+    Extra, ExtraValue, InitError, Level, StartJobError, SupervisorOptions, extra_fields,
+};
 pub use supervisor::{MemoryError, ProcHost, ProcSupervisor};
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 

@@ -120,7 +120,6 @@ impl lk_agents_abi::worker::cli::WorkerCli for WorkerCli {
     }
 
     fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
-        super::ipc::ipc_pair()
-            .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))
+        crate::worker::ipc::process::ipc_pair().map_err(|error| error.to_string().into())
     }
 }

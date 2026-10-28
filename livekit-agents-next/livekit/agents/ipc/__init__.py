@@ -225,12 +225,14 @@ class JobExecutor:
             raise RuntimeError("process is closed")
         pch, cch = _core.ipc_pair()
         child_end = socket.socket(fileno=cch)
+        self._child_end = child_end
         self._pch = _core.ProcSupervisor(pch, self, pid=0, killable=self._killable, **self._opts)
         # The Rust owner exists before the host invokes multiprocessing and survives caller loss.
-        self._supervise_atask = self._pch.run(self._core_launch(child_end), self)
+        self._supervise_atask = asyncio.ensure_future(self._pch.run())
         await asyncio.shield(self._launched)
 
-    async def _core_launch(self, child_end: socket.socket) -> None:
+    async def _core_launch(self) -> None:
+        child_end = self._child_end
         self._proc = self._create_process(child_end)
 
         def launch() -> None:
@@ -322,6 +324,10 @@ class JobExecutor:
         )
         if self._killable:
             metrics.proc_initialized(time_elapsed=elapsed_time)
+
+    async def _core_launch_job(self, info: RunningJobInfo, launched_at: float) -> None:
+        info.launched_at = launched_at
+        await self.launch_job(info)
 
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the process"""
@@ -468,7 +474,7 @@ class ProcPool(
         await self._pool.join_jobs()
 
     async def launch_job(self, info: RunningJobInfo) -> None:
-        await self._pool.launch_job(info)
+        await self._pool.launch_job(info.job.id, info)
 
     def set_target_idle_processes(self, num_idle_processes: int) -> None:
         self._pool.target_idle_processes = num_idle_processes

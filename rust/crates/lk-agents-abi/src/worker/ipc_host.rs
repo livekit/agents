@@ -1,14 +1,104 @@
-//! Native process bootstrap adapters used by the Python host.
+//! The job processes as the host drives them: the parent's supervisor and pool of each process,
+//! the child's channel to its parent and the run of its one job, with the host objects they call.
+use std::any::Any;
+use std::sync::Arc;
+
+use crate::invoke::CallContext;
+use crate::worker::ipc::ProcessCompletion;
 use crate::worker::job::StartJobFields;
 use crate::{HostRef, errors::HostError};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-#[crate::host(class(name = "ProcSupervisor"))]
+/// A worker operation's failure, raised as the host exception its kind names.
+#[derive(Debug, Clone, thiserror::Error)]
+#[crate::host(error(kind = "RuntimeError"))]
+pub enum WorkerError {
+    #[error("{0}")]
+    Failed(String),
+    #[error("{0}")]
+    #[host(kind = "ValueError")]
+    Invalid(String),
+    #[error("{0}")]
+    #[host(kind = "TimeoutError")]
+    TimedOut(String),
+    #[error("the IPC socket is closed")]
+    #[host(kind = "ConnectionError")]
+    Closed,
+    #[error("the job ended")]
+    #[host(kind = "asyncio.CancelledError")]
+    Cancelled,
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(#[from] HostError),
+}
+
+/// The executor of one job process (`ipc.JobExecutor`): it spawns the process, owns its
+/// start-method bookkeeping and receives the supervisor's diagnostics.
+#[crate::host(proxy(host = "livekit.agents.ipc.JobExecutor"))]
+#[async_trait::async_trait]
+pub trait ProcessHost: Any + Send + Sync {
+    /// Spawn the process on its socket; it reports its receipt through `_core_launched_process`.
+    #[host(await, name = "_core_launch")]
+    async fn launch(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    #[host(await, name = "_core_launched")]
+    async fn launched(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    #[host(await, name = "_core_launch_failed")]
+    async fn launch_failed(
+        &self,
+        #[host(context)] context: &CallContext,
+        cause: String,
+    ) -> Result<(), HostError>;
+    /// The process exited and was reaped.
+    #[host(await, name = "_core_completed")]
+    async fn completed(
+        &self,
+        #[host(context)] context: &CallContext,
+        completion: ProcessCompletion,
+        pid: u32,
+    ) -> Result<(), HostError>;
+    /// One supervision diagnostic on the host's logger, with the failure that caused it.
+    #[host(call, name = "_core_log")]
+    fn log(
+        &self,
+        level: i32,
+        message: String,
+        extra: Map<String, Value>,
+        error: Option<HostError>,
+    ) -> Result<(), HostError>;
+    /// The pool's steps: start the process (its supervisor), initialize it, hand it a job
+    /// (`launched_at` is when it took it), close it and join it.
+    #[host(await, name = "_core_start")]
+    async fn start(
+        &self,
+        #[host(context)] context: &CallContext,
+    ) -> Result<Arc<dyn SupervisedProcess>, HostError>;
+    #[host(await, name = "initialize")]
+    async fn initialize(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    #[host(await, name = "_core_launch_job")]
+    async fn launch_job(
+        &self,
+        #[host(context)] context: &CallContext,
+        info: HostRef,
+        launched_at: f64,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "aclose")]
+    async fn close(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    #[host(await, name = "_core_join")]
+    async fn join(&self, #[host(context)] context: &CallContext) -> Result<bool, HostError>;
+}
+
+/// A native `ProcSupervisor`, as its executor hands it to the pool.
+#[crate::host(native(refused = "expected a native ProcSupervisor"))]
+pub trait SupervisedProcess: Any + Send + Sync {}
+
+#[crate::host(class(name = "ProcSupervisor", native = SupervisedProcess))]
 pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
     #[host(new)]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         fd: i64,
-        host: HostRef,
+        host: Arc<dyn ProcessHost>,
         #[host(kw)] pid: u32,
         initialize_timeout: f64,
         close_timeout: f64,
@@ -18,15 +108,18 @@ pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
         ping_timeout: f64,
         high_ping_threshold: f64,
         #[host(default = true)] killable: bool,
-    ) -> Result<Self, HostError>;
-    #[host(call, future = f64)]
-    fn initialize(
+        #[host(context)] context: CallContext,
+    ) -> Result<Self, WorkerError>;
+    /// The seconds the process took to be ready.
+    #[host(await)]
+    async fn initialize(
         &self,
         #[host(kw)] asyncio_debug: bool,
         http_proxy: Option<String>,
-    ) -> Result<HostRef, HostError>;
+    ) -> Result<f64, WorkerError>;
     #[host(getter)]
     fn initialized(&self) -> bool;
+    /// The launch's receipt, reported on the launch worker right after the OS created the child.
     #[host(call)]
     fn _core_launched_process(
         &self,
@@ -34,70 +127,211 @@ pub trait WorkerProcSupervisor: Send + Sync + Sized + 'static {
         sentinel: i64,
         method: String,
         owned: Vec<i64>,
-    ) -> Result<(), HostError>;
-    #[host(call, future = bool)]
-    fn run(&self, joined: HostRef, host: HostRef) -> Result<HostRef, HostError>;
-    #[host(call, future = bool)]
-    fn _core_wait_exit(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = bool)]
-    fn _core_join(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn aclose(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn kill(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn start_job(&self, fields: StartJobFields) -> Result<HostRef, HostError>;
+    ) -> Result<(), WorkerError>;
+    /// Launch, supervise, observe the exit and reap; whether the process ran (an OS child was
+    /// reaped). Cancelling the wait leaves the process owned.
+    #[host(await)]
+    async fn run(&self) -> bool;
+    #[host(await)]
+    async fn _core_wait_exit(&self) -> bool;
+    #[host(await)]
+    async fn _core_join(&self) -> bool;
+    #[host(await)]
+    async fn aclose(&self);
+    #[host(await)]
+    async fn kill(&self);
+    #[host(await)]
+    async fn start_job(&self, fields: StartJobFields) -> Result<(), WorkerError>;
     #[host(getter)]
     fn killed(&self) -> bool;
 }
 
+/// The process's setup, called with the parent's HTTP proxy before readiness.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+pub trait ChildInitialize: Send + Sync {
+    #[host(call, name = "__call__")]
+    fn initialize(&self, http_proxy: Option<String>) -> Result<(), HostError>;
+}
+
+/// The job process's runner (`ipc.child._JobProc`): it starts the job the parent hands over and
+/// runs each step of the job's run, in the context the run captured.
+#[crate::host(proxy(host = "livekit.agents.ipc.child._JobProc"))]
+#[async_trait::async_trait]
+pub trait JobHost: Send + Sync {
+    /// Answers once its loop ran it: a pong measures the loop's responsiveness.
+    #[host(await, name = "_core_ping")]
+    async fn ping(&self) -> Result<(), HostError>;
+    #[host(await, name = "_core_start_job")]
+    async fn start_job(&self, fields: StartJobFields) -> Result<Arc<dyn JobExecution>, HostError>;
+    #[host(await, name = "_core_dump_stacks")]
+    async fn dump_stacks(&self) -> Result<(), HostError>;
+
+    /// The entrypoint's task.
+    #[host(await, name = "_core_start_entrypoint")]
+    async fn start_entrypoint(
+        &self,
+        #[host(context)] context: &CallContext,
+    ) -> Result<HostRef, HostError>;
+    #[host(await, name = "_core_wait")]
+    async fn wait(
+        &self,
+        #[host(context)] context: &CallContext,
+        task: HostRef,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "_core_cancel")]
+    async fn cancel(
+        &self,
+        #[host(context)] context: &CallContext,
+        task: HostRef,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "_core_shutdown_began")]
+    async fn shutdown_began(
+        &self,
+        #[host(context)] context: &CallContext,
+        reason: String,
+        user_initiated: bool,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "_core_close_session")]
+    async fn close_session(&self, #[host(context)] context: &CallContext) -> Result<(), HostError>;
+    #[host(await, name = "_core_session_end")]
+    async fn session_end(
+        &self,
+        #[host(context)] context: &CallContext,
+        span: HostRef,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "_core_upload")]
+    async fn upload(
+        &self,
+        #[host(context)] context: &CallContext,
+        span: HostRef,
+    ) -> Result<(), HostError>;
+    #[host(await, name = "_core_disconnect")]
+    async fn disconnect(
+        &self,
+        #[host(context)] context: &CallContext,
+        span: HostRef,
+    ) -> Result<(), HostError>;
+    /// A shutdown callback, given the reason when it takes one, in its span (the shutdown's own
+    /// for a framework callback).
+    #[host(await, name = "_core_shutdown_callback")]
+    async fn shutdown_callback(
+        &self,
+        #[host(context)] context: &CallContext,
+        callback: HostRef,
+        reason: Option<String>,
+        span: Option<HostRef>,
+    ) -> Result<(), HostError>;
+    /// A span of the shutdown's, labelled with the callback it runs.
+    #[host(call, name = "_core_span")]
+    fn span(&self, name: String, callback: Option<String>) -> Result<HostRef, HostError>;
+    #[host(call, name = "_core_span_end")]
+    fn span_end(
+        &self,
+        span: HostRef,
+        error: Option<HostError>,
+        timed_out: bool,
+    ) -> Result<(), HostError>;
+    #[host(call, name = "_core_log")]
+    fn log(
+        &self,
+        level: i32,
+        message: String,
+        extra: Map<String, Value>,
+        error: Option<HostError>,
+    ) -> Result<(), HostError>;
+}
+
+/// An awaited application call of the job's (`connect`, `delete_room`, ...), run in its caller's
+/// context.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[async_trait::async_trait]
+pub trait JobCall: Send + Sync {
+    #[host(await, name = "__call__")]
+    async fn call(&self, #[host(context)] context: &CallContext) -> Result<HostRef, HostError>;
+}
+
+/// A participant entrypoint: `entrypoint(ctx, participant)`.
+#[crate::host(proxy(host = "collections.abc.Callable"))]
+#[async_trait::async_trait]
+pub trait ParticipantEntrypoint: Send + Sync {
+    #[host(await, name = "__call__")]
+    async fn run(
+        &self,
+        #[host(context)] context: &CallContext,
+        job: HostRef,
+        participant: HostRef,
+    ) -> Result<(), HostError>;
+}
+
 #[crate::host(class(name = "IpcClient"))]
 pub trait WorkerIpcClient: Send + Sync + Sized + 'static {
-    #[host(new)]
+    /// The handshake on the parent's socket, blocking before the process's loop exists.
+    #[host(new, detach)]
     fn new(
         fd: i64,
-        initialize: HostRef,
+        initialize: Arc<dyn ChildInitialize>,
         #[host(kw, default = false)] process: bool,
-    ) -> Result<Self, HostError>;
+    ) -> Result<Self, WorkerError>;
     #[host(getter)]
     fn asyncio_debug(&self) -> bool;
-    #[host(call, future = ())]
-    fn serve(&self, host: HostRef) -> Result<HostRef, HostError>;
+    /// Serve the parent's messages until it goes, its shutdown ends the process, or `stop()`.
+    #[host(await)]
+    async fn serve(&self, host: Arc<dyn JobHost>) -> Result<(), WorkerError>;
     #[host(call)]
     fn stop(&self);
-    #[host(call, future = ())]
-    fn aclose(&self) -> Result<HostRef, HostError>;
+    #[host(await)]
+    async fn aclose(&self);
+}
+
+#[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
+#[async_trait::async_trait]
+pub trait PoolHost: Send + Sync {
+    /// A new executor, made on the host's loop.
+    #[host(await, name = "_core_create")]
+    async fn create(&self) -> Result<Arc<dyn ProcessHost>, HostError>;
+    #[host(notify, name = "emit")]
+    fn emit(&self, event: String, process: Arc<dyn ProcessHost>);
 }
 
 #[crate::host(class(name = "ProcPool"))]
 pub trait WorkerProcPool: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
-        host: HostRef,
+        host: Arc<dyn PoolHost>,
         #[host(kw)] num_idle_processes: usize,
         initialize_timeout: f64,
         close_timeout: f64,
-    ) -> Result<Self, HostError>;
+        #[host(context)] context: CallContext,
+    ) -> Result<Self, WorkerError>;
     #[host(getter)]
-    fn processes(&self) -> Vec<HostRef>;
+    fn processes(&self) -> Vec<Arc<dyn ProcessHost>>;
     #[host(getter)]
     fn jobs_waiting(&self) -> usize;
     #[host(getter)]
     fn target_idle_processes(&self) -> usize;
     #[host(setter, name = "target_idle_processes")]
     fn set_target_idle_processes(&self, n: usize);
-    #[host(call, future = ())]
-    fn start(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn launch_job(&self, info: HostRef) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn join_jobs(&self) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn aclose(&self) -> Result<HostRef, HostError>;
+    #[host(await)]
+    async fn start(&self) -> Result<(), WorkerError>;
+    #[host(await)]
+    async fn launch_job(&self, job_id: String, info: HostRef) -> Result<(), WorkerError>;
+    /// Waits until every process a job was launched on exited (the drain).
+    #[host(await)]
+    async fn join_jobs(&self);
+    #[host(await)]
+    async fn aclose(&self);
 }
 
-#[crate::host(class(name = "JobRun"))]
+/// A native `JobRun`, as the runner hands it back when its job starts.
+#[crate::host(native(refused = "expected a native JobRun"))]
+pub trait JobExecution: Any + Send + Sync {}
+
+/// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
+/// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
+/// application calls in flight and the recording's setup.
+#[crate::host(class(name = "JobRun", native = JobExecution))]
 pub trait WorkerJobRun: Send + Sync + Sized + 'static {
+    /// `session_end` names the door's `on_session_end`, when it has one.
     #[host(new)]
     fn new(
         #[host(kw)] fake_job: bool,
@@ -105,11 +339,19 @@ pub trait WorkerJobRun: Send + Sync + Sized + 'static {
         redaction: bool,
         #[host(default = "")] url: String,
         #[host(default = false)] recording: bool,
-        #[host(default = None)] session_end: Option<HostRef>,
+        #[host(default = None)] session_end: Option<String>,
         #[host(default = 60.0)] session_aclose_timeout: f64,
-    ) -> Result<Self, HostError>;
+    ) -> Result<Self, WorkerError>;
+    /// `callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
+    /// framework callback runs in the shutdown's span, any other in its own span named `name`.
     #[host(call)]
-    fn add_shutdown_callback(&self, callback: HostRef) -> Result<(), HostError>;
+    fn add_shutdown_callback(
+        &self,
+        callback: HostRef,
+        takes_reason: bool,
+        framework: bool,
+        name: String,
+    );
     #[host(getter)]
     fn observability_url(&self) -> Option<String>;
     #[host(getter)]
@@ -118,43 +360,61 @@ pub trait WorkerJobRun: Send + Sync + Sized + 'static {
     fn shutdown(&self, reason: String, user_initiated: bool);
     #[host(call)]
     fn connected(&self);
-    #[host(call, future = ())]
-    fn connect(&self, connect: HostRef) -> Result<HostRef, HostError>;
+    /// Awaits `connect()` once: a call while it runs waits for it, a call after it connected
+    /// returns at once, a failed one leaves the next call to try again.
+    #[host(await)]
+    async fn connect(
+        &self,
+        connect: Arc<dyn JobCall>,
+        #[host(context)] context: CallContext,
+    ) -> Result<(), WorkerError>;
+    /// `entrypoint` (named `name`) runs for each joining participant of one of `kinds`.
     #[host(call)]
     fn add_participant_entrypoint(
         &self,
-        entrypoint: HostRef,
+        entrypoint: Arc<dyn ParticipantEntrypoint>,
         kinds: Vec<i32>,
-    ) -> Result<(), HostError>;
+        name: String,
+    );
+    /// A participant joined, or was in the room when it connected; `job` is the `JobContext`.
     #[host(call)]
     fn participant_joined(
         &self,
-        ctx: HostRef,
+        job: HostRef,
         participant: HostRef,
         identity: String,
         kind: i32,
-    ) -> Result<(), HostError>;
+        #[host(context)] context: CallContext,
+    );
     #[host(call)]
     fn participant_left(&self, attributes: BTreeMap<String, String>);
-    #[host(call, future = HostRef)]
-    fn api_call(
+    /// An application API call (`delete_room`, ...): its failure is logged whether or not the
+    /// caller awaits it, and it is cancelled once the job ends. A console job makes no call: it
+    /// resolves to `console_result`.
+    #[host(await)]
+    async fn api_call(
         &self,
-        call: HostRef,
+        call: Arc<dyn JobCall>,
         name: String,
         console_result: HostRef,
-    ) -> Result<HostRef, HostError>;
-    #[host(call, future = ())]
-    fn close_tasks(&self) -> Result<HostRef, HostError>;
+        #[host(context)] context: CallContext,
+    ) -> Result<HostRef, WorkerError>;
+    /// Cancels the API calls still running and waits for them.
+    #[host(await)]
+    async fn close_tasks(&self);
+    /// The redaction to record with when the cloud upload is to be set up now, `None` when not.
     #[host(call)]
-    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<Option<bool>, HostError>;
-    #[host(call)]
-    fn claim_session(&self, session: HostRef) -> Result<bool, HostError>;
-    #[host(getter)]
-    fn primary_session(&self) -> Option<HostRef>;
+    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<Option<bool>, WorkerError>;
     #[host(getter)]
     fn recording_initialized(&self) -> bool;
     #[host(getter)]
     fn redaction(&self) -> bool;
-    #[host(call, future = ())]
-    fn run(&self, host: HostRef) -> Result<HostRef, HostError>;
+    /// The entrypoint, then the shutdown sequence once the job ends; `host` runs each step in the
+    /// context this call captured.
+    #[host(await)]
+    async fn run(
+        &self,
+        host: Arc<dyn JobHost>,
+        #[host(context)] context: CallContext,
+    ) -> Result<(), WorkerError>;
 }

@@ -673,3 +673,28 @@ pub fn ipc_pair() -> io::Result<(i64, i64)> {
         Ok((parent.into_raw_socket() as i64, child.into_raw_socket() as i64))
     }
 }
+
+#[cfg(unix)]
+pub type Socket = tokio::net::UnixStream;
+#[cfg(windows)]
+pub type Socket = tokio::net::TcpStream;
+
+/// Takes ownership of a connected socket (an end of [`ipc_pair`], or a host socket's detached
+/// descriptor). Needs a runtime context.
+pub fn socket(fd: i64) -> io::Result<Socket> {
+    #[cfg(unix)]
+    let std = {
+        let fd = i32::try_from(fd)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad socket fd"))?;
+        // SAFETY: the caller hands the descriptor's ownership over.
+        unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) }
+    };
+    #[cfg(windows)]
+    let std = {
+        use std::os::windows::io::FromRawSocket;
+        // SAFETY: the caller hands the socket's ownership over.
+        unsafe { std::net::TcpStream::from_raw_socket(fd as u64) }
+    };
+    std.set_nonblocking(true)?;
+    Socket::from_std(std)
+}

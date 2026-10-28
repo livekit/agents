@@ -140,7 +140,8 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         )
     owner = object.__new__(JobContext)
     owner._info = SimpleNamespace(job=job_protocol.Job(id="report-worker"))
-    owner._run = SimpleNamespace(primary_session=session, observability_url=None, redaction=False)
+    owner._run = SimpleNamespace(observability_url=None, redaction=False)
+    owner._primary_session = session
     owner._tagger = SimpleNamespace(has_evals=lambda: False)
     entered, release = threading.Event(), threading.Event()
     loop_thread = threading.get_ident()
@@ -250,9 +251,8 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     set_capture_content(later_consent)
     owner = object.__new__(JobContext)
     owner._info = SimpleNamespace(job=job_protocol.Job(id="console-policy"))
-    owner._run = SimpleNamespace(
-        primary_session=session, observability_url=None, redaction=project_redaction
-    )
+    owner._run = SimpleNamespace(observability_url=None, redaction=project_redaction)
+    owner._primary_session = session
     owner._tagger = SimpleNamespace(has_evals=lambda: False)
     monkeypatch.setattr(ConsoleCall, "record", True)
     monkeypatch.chdir(tmp_path)
@@ -461,9 +461,8 @@ async def test_event_overflow_preserves_the_complete_transcript(
             session = VoiceSession(turn_handling={"turn_detection": None})
             owner = object.__new__(JobContext)
             owner._info = SimpleNamespace(job=job_protocol.Job(id="report-job"))
-            owner._run = SimpleNamespace(
-                primary_session=session, observability_url=None, redaction=False
-            )
+            owner._run = SimpleNamespace(observability_url=None, redaction=False)
+            owner._primary_session = session
             owner._tagger = _core.Tagger()
             monkeypatch.setattr(JobContext, "_build_session_report", lambda *args: report)
             monkeypatch.setattr(ConsoleCall, "record", True)

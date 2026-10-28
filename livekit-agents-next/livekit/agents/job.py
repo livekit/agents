@@ -18,6 +18,7 @@ import asyncio
 import contextvars
 import datetime
 import functools
+import inspect
 import logging
 import multiprocessing as mp
 import tempfile
@@ -185,6 +186,14 @@ class _ContextLogFieldsFilter(logging.Filter):
         return True
 
 
+def callable_name(callable: Any) -> str:
+    """A callable's name, as the shutdown spans and logs label it."""
+    for attr in ("__qualname__", "__name__"):
+        if isinstance(name := getattr(callable, attr, None), str):
+            return name
+    return repr(callable)
+
+
 class JobContext:
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
@@ -204,6 +213,9 @@ class JobContext:
         self._room = room
         # the participant entrypoints, the connection, the API calls and the recording's setup
         self._run = run
+        self._participant_entrypoints: list[Callable[..., Any]] = []
+        # the job's primary session: the first started for it, which the job closes and reports
+        self._primary_session: VoiceSession | None = None
         self._room.on("participant_connected", self._participant_available)
 
         self._log_fields: dict[str, Any] = {}
@@ -409,7 +421,13 @@ class JobContext:
 
     @property
     def _primary_agent_session(self) -> VoiceSession | None:
-        return cast("VoiceSession | None", self._run.primary_session)
+        return self._primary_session
+
+    def _claim_session(self, session: VoiceSession) -> bool:
+        """A session started for the job: whether it is the job's primary one."""
+        if self._primary_session is None:
+            self._primary_session = session
+        return self._primary_session is session
 
     @property
     def _redaction_enabled(self) -> bool:
@@ -619,7 +637,14 @@ class JobContext:
         Add a callback to be called when the job is shutting down.
         Optionally the callback can take a single argument, the shutdown reason.
         """
-        self._run.add_shutdown_callback(callback)
+        bound = 1 if inspect.ismethod(callback) else 0
+        module = getattr(callback, "__module__", "") or ""
+        self._run.add_shutdown_callback(
+            callback,
+            takes_reason=cast(Any, callback).__code__.co_argcount > bound,
+            framework=module == "livekit.agents" or module.startswith("livekit.agents."),
+            name=callable_name(callback),
+        )
 
     async def wait_for_participant(
         self,
@@ -838,8 +863,13 @@ class JobContext:
         the participant has already joined, the entrypoint will be run immediately. Multiple unique entrypoints can be
         added and they will each be run in parallel for each participant.
         """  # noqa: E501
+        if entrypoint_fnc in self._participant_entrypoints:
+            raise ValueError("entrypoints cannot be added more than once")
+        self._participant_entrypoints.append(entrypoint_fnc)
         kinds = kind if isinstance(kind, list) else [kind]
-        self._run.add_participant_entrypoint(entrypoint_fnc, kinds)
+        self._run.add_participant_entrypoint(
+            cast(Any, entrypoint_fnc), kinds, getattr(entrypoint_fnc, "__name__", "")
+        )
 
     def init_recording(self, options: RecordingOptions) -> None:
         redaction = self._run.init_recording(dict(options))  # type: ignore[arg-type]

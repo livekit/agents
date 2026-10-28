@@ -33,6 +33,22 @@ pub enum ExtraValue {
 /// A log record's extra fields; the host adds the process's own after them.
 pub type Extra = Vec<(&'static str, ExtraValue)>;
 
+/// The fields as the host's log record takes them.
+pub fn extra_fields(extra: Extra) -> serde_json::Map<String, serde_json::Value> {
+    extra
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                ExtraValue::Int(v) => v.into(),
+                ExtraValue::Float(v) => v.into(),
+                ExtraValue::Str(v) => v.into(),
+                ExtraValue::Bool(v) => v.into(),
+            };
+            (key.to_owned(), value)
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
     pub pid: u32,

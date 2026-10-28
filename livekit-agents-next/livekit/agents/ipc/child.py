@@ -47,6 +47,7 @@ from ..job import (
     JobProcess,
     RunningJobInfo,
     _JobContextVar,
+    callable_name,
 )
 from ..log import logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -200,6 +201,9 @@ class _JobProc:
     async def _core_dump_stacks(self) -> None:
         _dump_stack_traces()
 
+    async def _core_ping(self) -> None:
+        """Answered once the loop ran it: the pong measures the loop's responsiveness."""
+
     async def aclose(self) -> None:
         # the parent went or the job ended: a job still running is cancelled
         if self._job_task is not None:
@@ -220,7 +224,7 @@ class _JobProc:
             redaction=info.job.enable_redaction,
             url=info.url,
             recording=info.job.enable_recording,
-            session_end=self._session_end_fnc,
+            session_end=callable_name(self._session_end_fnc) if self._session_end_fnc else None,
         )
         self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(
@@ -323,6 +327,11 @@ class _JobProc:
             name, context=trace.set_span_in_context(self._shutdown_span), attributes=attributes
         )
 
+    def _core_log(
+        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
+    ) -> None:
+        logger.log(level, msg, extra=extra, exc_info=exc)
+
     def _core_span_end(
         self, span: trace.Span, error: BaseException | None, timed_out: bool
     ) -> None:
@@ -350,9 +359,10 @@ class _JobProc:
     async def _core_shutdown_callback(
         self,
         callback: Callable[..., Awaitable[None]],
-        args: tuple[str, ...],
+        reason: str | None,
         span: trace.Span | None,
     ) -> None:
+        args = () if reason is None else (reason,)
         # a framework callback runs in the shutdown's own span
         with trace.use_span(
             span or self._shutdown_span or trace.INVALID_SPAN,

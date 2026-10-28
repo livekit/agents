@@ -106,10 +106,13 @@ impl generated::Implementations for Selected {
     type EndpointCard = lk_agents_runtime::a2a_card::CardBuilder;
     type McpSession = lk_agents_runtime::mcp::McpSession;
     type McpTools = lk_agents_runtime::mcp::McpTools;
-    type WorkerProcSupervisor = crate::worker_host::ipc::PyProcSupervisor;
-    type WorkerIpcClient = crate::worker_host::ipc::PyIpcClient;
-    type WorkerProcPool = crate::worker_host::ipc::PyProcPool;
-    type WorkerJobRun = crate::worker_host::ipc::PyJobRun;
+    type WorkerProcSupervisor =
+        lk_agents_runtime::worker::ipc::ProcessOwner<lk_agents_runtime::process::Process>;
+    type WorkerIpcClient =
+        lk_agents_runtime::worker::ipc::ChildChannel<lk_agents_runtime::process::Process>;
+    type WorkerProcPool =
+        lk_agents_runtime::worker::ipc::ProcessPool<lk_agents_runtime::process::Process>;
+    type WorkerJobRun = lk_agents_runtime::worker::ipc::JobRun<lk_agents_runtime::process::Process>;
     type WorkerCli = crate::worker_host::cli::WorkerCli;
     type EndpointStream = crate::worker_host::endpoint::PyEndpointStream;
     type EndpointServer = crate::worker_host::endpoint::PyEndpointServer;

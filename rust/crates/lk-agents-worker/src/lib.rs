@@ -14,6 +14,7 @@ pub mod cli_signals;
 pub mod config;
 pub mod diagnostics;
 pub mod endpoint;
+pub mod env;
 pub mod hw;
 pub mod io;
 pub mod ipc;

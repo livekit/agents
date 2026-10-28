@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 from asyncio import Future
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from livekit.agents.cli import _DevServer
+from livekit.agents.ipc import JobExecutor, ProcPool
+from livekit.agents.ipc.child import _JobProc
 
 from .._core import StartJobFields
 from .worker_cli import CliArgs
@@ -106,7 +108,7 @@ class ProcSupervisor:
     def __init__(
         self,
         fd: int,
-        host: object,
+        host: JobExecutor,
         *,
         pid: int,
         initialize_timeout: float,
@@ -118,7 +120,8 @@ class ProcSupervisor:
         high_ping_threshold: float,
         killable: bool = True,
     ) -> None: ...
-    def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> Future[float]: ...
+    async def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> float:
+        """The seconds the process took to be ready."""
     @property
     def initialized(self) -> bool: ...
     def _core_launched_process(
@@ -127,47 +130,64 @@ class ProcSupervisor:
         sentinel: int,
         method: str,
         owned: Sequence[int],
-    ) -> None: ...
-    def run(self, joined: object, host: object) -> Future[bool]: ...
-    def _core_wait_exit(self) -> Future[bool]: ...
-    def _core_join(self) -> Future[bool]: ...
-    def aclose(self) -> Future[None]: ...
-    def kill(self) -> Future[None]: ...
-    def start_job(self, fields: StartJobFields) -> Future[None]: ...
+    ) -> None:
+        """The launch's receipt, reported on the launch worker right after the OS created the child."""
+    async def run(self) -> bool:
+        """Launch, supervise, observe the exit and reap; whether the process ran (an OS child was
+        reaped). Cancelling the wait leaves the process owned.
+        """
+    async def _core_wait_exit(self) -> bool: ...
+    async def _core_join(self) -> bool: ...
+    async def aclose(self) -> None: ...
+    async def kill(self) -> None: ...
+    async def start_job(self, fields: StartJobFields) -> None: ...
     @property
     def killed(self) -> bool: ...
 
 class IpcClient:
-    def __init__(self, fd: int, initialize: object, *, process: bool = False) -> None: ...
+    def __init__(
+        self,
+        fd: int,
+        initialize: Callable[[str | None], None],
+        *,
+        process: bool = False,
+    ) -> None:
+        """The handshake on the parent's socket, blocking before the process's loop exists."""
     @property
     def asyncio_debug(self) -> bool: ...
-    def serve(self, host: object) -> Future[None]: ...
+    async def serve(self, host: _JobProc) -> None:
+        """Serve the parent's messages until it goes, its shutdown ends the process, or `stop()`."""
     def stop(self) -> None: ...
-    def aclose(self) -> Future[None]: ...
+    async def aclose(self) -> None: ...
 
 class ProcPool:
     def __init__(
         self,
-        host: object,
+        host: ProcPool,
         *,
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
     ) -> None: ...
     @property
-    def processes(self) -> list[object]: ...
+    def processes(self) -> list[JobExecutor]: ...
     @property
     def jobs_waiting(self) -> int: ...
     @property
     def target_idle_processes(self) -> int: ...
     @target_idle_processes.setter
     def target_idle_processes(self, n: int) -> None: ...
-    def start(self) -> Future[None]: ...
-    def launch_job(self, info: object) -> Future[None]: ...
-    def join_jobs(self) -> Future[None]: ...
-    def aclose(self) -> Future[None]: ...
+    async def start(self) -> None: ...
+    async def launch_job(self, job_id: str, info: object) -> None: ...
+    async def join_jobs(self) -> None:
+        """Waits until every process a job was launched on exited (the drain)."""
+    async def aclose(self) -> None: ...
 
 class JobRun:
+    """A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
+    order and bounds of the shutdown, the participant entrypoints, the room connected once, the
+    application calls in flight and the recording's setup.
+    """
     def __init__(
         self,
         *,
@@ -176,37 +196,68 @@ class JobRun:
         redaction: bool,
         url: str = "",
         recording: bool = False,
-        session_end: object | None = None,
+        session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
-    ) -> None: ...
-    def add_shutdown_callback(self, callback: object) -> None: ...
+    ) -> None:
+        """`session_end` names the door's `on_session_end`, when it has one."""
+    def add_shutdown_callback(
+        self,
+        callback: object,
+        takes_reason: bool,
+        framework: bool,
+        name: str,
+    ) -> None:
+        """`callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
+        framework callback runs in the shutdown's span, any other in its own span named `name`.
+        """
     @property
     def observability_url(self) -> str | None: ...
     @property
     def buffer_logs(self) -> bool: ...
     def shutdown(self, reason: str, user_initiated: bool) -> None: ...
     def connected(self) -> None: ...
-    def connect(self, connect: object) -> Future[None]: ...
-    def add_participant_entrypoint(self, entrypoint: object, kinds: Sequence[int]) -> None: ...
+    async def connect(self, connect: Callable[[], Awaitable[object]]) -> None:
+        """Awaits `connect()` once: a call while it runs waits for it, a call after it connected
+        returns at once, a failed one leaves the next call to try again.
+        """
+    def add_participant_entrypoint(
+        self,
+        entrypoint: Callable[[object, object], Awaitable[None]],
+        kinds: Sequence[int],
+        name: str,
+    ) -> None:
+        """`entrypoint` (named `name`) runs for each joining participant of one of `kinds`."""
     def participant_joined(
         self,
-        ctx: object,
+        job: object,
         participant: object,
         identity: str,
         kind: int,
-    ) -> None: ...
+    ) -> None:
+        """A participant joined, or was in the room when it connected; `job` is the `JobContext`."""
     def participant_left(self, attributes: Mapping[str, str]) -> None: ...
-    def api_call(self, call: object, name: str, console_result: object) -> Future[object]: ...
-    def close_tasks(self) -> Future[None]: ...
-    def init_recording(self, options: Mapping[str, bool]) -> bool | None: ...
-    def claim_session(self, session: object) -> bool: ...
-    @property
-    def primary_session(self) -> object | None: ...
+    async def api_call(
+        self,
+        call: Callable[[], Awaitable[object]],
+        name: str,
+        console_result: object,
+    ) -> object:
+        """An application API call (`delete_room`, ...): its failure is logged whether or not the
+        caller awaits it, and it is cancelled once the job ends. A console job makes no call: it
+        resolves to `console_result`.
+        """
+    async def close_tasks(self) -> None:
+        """Cancels the API calls still running and waits for them."""
+    def init_recording(self, options: Mapping[str, bool]) -> bool | None:
+        """The redaction to record with when the cloud upload is to be set up now, `None` when not."""
     @property
     def recording_initialized(self) -> bool: ...
     @property
     def redaction(self) -> bool: ...
-    def run(self, host: object) -> Future[None]: ...
+    async def run(self, host: _JobProc) -> None:
+        """The entrypoint, then the shutdown sequence once the job ends; `host` runs each step in the
+        context this call captured.
+        """
 
 class ServerConfig:
     def __init__(self, options: ServerOptions) -> None: ...

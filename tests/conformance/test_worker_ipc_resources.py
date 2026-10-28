@@ -58,6 +58,9 @@ class _ChildHost:
     async def _core_dump_stacks(self) -> None:
         pass
 
+    async def _core_ping(self) -> None:
+        pass
+
 
 def _ipc_child(endpoint: socket.socket, behavior: str) -> None:
     if hasattr(signal, "SIGUSR1"):
@@ -135,11 +138,11 @@ class _Executor(JobExecutor):
             return super()._create_process(endpoint)
         return self._mp_ctx.Process(target=_ipc_child, args=(endpoint, self.behavior))
 
-    async def _core_launch(self, endpoint: socket.socket) -> None:
+    async def _core_launch(self) -> None:
         self.launch_entered.set()
         if self.launch_gate is not None:
             await self.launch_gate.wait()
-        await super()._core_launch(endpoint)
+        await super()._core_launch()
         self.process_spawned.set()
         if self.receipt_gate is not None:
             await self.receipt_gate.wait()

@@ -111,6 +111,12 @@ impl lk_agents_net::env::Env for Process {
     }
 }
 
+impl lk_agents_worker::env::Env for Process {
+    fn worker_io() -> Result<lk_agents_worker::io::WorkerIo, String> {
+        worker_io().map_err(|error| error.to_string())
+    }
+}
+
 impl lk_agents_inference::env::Env for Process {
     fn workers() -> Result<MediaWorkers, String> {
         workers().map_err(|error| error.to_string())

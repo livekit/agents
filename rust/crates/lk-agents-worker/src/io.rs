@@ -88,6 +88,25 @@ impl WorkerIo {
         self.runtime.clone()
     }
 
+    /// Runs `work` on the injected runtime, wherever the caller polls: tasks it spawns land there
+    /// too. Dropping the returned future cancels the work.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = T> + Send + 'static,
+    ) -> T {
+        struct Owned<T>(JoinHandle<T>);
+        impl<T> Drop for Owned<T> {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let mut task = Owned(self.runtime.spawn(work));
+        match (&mut task.0).await {
+            Ok(value) => value,
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
+        }
+    }
+
     pub fn try_admit(&self) -> Result<WorkerIoPermit, WorkerIoError> {
         let permit =
             self.capacity.clone().try_acquire_owned().map_err(|_| WorkerIoError::Exhausted)?;

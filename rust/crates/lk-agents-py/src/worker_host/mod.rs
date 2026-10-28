@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(super) mod callback;
 pub mod cli;
-pub mod ipc;
 mod server;
 
 use crate::worker::transport::{
