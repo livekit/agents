@@ -2,9 +2,12 @@
 //! told "insert this after that" or "delete this".
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{ChatContext, ChatItem};
+
+mod incremental;
+pub use incremental::ChatContextDiff;
 
 /// `(previous_item_id, id)`; `None` is first in the conversation.
 pub type Anchored = (Option<String>, String);
@@ -15,99 +18,6 @@ pub struct DiffOps {
     pub to_create: Vec<Anchored>,
     /// Patched in place, keeping the item's server-side position.
     pub to_update: Vec<Anchored>,
-}
-
-/// Ids only, never content, so an edited message is an update. Stable item ids turn the LCS
-/// into a longest increasing subsequence of their positions in the new context.
-fn lcs(old: &[&str], new: &[&str]) -> Vec<String> {
-    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
-    let mut out: Vec<String> = old[..prefix].iter().map(|id| (*id).to_owned()).collect();
-    let (old, new) = (&old[prefix..], &new[prefix..]);
-    if old.is_empty() || new.is_empty() {
-        return out;
-    }
-
-    let mut positions = std::collections::BTreeMap::new();
-    for (index, id) in new.iter().enumerate() {
-        if positions.insert(*id, index).is_some() {
-            // Host-authored contexts can repeat ids. Keep their established diff semantics too,
-            // without allocating a quadratic table for that exceptional input.
-            lcs_repeated_ids(old, new, &mut out);
-            return out;
-        }
-    }
-
-    let mut tails = Vec::<usize>::new();
-    let mut tail_items = Vec::<usize>::new();
-    let mut previous = vec![None; old.len()];
-    for (index, id) in old.iter().enumerate() {
-        let Some(&position) = positions.get(id) else { continue };
-        let length = tails.partition_point(|&tail| tail < position);
-        previous[index] = length.checked_sub(1).map(|i| tail_items[i]);
-        if length == tails.len() {
-            tails.push(position);
-            tail_items.push(index);
-        } else {
-            // Scanning old items and replacing equal-length tails keeps the old backtracking
-            // tie rule: discard from the new side when both choices have the same length.
-            tails[length] = position;
-            tail_items[length] = index;
-        }
-    }
-    let mut suffix = Vec::with_capacity(tails.len());
-    let mut cursor = tail_items.last().copied();
-    while let Some(index) = cursor {
-        suffix.push(old[index].to_owned());
-        cursor = previous[index];
-    }
-    out.extend(suffix.into_iter().rev());
-    out
-}
-
-/// Hirschberg's linear-space fallback for repeated new ids. The normal, uniquely keyed path
-/// above is O((n + m) log m); this fallback is O(nm) time and O(n + m) memory.
-fn lcs_repeated_ids(old: &[&str], new: &[&str], out: &mut Vec<String>) {
-    if old.is_empty() || new.is_empty() {
-        return;
-    }
-    if old.len() == 1 {
-        if new.contains(&old[0]) {
-            out.push(old[0].to_owned());
-        }
-        return;
-    }
-    let middle = old.len() / 2;
-    let left = lcs_lengths(&old[..middle], new, false);
-    let right = lcs_lengths(&old[middle..], new, true);
-    let mut split = 0;
-    let mut longest = 0;
-    for index in 0..=new.len() {
-        let length = left[index] + right[new.len() - index];
-        if length > longest {
-            longest = length;
-            split = index;
-        }
-    }
-    // Free rows before recursing so live scratch space remains linear.
-    drop(left);
-    drop(right);
-    lcs_repeated_ids(&old[..middle], &new[..split], out);
-    lcs_repeated_ids(&old[middle..], &new[split..], out);
-}
-
-fn lcs_lengths(old: &[&str], new: &[&str], reverse: bool) -> Vec<usize> {
-    let mut lengths = vec![0; new.len() + 1];
-    for i in 0..old.len() {
-        let old_id = old[if reverse { old.len() - 1 - i } else { i }];
-        let mut diagonal = 0;
-        for j in 0..new.len() {
-            let new_id = new[if reverse { new.len() - 1 - j } else { j }];
-            let previous = lengths[j + 1];
-            lengths[j + 1] = if old_id == new_id { diagonal + 1 } else { lengths[j].max(previous) };
-            diagonal = previous;
-        }
-    }
-    lengths
 }
 
 /// `compute_chat_ctx_diff` (`llm/utils.py:120`) over the host's items, as
@@ -128,8 +38,8 @@ pub fn compute_chat_ctx_diff(old: &ChatContext, new: &ChatContext) -> DiffOps {
     if old_by_id.len() == old.len()
         && old.items.iter().zip(&new.items).all(|(before, after)| before.id() == after.id())
     {
-        // Reuse the existing id index to validate the appended suffix. A duplicate restores the
-        // old-only index before falling back to the historical set semantics.
+        // Validate appended ids with the existing index. Repeated ids use the general edit
+        // engine's historical set semantics.
         let unique = new
             .items
             .iter()
@@ -138,31 +48,11 @@ pub fn compute_chat_ctx_diff(old: &ChatContext, new: &ChatContext) -> DiffOps {
         if unique {
             return prefix_diff(old, new);
         }
-        old_by_id = old.items.iter().map(|item| (item.id(), item)).collect();
     }
-    let old_ids: Vec<&str> = old.items.iter().map(|i| i.id()).collect();
-    let new_ids: Vec<&str> = new.items.iter().map(|i| i.id()).collect();
-    let kept: HashSet<String> = lcs(&old_ids, &new_ids).into_iter().collect();
-
-    let to_remove =
-        old.items.iter().filter(|i| !kept.contains(i.id())).map(|i| i.id().to_owned()).collect();
-
-    let (mut to_create, mut to_update) = (Vec::new(), Vec::new());
-    let mut prev: Option<String> = None;
-
-    for item in &new.items {
-        if !kept.contains(item.id()) {
-            to_create.push((prev.clone(), item.id().to_owned()));
-        } else if let Some(old_item) = old_by_id.get(item.id())
-            && message_changed(old_item, item)
-        {
-            to_update.push((prev.clone(), item.id().to_owned()));
-        }
-        // Advances for created items too, so a run of new items chains in order.
-        prev = Some(item.id().to_owned());
-    }
-
-    DiffOps { to_remove, to_create, to_update }
+    drop(old_by_id);
+    let mut diff = ChatContextDiff::default();
+    while !diff.advance(old, new, 1024) {}
+    diff.take_operations()
 }
 
 /// Appending or trimming a context whose ids already line up needs no retained subsequence or
