@@ -2,10 +2,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::voice::room_owner::RoomIo as _;
 use lk_agents_abi::{ATTRIBUTE_AGENT_STATE, TokioSpawner};
-use lk_agents_rtc::{ConnectionState, FakeRtc, RtcRoom};
-use lk_agents_voice::room_io::_output::transcription::SegmentIds;
-use lk_agents_voice::room_io::RoomIo;
+use lk_agents_test_support::room_io::owner::RoomIo;
+use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, RtcRoom};
 use lk_agents_voice::room_io::RoomIoConfig;
 
 // Catches: `lk.agent.state` written only while the room is connected, and the session started
@@ -17,19 +17,13 @@ async fn a_state_taken_before_the_connect_is_written_on_it() {
     let room = rtc.room("agent-state-on-connect");
     room.set_connection_state(ConnectionState::Disconnected);
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
-    let io = RoomIo::new(
-        room.clone() as Arc<dyn RtcRoom>,
-        clock,
-        spawner,
-        Arc::new(SegmentIds::default()),
-        RoomIoConfig::default(),
-        None,
-    );
-    io.start();
-    io.on_agent_state_changed("listening");
+    let io = RoomIo::new(room.clone() as Arc<dyn RtcRoom>, clock, spawner, RoomIoConfig::default());
+    io.clone().start();
+    io.clone().on_agent_state_changed("listening");
     tokio::time::sleep(Duration::from_millis(50)).await;
     room.set_connection_state(ConnectionState::Connected);
     tokio::time::sleep(Duration::from_millis(50)).await;
     let state = room.local_participant().attributes().get(ATTRIBUTE_AGENT_STATE).cloned();
     assert_eq!(state.as_deref(), Some("listening"));
+    assert_eq!(io.aclose().await, lk_agents_abi::Closed::Clean);
 }

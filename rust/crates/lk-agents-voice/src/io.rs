@@ -104,8 +104,41 @@ impl TextOutput for NodeTextOutput {
         })
     }
 
+    fn retain_until_flushed(&self, owner: Box<dyn Send>) {
+        self.node.retain_until_drained(Box::new(TextOutputOwner {
+            next: self.next.clone(),
+            owner: Some(owner),
+        }));
+    }
+
+    fn cancel_flush(&self) {
+        self.node.cancel();
+        self.next.cancel_flush();
+    }
+
+    fn wait_for_flush(&self) -> lk_agents_abi::BoxFuture<'_, Result<()>> {
+        Box::pin(async {
+            self.node.drain().await?;
+            self.next.wait_for_flush().await
+        })
+    }
+
     fn flush(&self) {
         self.node.flush();
+    }
+}
+
+/// Pass a binding through every processing receipt in its text chain.
+struct TextOutputOwner {
+    next: Arc<dyn TextOutput>,
+    owner: Option<Box<dyn Send>>,
+}
+
+impl Drop for TextOutputOwner {
+    fn drop(&mut self) {
+        if let Some(owner) = self.owner.take() {
+            self.next.retain_until_flushed(owner);
+        }
     }
 }
 
@@ -142,5 +175,47 @@ impl CoreTextOutput {
     #[host(method)]
     pub fn flush(&self) {
         self.0.flush();
+    }
+}
+
+#[cfg(test)]
+mod text_node_tests {
+    use super::*;
+    use std::task::{Context, Poll, Waker};
+
+    use lk_agents_test_support::text::BufferedTextNode;
+
+    struct Destination;
+    impl TextOutput for Destination {
+        fn label(&self) -> &str {
+            "destination"
+        }
+        fn capture_text<'a>(&'a self, _: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn a_buffered_text_node_keeps_the_segment_pending_until_its_drain_finishes() {
+        let delivered = Arc::new(BufferedTextNode::default());
+        let output = NodeTextOutput::new(delivered.clone(), Arc::new(Destination));
+        output.flush();
+        let mut completion = output.wait_for_flush();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Pending));
+        delivered.complete();
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+    }
+    #[test]
+    fn cancelling_a_buffered_text_node_settles_its_own_segment() {
+        let delivered = Arc::new(BufferedTextNode::default());
+        let output = NodeTextOutput::new(delivered, Arc::new(Destination));
+        output.flush();
+        let mut completion = output.wait_for_flush();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Pending));
+        output.cancel_flush();
+        assert!(matches!(completion.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
     }
 }

@@ -14,7 +14,6 @@ doctest = false
 [dependencies]
 regex = "1.13.1"
 fancy-regex = "0.19.0"
-lk-agents-rtc = { path = "../lk-agents-rtc" }
 serde = { workspace = true }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # The shared agent execution core: the tool outcome table, approval and AgentRun.
@@ -39,6 +38,7 @@ pbjson-types.workspace = true
 pyo3 = { workspace = true, optional = true }
 
 [dev-dependencies]
+lk-agents-test-support = { path = "../lk-agents-test-support" }
 # Paused time (`start_paused`) for the unit tests only.
 tokio = { workspace = true, features = ["test-util"] }
 
@@ -54,4 +54,4 @@ native-audio = ["lk-agents-media/resample"]
 # for a queue owner of its own). Enabled by the fuzzer and runtime conformance tests.
 dst = []
 # The Python binding, expanded in place: only `lk-agents-py` enables it.
-python = ["dep:pyo3", "lk-agents-abi/python", "lk-agents-rtc/python"]
+python = ["dep:pyo3", "lk-agents-abi/python"]

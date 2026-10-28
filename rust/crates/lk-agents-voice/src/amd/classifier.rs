@@ -825,7 +825,10 @@ pub fn resolve_max_endpointing_delay(
 /// `provided` is `None` only when the key was absent: the reference tests key presence, so an
 /// explicit default still beats a disagreeing activity.
 #[lk_agents_abi::host(export(name = "amd_resolve_max_endpointing_delay", pid = false))]
-pub fn resolve_max_endpointing_delay_for_host(provided: Option<Duration>, #[host(required)] activity: Option<Duration>) -> Duration {
+pub fn resolve_max_endpointing_delay_for_host(
+    provided: Option<Duration>,
+    #[host(required)] activity: Option<Duration>,
+) -> Duration {
     resolve_max_endpointing_delay(provided, activity, MAX_ENDPOINTING_DELAY)
 }
 

@@ -24,6 +24,7 @@ pub mod driver;
 pub mod effects;
 pub mod host_events;
 pub mod nodes;
+pub mod output;
 pub(crate) mod storage;
 pub mod time;
 
@@ -61,6 +62,7 @@ pub(crate) struct VoiceSession {
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     /// `session.output` as the core decides with it.
     pub(crate) outputs: Outputs,
+    pub(crate) output_bindings: output::OutputBindings,
     /// `AgentSession._tools`, and the hosts that run them.
     pub(crate) tools: crate::tool_executor::Toolset,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
@@ -141,6 +143,7 @@ impl VoiceSession {
             stt,
             vad,
             outputs,
+            output_bindings: Default::default(),
             tools: Default::default(),
             tool_hosts: Vec::new(),
             keyterms: None,
@@ -398,9 +401,6 @@ pub struct SessionShared {
     pub output: tokio::sync::watch::Sender<Outputs>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub recorder: Arc<std::sync::RwLock<Option<crate::recorder_io::RecorderTap>>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub recorder_observer:
-        std::sync::Mutex<Option<Arc<dyn lk_agents_abi::voice::io::PlaybackObserver>>>,
     /// Published by the loop every iteration, read by `perform_audio_forwarding` before its first
     /// push.
     pub launch: LaunchGate,
@@ -559,7 +559,12 @@ impl Driver {
             s.outputs.transcription.as_ref().map(|r| r.id),
         ];
         let updates = self.activity.handoff.updates().chain(self.activity.voice_tasks.parents());
-        slots.into_iter().flatten().chain(updates.flat_map(|u| u.resources())).collect()
+        slots
+            .into_iter()
+            .flatten()
+            .chain(s.output_bindings.held())
+            .chain(updates.flat_map(|u| u.resources()))
+            .collect()
     }
 
     /// Every provider the core held or was handed since the last step and holds no more.

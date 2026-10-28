@@ -34,6 +34,10 @@ impl Timebase {
         Timebase { clock: clock.clone(), virt: Some(clock) }
     }
 
+    pub fn virtual_clock(&self) -> Option<Arc<VirtualClock>> {
+        self.virt.clone()
+    }
+
     pub fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
     }

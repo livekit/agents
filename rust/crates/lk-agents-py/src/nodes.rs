@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::python::{
-    Ambient, Convert, HostHandle, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState,
-    NodeCalls, captured, check_pid, item_stream, pyo3_async_runtimes,
+    Ambient, Convert, HostProxy, HostSource, ItemSink, ItemStream, NodeCallState, NodeCalls,
+    captured, check_pid, item_stream, pyo3_async_runtimes,
 };
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
+use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, IoError, TextOutput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
 use lk_agents_abi::{
@@ -106,31 +106,42 @@ impl AgentNodes {
         })
     }
 
-    /// `host.<node>(arg)` in a fresh copy of the binding's context, on the loop; its output is
-    /// drained in that same copy.
+    /// One raw call, in the same owned context its returned stream will use.
+    fn start_call(
+        &self,
+        node: &'static str,
+        arg: impl FnOnce(Python<'_>) -> PyResult<Py<PyAny>> + Send + 'static,
+    ) -> Result<
+        (crate::host::Started, pyo3_async_runtimes::TaskLocals, Option<NodeCalls>),
+        ProviderError,
+    > {
+        Python::attach(|py| {
+            let context = self.context.bind(py).call_method0("copy")?;
+            let calls = (node == "tts").then(NodeCalls::default);
+            if let Some(calls) = calls.clone() {
+                let set = node_calls_var(py)?.getattr("set")?;
+                context.call_method1("run", (set, Py::new(py, NodeCallsCell(calls))?))?;
+            }
+            let host = self.host.clone_ref(py);
+            let started =
+                crate::host::start_raw_in(py, &self.locals.event_loop(py), &context, move |py| {
+                    host.bind(py).call_method1(node, (arg(py)?,))
+                })?;
+            let locals = self.locals.clone().with_context(context);
+            Ok((started, locals, calls))
+        })
+        .map_err(captured)
+    }
+
+    /// A provider node's result, retaining its synthesis metering in the call's context.
     async fn call<T: Send + 'static>(
         &self,
         node: &'static str,
         arg: impl FnOnce(Python<'_>) -> PyResult<Py<PyAny>> + Send + 'static,
         convert: Convert<T>,
     ) -> Result<HostSource<T>, ProviderError> {
-        let (context, host) =
-            Python::attach(|py| (self.context.clone_ref(py), self.host.clone_ref(py)));
-        let on_loop = Python::attach(|py| HostHandle::from_parts(py.None(), self.locals.clone()));
-        let calls = (node == "tts").then(NodeCalls::default);
-        let cell = calls.clone();
-        let (context, out) = on_loop
-            .run_on_loop(move |py| {
-                let context = context.bind(py).call_method0("copy")?;
-                if let Some(calls) = cell {
-                    let set = node_calls_var(py)?.getattr("set")?;
-                    context.call_method1("run", (set, Py::new(py, NodeCallsCell(calls))?))?;
-                }
-                let out = context.call_method1("run", (host.bind(py).getattr(node)?, arg(py)?))?;
-                Ok((context.unbind(), out.unbind()))
-            })
-            .await?;
-        let locals = Python::attach(|py| self.locals.clone().with_context(context.into_bound(py)));
+        let (mut started, locals, calls) = self.start_call(node, arg)?;
+        let out = started.settled().await.map_err(captured)?;
         let source = HostSource::returned(out, locals, convert, Arc::clone(&self.clock));
         Ok(match calls {
             Some(calls) => source.with_calls(calls),
@@ -156,54 +167,191 @@ impl AgentNodes {
         &self,
         node: &'static str,
         to_py: fn(Python<'_>, &I) -> PyResult<Py<PyAny>>,
-        convert: Convert<T>,
+        convert: crate::host::stream::Convert<T>,
         deliver: D,
-        done: impl FnOnce() + Send + 'static,
+        done: impl FnOnce(Result<(), IoError>) + Send + 'static,
+        tasks: Option<&Arc<lk_agents_abi::TaskSet>>,
+        mut cancelled: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Option<ItemSink<I>>
     where
         I: Send + Sync + 'static,
         T: Send + 'static,
         D: Fn(T) -> F + Send + 'static,
-        F: std::future::Future<Output = bool> + Send,
+        F: std::future::Future<Output = Result<bool, IoError>> + Send,
     {
         let (sink, input) = match Python::attach(|py| item_stream(py, to_py)) {
             Ok(halves) => halves,
             Err(e) => {
-                lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "failed to open a node");
+                done(Err(IoError::from(captured(e))));
                 return None;
             }
         };
         let nodes = self.share();
-        self.spawner.spawn_unboxed(async move {
-            match nodes.call(node, move |_| Ok(input.into_any()), convert).await {
-                Ok(mut out) => {
-                    loop {
-                        let item = match out.next().await {
-                            Ok(Some(item)) => item,
-                            Ok(None) => break,
-                            Err(e) => {
-                                lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "error in a node");
-                                break;
-                            }
-                        };
-                        if !deliver(item).await {
-                            break;
-                        }
+        let drain = async move {
+            let (mut opening, locals, _) =
+                match nodes.start_call(node, move |_| Ok(input.into_any())) {
+                    Ok(started) => started,
+                    Err(error) => {
+                        done(Err(error.into()));
+                        return;
                     }
-                    let deadline = nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-                    Box::new(out).close(deadline).await;
+                };
+            let mut cancelled_at = None;
+            let returned =
+                node_returned(&nodes, &mut opening, &mut cancelled, &mut cancelled_at).await;
+            let opened = match returned {
+                Ok(Some(value)) => {
+                    let awaitable = Python::attach(|py| {
+                        py.import("inspect")?
+                            .call_method1("isawaitable", (value.bind(py),))?
+                            .is_truthy()
+                    })
+                    .map_err(captured);
+                    let resolved = match awaitable {
+                        Ok(true) => {
+                            let awaiting = Python::attach(|py| {
+                                crate::host::start_in(
+                                    py,
+                                    &locals.event_loop(py),
+                                    &locals.context(py),
+                                    move |py| Ok(value.bind(py).clone()),
+                                )
+                            })
+                            .map_err(captured);
+                            match awaiting {
+                                Ok(mut awaiting) => {
+                                    node_returned(
+                                        &nodes,
+                                        &mut awaiting,
+                                        &mut cancelled,
+                                        &mut cancelled_at,
+                                    )
+                                    .await
+                                }
+                                Err(error) => Err(error.into()),
+                            }
+                        }
+                        Ok(false) => Ok(Some(value)),
+                        Err(error) => Err(error.into()),
+                    };
+                    resolved.and_then(|value| {
+                        Python::attach(|py| match value {
+                            None => Ok(None),
+                            Some(value) if value.is_none(py) => Ok(None),
+                            Some(value) => crate::host::stream::HostStream::open_in(
+                                value.bind(py),
+                                &locals.event_loop(py),
+                                &locals.context(py),
+                                convert,
+                                nodes.clock.clone(),
+                            )
+                            .map(Some)
+                            .map_err(|error| IoError::from(captured(error))),
+                        })
+                    })
                 }
-                Err(e) => lk_agents_abi::python::log::error!(target: LOG, node = node, error = e.to_string().as_str(); "error in a node"),
-            }
-            done();
-        });
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
+            };
+            let outcome = match opened {
+                Ok(None) => Ok(()),
+                Ok(Some(mut out)) => {
+                    let outcome = loop {
+                        let next = tokio::select! {
+                            biased;
+                            () = node_cancelled(&mut cancelled) => {
+                                cancelled_at.get_or_insert_with(|| nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
+                                break Ok(());
+                            },
+                            next = out.next() => next,
+                        };
+                        let item = match next {
+                            Ok(Some(item)) => item,
+                            Ok(None) => break Ok(()),
+                            Err(e) => break Err(IoError::from(e)),
+                        };
+                        let delivered = tokio::select! {
+                            biased;
+                            () = node_cancelled(&mut cancelled) => {
+                                cancelled_at.get_or_insert_with(|| nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
+                                break Ok(());
+                            },
+                            delivered = deliver(item) => delivered,
+                        };
+                        match delivered {
+                            Ok(true) => {}
+                            Ok(false) => break Ok(()),
+                            Err(error) => break Err(error),
+                        }
+                    };
+                    let deadline = cancelled_at.unwrap_or_else(|| {
+                        nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
+                    });
+                    let cleanup = Box::new(out).close(deadline).await;
+                    outcome.and_then(|()| match cleanup {
+                        lk_agents_abi::Closed::Clean => Ok(()),
+                        _ => Err(IoError::Rtc("node output cleanup did not settle".into())),
+                    })
+                }
+                Err(error) => Err(error),
+            };
+            done(outcome);
+        };
+        if let Some(tasks) = tasks {
+            tasks.spawn(self.spawner.as_ref(), node, drain);
+        } else {
+            self.spawner.spawn_unboxed(drain);
+        }
         Some(sink)
+    }
+}
+
+/// Resolve an owned host call, joining cancellation under the segment's cleanup deadline.
+async fn node_returned(
+    nodes: &AgentNodes,
+    opening: &mut crate::host::Started,
+    cancelled: &mut Option<tokio::sync::watch::Receiver<bool>>,
+    deadline: &mut Option<lk_agents_abi::Ts>,
+) -> Result<Option<Py<PyAny>>, IoError> {
+    tokio::select! {
+        biased;
+        () = node_cancelled(cancelled) => {
+            let deadline = *deadline.get_or_insert_with(|| nodes.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT));
+            opening.cancel();
+            match lk_agents_abi::timeout(nodes.clock.as_ref(), deadline.saturating_duration_since(nodes.clock.now()), opening.settled()).await {
+                Ok(Ok(value)) => Ok(Some(value)),
+                Ok(Err(error)) => {
+                    let was_cancelled = Python::attach(|py| error.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py));
+                    if was_cancelled { Ok(None) } else { Err(captured(error).into()) }
+                }
+                Err(_) => Err(IoError::Rtc("node invocation cleanup did not settle".into())),
+            }
+        }
+        returned = opening.settled() => returned.map(Some).map_err(|error| captured(error).into()),
+    }
+}
+
+async fn node_cancelled(cancelled: &mut Option<tokio::sync::watch::Receiver<bool>>) {
+    match cancelled {
+        Some(cancelled) => {
+            let _ = cancelled.wait_for(|value| *value).await;
+        }
+        None => std::future::pending().await,
     }
 }
 
 impl NodeFactory for AgentNodes {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
-        let node = TranscriptionNode { nodes: self.share(), below, segment: Mutex::new(None) };
+        let node = TranscriptionNode {
+            nodes: self.share(),
+            below,
+            segment: Mutex::new(None),
+            completion: tokio::sync::watch::channel(None).0,
+            retained: Arc::new(Mutex::new(None)),
+            started: AtomicBool::new(false),
+            cancelled: tokio::sync::watch::channel(false).0,
+            tasks: Arc::new(lk_agents_abi::TaskSet::default()),
+        };
         Ok(Arc::new(node))
     }
 
@@ -264,6 +412,11 @@ struct TranscriptionNode {
     below: Arc<dyn TextOutput>,
     /// The open segment's input, while the node reads it.
     segment: Mutex<Option<ItemSink<TimedString>>>,
+    completion: tokio::sync::watch::Sender<Option<Result<(), IoError>>>,
+    retained: Arc<Mutex<Option<Box<dyn Send>>>>,
+    started: AtomicBool,
+    cancelled: tokio::sync::watch::Sender<bool>,
+    tasks: Arc<lk_agents_abi::TaskSet>,
 }
 
 impl TranscriptionNode {
@@ -271,10 +424,13 @@ impl TranscriptionNode {
         let mut segment = self.segment.lock().unwrap_or_else(|p| p.into_inner());
         if segment.is_none() {
             let (below, flushed) = (Arc::clone(&self.below), Arc::clone(&self.below));
+            self.started.store(true, Ordering::SeqCst);
+            let done = self.completion.clone();
+            let retained = self.retained.clone();
             *segment = self.nodes.open(
                 "transcription",
                 timed_to_py,
-                Box::new(|t| t.extract::<TimedString>().map_err(Into::into)),
+                |t| t.extract::<TimedString>(),
                 move |t: TimedString| {
                     let below = Arc::clone(&below);
                     async move {
@@ -284,10 +440,20 @@ impl TranscriptionNode {
                         } else {
                             below.capture_text(&t.text).await
                         };
-                        sent.is_ok()
+                        sent.map(|()| true)
                     }
                 },
-                move || flushed.flush(),
+                move |outcome| {
+                    flushed.flush();
+                    let owner = {
+                        let mut owner = retained.lock().unwrap_or_else(|p| p.into_inner());
+                        done.send_replace(Some(outcome));
+                        owner.take()
+                    };
+                    drop(owner);
+                },
+                Some(&self.tasks),
+                Some(self.cancelled.subscribe()),
             );
         }
         if let Some(sink) = segment.as_ref() {
@@ -305,12 +471,47 @@ impl TextNode for TranscriptionNode {
         self.push(text.clone());
     }
 
+    fn retain_until_drained(&self, owner: Box<dyn Send>) {
+        let mut retained = self.retained.lock().unwrap_or_else(|p| p.into_inner());
+        if self.started.load(Ordering::SeqCst) && self.completion.borrow().is_none() {
+            assert!(retained.is_none(), "a segment has one binding owner");
+            *retained = Some(owner);
+        } else {
+            drop(retained);
+            drop(owner);
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+
+    fn drain(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), IoError>> {
+        let mut completion = self.completion.subscribe();
+        Box::pin(async move {
+            if !self.started.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            let result = completion
+                .wait_for(Option::is_some)
+                .await
+                .map_err(|_| IoError::Rtc("transcription node completion was lost".into()))?;
+            result.as_ref().expect("completed node").clone()
+        })
+    }
+
     /// A segment the node never saw a word of ends at once.
     fn flush(&self) {
         match self.segment.lock().unwrap_or_else(|p| p.into_inner()).take() {
             Some(sink) => sink.end_input(),
             None => self.below.flush(),
         }
+    }
+}
+
+impl Drop for TranscriptionNode {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -342,14 +543,24 @@ impl RealtimeAudioNode for AudioOutputNode {
                 *generation = self.nodes.open(
                     "realtime_audio",
                     |py, f: &AudioFrame| f.into_py_any(py),
-                    Box::new(|f| f.extract::<AudioFrame>().map_err(Into::into)),
+                    |f| f.extract::<AudioFrame>(),
                     move |frame: AudioFrame| {
                         let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
                         async move {
-                            !cut.load(Ordering::SeqCst) && below.capture_frame(&frame).await.is_ok()
+                            if cut.load(Ordering::SeqCst) {
+                                Ok(false)
+                            } else {
+                                below.capture_frame(&frame).await.map(|()| true)
+                            }
                         }
                     },
-                    || {},
+                    |outcome| {
+                        if let Err(error) = outcome {
+                            lk_agents_abi::python::log::error!(target: LOG, error = error.to_string().as_str(); "error in audio node");
+                        }
+                    },
+                    None,
+                    None,
                 );
             }
             if let Some(sink) = generation.as_ref() {
@@ -582,3 +793,190 @@ fn stt_node(
 
 lk_agents_abi::register_host!(fn tts_node);
 lk_agents_abi::register_host!(fn stt_node);
+
+#[cfg(test)]
+mod text_cleanup_tests {
+    use super::*;
+    use lk_agents_abi::RealClock;
+    use std::time::Duration;
+
+    struct Destination;
+    impl TextOutput for Destination {
+        fn label(&self) -> &str {
+            "destination"
+        }
+        fn capture_text<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn flush(&self) {}
+    }
+
+    struct BindingOwner(Arc<AtomicBool>);
+    impl Drop for BindingOwner {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    async fn flag(g: &Py<pyo3::types::PyDict>, name: &str) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !Python::attach(|py| {
+                g.bind(py)
+                    .get_item(name)
+                    .unwrap()
+                    .unwrap()
+                    .call_method0("is_set")
+                    .unwrap()
+                    .extract::<bool>()
+                    .unwrap()
+            }) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the Python node did not reach the expected boundary");
+    }
+
+    fn processing_nodes(
+        g: &Py<pyo3::types::PyDict>,
+        captured: &lk_agents_abi::HostRef,
+    ) -> AgentNodes {
+        Python::attach(|py| {
+            let (event_loop, context) = crate::host::captured_pair(py, captured).unwrap();
+            AgentNodes {
+                context: context.clone().unbind(),
+                host: g.bind(py).get_item("processing").unwrap().unwrap().unbind(),
+                locals: pyo3_async_runtimes::TaskLocals::new(event_loop).with_context(context),
+                clock: Arc::new(RealClock::new()),
+                spawner: Arc::new(lk_agents_abi::TokioSpawner::current()),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn text_node_cancellation_retains_its_binding_until_python_finally_finishes() {
+        Python::initialize();
+        let (g, captured) = Python::attach(crate::host::stream::tests::setup);
+        Python::attach(|py| {
+            py.run(
+                c"
+entered = threading.Event()
+closing = threading.Event()
+cleaned = threading.Event()
+close_gate = asyncio.Event()
+class Processing:
+    async def transcription(self, words):
+        try:
+            async for word in words:
+                yield word
+            entered.set()
+            await asyncio.Future()
+        finally:
+            closing.set()
+            await close_gate.wait()
+            cleaned.set()
+processing = Processing()
+",
+                Some(g.bind(py)),
+                None,
+            )
+            .unwrap();
+        });
+        let nodes = processing_nodes(&g, &captured);
+        let node = nodes.text_node(Arc::new(Destination)).unwrap();
+        node.capture_text("queued words");
+        node.flush();
+        flag(&g, "entered").await;
+        let released = Arc::new(AtomicBool::new(false));
+        node.retain_until_drained(Box::new(BindingOwner(released.clone())));
+        node.cancel();
+        flag(&g, "closing").await;
+        let mut receipt = node.drain();
+        let early = tokio::time::timeout(Duration::from_millis(30), receipt.as_mut()).await;
+        let was_pending = early.is_err();
+        let was_retained = !released.load(Ordering::SeqCst);
+        // Always release the gate, including a regression failure, so the host loop is clean.
+        Python::attach(|py| {
+            let globals = g.bind(py);
+            globals
+                .get_item("loop")
+                .unwrap()
+                .unwrap()
+                .call_method1(
+                    "call_soon_threadsafe",
+                    (globals.get_item("close_gate").unwrap().unwrap().getattr("set").unwrap(),),
+                )
+                .unwrap();
+        });
+        if was_pending {
+            tokio::time::timeout(Duration::from_secs(2), receipt)
+                .await
+                .expect("the text receipt did not settle after source cleanup")
+                .unwrap();
+        }
+        flag(&g, "cleaned").await;
+        assert!(was_pending, "the node completed while its Python finally block was still open");
+        assert!(was_retained, "the binding owner was dropped before Python source cleanup");
+        assert!(released.load(Ordering::SeqCst), "the completed source retained its binding");
+    }
+    #[tokio::test]
+    async fn coroutine_provider_node_receives_its_input_before_returning() {
+        Python::initialize();
+        let (g, captured) = Python::attach(crate::host::stream::tests::setup);
+        Python::attach(|py| {
+            py.run(
+                c"
+consumed = []
+class Processing:
+    async def stt(self, input):
+        async for item in input:
+            consumed.append(item)
+        return None
+processing = Processing()
+",
+                Some(g.bind(py)),
+                None,
+            )
+            .unwrap();
+        });
+        let nodes = processing_nodes(&g, &captured);
+        let (sink, mut output) = tokio::time::timeout(
+            Duration::from_secs(2),
+            nodes.duplex(
+                "stt",
+                |py, item: &String| item.into_py_any(py),
+                Box::new(|item| item.extract::<String>()),
+            ),
+        )
+        .await
+        .expect("the provider awaited input before returning its sink")
+        .unwrap();
+        sink.send(&"queued input".to_owned());
+        sink.end_input();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), output.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            Box::new(output)
+                .close(
+                    lk_agents_abi::Clock::now(&RealClock::new())
+                        .saturating_add(Duration::from_secs(2))
+                )
+                .await,
+            lk_agents_abi::Closed::Clean
+        );
+        Python::attach(|py| {
+            assert_eq!(
+                g.bind(py).get_item("consumed").unwrap().unwrap().extract::<Vec<String>>().unwrap(),
+                ["queued input"]
+            )
+        });
+    }
+}

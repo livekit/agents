@@ -65,5 +65,12 @@ pub use lk_agents_media::filters;
 /// The voice session queue owner and its I/O effect execution.
 pub mod voice;
 
+pub mod avatar;
+pub mod avatar_receiver;
+/// Runtime room execution over the ABI-declared SDK capabilities.
+pub mod room_io;
+pub mod rtc;
 /// Tokenization through the application's tokenizer callbacks.
 pub mod tokenize;
+#[cfg(test)]
+pub(crate) use lk_agents_test_support::rtc as test_support_rtc;

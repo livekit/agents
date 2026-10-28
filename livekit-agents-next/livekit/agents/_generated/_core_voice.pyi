@@ -5,6 +5,12 @@
 
 from __future__ import annotations
 
+from livekit.agents.voice.avatar import AudioReceiver
+from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
+
+from .._core import PlaybackInfo, PlaybackTracker, RoomEventBus, _core_RoomSession
+from .io_events import AvatarPlaybackSegment, PlaybackSegment
+
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
     def __init__(
@@ -24,8 +30,125 @@ class DataStreamAudioOutput:
     async def aclose(self) -> None:
         """Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes."""
 
+class DataStreamAudioReceiver:
+    """The worker's receiver keeps stream identity with each delivered frame and playback report."""
+    def __init__(
+        self,
+        room: Room,
+        *,
+        sender_identity: str | None = None,
+        frame_size_ms: int = 100,
+        rpc_max_retries: int = 3,
+        on_clear_buffer: AudioReceiver | None = None,
+    ) -> None: ...
+    async def start(self) -> None: ...
+    async def next_audio(
+        self,
+    ) -> tuple[int, bool, AvatarPlaybackSegment | None, dict[str, object] | None]: ...
+    def notify_playback_started(self, segment: AvatarPlaybackSegment) -> None: ...
+    def notify_playback_finished(
+        self,
+        segment: AvatarPlaybackSegment,
+        playback_position: float,
+        interrupted: bool,
+    ) -> None: ...
+    def aclose(self) -> None: ...
+
+def _core_playback_begin(tracker: PlaybackTracker, segment: PlaybackSegment) -> bool: ...
+
+def _core_playback_current_segment(tracker: PlaybackTracker) -> PlaybackSegment | None: ...
+
+def _core_playback_note_capture(tracker: PlaybackTracker) -> PlaybackSegment: ...
+
+def _core_playback_started(
+    tracker: PlaybackTracker,
+    segment: PlaybackSegment,
+    created_at: float,
+) -> bool: ...
+
+def _core_playback_progressed(
+    tracker: PlaybackTracker,
+    segment: PlaybackSegment,
+    started_at: float,
+    offset: float,
+    duration: float,
+) -> bool: ...
+
+def _core_playback_finished(
+    tracker: PlaybackTracker,
+    segment: PlaybackSegment,
+    playback_position: float,
+    interrupted: bool,
+    synchronized_transcript: str | None,
+) -> bool: ...
+
+def _core_create_room_event_bus() -> RoomEventBus: ...
+
+def _core_room_track_subscribed(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+    publication: TrackPublication,
+) -> None: ...
+
+def _core_room_track_unsubscribed(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+    publication: TrackPublication,
+) -> None: ...
+
+def _core_room_track_published(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+    publication: TrackPublication,
+) -> None: ...
+
+def _core_room_track_unpublished(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+    publication: TrackPublication,
+) -> None: ...
+
+def _core_room_local_track_published(bus: RoomEventBus, publication: TrackPublication) -> None: ...
+
+def _core_room_participant_connected(bus: RoomEventBus, participant: RemoteParticipant) -> None: ...
+
+def _core_room_participant_active(bus: RoomEventBus, participant: RemoteParticipant) -> None: ...
+
+def _core_room_participant_attributes_changed(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+) -> None: ...
+
+def _core_room_participant_disconnected(
+    bus: RoomEventBus,
+    participant: RemoteParticipant,
+    reason: str,
+) -> None: ...
+
+def _core_room_connection_state_changed(bus: RoomEventBus, state: str) -> None: ...
+
+def _core_room_disconnected(bus: RoomEventBus, reason: str) -> None: ...
+
+def _core_room_sip_dtmf_received(
+    bus: RoomEventBus,
+    digit: str,
+    participant: str | None,
+) -> None: ...
+
+class PlayoutLedger:
+    def __init__(self) -> None: ...
+    def add_pushed_samples(self, samples_per_channel: int, sample_rate: int) -> None: ...
+    def add_discarded(self, duration: float) -> None: ...
+    def snapshot(self, queued: float) -> PlaybackInfo: ...
+    def settle(self) -> PlaybackInfo: ...
+
 class ConsoleIo:
     """`lk agent console`'s socket, opened when the session starts."""
     def __init__(self, addr: str) -> None: ...
 
 async def _core_voice_session_start(session: object, capture_run: bool) -> None: ...
+
+def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
+
+async def wait_avatar_join(room: _core_RoomSession, identity: str) -> tuple[float, float]:
+    """Wait for the supplied room's connection, avatar participant and subscribed video track."""

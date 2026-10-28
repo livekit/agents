@@ -27,8 +27,7 @@ lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }
 # enabled by maturin from pyproject.toml: a dependency feature unifies across the workspace, and it
 # made every workspace test build compile ffmpeg (897 s of a 15 min cold build, 2026-09-06).
 lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python", "media-resample"] }
-# The avatar sink's SDK room (`src/avatar_output.rs`) until the room is a declared proxy (H-15).
-lk-agents-rtc = { path = "../lk-agents-rtc", features = ["python"] }
+
 lk-agents-voice = { path = "../lk-agents-voice", features = ["native-audio", "python"] }
 # The avatar sink implements an async-trait ABI contract.
 async-trait.workspace = true
@@ -38,6 +37,7 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
+lk-agents-test-support = { path = "../lk-agents-test-support" }
 
 [features]
 extension-module = ["pyo3/extension-module"]

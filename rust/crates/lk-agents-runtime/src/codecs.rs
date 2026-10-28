@@ -749,13 +749,7 @@ lk_agents_abi::inventory::submit! {
                 .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
                 .map_err(|error| error.to_string())
         },
-        open_bytes: |options| {
-            let workers = crate::process::workers().map_err(|error| error.to_string())?;
-            let limits = decoder_limits(options.sample_rate, options.num_channels);
-            AudioDecoder::open_bytes(&workers, options, limits)
-                .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
-                .map_err(|error| error.to_string())
-        },
+        open_bytes,
     }
 }
 
@@ -814,8 +808,19 @@ pub(crate) fn whole_pushes(limits: DecodeLimits) -> DecodeLimits {
     DecodeLimits { max_samples_per_frame: i32::MAX as usize, ..limits }
 }
 
+pub(crate) fn open_bytes(
+    options: ByteDecoderOptions,
+) -> Result<Box<dyn lk_agents_abi::media::decoder::FileDecoder>, String> {
+    let workers = crate::process::workers().map_err(|error| error.to_string())?;
+    let limits = decoder_limits(options.sample_rate, options.num_channels);
+    AudioDecoder::open_bytes(&workers, options, limits)
+        .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
+        .map_err(|error| error.to_string())
+}
+
 /// Two seconds of queued PCM, delivered in 10 ms chunks.
 pub(crate) fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
+
     let output_samples =
         (sample_rate as usize).saturating_mul(usize::from(num_channels)).saturating_mul(2);
     DecoderLimits {

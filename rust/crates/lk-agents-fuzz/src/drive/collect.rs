@@ -119,6 +119,51 @@ impl Run {
                         self.end_utterances_on(at, slot.nth);
                     }
                 }
+                Record::OutputAttachment { at, output, attached } => {
+                    self.record.record_output_attachment(at, output, attached);
+                    let active = self
+                        .record
+                        .host_view()
+                        .outputs()
+                        .into_iter()
+                        .find(|o| o.nth() == output)
+                        .map_or(0, |o| {
+                            o.attachments()
+                                .fold(0i32, |n, (_, attached)| n + if attached { 1 } else { -1 })
+                        });
+                    if attached || active > 0 {
+                        continue;
+                    }
+                    // Enable toggles can reattach the selected endpoint. Only a detached,
+                    // replaced endpoint has relinquished its admitted binding.
+                    let retired = self.record.host_view().outputs().into_iter().any(|o| {
+                        if o.nth() != output {
+                            return false;
+                        }
+                        o.replaced_at().is_some_and(|replacement| replacement <= at)
+                            || self.record.applied().iter().any(|applied| {
+                                applied.accepted
+                                    && applied.at >= o.attached_at()
+                                    && applied.at <= at
+                                    && matches!(
+                                        (&applied.input, o.is_audio()),
+                                        (Input::SetAudioOutput { attach: false }, true)
+                                            | (
+                                                Input::SetTranscriptionOutput { attach: false },
+                                                false
+                                            )
+                                    )
+                            })
+                            || self
+                                .record
+                                .inputs_view()
+                                .close_asked_at()
+                                .is_some_and(|close| close <= at)
+                    });
+                    if retired && self.record.live().has(Kind::Output, output) {
+                        self.record.close(at, Kind::Output, output);
+                    }
+                }
                 Record::Produced { at, tts, chunk, text, stamps } => {
                     self.record.record_produced(at, tts, chunk, text, stamps);
                 }
@@ -213,32 +258,6 @@ impl Run {
                 }
                 Step::Handoff(HandoffStep::HookFinished { hook, .. }) => {
                     self.close_by_id(at, Kind::Hook, Id::Hook(*hook));
-                }
-                // The output the case attached replaced the one before it: the old one is gone
-                // from the chain, and a resource nothing can reach any more is closed.
-                Step::Playout(PlayoutStep::OutputReplaced { audio, transcription }) => {
-                    for is_audio in [(*audio, true), (*transcription, false)]
-                        .into_iter()
-                        .filter_map(|(replaced, is_audio)| replaced.then_some(is_audio))
-                    {
-                        let mut of_kind: Vec<u32> = self
-                            .record
-                            .live()
-                            .of(Kind::Output)
-                            .into_iter()
-                            .filter(|nth| {
-                                matches!(
-                                    self.record.resource(Kind::Output, *nth).map(|r| r.detail()),
-                                    Some(Detail::Output { audio: a }) if *a == is_audio
-                                )
-                            })
-                            .collect();
-                        of_kind.sort_unstable();
-                        of_kind.pop();
-                        for old in of_kind {
-                            self.record.close(at, Kind::Output, old);
-                        }
-                    }
                 }
                 // A detached tool ran on past its answer; its final update is its end.
                 Step::Tool(ToolStep::Updated { call_id, is_final: true, .. }) => {

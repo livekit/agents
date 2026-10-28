@@ -1,9 +1,10 @@
 //! Deterministic boundary ordering: clear overtakes an audio result already yielded by the host.
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::utils::video::{AvatarFrame, MediaFrame};
+use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
+use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use lk_agents_abi::{AudioFrame, TokioSpawner, VirtualClock};
-use lk_agents_rtc::FakeRtc;
+use lk_agents_test_support::rtc::FakeRtc;
 use lk_agents_voice::avatar_runner::{AvatarIo, AvatarRunner, Event};
 use std::sync::{
     Arc, OnceLock, Weak,
@@ -12,10 +13,12 @@ use std::sync::{
 use tokio::sync::{Mutex, Notify, mpsc};
 
 struct Receiver {
-    audio: Mutex<mpsc::Receiver<(u64, bool, Option<AvatarFrame>)>>,
+    audio: Mutex<
+        mpsc::Receiver<(u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>)>,
+    >,
     runner: OnceLock<Weak<AvatarRunner>>,
     clear_once: AtomicBool,
-    reports: mpsc::Sender<bool>,
+    reports: mpsc::Sender<(AvatarPlaybackSegment, bool)>,
     block_interruption: bool,
     report_started: mpsc::Sender<()>,
     allow_report: Arc<Notify>,
@@ -26,20 +29,30 @@ impl AvatarAudioReceiver for Receiver {
     }
     fn next_audio(
         &self,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
+            ProviderError,
+        >,
+    > {
         Box::pin(async move {
             let frame = self.audio.lock().await.recv().await;
             if !self.clear_once.swap(true, Ordering::AcqRel) {
                 self.runner.get().unwrap().upgrade().unwrap().clear_buffer(1);
             }
-            Ok(frame.unwrap_or((1, false, None)))
+            Ok(frame.unwrap_or((1, false, None, None)))
         })
     }
-    fn notify_playback_started(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn notify_playback_started(
+        &self,
+        _: AvatarPlaybackSegment,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { Ok(()) })
     }
     fn notify_playback_finished(
         &self,
+        segment: AvatarPlaybackSegment,
         _: f64,
         interrupted: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
@@ -48,7 +61,7 @@ impl AvatarAudioReceiver for Receiver {
                 self.report_started.send(()).await.unwrap();
                 self.allow_report.notified().await;
             }
-            self.reports.send(interrupted).await.unwrap();
+            self.reports.send((segment, interrupted)).await.unwrap();
             Ok(())
         })
     }
@@ -104,8 +117,15 @@ async fn settle() {
         tokio::task::yield_now().await;
     }
 }
-fn pcm(id: u8) -> AvatarFrame {
-    AvatarFrame::Audio(AudioFrame::new(vec![id; 20], 1000, 1, 10))
+fn token(id: u64) -> AvatarPlaybackSegment {
+    AvatarPlaybackSegment {
+        playback: PlaybackSegment { attachment: 1, segment: id },
+        stream_id: Some(format!("S{id}")),
+    }
+}
+
+fn pcm(id: u8) -> AudioReceiverFrame {
+    AudioReceiverFrame::Audio(AudioFrame::new(vec![id; 20], 1000, 1, 10))
 }
 
 #[tokio::test]
@@ -157,7 +177,7 @@ async fn scheduled_clear_race(block_interruption: bool) {
         },
     ));
     receiver.runner.set(Arc::downgrade(&runner)).unwrap();
-    audio_tx.send((0, true, Some(pcm(1)))).await.unwrap();
+    audio_tx.send((0, true, Some(token(1)), Some(pcm(1)))).await.unwrap();
     runner.start().await.unwrap();
     settle().await;
     assert!(overtook.load(Ordering::Acquire));
@@ -166,11 +186,11 @@ async fn scheduled_clear_race(block_interruption: bool) {
         report_started_rx.recv().await.unwrap();
         assert!(report_rx.try_recv().is_err());
     } else {
-        assert_eq!(report_rx.try_recv(), Ok(true));
+        assert_eq!(report_rx.try_recv(), Ok((token(1), true)));
     }
     assert!(report_rx.try_recv().is_err());
-    audio_tx.send((1, true, Some(pcm(2)))).await.unwrap();
-    audio_tx.send((1, false, Some(AvatarFrame::SegmentEnd))).await.unwrap();
+    audio_tx.send((1, true, Some(token(2)), Some(pcm(2)))).await.unwrap();
+    audio_tx.send((1, false, Some(token(2)), Some(AudioReceiverFrame::SegmentEnd))).await.unwrap();
     if block_interruption {
         settle().await;
         assert!(pushed_rx.try_recv().is_err(), "new audio crossed the pending old acknowledgement");
@@ -179,10 +199,10 @@ async fn scheduled_clear_race(block_interruption: bool) {
     }
     settle().await;
     if block_interruption {
-        assert_eq!(report_rx.try_recv(), Ok(true));
+        assert_eq!(report_rx.try_recv(), Ok((token(1), true)));
     }
     assert!(matches!(pushed_rx.try_recv(), Ok(MediaFrame::Audio(_))));
-    assert_eq!(report_rx.try_recv(), Ok(false));
+    assert_eq!(report_rx.try_recv(), Ok((token(2), false)));
     assert!(report_rx.try_recv().is_err());
     runner.aclose().await.unwrap();
 }

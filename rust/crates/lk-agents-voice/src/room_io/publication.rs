@@ -21,12 +21,12 @@ enum Phase {
 }
 
 #[derive(Default)]
-pub(super) struct Publication {
+pub struct Publication {
     phase: Phase,
 }
 
 impl Publication {
-    pub(super) fn begin(&mut self) -> bool {
+    pub fn begin(&mut self) -> bool {
         if !matches!(self.phase, Phase::Idle) {
             return false;
         }
@@ -35,7 +35,7 @@ impl Publication {
     }
 
     /// Install the source in the same transition, or retain it for retirement.
-    pub(super) fn adopt(&mut self, sid: TrackSid) -> bool {
+    pub fn adopt(&mut self, sid: TrackSid) -> bool {
         if !matches!(self.phase, Phase::Creating) {
             return false;
         }
@@ -43,23 +43,23 @@ impl Publication {
         true
     }
 
-    pub(super) fn creation_retired(&mut self) {
+    pub fn creation_retired(&mut self) {
         if let Phase::Closed { creating, .. } = &mut self.phase {
             *creating = false;
         }
     }
 
-    pub(super) fn creating(&self) -> bool {
+    pub fn creating(&self) -> bool {
         matches!(self.phase, Phase::Creating | Phase::Closed { creating: true, .. })
     }
 
-    pub(super) fn ready(&mut self) {
+    pub fn ready(&mut self) {
         if let Phase::Subscribing(sid) = &self.phase {
             self.phase = Phase::Ready(sid.clone());
         }
     }
 
-    pub(super) fn fail(&mut self, error: IoError) {
+    pub fn fail(&mut self, error: IoError) {
         self.phase = match std::mem::take(&mut self.phase) {
             Phase::Creating => Phase::Failed { error, sid: None },
             Phase::Subscribing(sid) | Phase::Ready(sid) => Phase::Failed { error, sid: Some(sid) },
@@ -68,7 +68,7 @@ impl Publication {
         };
     }
 
-    pub(super) fn outcome(&self) -> Option<Result<()>> {
+    pub fn outcome(&self) -> Option<Result<()>> {
         match &self.phase {
             Phase::Ready(_) => Some(Ok(())),
             Phase::Failed { error, .. } => Some(Err(error.clone())),
@@ -77,7 +77,7 @@ impl Publication {
         }
     }
 
-    pub(super) fn close(&mut self) {
+    pub fn close(&mut self) {
         self.phase = match std::mem::take(&mut self.phase) {
             Phase::Creating => Phase::Closed { creating: true, sid: None },
             Phase::Subscribing(sid) | Phase::Ready(sid) => {
@@ -89,7 +89,7 @@ impl Publication {
         };
     }
 
-    pub(super) fn retire(&mut self) -> Option<TrackSid> {
+    pub fn retire(&mut self) -> Option<TrackSid> {
         match &mut self.phase {
             Phase::Closed { sid, .. } => sid.take(),
             _ => None,

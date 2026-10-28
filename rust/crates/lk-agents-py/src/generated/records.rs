@@ -957,6 +957,56 @@ pub mod evals {
     }
 }
 
+pub mod io_events {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
+    static PLAYBACK_SEGMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn playback_segment_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::io::PlaybackSegment> {
+        let py = obj.py();
+            if !obj.is_instance(PLAYBACK_SEGMENT.import(py, "livekit.agents._generated.io_events", "PlaybackSegment")?)? {
+                return Err(super::not_a(obj, "PlaybackSegment"));
+            }
+            Ok(::lk_agents_abi::voice::io::PlaybackSegment {
+                attachment: ::lk_agents_abi::python::attr_with(obj, "PlaybackSegment", "attachment", |v| ::lk_agents_abi::python::number_from_py::<u64>(v, "PlaybackSegment.attachment"))?,
+                segment: ::lk_agents_abi::python::attr_with(obj, "PlaybackSegment", "segment", |v| ::lk_agents_abi::python::number_from_py::<u64>(v, "PlaybackSegment.segment"))?,
+            })
+    }
+
+    pub fn playback_segment_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::io::PlaybackSegment) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::io::PlaybackSegment { attachment, segment } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("attachment", ::pyo3::IntoPyObjectExt::into_bound_py_any(attachment, py)?)?;
+            kwargs.set_item("segment", ::pyo3::IntoPyObjectExt::into_bound_py_any(segment, py)?)?;
+            crate::host::construct(PLAYBACK_SEGMENT.import(py, "livekit.agents._generated.io_events", "PlaybackSegment")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/io.rs.
+    static AVATAR_PLAYBACK_SEGMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn avatar_playback_segment_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::io::AvatarPlaybackSegment> {
+        let py = obj.py();
+            if !obj.is_instance(AVATAR_PLAYBACK_SEGMENT.import(py, "livekit.agents._generated.io_events", "AvatarPlaybackSegment")?)? {
+                return Err(super::not_a(obj, "AvatarPlaybackSegment"));
+            }
+            Ok(::lk_agents_abi::voice::io::AvatarPlaybackSegment {
+                playback: ::lk_agents_abi::python::attr_with(obj, "AvatarPlaybackSegment", "playback", |v| crate::generated::records::io_events::playback_segment_from_py(v))?,
+                stream_id: ::lk_agents_abi::python::attr_with(obj, "AvatarPlaybackSegment", "stream_id", |v| if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) })?,
+            })
+    }
+
+    pub fn avatar_playback_segment_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::io::AvatarPlaybackSegment) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::io::AvatarPlaybackSegment { playback, stream_id } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("playback", crate::generated::records::io_events::playback_segment_to_py(py, playback)?)?;
+            kwargs.set_item("stream_id", match stream_id { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
+            crate::host::construct(AVATAR_PLAYBACK_SEGMENT.import(py, "livekit.agents._generated.io_events", "AvatarPlaybackSegment")?.as_any(), (), Some(&kwargs))
+    }
+}
+
 pub mod llm_fallback {
     use pyo3::prelude::*;
 

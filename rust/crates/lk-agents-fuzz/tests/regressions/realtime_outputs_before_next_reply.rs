@@ -22,7 +22,7 @@ fn the_output_goes_with_the_commit() {
     };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
-        Input::Advance { ms: Millis(3_000) },
+        Input::Advance { ms: Millis(10_000) },
         Input::PlayoutStarted { segment: Ref::new(0) },
         Input::PlayoutFinished { segment: Ref::new(0) },
         Input::ToolAnswered {
@@ -30,12 +30,12 @@ fn the_output_goes_with_the_commit() {
             answer: ToolAnswer::Value,
             text: AgentText("shipped".into()),
         },
-        Input::Advance { ms: Millis(3_000) },
+        Input::Advance { ms: Millis(10_000) },
     ];
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
         for input in &inputs {
-            run.apply(input).await;
+            super::playout::apply_with_playout(&mut run, input).await;
         }
         run
     });
@@ -44,7 +44,10 @@ fn the_output_goes_with_the_commit() {
     let pushed = position(&|s| {
         matches!(
             s,
-            Step::Realtime(RealtimeStep::Sent { kind: lk_agents_abi::RealtimeCommandKind::PushItem, .. })
+            Step::Realtime(RealtimeStep::Sent {
+                kind: lk_agents_abi::RealtimeCommandKind::PushItem,
+                ..
+            })
         )
     });
     let finished = position(&|s| matches!(s, Step::Tool(ToolStep::Finished { .. })));

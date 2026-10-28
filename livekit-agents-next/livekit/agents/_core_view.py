@@ -322,6 +322,9 @@ class _AudioOutput:
     def _core_sample_rate(self) -> int | None:
         return self._obj.sample_rate
 
+    def _core_begin_segment(self, segment: io.PlaybackSegment) -> None:
+        self._obj.begin_segment(segment)
+
     async def _core_capture(self, frame: Any) -> None:
         await self._obj.capture_frame(frame)
 
@@ -343,18 +346,25 @@ class _AudioOutput:
     def _core_resume(self) -> None:
         self._obj.resume()
 
-    def _core_on_playback_started(self, created_at: float) -> None:
-        self._obj.on_playback_started(created_at=created_at)
+    def _core_on_playback_started(self, segment: io.PlaybackSegment, created_at: float) -> None:
+        self._obj.on_playback_started(segment=segment, created_at=created_at)
 
     def _core_on_playback_progressed(
-        self, started_at: float, offset: float, duration: float
+        self, segment: io.PlaybackSegment, started_at: float, offset: float, duration: float
     ) -> None:
-        self._obj.on_playback_progressed(started_at=started_at, offset=offset, duration=duration)
+        self._obj.on_playback_progressed(
+            segment=segment, started_at=started_at, offset=offset, duration=duration
+        )
 
     def _core_on_playback_finished(
-        self, playback_position: float, interrupted: bool, synchronized_transcript: str | None
+        self,
+        segment: io.PlaybackSegment,
+        playback_position: float,
+        interrupted: bool,
+        synchronized_transcript: str | None,
     ) -> None:
         self._obj.on_playback_finished(
+            segment=segment,
             playback_position=playback_position,
             interrupted=interrupted,
             synchronized_transcript=synchronized_transcript,

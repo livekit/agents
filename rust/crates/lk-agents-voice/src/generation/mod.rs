@@ -4,6 +4,7 @@
 use crate::tts::markup::MarkupExt;
 mod forward;
 mod llm;
+mod output;
 pub mod pipeline_reply;
 pub(crate) mod playout;
 pub mod realtime_generation;
@@ -811,6 +812,23 @@ pub struct PlannedReply {
 /// cross-machine write the task may not make itself.
 #[derive(Debug)]
 pub enum GenEvent {
+    BindOutput {
+        call: crate::agent_session::RequestId,
+        speech: SpeechId,
+    },
+    ActivateOutput {
+        call: crate::agent_session::RequestId,
+        binding: crate::agent_session::RequestId,
+        speech: SpeechId,
+    },
+    ReleaseOutput {
+        binding: crate::agent_session::RequestId,
+        speech: SpeechId,
+    },
+    OutputUnsettled {
+        binding: crate::agent_session::RequestId,
+        speech: SpeechId,
+    },
     /// Answered with [`Answer::ReplyPlan`](crate::agent_session::Answer::ReplyPlan) under `call`.
     Plan {
         call: crate::agent_session::RequestId,

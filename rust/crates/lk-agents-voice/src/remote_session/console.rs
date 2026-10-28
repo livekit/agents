@@ -1,50 +1,52 @@
-//! `lk agent console`'s audio legs as the session accounts for them (`TcpAudioOutput`,
-//! `TcpAudioInput`). The CLI plays what it is sent and acks each flushed segment once played, so a
-//! segment's position is all it was sent, or, when a clear cuts it, what had time to play.
+//! Shared console audio accounting and microphone projection. Local cleanup retains operation
+//! identity; an unkeyed CLI acknowledgement cannot establish a playback position.
 
 use super::proto::agent_session_message::{Message, console_io};
 use lk_agents_abi::AudioFrame;
-use lk_agents_abi::voice::io::PlaybackFinished;
+use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment};
 use std::time::Duration;
 
 /// The rate the CLI captures and plays at.
 pub const CONSOLE_SAMPLE_RATE: u32 = 48_000;
 
-/// The segment the CLI is playing. Times are the caller's wall clock, in Unix seconds.
+/// One admitted local operation. The CLI protocol carries no keyed playback receipt.
 #[derive(Debug, Default)]
 pub struct ConsolePlayback {
-    /// When the segment's first frame went out.
-    started: Option<f64>,
-    sent: Duration,
+    segment: Option<PlaybackSegment>,
 }
 
 impl ConsolePlayback {
-    /// `frame` goes to the CLI at `now`: its message, and whether it opened the segment (whose
-    /// playback started at `now`).
-    pub fn capture(&mut self, frame: &AudioFrame, now: f64) -> (Message, bool) {
-        self.sent += Duration::from_secs_f64(frame.duration());
-        let opened = self.started.is_none();
-        self.started.get_or_insert(now);
+    /// The message for a captured frame and whether it opens this admitted operation.
+    /// A different operation cannot borrow the previous one's pending physical buffer.
+    pub fn capture(
+        &mut self,
+        frame: &AudioFrame,
+        segment: PlaybackSegment,
+    ) -> Result<(Message, bool), IoError> {
+        if self.segment.is_some_and(|pending| pending != segment) {
+            return Err(IoError::PlaybackSegmentUnavailable);
+        }
+        let opened = self.segment.is_none();
+        self.segment = Some(segment);
         let message = Message::AudioOutput(console_io::AudioFrame {
             data: frame.data.to_vec(),
             sample_rate: frame.sample_rate,
             num_channels: u32::from(frame.num_channels),
             samples_per_channel: frame.samples_per_channel,
         });
-        (message, opened)
+        Ok((message, opened))
     }
 
-    /// The segment ends at `now`, played out (the CLI's ack) or cut by a clear; `None` when it
-    /// held no audio.
-    pub fn finish(&mut self, interrupted: bool, now: f64) -> Option<PlaybackFinished> {
-        let started = self.started.take()?;
-        let sent = std::mem::take(&mut self.sent);
-        let played = Duration::try_from_secs_f64(now - started).unwrap_or_default();
-        Some(PlaybackFinished {
-            playback_position: if interrupted { played.min(sent) } else { sent },
-            interrupted,
-            synchronized_transcript: None,
-        })
+    /// Local cleanup settles its own operation without inventing heard audio from elapsed time.
+    pub fn clear(&mut self) -> Option<(PlaybackSegment, PlaybackFinished)> {
+        Some((
+            self.segment.take()?,
+            PlaybackFinished {
+                playback_position: Duration::ZERO,
+                interrupted: true,
+                synchronized_transcript: None,
+            },
+        ))
     }
 }
 

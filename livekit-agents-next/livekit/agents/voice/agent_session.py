@@ -80,7 +80,13 @@ from .events import (
     UserTurnExceededEvent,
 )
 from .remote_session import ConsoleCall, SessionPort
-from .room_io import AudioInputOptions, RoomOptions, TextInputCallback, TextInputEvent
+from .room_io import (
+    AudioInputOptions,
+    Room as _RtcRoom,
+    RoomOptions,
+    TextInputCallback,
+    TextInputEvent,
+)
 from .run_result import _OUTPUT_RETRY_PROMPT, VoiceRunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
@@ -253,7 +259,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._store: ContextStore | None = None
 
         self._core: _core.VoiceSession = None  # type: ignore[assignment]
-        self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
+        self._room: rtc.Room | None = None
         self._amd: AMD | None = None
         # `override_options`: what `update_options` wrote under a layer, and the layers in order
         self._base_options: dict[str, Any] = {}
@@ -282,11 +288,11 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._root_span_context: Any = None
         self._loop_stalls: list[float] = []
         self._text_input_cb: TextInputCallback | None = None
-        self._audio_input_options: AudioInputOptions | None = None
         # the session's audio recording, written by the core; finished once it closes
         self._recorder: _core.SessionRecorder | None = None
         self._recording_path: Path | None = None
         self._recording_finished: asyncio.Future[None] | None = None
+        self._audio_input_options: AudioInputOptions | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         # the handles the core announced, for their done callbacks (``speech_done``)
         self._speech_handles: weakref.WeakValueDictionary[str, SpeechHandle] = (
@@ -404,7 +410,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self,
         agent: Agent,
         *,
-        room: NotGivenOr[rtc.Room | _core.FakeRoom | _core.OfflineRoom] = NOT_GIVEN,
+        room: NotGivenOr[rtc.Room | None] = NOT_GIVEN,
         room_options: NotGivenOr[RoomOptions] = NOT_GIVEN,
         chat_ctx: llm.ChatContext | None = None,
         capture_run: bool = False,
@@ -418,9 +424,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if job_ctx is not None:
             self._event_retention.claim(job_ctx.job.id)
         if console is not None:
-            room = _core.OfflineRoom("console")
+            room = None
         elif not is_given(room):
-            room = job_ctx.room if job_ctx is not None else _core.OfflineRoom("console")
+            room = job_ctx.room if job_ctx is not None else None
         if chat_ctx is not None:
             self._chat_ctx = chat_ctx.copy()
         options = room_options if is_given(room_options) else RoomOptions()
@@ -482,7 +488,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._room = room
         try:
             self._core = _core.VoiceSession(
-                room,
+                _core._core_create_room_session(_RtcRoom.of(room) if room is not None else None),
                 instructions=frame["instructions"],
                 dynamic_instructions=frame["dynamic_instructions"],
                 agent=frame["agent"],
@@ -1132,7 +1138,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=error))
         if self._recording_finished is None and (recorder := self._recorder) is not None:
             self._recording_finished = asyncio.ensure_future(recorder.finish())
-        # a frame processor given directly is the room input's for the session's life
         audio_in = self._audio_input_options
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
             audio_in.noise_cancellation._close()

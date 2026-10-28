@@ -8,7 +8,7 @@
 use std::task::{Context, Poll, Waker};
 
 use lk_agents_abi::voice::session_options::UpdateKwargs;
-use lk_agents_rtc::{ConnectionState, DisconnectReason, RtcRoom};
+use lk_agents_test_support::rtc::{self, ConnectionState, DisconnectReason, RtcRoom};
 use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused};
 
 use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
@@ -178,11 +178,11 @@ impl Run {
     /// switches and no room legs), and once the room is gone.
     fn room_event(&mut self, event: RoomIn) -> bool {
         if (self.setup.room.is_none() && self.setup.room_legs.is_none())
-            || self.room.connection_state() == ConnectionState::Disconnected
+            || self.room.connection_state().expect("fake state") == ConnectionState::Disconnected
         {
             return false;
         }
-        let who = lk_agents_rtc::ParticipantIdentity::from(super::start::CALLER);
+        let who = rtc::ParticipantIdentity::from(super::start::CALLER);
         let reason = DisconnectReason::ClientInitiated;
         match event {
             RoomIn::Linked => {
@@ -225,7 +225,7 @@ impl Run {
                 true
             }
             RoomIn::Resubscribed => {
-                use lk_agents_rtc::TrackPublication as _;
+                use rtc::TrackPublication as _;
                 let now = self.record.now().at_ms;
                 let mut any = false;
                 for (leg, _) in self.mics.values_mut() {
@@ -240,14 +240,11 @@ impl Run {
                 any
             }
             RoomIn::Chat => {
-                let info = lk_agents_rtc::StreamInfo {
+                let info = rtc::StreamInfo {
                     id: format!("chat_{}", self.record.now().seq),
                     topic: lk_agents_abi::TOPIC_CHAT.into(),
                     mime_type: "text/plain".into(),
-                    total_length: None,
-                    attributes: Default::default(),
-                    timestamp: 0,
-                    attachments: Vec::new(),
+                    ..Default::default()
                 };
                 self.room.send_text_stream(who, info, ["can you hear me"]).is_ok()
             }
@@ -805,12 +802,13 @@ impl Run {
                 // subscribed, carries the words even when nothing reads them: the agent went deaf,
                 // which the rules are to see.
                 Mic::Room { track, read, .. } => {
-                    use lk_agents_rtc::TrackPublication as _;
+                    use rtc::TrackPublication as _;
                     if track.push_frame(frame) > 0 {
                         read.get_or_insert(now);
                         true
                     } else {
-                        track.is_subscribed() && read.is_some_and(|since| now > since)
+                        track.is_subscribed().expect("fake subscription")
+                            && read.is_some_and(|since| now > since)
                     }
                 }
                 Mic::Console(cli) => cli.send(Message::AudioInput(console_io::AudioFrame {
@@ -836,14 +834,14 @@ impl Run {
         use lk_agents_abi::voice::amd::{
             AmdCategory, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR,
         };
-        use lk_agents_rtc::RemoteParticipant;
+        use rtc::RemoteParticipant;
         let api = self.api.clone();
         match input {
             // The SIP callee picks up; refused when the callee is not a SIP call in the room.
             AmdInput::Answer => {
-                let callee = lk_agents_rtc::ParticipantIdentity::from(super::start::CALLER);
+                let callee = rtc::ParticipantIdentity::from(super::start::CALLER);
                 let Some(callee) = self.room.fake_participant(&callee) else { return false };
-                if callee.kind() != lk_agents_rtc::ParticipantKind::Sip {
+                if callee.kind() != rtc::ParticipantKind::Sip {
                     return false;
                 }
                 callee.set_attribute(SIP_CALL_STATUS_ATTR, SIP_CALL_STATUS_ACTIVE);

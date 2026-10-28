@@ -5,7 +5,13 @@ import time
 
 from livekit import rtc
 from livekit.agents import utils
-from livekit.agents.voice.io import AudioInput, AudioOutput, AudioOutputCapabilities, TextOutput
+from livekit.agents.voice.io import (
+    AudioInput,
+    AudioOutput,
+    AudioOutputCapabilities,
+    PlaybackSegment,
+    TextOutput,
+)
 
 
 class FakeAudioInput(AudioInput):
@@ -46,6 +52,7 @@ class FakeAudioOutput(AudioOutput):
             sample_rate=sample_rate,
             capabilities=AudioOutputCapabilities(pause=can_pause),
         )
+        self._playback_segment: PlaybackSegment
         self._pushed_duration = 0.0
         self._flushed = False
         self._flush_handle: asyncio.TimerHandle | None = None
@@ -79,11 +86,13 @@ class FakeAudioOutput(AudioOutput):
             return  # defer until resume()
 
         pushed_duration = self._pushed_duration
+        segment = self._playback_segment
         delay = max(pushed_duration - self._played_duration(), 0.0)
 
         def _on_playback_finished() -> None:
             self._reset_playout()
             self.on_playback_finished(
+                segment=segment,
                 playback_position=pushed_duration,
                 interrupted=False,
                 synchronized_transcript=None,
@@ -93,6 +102,9 @@ class FakeAudioOutput(AudioOutput):
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
+        segment = self.playback_segment
+        assert segment is not None
+        self._playback_segment = segment
 
         self._pushed_duration += frame.duration
         if self._paused_at is not None:
@@ -100,7 +112,7 @@ class FakeAudioOutput(AudioOutput):
 
         if self._started_at is None:
             self._started_at = time.time()
-            self.on_playback_started(created_at=self._started_at)
+            self.on_playback_started(segment=self._playback_segment, created_at=self._started_at)
 
     def pause(self) -> None:
         super().pause()
@@ -118,7 +130,7 @@ class FakeAudioOutput(AudioOutput):
         # fire on_playback_started if frames arrived while paused (first frame now plays)
         if self._started_at is None and self._pushed_duration > 0:
             self._started_at = time.time()
-            self.on_playback_started(created_at=self._started_at)
+            self.on_playback_started(segment=self._playback_segment, created_at=self._started_at)
         if self._flushed:
             self._schedule_flush_completion()
 
@@ -136,6 +148,7 @@ class FakeAudioOutput(AudioOutput):
         playback_position = min(self._played_duration(), self._pushed_duration)
         self._reset_playout()
         self.on_playback_finished(
+            segment=self._playback_segment,
             playback_position=playback_position,
             interrupted=True,
             synchronized_transcript=None,

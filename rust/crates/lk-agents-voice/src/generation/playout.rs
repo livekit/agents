@@ -10,10 +10,10 @@ use crate::trace::{PlayoutStep, SinkCall};
 use crate::transcription::Heard;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::io::{
-    AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
+    AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment,
 };
+use lk_agents_abi::voice::rtc::frame_duration;
 use lk_agents_media::{FrameResampler, OnChange, Quality};
-use lk_agents_rtc::frame_duration;
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,7 +45,18 @@ pub(crate) enum Next {
 /// A source of one segment's frames. `next` is never raced (it may be a host generator that
 /// dropping does not cancel); interruption is checked between frames, and the push is raced.
 pub(crate) trait Segment {
+    /// Realtime messages settle before the next message acquires its output binding.
+    fn stop_at_boundary(&self) -> bool {
+        false
+    }
+
     fn next(&mut self) -> impl std::future::Future<Output = Result<Next, DriverError>> + Send;
+
+    /// Independent control events may progress while a flushed segment awaits its receipt.
+    /// This future may be dropped at any poll and must not race a host generator's `next`.
+    fn playout_controls(&mut self) -> impl std::future::Future<Output = ()> + Send {
+        std::future::pending()
+    }
 
     fn text(&self) -> String;
 
@@ -53,6 +64,23 @@ pub(crate) trait Segment {
     /// a paused sink plays nothing). `at` is the sink's own instant, in wall seconds. Bookkeeping
     /// only; the `speaking` edge is `GenEvent::PlaybackStarted`'s.
     fn started_speaking(&mut self, at: f64);
+}
+
+/// Poll only a source's cancellation-safe control path beside the native playback wait.
+async fn with_playout_controls<S: Segment, T: Send>(
+    source: &mut S,
+    work: impl std::future::Future<Output = T> + Send,
+) -> T {
+    let mut controls = std::pin::pin!(source.playout_controls());
+    let mut work = std::pin::pin!(work);
+    let mut controls_done = false;
+    std::future::poll_fn(|cx| {
+        if !controls_done {
+            controls_done = controls.as_mut().poll(cx).is_ready();
+        }
+        work.as_mut().poll(cx)
+    })
+    .await
 }
 
 /// Once per turn; not gated on interruption, since nothing is pushed for a speech cut before its
@@ -66,11 +94,12 @@ pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator
 pub(crate) struct SourceFailed {
     pub(crate) error: DriverError,
     pub(crate) synchronized: Option<String>,
+    pub(crate) heard: Option<Heard>,
 }
 
 impl From<DriverError> for SourceFailed {
     fn from(error: DriverError) -> Self {
-        SourceFailed { error, synchronized: None }
+        SourceFailed { error, synchronized: None, heard: None }
     }
 }
 
@@ -93,7 +122,9 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
                 next = segment.next() => next?,
             };
             match next {
-                Next::Frame(_) | Next::Boundary => {}
+                Next::Frame(_) => {}
+                Next::Boundary if segment.stop_at_boundary() => break true,
+                Next::Boundary => {}
                 Next::End => break true,
             }
         };
@@ -103,6 +134,8 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     let (tx, events) = mpsc::unbounded_channel();
     out.tracker().observe(Arc::new(SinkReports(tx)));
     let mut playing = Playing {
+        segment_key: out.tracker().current_segment(),
+        finish_due: None,
         shared,
         handle,
         out,
@@ -118,7 +151,6 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         batch: 0,
         first_segment: None,
         cut_below: false,
-        dropped: Dropped::default(),
     };
     let mut ended = loop {
         if handle.interrupted() {
@@ -127,11 +159,12 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
         // The next frame or the interruption, folding sink reports meanwhile: a slow provider
         // must not delay the cut, and a pushed frame's `PlaybackStarted` must not wait for the
         // next frame. Dropping `next()` here is what interruption means for it.
-        let next = playing.watched(segment.next(), |_| false).await.done();
+        let next = playing.watched(segment.next()).await;
         playing.settle(segment);
         let frame = match next {
             None => break Ended::Cut,
             Some(Ok(Next::Frame(frame))) => frame,
+            Some(Ok(Next::Boundary)) if segment.stop_at_boundary() => break Ended::Audio,
             Some(Ok(Next::Boundary)) => {
                 if handle.interrupted() {
                     break Ended::Cut;
@@ -177,24 +210,32 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
             let mut synchronized = None;
             if playing.pushed > 0 {
                 playing.flush_batch();
-                match playing.played_out_report().await {
-                    Some(ev) => {
+                match with_playout_controls(segment, playing.played_out_report()).await {
+                    Ok(Some(ev)) => {
                         playing.played_out(segment, &ev);
                         synchronized = ev.synchronized_transcript.map(|t| Visible::of(&t).text);
                     }
-                    None => {
+                    Ok(None) | Err(_) => {
                         playing.cut(segment, text).await;
                     }
                 }
             }
-            Err(SourceFailed { error: e, synchronized })
+            Err(SourceFailed { error: e, synchronized, heard: Some(playing.confirmed_heard()) })
         }
         // No audio: flushing would make `wait_for_playout` answer with the previous event.
         Ended::Audio if playing.pushed == 0 => Ok(silent(text, true)),
         Ended::Audio => {
             playing.flush_batch();
-            let Some(ev) = playing.played_out_report().await else {
-                return Ok(playing.cut(segment, text).await);
+            let ev = match with_playout_controls(segment, playing.played_out_report()).await {
+                Ok(Some(ev)) => ev,
+                Ok(None) => return Ok(playing.cut(segment, text).await),
+                Err(error) => {
+                    return Err(SourceFailed {
+                        error,
+                        synchronized: None,
+                        heard: Some(playing.confirmed_heard()),
+                    });
+                }
             };
             playing.played_out(segment, &ev);
             // A synchroniser's words up to the played position, not the words sent.
@@ -285,7 +326,7 @@ pub(super) fn unheard() -> Heard {
 /// carries the tracker's number for the segment it closed.
 enum SinkReport {
     Playback(PlaybackEvent),
-    Finished { segment: u64, ev: PlaybackFinished },
+    Finished { segment: PlaybackSegment, ev: PlaybackFinished },
     Shown(lk_agents_abi::TimedString),
     Reset,
 }
@@ -298,7 +339,7 @@ impl PlaybackObserver for SinkReports {
         let _ = self.0.send(SinkReport::Playback(ev.clone()));
     }
 
-    fn on_segment_finished(&self, segment: u64, ev: &PlaybackFinished) {
+    fn on_segment_finished(&self, segment: PlaybackSegment, ev: &PlaybackFinished) {
         let _ = self.0.send(SinkReport::Finished { segment, ev: ev.clone() });
     }
 
@@ -355,27 +396,12 @@ enum Ended {
     Provider(DriverError),
 }
 
-/// How a watched future ended.
-enum Watched<T> {
-    Done(T),
-    Interrupted,
-    /// An event made the caller's condition hold first.
-    Stopped,
-}
-
-impl<T> Watched<T> {
-    fn done(self) -> Option<T> {
-        match self {
-            Watched::Done(v) => Some(v),
-            Watched::Interrupted | Watched::Stopped => None,
-        }
-    }
-}
-
 /// One segment on its way to the sink. Never off a push. The segment is not held here, so its
 /// `next()` can be pending while reports are folded (`watched`) and settled once it is free
 /// (`settle`).
 struct Playing<'a> {
+    segment_key: Option<PlaybackSegment>,
+    finish_due: Option<lk_agents_abi::Ts>,
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     out: &'a dyn AudioOutput,
@@ -396,20 +422,10 @@ struct Playing<'a> {
     /// Pushed since the last boundary: one `SinkCall::Push` record per stretch.
     batch: u64,
     /// The tracker's number for this forwarding's first segment, once a frame opened it.
-    first_segment: Option<u64>,
+    first_segment: Option<PlaybackSegment>,
     /// The sink reported one of this forwarding's segments cut under it (a reset): not all of
     /// it played, whatever the last segment reports.
     cut_below: bool,
-    /// Where the sink last dropped what it held: the audio pushed before is no longer owed.
-    dropped: Dropped,
-}
-
-/// The pushed and played totals when the sink last dropped what it held (a reset, a segment
-/// reported cut): what it owes is what was pushed since, against what it played since.
-#[derive(Default, Clone, Copy)]
-struct Dropped {
-    pushed: Duration,
-    played: Duration,
 }
 
 impl Playing<'_> {
@@ -438,6 +454,19 @@ impl Playing<'_> {
         }
     }
 
+    /// The confirmed lower bound at a failed report boundary. The physical operation remains
+    /// pending; this value neither clears the leaf nor credits unreported audio or words.
+    fn confirmed_heard(&mut self) -> Heard {
+        self.drain_reports();
+        Heard {
+            text: String::new(),
+            position: self.played.saturating_sub(self.completed),
+            complete: false,
+            frames: self.pushed,
+            played: self.played,
+        }
+    }
+
     fn report_push(&self) {
         if self.batch > 0 {
             self.sink_call(SinkCall::Push { frames: self.batch });
@@ -448,6 +477,11 @@ impl Playing<'_> {
         if std::mem::take(&mut self.batch) > 0 {
             self.sink_call(SinkCall::Flush);
             self.out.flush();
+            let remaining = self.pushed_len.saturating_sub(self.played);
+            let at =
+                self.shared.time.now().saturating_add(remaining).saturating_add(LOST_FINISH_MARGIN);
+            self.finish_due = Some(at);
+            self.trace(PlayoutStep::FinishDue { speech: self.handle.id(), at });
         }
     }
 
@@ -462,25 +496,33 @@ impl Playing<'_> {
                 played: self.played,
             }),
             SinkReport::Reset => {
-                self.drop_owed();
                 self.trace(PlayoutStep::SinkReset { speech });
             }
             SinkReport::Playback(PlaybackEvent::Started(s)) => {
+                if self.segment_key.is_some_and(|key| key != s.segment) {
+                    return;
+                }
                 let time = &self.shared.time;
                 let at = time.wall_secs()
                     - time.now().saturating_duration_since(s.created_at).as_secs_f64();
                 self.start(at);
             }
             SinkReport::Playback(PlaybackEvent::Progressed(p)) => {
+                if self.segment_key.is_some_and(|key| key != p.segment) {
+                    return;
+                }
                 let (offset, duration) = (p.offset, p.duration);
                 self.trace(PlayoutStep::PlaybackProgressed { speech, offset, duration });
                 self.played += p.duration;
                 self.report_played();
             }
             // Started/progressed only: a tracker reports finishes with their segment.
-            SinkReport::Playback(PlaybackEvent::Finished(_)) => {}
+            SinkReport::Playback(PlaybackEvent::Finished { .. }) => {}
             SinkReport::Finished { segment, ev: f } => {
-                if f.interrupted && self.first_segment.is_some_and(|first| segment >= first) {
+                if self.segment_key.is_some_and(|key| key != segment) {
+                    return;
+                }
+                if f.interrupted && self.first_segment.is_some_and(|first| segment == first) {
                     self.cut_below = true;
                 }
                 // A sink with no `Started` (a bare recorder) still played it, unless cut at zero.
@@ -489,18 +531,12 @@ impl Playing<'_> {
                 }
                 self.played = self.played.max(f.playback_position);
                 if f.interrupted {
-                    self.drop_owed();
                 } else {
                     self.completed += f.playback_position;
                 }
                 self.report_played();
             }
         }
-    }
-
-    /// The sink dropped what it held: nothing pushed so far is owed any more.
-    fn drop_owed(&mut self) {
-        self.dropped = Dropped { pushed: self.pushed_len, played: self.played };
     }
 
     fn start(&mut self, at: f64) {
@@ -537,90 +573,47 @@ impl Playing<'_> {
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    /// `fut`, with the sink's reports folded meanwhile; [`Watched::Stopped`] once a folded report
-    /// makes `stop` hold. `biased`, so an event already reported is folded before the push it may
-    /// explain.
-    async fn watched<T>(
-        &mut self,
-        fut: impl std::future::Future<Output = T>,
-        stop: impl Fn(&Self) -> bool,
-    ) -> Watched<T> {
+    /// `fut`, folding queued sink reports before the operation they may explain.
+    async fn watched<T>(&mut self, fut: impl std::future::Future<Output = T>) -> Option<T> {
         tokio::pin!(fut);
         let mut listening = true;
         loop {
             tokio::select! {
                 biased;
-                () = self.handle.wait_for_interrupted() => return Watched::Interrupted,
+                () = self.handle.wait_for_interrupted() => return None,
                 ev = self.events.recv(), if listening => match ev {
                     Some(ev) => {
                         self.on_event(ev);
-                        if stop(self) {
-                            return Watched::Stopped;
-                        }
                     }
                     None => listening = false,
                 },
-                v = &mut fut => return Watched::Done(v),
+                v = &mut fut => return Some(v),
             }
         }
     }
 
-    /// The sink's finish for what was pushed; `None` when interrupted. A finish lost on its way
-    /// would hold the speech until the close: once the sink reported all it owes played, the finish
-    /// gets [`LOST_FINISH_MARGIN`], then it is reported for the sink. Before that nothing bounds it:
-    /// a pause, or a sink slower than the clock, holds audio for as long as it likes. The margin
-    /// starts at the report that completes what is owed, not at a later look.
-    async fn played_out_report(&mut self) -> Option<PlaybackFinished> {
+    /// A missing report is bounded from the flush by delivered audio plus the transport
+    /// allowance. Expiry reports uncertainty; it never manufactures heard audio or a leaf finish.
+    async fn played_out_report(&mut self) -> Result<Option<PlaybackFinished>, DriverError> {
         let out = self.out;
-        let mut wait = std::pin::pin!(out.wait_for_playout());
         let time = self.shared.time.clone();
-        let mut due = None;
-        loop {
-            if due.is_none() && self.played_all() {
-                let at = time.now().saturating_add(LOST_FINISH_MARGIN);
-                self.trace(PlayoutStep::FinishDue { speech: self.handle.id(), at });
-                due = Some(at);
+        let due = self.finish_due.expect("accepted audio was flushed before awaiting playback");
+        let left = due.saturating_duration_since(time.now());
+        match self.watched(time.timeout(left, out.wait_for_playout())).await {
+            None => Ok(None),
+            Some(Ok(event)) => Ok(Some(event)),
+            Some(Err(_)) => {
+                let position = self.played.saturating_sub(self.completed);
+                self.trace(PlayoutStep::FinishLost {
+                    speech: self.handle.id(),
+                    segment: self.segment_key.expect("captured audio has a playback key"),
+                    position,
+                });
+                Err(DriverError::PlaybackReportTimeout(
+                    self.segment_key.expect("captured audio has a playback key"),
+                ))
             }
-            let left =
-                due.map_or(LOST_FINISH_MARGIN, |at| at.saturating_duration_since(time.now()));
-            let armed = due.is_some();
-            let finished = time.timeout(left, wait.as_mut());
-            match self.watched(finished, |this| !armed && this.played_all()).await {
-                Watched::Interrupted => return None,
-                Watched::Done(Ok(ev)) => return Some(ev),
-                Watched::Done(Err(_)) if armed => break,
-                Watched::Done(Err(_)) | Watched::Stopped => {}
-            }
         }
-        let lost = self.report_lost_finish();
-        // The chain settles on the report at once; a count it no longer owes takes it as is.
-        Some(time.timeout(Duration::ZERO, wait).await.unwrap_or(lost))
-    }
-
-    /// The sink reported all it owes played. Audio pushed before it last dropped what it held is
-    /// owed no more.
-    fn played_all(&self) -> bool {
-        let owed = self.pushed_len.saturating_sub(self.dropped.pushed);
-        self.played.saturating_sub(self.dropped.played) >= owed
-    }
-
-    /// The finish the sink lost, reported where the sink would have: at the end of the chain, so
-    /// every node above settles its segment as if the report had come.
-    fn report_lost_finish(&mut self) -> PlaybackFinished {
-        let position = self.played.saturating_sub(self.completed);
-        self.trace(PlayoutStep::FinishLost { speech: self.handle.id(), position });
-        let finished = PlaybackFinished { playback_position: position, ..Default::default() };
-        let mut leaf = None;
-        let mut next = self.out.next_in_chain();
-        while let Some(node) = next {
-            next = node.next_in_chain();
-            leaf = Some(node);
-        }
-        let reported = leaf.is_some_and(|leaf| leaf.tracker().playback_finished(finished.clone()));
-        if !reported {
-            self.out.tracker().playback_finished(finished.clone());
-        }
-        finished
     }
 
     async fn push<S: Segment>(
@@ -631,12 +624,13 @@ impl Playing<'_> {
         for frame in &frames {
             // Safe to race: a Rust-native future, dropping it only declines one push.
             let out = self.out;
-            let pushed = self.watched(out.capture_frame(frame), |_| false).await.done();
+            let pushed = self.watched(out.capture_frame(frame)).await;
             self.settle(segment);
             match pushed {
                 Some(Ok(())) => {
                     if self.first_segment.is_none() {
-                        self.first_segment = Some(self.out.tracker().segments());
+                        self.first_segment = self.out.tracker().current_segment();
+                        self.segment_key = self.first_segment;
                     }
                     self.pushed += 1;
                     self.pushed_len += frame_duration(frame);
@@ -695,11 +689,6 @@ impl Playing<'_> {
         if report.is_none() && !*self.shared.closing.borrow() {
             report =
                 self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
-        }
-        // A sink that had played all of it answers the clear with no finish: the finish was lost,
-        // and is reported for it, or the output's count stays a finish ahead of every later wait.
-        if report.is_none() && self.played_all() {
-            report = Some(self.report_lost_finish());
         }
         let Some(ev) = report else {
             let position = self.out.tracker().position();

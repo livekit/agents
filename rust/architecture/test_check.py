@@ -92,6 +92,30 @@ class DependencyContracts(unittest.TestCase):
         actual = dependency_violations(metadata({"lk-agents-core": ["lk-agents-runtime"]}))
         self.assertIn("direction:lk-agents-core:lk-agents-runtime", actual)
 
+    def test_test_support_is_confined_to_test_dependencies(self):
+        for consumer in ("lk-agents-voice", "lk-agents-runtime", "lk-agents-py"):
+            with self.subTest(consumer=consumer):
+                graph = metadata(
+                    {
+                        consumer: ["lk-agents-test-support"],
+                        "lk-agents-test-support": ["lk-agents-abi"],
+                    }
+                )
+                violation = f"direction:{consumer}:lk-agents-test-support"
+                self.assertIn(violation, dependency_violations(graph))
+                node = next(node for node in graph["resolve"]["nodes"] if node["id"] == consumer)
+                node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+                self.assertNotIn(violation, dependency_violations(graph))
+        graph = metadata(
+            {
+                "lk-agents-fuzz": ["lk-agents-test-support"],
+                "lk-agents-test-support": ["lk-agents-abi"],
+            }
+        )
+        self.assertNotIn(
+            "direction:lk-agents-fuzz:lk-agents-test-support", dependency_violations(graph)
+        )
+
     def test_rtc_obeys_core_closure_and_layering_until_it_is_dissolved(self):
         actual = dependency_violations(
             metadata({"lk-agents-rtc": ["adapter", "lk-agents-voice"], "adapter": ["tokio"]})

@@ -8,9 +8,9 @@
 use crate::agent_session::{DriverError, Input};
 use crate::audio::{AudioChannel, DEFAULT_FRAME_MS, Feed};
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::voice::rtc::silence_frame;
 use lk_agents_abi::{AudioByteStream, AudioFrame, Ts};
 use lk_agents_media::{FrameResampler, OnChange, Quality};
-use lk_agents_rtc::silence_frame;
 
 /// What the decision core tells the forwarder, through the queue like any other event, so a gate
 /// change can land before or after a decision.

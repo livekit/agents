@@ -5,8 +5,8 @@
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Spawner, SpawnerExt};
-use lk_agents_rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
+use lk_agents_abi::voice::rtc::{ByteStream, Receiver, RtcRoom, StreamBytesOptions};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt};
 use prost::Message as _;
 #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
 use tokio::sync::Mutex as AsyncMutex;
@@ -21,6 +21,7 @@ pub struct RoomTransport(Arc<Inner>);
 struct Inner {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,
+    clock: Arc<dyn Clock>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<State>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
@@ -39,9 +40,10 @@ struct State {
 
 impl RoomTransport {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pub fn new(room: Arc<dyn RtcRoom>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(room: Arc<dyn RtcRoom>, clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         RoomTransport(Arc::new(Inner {
             room,
+            clock,
             spawner,
             state: Mutex::default(),
             incoming: AsyncMutex::new(None),
@@ -56,7 +58,9 @@ impl Inner {
     }
 
     async fn send(&self, msg: &proto::AgentSessionMessage) -> Result<(), HostError> {
-        if self.closed() || !self.room.connection_state().is_connected() {
+        let connection =
+            self.room.connection_state().map_err(|error| HostError::new(error.to_string()))?;
+        if self.closed() || !connection.is_connected() {
             return Err(HostError::new("room session transport is closed"));
         }
         let data = msg.encode_to_vec();
@@ -68,8 +72,14 @@ impl Inner {
         };
         let sent = async {
             let writer = self.room.local().stream_bytes(opts).await?;
-            writer.write(&data).await?;
-            writer.close().await
+            let written = writer.write(&data).await;
+            let closed = writer.close().await;
+            match (written, closed) {
+                (Ok(()), result) | (result, Ok(())) => result,
+                (Err(error), Err(cleanup)) => Err(lk_agents_abi::voice::rtc::RtcError::host(
+                    format!("{error}; stream cleanup failed: {cleanup}"),
+                )),
+            }
         };
         sent.await.map_err(|e| HostError::new(format!("failed to send binary stream message: {e}")))
     }
@@ -116,11 +126,39 @@ impl SessionTransport for RoomTransport {
         Box::pin(async move {
             let mut incoming = self.0.incoming.lock().await;
             let Some(streams) = incoming.as_mut() else { return Ok(None) };
-            while let Some(mut stream) = streams.recv().await {
-                let mut data = Vec::new();
-                while let Some(chunk) = stream.chunks.recv().await {
-                    data.extend_from_slice(&chunk);
+            while let Some(mut stream) =
+                streams.next().await.map_err(|error| HostError::new(error.to_string()))?
+            {
+                let read = async {
+                    let mut data = Vec::new();
+                    while let Some(chunk) = stream
+                        .chunks
+                        .next()
+                        .await
+                        .map_err(|error| HostError::new(error.to_string()))?
+                    {
+                        if chunk.len() > super::MAX_MESSAGE_SIZE.saturating_sub(data.len()) {
+                            return Err(HostError::new(
+                                "room session message exceeds its byte limit",
+                            ));
+                        }
+                        data.extend_from_slice(&chunk);
+                    }
+                    Ok(data)
                 }
+                .await;
+                let deadline = self.0.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+                let closed = stream.close(deadline).await;
+                let data = match (read, closed) {
+                    (Ok(data), Closed::Clean) => data,
+                    (Err(error), Closed::Clean) => return Err(error),
+                    (read, cleanup) => {
+                        return Err(HostError::new(format!(
+                            "{}room session stream cleanup failed: {cleanup:?}",
+                            read.err().map(|error| format!("{error}; ")).unwrap_or_default()
+                        )));
+                    }
+                };
                 match proto::AgentSessionMessage::decode(data.as_slice()) {
                     Ok(msg) => return Ok(Some(msg)),
                     Err(e) => {
@@ -145,10 +183,22 @@ impl SessionTransport for RoomTransport {
             };
             // The handler's sender goes with it, which ends a receive waiting on the next stream.
             if registered {
-                self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES);
+                if let Err(error) =
+                    self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
+                {
+                    log::error!(target: LOG, "room session handler cleanup failed: {error}");
+                }
             }
             if let Ok(mut incoming) = self.0.incoming.try_lock() {
-                incoming.take();
+                let source = incoming.take();
+                drop(incoming);
+                if let Some(source) = source {
+                    let deadline = self.0.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+                    let closed = source.close(deadline).await;
+                    if closed != Closed::Clean {
+                        log::error!(target: LOG, "room session receiver cleanup failed: {closed:?}");
+                    }
+                }
             }
         })
     }
@@ -168,7 +218,7 @@ fn stream_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_rtc::{ConnectionState, FakeRtc, StreamInfo};
+    use lk_agents_test_support::rtc::{ConnectionState, FakeRtc, StreamInfo};
     use proto::agent_session_message::Message;
 
     fn ping(id: &str) -> proto::AgentSessionMessage {
@@ -188,10 +238,11 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn the_room_carries_one_message_per_stream() {
-        let (rtc, _clock) = FakeRtc::with_virtual_clock();
+        let (rtc, clock) = FakeRtc::with_virtual_clock();
         let room = rtc.room("call");
         let transport = RoomTransport::new(
             room.clone() as Arc<dyn RtcRoom>,
+            clock,
             Arc::new(lk_agents_abi::TokioSpawner::current()),
         );
         transport.start().await.unwrap();

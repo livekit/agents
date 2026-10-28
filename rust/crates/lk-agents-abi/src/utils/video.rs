@@ -87,14 +87,24 @@ pub enum MediaFrame {
     Video(VideoFrame),
 }
 
-/// What an avatar's audio receiver or video generator yields: a frame, or the end of a segment
+/// What an avatar's video generator yields: a frame, or the end of a segment
 /// (`AudioSegmentEnd`).
 #[derive(Debug, Clone, PartialEq, Host)]
 #[binding(emit, extract, untagged)]
-#[crate::host(handwritten(extract, emit, host = "rtc.AudioFrame | rtc.VideoFrame | AudioSegmentEnd"))]
+#[host(host_type = "livekit.agents.voice.avatar._AvatarFrame")]
 pub enum AvatarFrame {
     Audio(AudioFrame),
     Video(VideoFrame),
+    #[binding(class = "livekit.agents.voice.avatar.AudioSegmentEnd")]
+    SegmentEnd,
+}
+
+/// An avatar audio receiver yields audio or the end of its segment, never video.
+#[derive(Debug, Clone, PartialEq, Host)]
+#[binding(emit, extract, untagged)]
+#[host(host_type = "livekit.agents.voice.avatar._AudioReceiverFrame")]
+pub enum AudioReceiverFrame {
+    Audio(AudioFrame),
     #[binding(class = "livekit.agents.voice.avatar.AudioSegmentEnd")]
     SegmentEnd,
 }

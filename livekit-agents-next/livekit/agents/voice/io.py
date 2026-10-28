@@ -13,6 +13,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core, llm, stt
+from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from ..types import FlushSentinel, TimedString as TimedString
 
 if TYPE_CHECKING:
@@ -111,11 +112,14 @@ class PlaybackFinishedEvent:
     """Interrupted is True if playback was interrupted (clear_buffer() was called)"""
     synchronized_transcript: str | None = None
     """Transcript synced with playback; may be partial if the audio was interrupted"""
+    segment: PlaybackSegment | None = None
+    """The captured segment key on emitted playback observations."""
 
 
 @dataclass
 class PlaybackStartedEvent:
     created_at: float
+    segment: PlaybackSegment
     """The timestamp (time.time()) when the playback started"""
 
 
@@ -126,6 +130,7 @@ class PlaybackProgressedEvent:
     started_at: float
     offset: float
     duration: float
+    segment: PlaybackSegment
 
 
 @dataclass
@@ -186,29 +191,52 @@ class AudioOutput(
     def can_pause(self) -> bool:
         return self._capabilities.pause and (not self.next_in_chain or self.next_in_chain.can_pause)
 
-    def on_playback_started(self, *, created_at: float) -> None:
-        self._tracker.playback_started(created_at)
-        self.emit("playback_started", PlaybackStartedEvent(created_at=created_at))
+    def begin_segment(self, segment: PlaybackSegment) -> None:
+        """Admit the segment key before passing audio to a transport or a wrapper."""
+        if not _core._core_playback_begin(self._tracker, segment):
+            raise RuntimeError("the output is still capturing another segment")
+        if self.next_in_chain is not None:
+            self.next_in_chain.begin_segment(segment)
 
-    def on_playback_progressed(self, *, started_at: float, offset: float, duration: float) -> None:
-        self._tracker.playback_progressed(started_at, offset, duration)
-        self.emit(
-            "playback_progressed",
-            PlaybackProgressedEvent(started_at=started_at, offset=offset, duration=duration),
-        )
+    @property
+    def playback_segment(self) -> PlaybackSegment | None:
+        """Latch this key when accepting audio and retain it with delayed playback reports."""
+        return _core._core_playback_current_segment(self._tracker)
+
+    def on_playback_started(self, *, segment: PlaybackSegment, created_at: float) -> None:
+        if _core._core_playback_started(self._tracker, segment, created_at):
+            self.emit(
+                "playback_started", PlaybackStartedEvent(created_at=created_at, segment=segment)
+            )
+
+    def on_playback_progressed(
+        self, *, segment: PlaybackSegment, started_at: float, offset: float, duration: float
+    ) -> None:
+        if _core._core_playback_progressed(self._tracker, segment, started_at, offset, duration):
+            self.emit(
+                "playback_progressed",
+                PlaybackProgressedEvent(
+                    started_at=started_at, offset=offset, duration=duration, segment=segment
+                ),
+            )
 
     def on_playback_finished(
         self,
         *,
+        segment: PlaybackSegment,
         playback_position: float,
         interrupted: bool,
         synchronized_transcript: str | None = None,
     ) -> None:
         """Call when a segment (ended by ``flush()`` or ``clear_buffer()``) has played out."""
-        if self._tracker.playback_finished(playback_position, interrupted, synchronized_transcript):
+        if _core._core_playback_finished(
+            self._tracker, segment, playback_position, interrupted, synchronized_transcript
+        ):
             self.emit(
                 "playback_finished",
-                PlaybackFinishedEvent(playback_position, interrupted, synchronized_transcript),
+                PlaybackFinishedEvent(
+                    playback_position, interrupted, synchronized_transcript, segment
+                ),
             )
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
@@ -220,7 +248,7 @@ class AudioOutput(
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture an audio frame for playback; frames can be pushed faster than real time.
         Overrides call ``super()``: the first frame after a flush opens a segment."""
-        self._tracker.note_capture()
+        _core._core_playback_note_capture(self._tracker)
 
     @abstractmethod
     def flush(self) -> None:
@@ -307,7 +335,7 @@ class AgentInput:
 
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
-        self._audio: AudioInput | None = None
+        self._audio: AudioInput | _core.RoomAudioInput | None = None
         self._video: VideoInput | None = None
         self._audio_enabled = True
 

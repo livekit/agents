@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from livekit import rtc
+from livekit.agents._generated.io_events import AvatarPlaybackSegment
 from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 
 pytestmark = pytest.mark.unit
@@ -20,19 +21,27 @@ async def test_delayed_interruption_report_does_not_finish_the_next_segment():
     audio.on("playback_finished", finished.append)
     try:
         await audio.capture_frame(frame())
+        old = audio.playback_segment
+        assert old is not None
         assert isinstance(await anext(audio), rtc.AudioFrame)
         audio.clear_buffer()
         await audio.capture_frame(frame())
+        new = audio.playback_segment
+        assert new is not None
         audio.flush()
         assert isinstance(await anext(aiter(audio)), rtc.AudioFrame)
         assert isinstance(await anext(aiter(audio)), AudioSegmentEnd)
         waiting = asyncio.create_task(audio.wait_for_playout())
         await asyncio.sleep(0)
-        audio.notify_playback_finished(0.0, True)
+        audio.notify_playback_finished(
+            0.0, True, segment=AvatarPlaybackSegment(playback=old, stream_id=None)
+        )
         await asyncio.sleep(0)
         assert not waiting.done(), "the interrupted report belongs to the cleared segment"
         assert len(finished) == 1
-        audio.notify_playback_finished(0.01, False)
+        audio.notify_playback_finished(
+            0.01, False, segment=AvatarPlaybackSegment(playback=new, stream_id=None)
+        )
         result = await asyncio.wait_for(waiting, 1)
         assert result.interrupted is False
         assert result.playback_position == 0.01

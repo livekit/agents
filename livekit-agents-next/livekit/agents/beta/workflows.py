@@ -120,7 +120,9 @@ async def receive_dtmf(
     stop_event: DtmfEvent = DtmfEvent.POUND,
 ) -> _core.GetDtmfResult:
     """Receive keypad digits; stop at the delimiter or after an inter-digit timeout."""
-    return await _core.receive_dtmf(room, num_digits, timeout, stop_event.value)
+    return await _core.receive_dtmf(
+        _core._core_create_room_session(Room.of(room)), num_digits, timeout, stop_event.value
+    )
 
 
 def _email_address(email: str) -> str:
@@ -271,7 +273,10 @@ class WarmTransfer:
         call; the session is the one that tool runs in."""
         session = _live_binding("WarmTransfer.run()").session
         job_ctx = get_job_context()
-        identity = await self._transfer.run(_TransferHost(self, session, job_ctx), job_ctx.room)
+        identity = await self._transfer.run(
+            _TransferHost(self, session, job_ctx),
+            _core._core_create_room_session(Room.of(job_ctx.room)),
+        )
         return WarmTransferResult(human_agent_identity=identity)
 
 
@@ -417,7 +422,7 @@ class _TransferHost:
         self._session.output.set_audio_enabled(state["audio_output"])
         self._session.output.set_transcription_enabled(state["transcription_output"])
 
-    async def _core_connect_human(self, room_name: str, identity: str) -> Room:
+    async def _core_connect_human(self, room_name: str, identity: str) -> _core._core_RoomSession:
         token = (
             api.AccessToken()
             .with_identity(identity)
@@ -434,7 +439,7 @@ class _TransferHost:
             .to_jwt()
         )
         await self._room.connect(self._job._info.url, token)
-        return Room.of(self._room)
+        return _core._core_create_room_session(Room.of(self._room))
 
     async def _core_start_human(self) -> None:
         await self._human.start(

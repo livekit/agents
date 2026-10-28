@@ -14,11 +14,11 @@ use lk_agents_abi::voice::amd::{
     AMD_PROMPT, AmdCategory, AmdReason, SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR,
     TRACK_PUBLICATION_TIMEOUT,
 };
+use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{
     AudioFrame, ChatContext, ChatItem, ChatMessage, FunctionToolCall, HostRef, Llm, Role,
     SpawnerExt, SpeechEvent, SpeechEventType, StreamSink, Stt, SttSink, SttSource, TimerSet, Ts,
 };
-use lk_agents_rtc::{ParticipantIdentity, ParticipantKind, RtcRoom};
 use std::fmt;
 use std::sync::Arc;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -698,24 +698,29 @@ async fn await_callee(
             "session room_io unavailable, starting amd timers immediately as fallback");
         return Callee::Answered;
     };
-    let audio = Some(vec![lk_agents_rtc::TRACK_KIND_AUDIO]);
-    let track =
-        lk_agents_rtc::wait_for_track_publication(room.clone(), participant, audio, false, true);
+    let audio = Some(vec![lk_agents_abi::voice::rtc::TRACK_KIND_AUDIO]);
+    let track = room.wait_for_track_publication(participant, audio, false, true);
     let publisher = match time.timeout(TRACK_PUBLICATION_TIMEOUT, track).await {
         Err(_) => return Callee::Missing("timed out waiting for participant audio track".into()),
         Ok(Err(e)) => return Callee::Missing(e.to_string()),
         Ok(Ok((publisher, _))) => publisher,
     };
-    let Some(publisher) = publisher.and_then(|id: ParticipantIdentity| room.participant(&id))
-    else {
+    let Some(identity) = publisher else {
         return Callee::Missing("participant disappeared after track subscription".into());
+    };
+    let publisher = match room.participant(&identity) {
+        Ok(Some(publisher)) => publisher,
+        Ok(None) => {
+            return Callee::Missing("participant disappeared after track subscription".into());
+        }
+        Err(error) => return Callee::Missing(error.to_string()),
     };
     if publisher.kind() != ParticipantKind::Sip {
         return Callee::Answered;
     }
     let (attribute, active) = (SIP_CALL_STATUS_ATTR.to_owned(), SIP_CALL_STATUS_ACTIVE.to_owned());
     let identity = publisher.identity().as_str().to_owned();
-    match lk_agents_rtc::wait_for_participant_attribute(room, identity, attribute, active).await {
+    match room.wait_for_participant_attribute(identity, attribute, active).await {
         Ok(()) => Callee::Answered,
         Err(e) => Callee::Missing(e.to_string()),
     }

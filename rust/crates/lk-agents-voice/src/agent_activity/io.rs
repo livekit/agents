@@ -31,7 +31,7 @@ pub(crate) struct AgentInput {
     /// So the same leg handed back is a no-op. Runtime retains the object.
     pub(crate) video_instance: Option<usize>,
     /// Shared: its rates are public attributes a caller may change mid-call.
-    video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
+    video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
     /// A pipeline session has nowhere to push a frame: said the first time only.
     video_sink_warned: bool,
     next_open: u64,
@@ -59,7 +59,7 @@ impl AgentInput {
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
         video_instance: Option<usize>,
-        video_sampler: Option<Arc<crate::room_io::_input::VideoSampler>>,
+        video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
     ) -> Self {
         AgentInput {
             live_stt: sinks.get(&crate::audio::AudioChannel::Stt).copied(),
@@ -310,33 +310,20 @@ impl Driver {
                 changed
             }
             IoKind::AudioOutput => {
-                let changed = self
-                    .set_outputs(|o| std::mem::replace(&mut o.audio_enabled, enabled))
-                    != enabled;
-                if changed {
-                    let output = OutputKind::Audio;
-                    let sink = self.session.outputs.audio.as_ref().map(|a| a.id);
-                    let op = AudioOp::SetOutputEnabled { output, sink, enabled };
-
-                    out.machine().push(Effect::Audio(op));
-                }
-                changed
+                self.set_outputs(|o| std::mem::replace(&mut o.audio_enabled, enabled)) != enabled
             }
             IoKind::Transcription => {
-                let changed = self
-                    .set_outputs(|o| std::mem::replace(&mut o.transcription_enabled, enabled))
-                    != enabled;
-                if changed {
-                    let output = OutputKind::Transcription;
-                    let sink = self.session.outputs.transcription.as_ref().map(|t| t.id);
-                    let op = AudioOp::SetOutputEnabled { output, sink, enabled };
-                    out.machine().push(Effect::Audio(op));
-                }
-                changed
+                self.set_outputs(|o| std::mem::replace(&mut o.transcription_enabled, enabled))
+                    != enabled
             }
         };
         if !changed {
             return;
+        }
+        if matches!(leg, IoKind::AudioOutput | IoKind::Transcription) {
+            // The current segment owns its captured flags; selection changes retire only
+            // destinations no admitted binding retains.
+            self.retire_outputs(out);
         }
         out.trace(match leg {
             IoKind::AudioInput => {
@@ -377,14 +364,14 @@ impl Driver {
     pub(crate) fn on_video_frame(
         &mut self,
         now: Ts,
-        frame: lk_agents_rtc::VideoFrameRef,
+        frame: lk_agents_abi::voice::rtc::VideoFrameRef,
         out: &mut Out,
     ) {
         if self.session.closing_past_edge() {
             return;
         }
         let speaking = self.activity.audio_recognition.user_speaking();
-        let sampler = self.input.video_sampler.as_ref();
+        let sampler = self.input.video_sampler.as_mut();
         if !sampler.is_none_or(|s| s.should_sample_at(speaking, now)) {
             return;
         }

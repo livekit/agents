@@ -2,9 +2,9 @@ use crate::agent_session::Driver;
 use crate::agent_session::effects::{Effect, Out, Timer};
 use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
-use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
-use lk_agents_abi::{Clock, Ts};
 use lk_agents_abi::recorder::AudioRecorder;
+use lk_agents_abi::voice::io::{PlaybackEvent, PlaybackObserver};
+use lk_agents_abi::{Clock, Ts};
 use std::sync::Arc;
 
 /// A recorder, and the monotonic-to-wall anchor its stamps are converted against.
@@ -34,13 +34,30 @@ impl RecorderTap {
     }
 }
 
-/// Forwards one [`lk_agents_abi::voice::io::PlaybackTracker`]'s events to a recorder. Via the tracker because it
-/// suppresses over-reports, which would close a segment still being filled.
-pub struct RecorderPlaybackObserver(pub RecorderTap);
+/// Forwards one attachment's playback events to a recorder. Several attachments may share the
+/// same physical tracker while their previously admitted operations settle.
+pub struct RecorderPlaybackObserver {
+    tap: RecorderTap,
+    attachment: lk_agents_abi::resources::ResourceId,
+}
+
+impl RecorderPlaybackObserver {
+    pub fn new(tap: RecorderTap, attachment: lk_agents_abi::resources::ResourceId) -> Self {
+        Self { tap, attachment }
+    }
+}
 
 impl PlaybackObserver for RecorderPlaybackObserver {
     fn on_playback_event(&self, ev: &PlaybackEvent) {
-        let tap = &self.0;
+        let attachment = match ev {
+            PlaybackEvent::Started(e) => e.segment.attachment,
+            PlaybackEvent::Progressed(e) => e.segment.attachment,
+            PlaybackEvent::Finished { segment, .. } => segment.attachment,
+        };
+        if attachment != self.attachment.0 {
+            return;
+        }
+        let tap = &self.tap;
         let r = &tap.recorder;
         match ev {
             PlaybackEvent::Started(e) => r.on_playback_started(tap.at(e.created_at)),
@@ -49,7 +66,7 @@ impl PlaybackObserver for RecorderPlaybackObserver {
                 e.offset.as_secs_f64(),
                 e.duration.as_secs_f64(),
             ),
-            PlaybackEvent::Finished(e) => {
+            PlaybackEvent::Finished { event: e, .. } => {
                 r.on_playback_finished(tap.now(), e.playback_position.as_secs_f64())
             }
         }
@@ -93,38 +110,6 @@ impl Driver {
         out.machine().push(Effect::FlushRecorder(self.step.wall_secs_at(now)));
         if rearm && !self.session.closing_past_edge() {
             out.machine().arm(Timer::RecorderFlush, now.saturating_add(RECORDER_FLUSH));
-        }
-    }
-}
-
-impl crate::agent_session::SessionShared {
-    pub fn unobserve_recorder(&self, output: Option<lk_agents_abi::resources::ResourceId>) {
-        if let Some(observer) =
-            self.recorder_observer.lock().unwrap_or_else(|p| p.into_inner()).take()
-            && let Some(output) = output.and_then(|id| self.resources.audio_output(id))
-        {
-            output.tracker().unobserve(&observer);
-        }
-    }
-
-    /// Off `previous` first, onto `sink`.
-    pub fn observe_recorder(
-        &self,
-        previous: Option<&dyn AudioOutput>,
-        sink: Option<lk_agents_abi::resources::ResourceId>,
-    ) {
-        let Some(tap) = self.recorder_tap() else { return };
-        let mut slot = self.recorder_observer.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(old) = slot.take()
-            && let Some(prev) = previous
-        {
-            prev.tracker().unobserve(&old);
-        }
-        if let Some(out) = sink.and_then(|id| self.resources.audio_output(id)) {
-            let observer: Arc<dyn lk_agents_abi::voice::io::PlaybackObserver> =
-                Arc::new(crate::recorder_io::RecorderPlaybackObserver(tap));
-            out.tracker().observe(observer.clone());
-            *slot = Some(observer);
         }
     }
 }

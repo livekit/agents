@@ -32,7 +32,6 @@ impl ToolStep {
         self.calls.is_empty()
     }
 
-    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Run once the step is authorized to play (a call made while another speech plays, or by a
     /// preemptive generation, waits). The runner's task is **not** registered on the speech
     /// handle: a tool may outlive the turn.
@@ -121,11 +120,7 @@ impl ToolStep {
             if let Some(start) = deferred {
                 // Authorization first: a discarded preemptive generation, or a speech
                 // interrupted while queued, drops the call unrun.
-                let authorized = tokio::select! {
-                    biased;
-                    () = handle.wait_for_interrupted() => false,
-                    () = handle.wait_for_step_authorized(step) => true,
-                };
+                let authorized = tool_authorization(&handle, step).await;
                 if !authorized {
                     let _ = tx.send(None);
                     return;
@@ -151,6 +146,39 @@ impl ToolStep {
         });
         task_owner.add_task(abort);
         self.calls.push(Dispatched { call, rx: Some(rx) });
+    }
+}
+
+async fn tool_authorization(handle: &SpeechHandle, step: u32) -> bool {
+    let mut interrupted = std::pin::pin!(handle.wait_for_interrupted());
+    let mut done = std::pin::pin!(handle.wait_for_done());
+    let mut authorized = std::pin::pin!(handle.wait_for_step_authorized(step));
+    std::future::poll_fn(|cx| {
+        if interrupted.as_mut().poll(cx).is_ready() || done.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(false);
+        }
+        if authorized.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(true);
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+#[cfg(test)]
+mod authorization_tests {
+    use super::*;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    #[test]
+    fn a_failed_speech_discards_a_tool_still_waiting_for_authorization() {
+        let handle = SpeechHandle::detached("failed-before-authorization".into(), true);
+        let mut waiting = std::pin::pin!(tool_authorization(&handle, 1));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        handle.mark_done(Some(lk_agents_abi::errors::ApiError::new("output refused").into()));
+        assert_eq!(waiting.as_mut().poll(&mut cx), Poll::Ready(false));
     }
 }
 

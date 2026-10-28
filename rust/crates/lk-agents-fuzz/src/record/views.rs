@@ -728,6 +728,13 @@ impl<'a> OutputView<'a> {
             .map(|o| o.at)
     }
 
+    /// Physical attachment callbacks for this object, preserving overlap and order.
+    pub fn attachments(&self) -> impl Iterator<Item = (Observed, bool)> + '_ {
+        self.r.output_attachments.iter().filter_map(|(at, output, attached)| {
+            (*output == self.nth()).then_some((*at, *attached))
+        })
+    }
+
     /// Every call that landed on this instance, in order.
     pub fn received(&self) -> Vec<(Observed, &'a Sink)> {
         self.r

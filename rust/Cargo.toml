@@ -20,7 +20,6 @@ default-members = [
     "crates/lk-agents-host-derive",
     "crates/lk-agents-inference",
     "crates/lk-agents-media",
-    "crates/lk-agents-rtc",
     "crates/lk-agents-storage",
     "crates/lk-agents-voice",
     "crates/lk-agents-worker",

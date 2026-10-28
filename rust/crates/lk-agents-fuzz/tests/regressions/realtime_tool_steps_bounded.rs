@@ -21,10 +21,11 @@ fn a_realtime_reply_stops_calling_tools_at_its_budget() {
         max_tool_steps: Some(1),
         ..Setup::default()
     };
-    let mut inputs = vec![Input::GenerateReply { user_input: None, instructions: None, allow: None }];
+    let mut inputs =
+        vec![Input::GenerateReply { user_input: None, instructions: None, allow: None }];
     // Every call the model makes is answered and every segment played, for a few rounds.
     for round in 0..4 {
-        inputs.push(Input::Advance { ms: Millis(3_000) });
+        inputs.push(Input::Advance { ms: Millis(10_000) });
         inputs.push(Input::PlayoutStarted { segment: Ref::new(round) });
         inputs.push(Input::PlayoutFinished { segment: Ref::new(round) });
         inputs.push(Input::ToolAnswered {
@@ -33,11 +34,11 @@ fn a_realtime_reply_stops_calling_tools_at_its_budget() {
             text: AgentText("ok".into()),
         });
     }
-    inputs.push(Input::Advance { ms: Millis(3_000) });
+    inputs.push(Input::Advance { ms: Millis(10_000) });
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
         for input in &inputs {
-            run.apply(input).await;
+            super::playout::apply_with_playout(&mut run, input).await;
         }
         run
     });

@@ -59,7 +59,8 @@ def dependency_violations(metadata: dict) -> set[str]:
     resolve = metadata.get("resolve")
     if not resolve or not resolve.get("nodes"):
         raise ValueError("cargo metadata has no resolved dependency graph")
-    nodes = {n["id"]: [d["pkg"] for d in n["deps"]] for n in resolve["nodes"]}
+    resolved = {node["id"]: node["deps"] for node in resolve["nodes"]}
+    nodes = {node: [edge["pkg"] for edge in edges] for node, edges in resolved.items()}
     members = metadata["workspace_members"]
     if not members or not any(packages[p] in PURE for p in members):
         raise ValueError("cargo metadata contains no subject cores or ABI")
@@ -101,8 +102,17 @@ def dependency_violations(metadata: dict) -> set[str]:
             "lk-agents-runtime": PURE - {"lk-agents-rtc"} | ASYNC,
             "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
         }.get(name, {"lk-agents-abi"})
-        for dep in nodes[root]:
+        for edge in resolved[root]:
+            dep = edge["pkg"]
             target = packages[dep]
+            if target == "lk-agents-test-support" and (
+                name == "lk-agents-fuzz"
+                or (
+                    edge.get("dep_kinds")
+                    and all(kind.get("kind") == "dev" for kind in edge["dep_kinds"])
+                )
+            ):
+                continue
             if target.startswith("lk-agents-") and target != name and target not in allowed:
                 # Proc macros/build tooling do not define a product dependency direction.
                 if target not in {"lk-agents-host-derive", "lk-agents-bindgen"}:

@@ -58,7 +58,9 @@ impl Runtime {
         // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
             E::RealtimePlayer { speech, event } => {
-                let Some(player) = self.realtime_players.get(&speech) else { return };
+                let Some(player) = self.realtime_players.get(&speech) else {
+                    return;
+                };
                 if let Err(error) = player.try_send(*event) {
                     if matches!(error, tokio::sync::mpsc::error::TrySendError::Full(_)) {
                         log::error!(target: "livekit.agents", speech = speech.0,
@@ -74,17 +76,19 @@ impl Runtime {
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
             E::CancelSpeech(handle) => handle.cancel_tasks(),
-            E::AttachRecorder { recorder, output } => {
-                self.shared.unobserve_recorder(output);
+            E::AttachRecorder { recorder, output: _ } => {
+                self.recorder_observers.detach(&self.shared, None);
                 let tap = lk_agents_voice::recorder_io::RecorderTap::new(
                     recorder.0,
                     self.shared.time.clock(),
                 );
                 *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
-                self.shared.observe_recorder(None, output);
+                for output in self.driver.active_audio_outputs() {
+                    self.recorder_observers.attach(&self.shared, output);
+                }
             }
-            E::DetachRecorder(output) => {
-                self.shared.unobserve_recorder(output);
+            E::DetachRecorder(_) => {
+                self.recorder_observers.detach(&self.shared, None);
                 *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
             }
             E::FlushRecorder(at) => {
@@ -139,7 +143,9 @@ impl Runtime {
             }
             E::DiscardLeg(sink) => {
                 self.shared.resources.release(sink);
-                let Some(stream) = self.pending_legs.remove(&sink) else { return };
+                let Some(stream) = self.pending_legs.remove(&sink) else {
+                    return;
+                };
                 let deadline = self.shared.time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
                 self.shared.spawner.spawn_unboxed(async move {
                     match stream {
@@ -307,7 +313,9 @@ impl Runtime {
             E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
             E::ProviderRelease(id) => self.shared.resources.release(id),
             E::RealtimeClose(id) => {
-                let Some(session) = self.shared.resources.realtime(id) else { return };
+                let Some(session) = self.shared.resources.realtime(id) else {
+                    return;
+                };
                 let tx = self.reports.clone();
                 self.shared.spawner.spawn_unboxed(async move {
                     session.aclose().await;
@@ -320,7 +328,9 @@ impl Runtime {
                 }
             }
             E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
-                let Some(sink) = self.shared.resources.audio_output(output) else { return };
+                let Some(sink) = self.shared.resources.audio_output(output) else {
+                    return;
+                };
                 match op {
                     GateOp::Pause => sink.pause(),
                     GateOp::Resume => sink.resume(),
@@ -330,33 +340,28 @@ impl Runtime {
                     GateOp::ClearBuffer => sink.clear_buffer(),
                 }
             }
-            // A synchroniser left behind would otherwise keep pacing into the old leaf. The same
-            // sink set again (under a new id) is neither detached nor re-attached.
             E::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
                 let resources = &self.shared.resources;
-                let old = previous.and_then(|id| resources.audio_output(id));
-                let new = next.and_then(|id| resources.audio_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
+                if let Some(id) = previous {
+                    self.recorder_observers.detach(&self.shared, Some(id));
+                    if let Some(old) = resources.audio_output(id) {
                         old.on_detached();
                     }
-                    if let Some(new) = &new {
+                }
+                if let Some(id) = next {
+                    if let Some(new) = resources.audio_output(id) {
                         if enabled { new.on_attached() } else { new.on_detached() }
                     }
+                    self.recorder_observers.attach(&self.shared, id);
                 }
-                self.shared.observe_recorder(old.as_deref(), next);
             }
             E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
                 let resources = &self.shared.resources;
-                let old = previous.and_then(|id| resources.text_output(id));
-                let new = next.and_then(|id| resources.text_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
-                        old.on_detached();
-                    }
-                    if let Some(new) = &new {
-                        if enabled { new.on_attached() } else { new.on_detached() }
-                    }
+                if let Some(old) = previous.and_then(|id| resources.text_output(id)) {
+                    old.on_detached();
+                }
+                if let Some(new) = next.and_then(|id| resources.text_output(id)) {
+                    if enabled { new.on_attached() } else { new.on_detached() }
                 }
             }
 
@@ -449,12 +454,4 @@ impl Runtime {
 enum PendingOpen {
     Stt(Arc<dyn lk_agents_abi::Stt>),
     Vad(Arc<dyn lk_agents_abi::Vad>),
-}
-
-fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b)),
-        (None, None) => true,
-        _ => false,
-    }
 }

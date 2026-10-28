@@ -13,8 +13,8 @@ use std::sync::Arc;
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
     agent_activity::scheduling::{SpeechId, SpeechKind},
-    events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle},
     agent_session::Tx,
+    events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle},
     speech_handle::SpeechHandle,
     trace::Step,
 };
@@ -22,8 +22,8 @@ use lk_agents_voice::{
 use crate::{
     input::Input,
     record::{
-        Answer, Breach, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag, Task,
-        TaskEnd,
+        Answer, Breach, Detail, Handle, Host, Id, Kind, Observed, Phase, Recording, Sink, Tag,
+        Task, TaskEnd,
     },
 };
 
@@ -164,6 +164,13 @@ impl Authored {
     /// The case attached an output instance.
     pub fn output(self, audio: bool) -> Self {
         self.opens(Kind::Output, Detail::Output { audio })
+    }
+
+    /// A physical attachment callback on an output object.
+    pub fn output_attachment(mut self, output: u32, attached: bool) -> Self {
+        let at = self.next();
+        self.recording.record_output_attachment(at, output, attached);
+        self
     }
 
     /// The driver closed this resource.

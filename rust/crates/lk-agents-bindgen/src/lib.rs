@@ -33,7 +33,6 @@ use proc_macro2::{Span, TokenStream};
 /// feature enables them, including runtime-owned adapters included from these locations.
 pub const IN_PLACE_CRATES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/",
-    "rust/crates/lk-agents-rtc/src/",
     "rust/crates/lk-agents-media/src/",
     "rust/crates/lk-agents-worker/src/",
     "rust/crates/lk-agents-voice/src/",

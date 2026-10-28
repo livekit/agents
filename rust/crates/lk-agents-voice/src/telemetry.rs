@@ -281,7 +281,12 @@ impl SessionTrace {
 
     /// A `VoiceTask` suspends `previous`: its agent's `on_enter` runs under this `update_agent`,
     /// which that hook, or [`SessionTrace::agent_updated`] without one, ends.
-    pub(crate) fn agent_suspended(&mut self, now: f64, previous: &str, out: &mut Vec<SessionEvent>) {
+    pub(crate) fn agent_suspended(
+        &mut self,
+        now: f64,
+        previous: &str,
+        out: &mut Vec<SessionEvent>,
+    ) {
         if !self.live() || self.updating.is_some() {
             return;
         }

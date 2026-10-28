@@ -2,11 +2,12 @@
 //! receiver tells its host.
 
 use crate::errors::ProviderError;
-use crate::utils::video::{AvatarFrame, MediaFrame};
+use crate::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
+use crate::voice::io::AvatarPlaybackSegment;
 
 /// The `clear_buffer` event `DataStreamAudioReceiver` emits when the agent clears its audio
 /// (`AudioReceiver.emit`).
-#[crate::host(proxy(host = "livekit.agents.voice.avatar.DataStreamAudioReceiver"))]
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.AudioReceiver"))]
 pub trait ClearBufferListener: Send + Sync {
     #[host(notify, name = "_core_clear_buffer")]
     fn clear_buffer(&self);
@@ -24,12 +25,22 @@ pub trait AvatarAudioReceiver: Send + Sync {
     #[host(await, name = "_core_next_audio")]
     fn next_audio(
         &self,
-    ) -> crate::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>>;
+    ) -> crate::BoxFuture<
+        '_,
+        Result<
+            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
+            ProviderError,
+        >,
+    >;
     #[host(await, name = "_core_notify_playback_started")]
-    fn notify_playback_started(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn notify_playback_started(
+        &self,
+        segment: AvatarPlaybackSegment,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_notify_playback_finished")]
     fn notify_playback_finished(
         &self,
+        segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
@@ -92,4 +103,34 @@ pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
     /// Stop admitting audio, settle startup and pending writes, close streams and retire RPC routes.
     #[host(await)]
     async fn aclose(&self);
+}
+
+/// The worker's receiver keeps stream identity with each delivered frame and playback report.
+#[crate::host(class(name = "DataStreamAudioReceiver", native = AvatarAudioReceiver))]
+pub trait DataStreamAudioReceiver: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new(
+        room: std::sync::Arc<dyn crate::voice::rtc::RtcRoom>,
+        #[host(kw, default = None)] sender_identity: Option<String>,
+        #[host(default = 100)] frame_size_ms: u32,
+        #[host(default = 3)] rpc_max_retries: u32,
+        #[host(default = None)] on_clear_buffer: Option<std::sync::Arc<dyn ClearBufferListener>>,
+    ) -> Result<Self, ProviderError>;
+    #[host(await)]
+    async fn start(&self) -> Result<(), ProviderError>;
+    #[host(await)]
+    async fn next_audio(
+        &self,
+    ) -> Result<(u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>), ProviderError>;
+    #[host(call)]
+    fn notify_playback_started(&self, segment: AvatarPlaybackSegment) -> Result<(), ProviderError>;
+    #[host(call)]
+    fn notify_playback_finished(
+        &self,
+        segment: AvatarPlaybackSegment,
+        playback_position: f64,
+        interrupted: bool,
+    ) -> Result<(), ProviderError>;
+    #[host(call)]
+    fn aclose(&self) -> Result<(), ProviderError>;
 }

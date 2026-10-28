@@ -45,20 +45,24 @@ impl FakeConsole {
     }
     fn send(&self, message: Message) {
         if let Some(outgoing) = self.outgoing.lock().unwrap().as_ref() {
-            let _ = outgoing.send(proto::AgentSessionMessage { message: Some(message) });
+            let _ = outgoing.send(proto::AgentSessionMessage {
+                message: Some(message),
+            });
         }
     }
-    fn finish(&self, interrupted: bool) {
-        let finished = self.playback.lock().unwrap().finish(interrupted, self.now());
-        if let Some(finished) = finished {
-            self.tracker.playback_finished(finished);
+    fn finish(&self) {
+        if let Some((segment, finished)) = self.playback.lock().unwrap().clear() {
+            self.tracker.playback_finished(segment, finished);
         }
     }
 }
 
 impl ConsolePort for FakeConsole {
     fn as_transport(self: Arc<Self>, spawner: Arc<dyn Spawner>) -> Arc<dyn SessionTransport> {
-        Arc::new(FakeTransport { console: self, spawner })
+        Arc::new(FakeTransport {
+            console: self,
+            spawner,
+        })
     }
     fn as_console(self: Arc<Self>) -> Arc<dyn ConsoleSink> {
         self
@@ -123,7 +127,7 @@ impl ConsoleSink for FakeConsole {
         }
     }
     fn playout_finished(&self) {
-        self.finish(false);
+        // This raw CLI acknowledgement has no operation key and cannot settle a local buffer.
     }
 }
 
@@ -152,20 +156,28 @@ impl AudioOutput for FakeConsole {
     fn capture<'a>(&'a self, frame: &'a AudioFrame) -> BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
             let now = self.now();
-            let (message, opened) = self.playback.lock().unwrap().capture(frame, now);
+            let segment = self
+                .tracker
+                .current_segment()
+                .ok_or(IoError::PlaybackSegmentUnavailable)?;
+            let (message, opened) = self.playback.lock().unwrap().capture(frame, segment)?;
             if opened {
-                self.tracker.report_started(now);
+                self.tracker.report_started(segment, now);
             }
             self.send(message);
             Ok(())
         })
     }
     fn flush_segment(&self) {
-        self.send(Message::AudioPlaybackFlush(console_io::AudioPlaybackFlush {}));
+        self.send(Message::AudioPlaybackFlush(
+            console_io::AudioPlaybackFlush {},
+        ));
     }
     fn clear_buffer(&self) {
-        self.send(Message::AudioPlaybackClear(console_io::AudioPlaybackClear {}));
-        self.finish(true);
+        self.send(Message::AudioPlaybackClear(
+            console_io::AudioPlaybackClear {},
+        ));
+        self.finish();
     }
 }
 
@@ -206,7 +218,10 @@ impl FakeCli {
             playback: Mutex::default(),
             clock,
         });
-        let cli = FakeCli { to_agent, playing_until: Arc::default() };
+        let cli = FakeCli {
+            to_agent,
+            playing_until: Arc::default(),
+        };
         let speaker = cli.clone();
         let world_inner = world.clone();
         world.spawn(Box::pin(async move {
@@ -252,12 +267,16 @@ impl FakeCli {
     /// The agent's voice the speaker has yet to play: an ack still owed on the clock.
     pub fn queued(&self) -> Duration {
         let until = *self.playing_until.lock().unwrap();
-        until.map_or(Duration::ZERO, |at| at.saturating_duration_since(tokio::time::Instant::now()))
+        until.map_or(Duration::ZERO, |at| {
+            at.saturating_duration_since(tokio::time::Instant::now())
+        })
     }
 
     /// One message to the agent; `false` once the CLI's socket is gone.
     pub fn send(&self, message: Message) -> bool {
-        let message = proto::AgentSessionMessage { message: Some(message) };
+        let message = proto::AgentSessionMessage {
+            message: Some(message),
+        };
         self.to_agent.send(message).is_ok()
     }
 }
@@ -273,7 +292,12 @@ impl remote_session::SessionPort for FakeConsolePort {
         Ok(Vec::new())
     }
     async fn agent_info(&self) -> Result<remote_session::AgentInfo, HostError> {
-        Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
+        Ok((
+            "agent".into(),
+            Some("You are a test agent.".into()),
+            Vec::new(),
+            Vec::new(),
+        ))
     }
     async fn run_input(&self, text: &str) -> Result<remote_session::RunOutcome, HostError> {
         Ok(if text.is_empty() {
@@ -287,7 +311,13 @@ impl remote_session::SessionPort for FakeConsolePort {
             .iter()
             .map(|(key, _)| ((*key).to_owned(), "None".to_owned()))
             .collect();
-        Ok(("listening".into(), "listening".into(), "agent".into(), options, Some(0.0)))
+        Ok((
+            "listening".into(),
+            "listening".into(),
+            "agent".into(),
+            options,
+            Some(0.0),
+        ))
     }
     async fn rtc_stats(&self) -> Result<Option<remote_session::RtcStats>, HostError> {
         Ok(None)

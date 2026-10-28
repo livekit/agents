@@ -508,10 +508,13 @@ pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
 /// answer to the model names the keys sent, or the first that failed and why.
 #[lk_agents_abi::host(export)]
 pub async fn send_dtmf_events(
-    room: std::sync::Arc<dyn lk_agents_rtc::RtcRoom>,
+    room: lk_agents_abi::voice::room_owner::RoomSession,
     events: Vec<String>,
     #[host(ambient)] clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
 ) -> String {
+    let Some(room) = room.0.rtc() else {
+        return "Failed to send DTMF events: room is not connected".into();
+    };
     for event in &events {
         let sent = match DtmfEvent::parse(event) {
             Some(key) => room
@@ -519,7 +522,7 @@ pub async fn send_dtmf_events(
                 .publish_dtmf(u32::from(dtmf_event_to_code(key)), event.clone())
                 .await
                 .map_err(|err| match err {
-                    lk_agents_rtc::RtcError::Host(host) => host.message,
+                    lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
                     other => other.to_string(),
                 }),
             None => Err(format!("unknown DTMF symbol {event:?}")),
@@ -545,6 +548,8 @@ pub enum ReceiveDtmfError {
     UnknownKey(String),
     #[error("Digits input not fully received. Expect {0} digits, got {1}")]
     Incomplete(usize, usize),
+    #[error("room event stream failed: {0}")]
+    Room(String),
 }
 
 #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
@@ -553,7 +558,7 @@ pub enum ReceiveDtmfError {
 /// first is in. Fewer than `num_digits` is [`ReceiveDtmfError::Incomplete`].
 #[lk_agents_abi::host(export)]
 pub async fn receive_dtmf(
-    room: std::sync::Arc<dyn lk_agents_rtc::RtcRoom>,
+    room: lk_agents_abi::voice::room_owner::RoomSession,
     num_digits: usize,
     timeout: f64,
     stop_event: String,
@@ -565,20 +570,24 @@ pub async fn receive_dtmf(
     }
     let stop = DtmfEvent::parse(&stop_event)
         .ok_or_else(|| ReceiveDtmfError::UnknownKey(py_repr(&stop_event)))?;
+    let room =
+        room.0.rtc().ok_or_else(|| ReceiveDtmfError::Room("room is not connected".into()))?;
     let gap = Duration::try_from_secs_f64(timeout.max(0.0)).unwrap_or(Duration::MAX);
     let mut events = room.events();
     let mut digits = Vec::new();
     let mut deadline = None;
     loop {
         let next = match deadline {
-            None => events.recv().await,
+            None => events.next().await,
             Some(at) => tokio::select! {
-                next = events.recv() => next,
+                next = events.next() => next,
                 _ = clock.wait_until(at) => break,
             },
         };
-        let Some(event) = next else { break };
-        let lk_agents_rtc::RoomEvent::SipDtmf { digit, .. } = event else { continue };
+        let Some(event) = next.map_err(|error| ReceiveDtmfError::Room(error.to_string()))? else {
+            break;
+        };
+        let lk_agents_abi::voice::rtc::RoomEvent::SipDtmf { digit, .. } = event else { continue };
         if digit == stop.as_str() {
             break;
         }

@@ -73,29 +73,6 @@ pub(crate) async fn realtime_generation_task(
     handle.clear_authorization();
 
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
-    let audio_out = shared.audio_output();
-    // `text_output`, read once for the step as the reference does: each message's words go down it.
-    let text_out = shared.transcription_enabled().then(|| shared.transcription_output());
-    let text_out = ctx.providers.output_nodes.text_output(text_out.flatten());
-    // `realtime_audio_output_node`: frames go to a node opened for this step over its output,
-    // which emits into that output itself. A node that fails to open plays nothing of the step.
-    let node = ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(
-        |(nodes, out)| {
-            nodes
-                .audio_node(Arc::clone(out))
-                .inspect_err(|e| {
-                    log::error!(target: "livekit.agents", error = e.to_string().as_str();
-                    "failed to open the realtime_audio_output_node");
-                })
-                .ok()
-        },
-    );
-    let node_out =
-        node.as_deref().zip(audio_out.as_deref()).map(|(node, out)| NodeOutput { node, out });
-    let out: Option<&dyn AudioOutput> = match &node_out {
-        Some(n) => Some(n),
-        None => audio_out.as_deref(),
-    };
     // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new();
     let mut generation = Generation {
@@ -112,31 +89,101 @@ pub(crate) async fn realtime_generation_task(
         messages: Vec::new(),
         audio: Duration::ZERO,
         received: false,
-        text_out: text_out.as_deref(),
-        speaks_text: out.is_none(),
-        plays_audio: out.is_some(),
+        text_out: None,
+        speaks_text: false,
+        plays_audio: false,
+        finished: false,
+        segment_start: 0,
         // A text message is voiced by the TTS when one plays into the audio output
         // (`"audio" not in msg_modalities and self.tts`).
-        tts: out.and(ctx.providers.tts.clone()),
+        tts: None,
         voiced: None,
         backlog: std::collections::VecDeque::new(),
         leg: None,
     };
-    let played = perform_audio_forwarding(shared, handle, out, &mut generation).await;
-    // The node's invocation ends with the generation, so cut-off frames never reach the next one.
-    if let Some(node) = &node {
-        node.end();
-    }
-    // `Generation::next` fails only on the speech's own request failing: nothing was generated.
-    generation.unvoice().await;
-    let heard = played.map_err(|failed| failed.error)?;
-    if heard.frames == 0
-        && heard.complete
-        && text_out.is_some()
-        && !generation.segments.is_empty()
-        && let Some(out) = audio_out.as_deref()
-    {
-        end_unvoiced(shared, handle.id(), out);
+    let mut heard = crate::generation::playout::silent(String::new(), true);
+    loop {
+        let Some(mut binding) = super::output::OutputBinding::acquire(shared, handle).await? else {
+            heard.complete = false;
+            break;
+        };
+        if !binding.activate().await? {
+            heard.complete = false;
+            break;
+        }
+        let audio_out = binding.audio();
+        generation.text_out = ctx.providers.output_nodes.text_output(binding.text());
+        binding.retain_text_processing(generation.text_out.clone());
+        generation.speaks_text = audio_out.is_none();
+        generation.plays_audio = audio_out.is_some();
+        generation.tts = audio_out.as_ref().and(ctx.providers.tts.clone());
+        generation.segment_start = generation.segments.len();
+        // A node invocation belongs to this binding. Its configured transforms survive a tail
+        // replacement; a pending invocation is ended before the next binding is acquired.
+        let node =
+            ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(
+                |(nodes, output)| {
+                    nodes
+                        .audio_node(output.clone())
+                        .inspect_err(|e| {
+                            log::error!(target: "livekit.agents", error = e.to_string().as_str();
+                    "failed to open the realtime_audio_output_node");
+                        })
+                        .ok()
+                },
+            );
+        let node_out =
+            node.as_deref().zip(audio_out.as_deref()).map(|(node, out)| NodeOutput { node, out });
+        let output: Option<&dyn AudioOutput> = match &node_out {
+            Some(node) => Some(node),
+            None => audio_out.as_deref(),
+        };
+        let played = perform_audio_forwarding(shared, handle, output, &mut generation).await;
+        if let Some(node) = &node {
+            node.end();
+        }
+        generation.unvoice().await;
+        generation.end_message();
+        let text_result = match generation.text_out.as_deref() {
+            Some(text) => super::forward::finish_text(text, handle, played.is_err()).await,
+            None => Ok(()),
+        };
+        binding.text_drained();
+        let part = match played {
+            Ok(part) => part,
+            Err(failed) => {
+                if let Some(part) = failed.heard {
+                    heard.text.push_str(&part.text);
+                    heard.position += part.position;
+                    heard.played += part.played;
+                    heard.frames += part.frames;
+                }
+                heard.complete = false;
+                generation.drain_started();
+                let cuts = generation.cuts(&heard);
+                let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
+                return Err(failed.error);
+            }
+        };
+        if part.frames == 0
+            && part.complete
+            && generation.text_out.is_some()
+            && generation.segments.len() > generation.segment_start
+            && let Some(output) = audio_out.as_deref()
+        {
+            end_unvoiced(shared, handle.id(), output);
+        }
+        heard.text.push_str(&part.text);
+        heard.position += part.position;
+        heard.played += part.played;
+        heard.frames += part.frames;
+        heard.complete &= part.complete;
+        text_result?;
+        // Its final report has settled before selection can activate the following segment.
+        drop(binding);
+        if !heard.complete || generation.finished || handle.interrupted() {
+            break;
+        }
     }
     let interrupted = !heard.complete || handle.interrupted();
     if interrupted {
@@ -237,7 +284,9 @@ struct Generation<'a> {
     received: bool,
     /// The transcription output, and whether the words are what starts the agent speaking (no
     /// audio output).
-    text_out: Option<&'a dyn TextOutput>,
+    text_out: Option<Arc<dyn TextOutput>>,
+    finished: bool,
+    segment_start: usize,
     speaks_text: bool,
     /// An audio output plays the generation: a message whose modality is unsettled is audio.
     plays_audio: bool,
@@ -275,6 +324,21 @@ struct Message {
 }
 
 impl Generation<'_> {
+    fn note_event(&mut self, event: &Event) {
+        self.received = true;
+        if self.response_id.is_none()
+            && let Some(id) = realtime_state::response_id_of(event)
+        {
+            self.response_id = Some(id.to_owned());
+        }
+    }
+
+    fn dispatch_call(&mut self, ready: rt::FunctionCallReady) {
+        let mut call = *ready.call;
+        call.created_at = self.shared.time.wall();
+        self.tools.dispatch(self.shared, self.handle, self.ctx, call);
+    }
+
     fn end_message(&mut self) {
         if let Some(leg) = self.leg.take() {
             leg.flush();
@@ -310,7 +374,7 @@ impl Generation<'_> {
     }
 
     fn add_audio(&mut self, frame: &lk_agents_abi::AudioFrame) {
-        let len = lk_agents_rtc::frame_duration(frame);
+        let len = lk_agents_abi::voice::rtc::frame_duration(frame);
         self.audio += len;
         if let Some(m) = self.messages.last_mut() {
             m.audio += len;
@@ -478,6 +542,58 @@ fn split_chars(s: &str, n: usize) -> (&str, &str) {
 }
 
 impl Segment for Generation<'_> {
+    fn stop_at_boundary(&self) -> bool {
+        true
+    }
+
+    async fn playout_controls(&mut self) {
+        // Service one cancellation-safe control event per poll, so even a continuously ready
+        // provider cannot starve the playback receipt/deadline polled beside this future.
+        // The first next-media event stays in the existing backlog until its binding is admitted.
+        let mut deferred_media = false;
+        std::future::poll_fn(|cx| {
+            if self.finished || deferred_media {
+                return std::task::Poll::Pending::<()>;
+            }
+            let event = match self.backlog.pop_front() {
+                Some(event) => event,
+                None => match self.events.poll_recv(cx) {
+                    std::task::Poll::Ready(Some(event)) => event,
+                    std::task::Poll::Ready(None) => {
+                        self.finished = true;
+                        return std::task::Poll::Pending;
+                    }
+                    std::task::Poll::Pending => return std::task::Poll::Pending,
+                },
+            };
+            self.note_event(&event);
+            match event {
+                Event::FunctionCall(ready) => self.dispatch_call(ready),
+                Event::GenerationDone(_) => {
+                    self.end_message();
+                    self.finished = true;
+                }
+                Event::MessageModalities(message) => {
+                    self.settle(&message.message_id, message.modalities)
+                }
+                event @ (Event::MessageStarted(_)
+                | Event::TextDelta(_)
+                | Event::AudioDelta(_)
+                | Event::MessageDone(_)
+                | Event::GenerateReplyFailed(_)) => {
+                    self.backlog.push_front(event);
+                    deferred_media = true;
+                }
+                _ => {}
+            }
+            if !self.finished && !deferred_media {
+                cx.waker().wake_by_ref();
+            }
+            std::task::Poll::Pending
+        })
+        .await;
+    }
+
     fn started_speaking(&mut self, at: f64) {
         first_frame(self.shared, self.acc, at);
     }
@@ -497,16 +613,12 @@ impl Segment for Generation<'_> {
                     // The channel closed: the session ended, or the loop released this speech.
                     None => {
                         self.end_message();
+                        self.finished = true;
                         return Ok(Next::End);
                     }
                 },
             };
-            self.received = true;
-            if self.response_id.is_none()
-                && let Some(id) = realtime_state::response_id_of(&ev)
-            {
-                self.response_id = Some(id.to_owned());
-            }
+            self.note_event(&ev);
             match ev {
                 Event::MessageStarted(m) => {
                     self.message_started(m.message_id.clone());
@@ -515,7 +627,7 @@ impl Segment for Generation<'_> {
                     self.current = Some(self.segments.len());
                     self.segments.push(String::new());
                     let speech = self.handle.id();
-                    self.leg = Some(TextLeg::new(self.text_out, None, self.shared, speech));
+                    self.leg = Some(TextLeg::new(self.text_out.clone(), None, self.shared, speech));
                 }
                 Event::TextDelta(rt::TextDelta { delta, .. }) => {
                     let Some(seg) = self.current.and_then(|idx| self.segments.get_mut(idx)) else {
@@ -552,12 +664,11 @@ impl Segment for Generation<'_> {
                 Event::FunctionCall(ready) => {
                     // Stamped at its execution start: the call arrives during the generation,
                     // before the message it belongs to is placed.
-                    let mut call = *ready.call;
-                    call.created_at = self.shared.time.wall();
-                    self.tools.dispatch(self.shared, self.handle, self.ctx, call);
+                    self.dispatch_call(ready);
                 }
                 Event::GenerationDone(_) => {
                     self.end_message();
+                    self.finished = true;
                     return Ok(Next::End);
                 }
                 // The request this speech was announced for failed (`_mark_done(error=e)`).
@@ -572,7 +683,7 @@ impl Segment for Generation<'_> {
     }
 
     fn text(&self) -> String {
-        self.segments.concat()
+        self.segments[self.segment_start..].concat()
     }
 }
 
@@ -590,6 +701,13 @@ impl AudioOutput for NodeOutput<'_> {
 
     fn tracker(&self) -> &Arc<PlaybackTracker> {
         self.out.tracker()
+    }
+
+    fn begin_segment(
+        &self,
+        key: lk_agents_abi::voice::io::PlaybackSegment,
+    ) -> lk_agents_abi::voice::io::Result<()> {
+        self.out.begin_segment(key)
     }
 
     fn capabilities(&self) -> AudioOutputCapabilities {

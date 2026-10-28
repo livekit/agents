@@ -261,9 +261,13 @@ impl Run {
     /// The agent's voice still queued in the room's speaker or the console's: either plays on the
     /// clock and owes the driver its playout, so a round that leaves audio there is not quiet.
     fn room_audio_queued(&self) -> Duration {
-        use lk_agents_rtc::AudioSource as _;
+        use lk_agents_test_support::rtc::AudioSource as _;
         let sources = self.room.local_participant().sources();
-        let room = sources.iter().map(|source| source.queued_duration()).max().unwrap_or_default();
+        let room = sources
+            .iter()
+            .map(|source| source.queued_duration().expect("fake source queue position"))
+            .max()
+            .unwrap_or_default();
         self.console.as_ref().map_or(room, |cli| room.max(cli.queued()))
     }
 
@@ -746,8 +750,9 @@ mod tests {
         });
         assert!(!sites.is_empty(), "the session spawned no task to check");
         for site in sites {
-            let placed =
-                site.contains("lk-agents-voice/src/") || site.ends_with("drive/executor.rs");
+            let placed = site.contains("lk-agents-voice/src/")
+                || site.contains("lk-agents-test-support/src/room_io/")
+                || site.ends_with("drive/executor.rs");
             assert!(placed, "a task is placed at {site}");
         }
     }

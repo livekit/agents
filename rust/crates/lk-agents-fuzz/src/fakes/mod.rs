@@ -101,7 +101,7 @@ pub enum Control {
     Video(mpsc::UnboundedSender<u64>),
     /// The person's camera track in the room: frames pushed onto it, minted the same way.
     RoomVideo(
-        Arc<lk_agents_rtc::FakeTrackPublication>,
+        Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
         Arc<dyn lk_agents_abi::errors::RefRegistry>,
     ),
     /// The realtime socket: the server-side events the case injects.
@@ -141,6 +141,12 @@ pub enum Record {
     Closed {
         at: Observed,
         slot: Slot,
+    },
+    /// The product physically attached or detached this object. Attachments may overlap.
+    OutputAttachment {
+        at: Observed,
+        output: u32,
+        attached: bool,
     },
     /// One chunk of audio a synthesis stream produced, with the text that caused it and the
     /// words it stamped (each with its start, in seconds from the stream's first audio).
@@ -403,6 +409,10 @@ impl Registry {
         let now = tokio::time::Instant::now();
         let due = self.voice_due.lock().unwrap();
         due.values().filter(|at| **at > now).max().map(|at| *at - now)
+    }
+
+    pub(super) fn output_attachment(&self, output: u32, attached: bool) {
+        self.write(Record::OutputAttachment { at: self.stamps.next(), output, attached });
     }
 
     pub(super) fn mark_closed(&self, slot: Slot) {

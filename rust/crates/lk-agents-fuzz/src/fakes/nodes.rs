@@ -96,7 +96,13 @@ impl Invocation {
 }
 
 /// What the host's text node hands its drain: a delta, or the segment's end.
-struct EchoText(tokio::sync::mpsc::UnboundedSender<Option<TimedString>>, Invocation);
+struct EchoText(
+    tokio::sync::mpsc::UnboundedSender<Option<TimedString>>,
+    Invocation,
+    tokio::sync::watch::Sender<Option<lk_agents_abi::voice::io::Result<()>>>,
+    tokio::sync::watch::Sender<bool>,
+    Arc<std::sync::Mutex<Option<Box<dyn Send>>>>,
+);
 
 impl TextNode for EchoText {
     fn capture_text(&self, text: &str) {
@@ -107,6 +113,31 @@ impl TextNode for EchoText {
     fn capture_timed(&self, text: &TimedString) {
         self.1.input();
         let _ = self.0.send(Some(text.clone()));
+    }
+
+    fn retain_until_drained(&self, owner: Box<dyn Send>) {
+        let mut retained = self.4.lock().unwrap();
+        if self.2.borrow().is_none() {
+            assert!(retained.is_none(), "a segment has one binding owner");
+            *retained = Some(owner);
+        } else {
+            drop(retained);
+            drop(owner);
+        }
+    }
+
+    fn cancel(&self) {
+        self.3.send_replace(true);
+    }
+
+    fn drain(&self) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<()>> {
+        let mut completion = self.2.subscribe();
+        Box::pin(async move {
+            let result = completion.wait_for(Option::is_some).await.map_err(|_| {
+                lk_agents_abi::voice::io::IoError::Rtc("text node completion was lost".into())
+            })?;
+            result.as_ref().expect("completed node").clone()
+        })
     }
 
     fn flush(&self) {
@@ -147,8 +178,26 @@ impl NodeFactory for FakeNodes {
     /// segment's flush after its last one.
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TimedString>>();
+        let completion = tokio::sync::watch::channel(None).0;
+        let done = completion.clone();
+        let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+        let retained = Arc::new(std::sync::Mutex::new(None::<Box<dyn Send>>));
+        let released = retained.clone();
         self.registry.world.spawn(Box::pin(async move {
-            while let Some(op) = rx.recv().await {
+            let outcome = loop {
+                let op = tokio::select! {
+                    biased;
+                    _ = async { let _ = cancelled.wait_for(|value| *value).await; } => {
+                        below.cancel_flush();
+                        break below.wait_for_flush().await;
+                    }
+                    op = rx.recv() => op,
+                };
+                let Some(op) = op else {
+                    break Err(lk_agents_abi::voice::io::IoError::Rtc(
+                        "text node input was cancelled".into(),
+                    ));
+                };
                 let sent = match op {
                     Some(t) if t.start_time.is_none() && t.end_time.is_none() => {
                         below.capture_text(&t.text).await
@@ -156,15 +205,27 @@ impl NodeFactory for FakeNodes {
                     Some(t) => below.capture_timed(&t).await,
                     None => {
                         below.flush();
-                        Ok(())
+                        break below.wait_for_flush().await;
                     }
                 };
-                if sent.is_err() {
-                    break;
+                if let Err(error) = sent {
+                    break Err(error);
                 }
-            }
+            };
+            let owner = {
+                let mut owner = released.lock().unwrap();
+                done.send_replace(Some(outcome));
+                owner.take()
+            };
+            drop(owner);
         }));
-        Ok(Arc::new(EchoText(tx, self.invocation(NodeUse::Transcription))))
+        Ok(Arc::new(EchoText(
+            tx,
+            self.invocation(NodeUse::Transcription),
+            completion,
+            cancel,
+            retained,
+        )))
     }
 
     /// `realtime_audio_output_node` as the default: each frame to the leg below, in order, none

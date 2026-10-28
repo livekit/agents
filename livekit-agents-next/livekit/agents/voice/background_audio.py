@@ -17,7 +17,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .agent_session import VoiceSession
 from .events import AgentStateChangedEvent
-from .room_io import _SOURCES, _name
+from .room_io import _SOURCES, Room as _RtcRoom, _name
 
 _resource_stack = contextlib.ExitStack()
 atexit.register(_resource_stack.close)
@@ -217,7 +217,7 @@ class BackgroundAudioPlayer:
         options = track_publish_options or rtc.TrackPublishOptions()
         ambient, choose = self._ambient
         sid = await self._player.start(
-            room,
+            _core._core_create_room_session(_RtcRoom.of(room)),
             random.random(),
             ambient=ambient,
             choose=choose,

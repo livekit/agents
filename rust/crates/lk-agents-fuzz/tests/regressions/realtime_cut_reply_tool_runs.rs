@@ -22,31 +22,66 @@ fn a_cut_realtime_reply_still_runs_its_tools() {
         tools: vec!["lookup".into()],
         ..Setup::default()
     };
-    let inputs = [
-        Input::GenerateReply { user_input: None, instructions: None, allow: None },
-        Input::Advance { ms: Millis(3_000) },
-        Input::PlayoutStarted { segment: Ref::new(0) },
-        Input::Advance { ms: Millis(200) },
-        // The speaker throws its playback away: the step's audio is cut, the speech is not.
-        Input::SinkReset { output: Ref::new(0) },
-        Input::Advance { ms: Millis(200) },
-        // The tool asks the agent to go idle from inside its body (`ctx.foreground()`).
-        Input::ToolAnswered {
-            tool: Ref::new(0),
-            answer: ToolAnswer::AfterIdle,
-            text: AgentText(String::new()),
-        },
-        Input::Advance { ms: Millis(2_000) },
-    ];
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
-        for input in &inputs {
-            run.apply(input).await;
+        run.apply(&Input::GenerateReply { user_input: None, instructions: None, allow: None })
+            .await;
+        // The regression needs a tool already running when its audio is cut. Wait for both
+        // external resources while the healthy speaker reports real PCM progress; fixed delays
+        // can reset the reply before this server has even delivered its tool call.
+        let mut running_tool = None;
+        for _ in 0..200 {
+            super::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(100) }).await;
+            let tool = run.record.live().of(lk_agents_fuzz::record::Kind::Tool).first().copied();
+            if tool.is_some()
+                && !run.record.live().of(lk_agents_fuzz::record::Kind::Segment).is_empty()
+            {
+                running_tool = tool;
+                break;
+            }
         }
+        let tool = running_tool.expect("the server's tool must overlap its admitted audio");
+        // The speaker cuts its playback, while the speech and its tool remain live.
+        run.apply(&Input::SinkReset { output: Ref::new(0) }).await;
+        run.apply(&Input::Advance { ms: Millis(200) }).await;
+        run.apply(&Input::ToolAnswered {
+            tool: Ref::new(tool),
+            answer: ToolAnswer::AfterIdle,
+            text: AgentText(String::new()),
+        })
+        .await;
+        run.apply(&Input::Advance { ms: Millis(2_000) }).await;
         run
     });
+    assert!(run.record.sink().iter().any(|(_, sink)| {
+        matches!(sink, lk_agents_fuzz::record::Sink::Reset { segments, .. } if !segments.is_empty())
+    }), "the regression did not cut an admitted audio segment");
     let granted = run.record.journal().iter().any(|(_, step)| {
         matches!(step, Step::Speech(SpeechStep::IdleAnswered { hold: Some(_), closing: false }))
     });
-    assert!(granted, "the tool's foreground was never granted");
+    let failures: Vec<_> = run
+        .record
+        .host_view()
+        .speeches()
+        .into_iter()
+        .filter_map(|speech| speech.error().map(|error| (speech.id, error.to_owned())))
+        .collect();
+    let tools: Vec<_> = run
+        .record
+        .resources(lk_agents_fuzz::record::Kind::Tool)
+        .map(|tool| (tool.nth(), tool.opened_at()))
+        .collect();
+    let answers: Vec<_> = run
+        .record
+        .inputs_view()
+        .sent()
+        .iter()
+        .filter_map(|sent| {
+            matches!(sent.input, Input::ToolAnswered { .. }).then_some((sent.at, sent.accepted))
+        })
+        .collect();
+    assert!(
+        granted,
+        "the tool's foreground was never granted; failures={failures:?}, tools={tools:?}, answers={answers:?}"
+    );
 }

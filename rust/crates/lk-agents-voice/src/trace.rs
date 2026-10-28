@@ -416,17 +416,25 @@ pub enum PlayoutStep {
     SinkReset {
         speech: SpeechId,
     },
-    /// The sink reported all of `speech`'s audio played: its finish is taken as lost at `at`
-    /// unless it comes first.
+    /// Delivered audio was flushed: its completion report expires at this deadline.
     FinishDue {
         speech: SpeechId,
         at: Ts,
     },
-    /// The sink never reported `speech`'s playout finished: it was reported for it, whole at
-    /// `position`, once the audio it owed was over by the lost-finish margin.
+    /// The completion deadline expired; `position` contains observed progress only.
     FinishLost {
         speech: SpeechId,
+        segment: lk_agents_abi::voice::io::PlaybackSegment,
         position: std::time::Duration,
+    },
+    OutputRefused {
+        speech: SpeechId,
+        reason: crate::agent_session::output::OutputBindingError,
+    },
+    /// A bounded transcription performer refused this speech's retained work.
+    TranscriptionRefused {
+        speech: SpeechId,
+        resource: String,
     },
     OutputReplaced {
         audio: bool,
@@ -778,12 +786,12 @@ pub enum RoomLinkStep {
     /// `RoomIO` linked a participant (`room_io.RoomIO._on_participant_connected`).
     Linked,
     /// The linked participant left with `reason`; `closes` is the machine's verdict.
-    Unlinked { reason: lk_agents_rtc::DisconnectReason, closes: bool },
+    Unlinked { reason: lk_agents_abi::voice::rtc::DisconnectReason, closes: bool },
     /// `delete_room_on_close`: the host was asked to delete the room, after `Close`.
     DeleteRoomRequested,
 }
 
-/// One [`RoomEvent`](lk_agents_rtc::RoomEvent) variant, payload dropped: what the journal keeps of it.
+/// One [`RoomEvent`](lk_agents_abi::voice::rtc::RoomEvent) variant, payload dropped: what the journal keeps of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomEventKind {
     TrackSubscribed,
@@ -801,8 +809,8 @@ pub enum RoomEventKind {
 }
 
 impl RoomEventKind {
-    pub fn of(ev: &lk_agents_rtc::RoomEvent) -> Self {
-        use lk_agents_rtc::RoomEvent as E;
+    pub fn of(ev: &lk_agents_abi::voice::rtc::RoomEvent) -> Self {
+        use lk_agents_abi::voice::rtc::RoomEvent as E;
         match ev {
             E::TrackSubscribed { .. } => RoomEventKind::TrackSubscribed,
             E::TrackUnsubscribed { .. } => RoomEventKind::TrackUnsubscribed,
@@ -938,6 +946,8 @@ impl Step {
                 | PlayoutStep::SinkReset { speech }
                 | PlayoutStep::FinishDue { speech, .. }
                 | PlayoutStep::FinishLost { speech, .. }
+                | PlayoutStep::OutputRefused { speech, .. }
+                | PlayoutStep::TranscriptionRefused { speech, .. }
                 | PlayoutStep::TranscriptForwarded { speech, .. }
                 | PlayoutStep::TranscriptShown { speech, .. } => Some(*speech),
                 PlayoutStep::SinkCalled { speech, .. } => *speech,

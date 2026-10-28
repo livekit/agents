@@ -36,7 +36,7 @@ pub struct SessionApi {
     stage: Arc<Mutex<Stage>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     view: tokio::sync::watch::Receiver<Arc<crate::agent_session::SessionView>>,
-    room_io: Arc<crate::room_io::RoomIo>,
+    room_io: Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     synchronizer: Option<Arc<crate::transcription::synchronizer::TranscriptSynchronizer>>,
     spawner: Arc<dyn Spawner>,
@@ -160,8 +160,8 @@ impl SessionApi {
             }
 
             // The room's own IO first; its events join the driver's queue, one stream, one order.
-            room_io.start();
-            builder.room_io_events = room_io.events();
+            room_io.clone().start();
+            builder.room_io_events = Some(room_io.clone());
 
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
@@ -725,7 +725,7 @@ struct HostParts {
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     has_options: bool,
     /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
-    call_room: Option<Arc<dyn lk_agents_rtc::RtcRoom>>,
+    call_room: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The remote session protocol this session serves, if it does.
     remote: Option<Arc<crate::remote_session::driver::Hosting>>,
     /// The job whose room the session runs in.
@@ -757,7 +757,7 @@ fn session_usage_updated(
 /// barrier. Dropping the runner releases a waiting [`close`](SessionApi::close).
 pub struct SessionRunner {
     events: Rx<HostEvent>,
-    room_io: Arc<crate::room_io::RoomIo>,
+    room_io: Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>,
     api: Tx,
     drained: Option<tokio::sync::oneshot::Sender<()>>,
     opening: Opening,
@@ -807,9 +807,14 @@ impl Drop for SessionRunner {
 
 /// What the room I/O mirrors: the agent's state edge (written as `lk.agent.state`) and the user's
 /// transcript.
-async fn forward_to_room_io(room_io: &Arc<crate::room_io::RoomIo>, ev: &SessionEvent) {
+async fn forward_to_room_io(
+    room_io: &Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>,
+    ev: &SessionEvent,
+) {
     match ev {
-        SessionEvent::AgentStateChanged { new, .. } => room_io.on_agent_state_changed(new.as_str()),
+        SessionEvent::AgentStateChanged { new, .. } => {
+            room_io.clone().on_agent_state_changed(new.as_str())
+        }
         SessionEvent::UserInputTranscribed(t) => {
             let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
             let _ = room_io.on_user_input_transcribed(text, t.is_final).await;
@@ -963,71 +968,11 @@ async fn answer_hook(
 }
 
 /// Timers and playout must share one clock: a fake room brings its own virtual clock, a host
-/// `rtc.Room` is a [`HostRoom`] on the wall clock. A native room crosses as itself (`as_dyn`).
-#[lk_agents_abi::host(native(through(HostRoom = HostedRoom::new)))]
-pub trait SessionRoom: Send + Sync {
-    fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
-    fn timebase(&self) -> Timebase;
-    /// No call behind the room (`OfflineRoom`): the reference's session without a room io.
-    fn offline(&self) -> bool {
-        false
-    }
-}
+pub use lk_agents_abi::voice::room_owner::SessionRoom;
 
-/// A host `rtc.Room`, seen through `_core_rtc.Room`, whose `_core_rtc` wraps it, on the caller's
-/// clock (else the ambient one: the wall clock, or the running loop's on virtual time).
-#[lk_agents_abi::host(proxy(host = "livekit.agents.voice.room_io.Room", clock))]
-pub trait HostRoom: lk_agents_abi::utils::clock::HostClock + Send + Sync {
-    /// The room, as the seam sees it.
-    fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom>;
-}
-
-/// A host room on the clock its proxy was built on.
-pub struct HostedRoom(Arc<dyn HostRoom>, Timebase);
-
-impl HostedRoom {
-    pub fn new(room: Arc<dyn HostRoom>) -> Self {
-        let time = Timebase::of_clock(room.host_clock());
-        HostedRoom(room, time)
-    }
-}
-
-impl SessionRoom for HostedRoom {
-    fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom> {
-        self.0.rtc()
-    }
-
-    fn timebase(&self) -> Timebase {
-        self.1.clone()
-    }
-}
-
-/// The session's clock scopes the host objects converted after the room.
-impl lk_agents_abi::utils::clock::HostClock for dyn SessionRoom {
-    fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
-        self.timebase().clock()
-    }
-}
-
-/// The session's clock scopes the host providers its commands take.
 impl lk_agents_abi::utils::clock::HostClock for SessionApi {
     fn host_clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
         self.time().clock()
-    }
-}
-
-pub struct FixedRoom {
-    pub rtc: Arc<dyn lk_agents_rtc::RtcRoom>,
-    pub time: Timebase,
-}
-
-impl SessionRoom for FixedRoom {
-    fn rtc(&self) -> Arc<dyn lk_agents_rtc::RtcRoom> {
-        Arc::clone(&self.rtc)
-    }
-
-    fn timebase(&self) -> Timebase {
-        self.time.clone()
     }
 }
 

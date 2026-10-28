@@ -414,6 +414,7 @@ fn live(pacer: &Pacer) -> bool {
 enum Out {
     Word(TimedString),
     Flush,
+    Detached,
 }
 
 /// The segments and the gate around them, under one lock.
@@ -421,6 +422,8 @@ struct SyncState {
     segments: SyncSegments,
     audio_attached: bool,
     text_attached: bool,
+    /// Admitted physical text attachments; a selected, unused leg owns none.
+    text_attachments: usize,
     closed: bool,
     /// `_SyncedTextOutput._capturing`: whether a flush has anything to end. With nothing
     /// captured, ending the text would pace later words against the next segment's audio.
@@ -471,6 +474,11 @@ impl SyncCore {
     }
 
     fn send(&self, out: Out) {
+        if matches!(out, Out::Word(_) | Out::Flush)
+            && self.state.lock().unwrap().text_attachments == 0
+        {
+            return;
+        }
         if let Some(tx) = self.tx.lock().unwrap().as_ref() {
             let _ = tx.send(out);
         }
@@ -498,6 +506,7 @@ impl SyncCore {
                     let _ = next.capture_timed(&t).await;
                 }
                 Out::Flush => next.flush(),
+                Out::Detached => next.on_detached(),
             }
         }
     }
@@ -550,21 +559,28 @@ impl SyncedAudioOutput {
     fn handle_playback(&self, ev: &PlaybackEvent) {
         match ev {
             PlaybackEvent::Started(e) => {
-                self.tracker.playback_started(e.created_at);
-                self.core.step(SyncInput::Started);
+                if self.tracker.playback_started(e.segment, e.created_at) {
+                    self.core.step(SyncInput::Started);
+                }
             }
             PlaybackEvent::Progressed(e) => {
-                self.tracker.playback_progressed(e.started_at, e.offset, e.duration);
-                self.core.step(SyncInput::Progressed(e.offset + e.duration));
+                if self.tracker.playback_progressed(e.segment, e.started_at, e.offset, e.duration) {
+                    self.core.step(SyncInput::Progressed(e.offset + e.duration));
+                }
             }
-            PlaybackEvent::Finished(e) => {
+            PlaybackEvent::Finished { segment, event: e } => {
+                if !self.tracker.accepts_report(*segment) {
+                    return;
+                }
                 let position = e.playback_position;
                 let heard =
                     self.core.step(SyncInput::Finished { position, interrupted: e.interrupted });
                 let synchronized_transcript =
                     heard.map(|h| h.text).or(e.synchronized_transcript.clone());
-                self.tracker
-                    .playback_finished(PlaybackFinished { synchronized_transcript, ..e.clone() });
+                self.tracker.playback_finished(
+                    *segment,
+                    PlaybackFinished { synchronized_transcript, ..e.clone() },
+                );
             }
         }
     }
@@ -595,7 +611,7 @@ impl AudioOutput for SyncedAudioOutput {
         Box::pin(async move {
             // Counted before it passes: the sink below may report its playback from inside the
             // capture, and that playback is this segment's.
-            let secs = lk_agents_rtc::frame_duration(frame).as_secs_f64();
+            let secs = lk_agents_abi::voice::rtc::frame_duration(frame).as_secs_f64();
             self.core.step(SyncInput::Audio { secs });
             self.next.capture_frame(frame).await
         })
@@ -692,6 +708,7 @@ impl TextOutput for SyncedTextOutput {
     }
 
     fn on_attached(&self) {
+        self.core.state.lock().unwrap().text_attachments += 1;
         if let Some(next) = &self.next {
             next.on_attached();
         }
@@ -699,10 +716,16 @@ impl TextOutput for SyncedTextOutput {
     }
 
     fn on_detached(&self) {
-        if let Some(next) = &self.next {
-            next.on_detached();
+        let attachments = self.core.state.lock().unwrap().text_attachments;
+        if attachments <= 1 {
+            // Rotation still belongs to the final admitted attachment. Its queued writes and
+            // flush must reach the leaf before that leaf observes physical retirement.
+            self.core.on_attachment_changed(None, Some(false));
         }
-        self.core.on_attachment_changed(None, Some(false));
+        if attachments > 0 {
+            self.core.state.lock().unwrap().text_attachments -= 1;
+            self.core.send(Out::Detached);
+        }
     }
 }
 
@@ -779,6 +802,7 @@ impl TranscriptSynchronizer {
                 segments: SyncSegments::new(opts),
                 audio_attached: true,
                 text_attached: true,
+                text_attachments: 0,
                 closed: false,
                 capturing_text: false,
             }),
@@ -838,10 +862,16 @@ impl TranscriptSynchronizer {
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
     #[host(method)]
     pub async fn aclose(&self) {
-        if std::mem::replace(&mut self.core.state.lock().unwrap().closed, true) {
-            return;
+        let admitted = {
+            let mut state = self.core.state.lock().unwrap();
+            if std::mem::replace(&mut state.closed, true) {
+                return;
+            }
+            state.text_attachments > 0
+        };
+        if admitted {
+            self.core.step(SyncInput::Rotate);
         }
-        self.core.step(SyncInput::Rotate);
         // Dropping the sender is what ends the forwarder's `recv`, after the words already queued.
         self.core.tx.lock().unwrap().take();
         let _ = lk_agents_abi::timeout(

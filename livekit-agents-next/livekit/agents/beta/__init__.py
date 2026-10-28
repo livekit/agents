@@ -123,11 +123,15 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     Call when:
     - User wants to send DTMF events
     """
+    from ..voice.room_io import Room
+
     session = ctx.live_session
     if session is None:
         raise RuntimeError("DTMF tones are sent on a call; this tool runs outside one")
     room = session._room or get_job_context().room
-    return await _core.send_dtmf_events(room, [event.value for event in events])
+    return await _core.send_dtmf_events(
+        _core._core_create_room_session(Room.of(room)), [event.value for event in events]
+    )
 
 
 @dataclass

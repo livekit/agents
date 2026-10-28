@@ -1,9 +1,9 @@
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_media::{Mixer, StreamId};
-use lk_agents_rtc::{
+use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
 };
+use lk_agents_media::{Mixer, StreamId};
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
 use std::future::Future;
@@ -371,9 +371,19 @@ struct PublishedOutput {
 impl BackgroundAudioPlayer {
     #[host(new(
         kw_only = "blocksize",
-        defaults(sample_rate = 48_000, num_channels = 1, blocksize = 4800, stream_timeout_ms = 200)
+        defaults(
+            sample_rate = 48_000,
+            num_channels = 1,
+            blocksize = 4800,
+            stream_timeout_ms = 200
+        )
     ))]
-    pub fn for_host(sample_rate: u32, num_channels: u16, blocksize: usize, stream_timeout_ms: u64) -> Self {
+    pub fn for_host(
+        sample_rate: u32,
+        num_channels: u16,
+        blocksize: usize,
+        stream_timeout_ms: u64,
+    ) -> Self {
         Self::build(sample_rate, num_channels, blocksize, Duration::from_millis(stream_timeout_ms))
     }
 
@@ -416,8 +426,8 @@ impl BackgroundAudioPlayer {
         ambient: Vec<Sound>,
         choose: bool,
         source: Option<TrackSource>,
-    ) -> Result<lk_agents_rtc::TrackSid, RtcError> {
-        let participant = room.rtc().local().clone();
+    ) -> Result<lk_agents_abi::voice::rtc::TrackSid, RtcError> {
+        let participant = room.rtc().ok_or(RtcError::NotConnected)?.local().clone();
         // Publish the track and own the pump. If the caller cancels, close waits and releases the
         // track.
         let this = self.clone();
@@ -465,7 +475,11 @@ impl BackgroundAudioPlayer {
     }
 
     /// [`play`](Self::play), choosing by the host's `draw` (`random.random()`).
-    #[host(method(name = "play", kw_only = "looping", defaults(looping = false, ambient = false, choose = true)))]
+    #[host(method(
+        name = "play",
+        kw_only = "looping",
+        defaults(looping = false, ambient = false, choose = true)
+    ))]
     pub fn play_for_host(
         &self,
         sounds: Vec<Sound>,
@@ -631,13 +645,15 @@ impl BackgroundAudioPlayer {
                 let _ = output.pump.await;
                 let _ = output.source.close().await;
                 // The SDK can replace the publication on reconnect; resolve the current SID.
-                if let Some(publication) = output
-                    .participant
-                    .track_publications()
-                    .into_iter()
-                    .find(|p| p.name() == TRACK_NAME)
-                {
-                    let _ = output.participant.unpublish_track(publication.sid()).await;
+                match output.participant.track_publications() {
+                    Ok(publications) => {
+                        if let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME) {
+                            if let Err(error) = output.participant.unpublish_track(publication.sid()).await {
+                                log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
+                            }
+                        }
+                    }
+                    Err(error) => log::error!(target: "livekit.agents", "background audio publication lookup failed: {error}"),
                 }
             }
             drop(output);

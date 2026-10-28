@@ -18,8 +18,8 @@ use crate::trace::{
 };
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{FrameId, SpeechEvent, TimerSet, Ts, VadEvent};
-use lk_agents_rtc::RoomEvent;
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
@@ -249,7 +249,7 @@ queue_events! {
         |ev| Event::Input(Input::Overlap(ev));
     ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
     StreamOpened => |opened| Event::LegOpened(opened);
-    lk_agents_rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
+    lk_agents_abi::voice::rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,7 +284,7 @@ pub enum Input {
         leg: crate::agent_session::effects::StreamKind,
         outcome: Result<lk_agents_abi::resources::ResourceId, ProviderError>,
     },
-    Video(lk_agents_rtc::VideoFrameRef),
+    Video(lk_agents_abi::voice::rtc::VideoFrameRef),
     /// The data plane's reports. The source's first frame forwarded (`input_started_at`).
     InputStarted {
         at: Ts,
@@ -843,8 +843,17 @@ pub enum DriverError {
     #[error("provider: {0}")]
     Provider(#[from] ProviderError),
 
+    #[error("output admission refused: {0}")]
+    OutputBindingRefused(#[from] super::output::OutputBindingError),
+
     #[error("resample: {0}")]
     Resample(String),
+
+    #[error("playback report timed out for attachment {} segment {}", .0.attachment, .0.segment)]
+    PlaybackReportTimeout(lk_agents_abi::voice::io::PlaybackSegment),
+
+    #[error("text output: {0}")]
+    TextOutput(lk_agents_abi::voice::io::IoError),
 
     #[error("the session has no {0}")]
     Missing(&'static str),

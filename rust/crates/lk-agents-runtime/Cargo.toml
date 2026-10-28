@@ -53,6 +53,7 @@ url = "2"
 libc = "0.2"
 
 [dev-dependencies]
+lk-agents-test-support = { path = "../lk-agents-test-support" }
 bytes = "1"
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false, features = ["dst"] }
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }

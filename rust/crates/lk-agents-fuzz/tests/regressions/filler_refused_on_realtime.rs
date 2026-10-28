@@ -22,7 +22,7 @@ fn a_filler_on_a_realtime_model_without_say_is_refused() {
     };
     let inputs = [
         Input::GenerateReply { user_input: None, instructions: None, allow: None },
-        Input::Advance { ms: Millis(3_000) },
+        Input::Advance { ms: Millis(10_000) },
         Input::FillerStart {
             tool: Ref::new(0),
             speech: Ref::new(0),
@@ -37,7 +37,7 @@ fn a_filler_on_a_realtime_model_without_say_is_refused() {
     let run = simulate(async {
         let mut run = Run::start(&setup, 0, Default::default()).await;
         for input in &inputs {
-            run.apply(input).await;
+            super::playout::apply_with_playout(&mut run, input).await;
         }
         run
     });

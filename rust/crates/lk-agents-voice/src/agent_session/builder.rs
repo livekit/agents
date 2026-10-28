@@ -19,10 +19,10 @@ use crate::trace::{CoreStep, Journal, RealtimeStep, Step};
 use lk_agents_abi::resources::{ResourceId, Resources};
 use lk_agents_abi::utils::frame::FrameTable;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
+use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{
     AudioFrame, EotDetector, FrameId, Llm, Spawner, StreamSink, Stt, TimerSet, Ts, Tts, Vad,
 };
-use lk_agents_rtc::RoomEvent;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +41,8 @@ pub struct SessionCores {
     /// The interruption detector, whose verdicts the executor pumps into the queue.
     pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
-    pub room_events: (Option<Rx<RoomEvent>>, Option<Rx<crate::room_io::RoomIoEvent>>),
+    pub room_events:
+        (Option<Rx<RoomEvent>>, Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>),
     /// The camera's forwarder parts and the camera read from the start.
     pub video:
         (crate::audio::VideoForwarderParts, Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>),
@@ -154,8 +155,9 @@ pub struct DriverBuilder {
     pub recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
     pub text_out: Option<Arc<dyn TextOutput>>,
+
     pub room_events: Option<Rx<RoomEvent>>,
-    pub room_io_events: Option<Rx<crate::room_io::RoomIoEvent>>,
+    pub room_io_events: Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>,
     pub room_link: Option<crate::room_io::RoomLinkConfig>,
     /// `None` commits turns on silence alone.
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
@@ -163,7 +165,7 @@ pub struct DriverBuilder {
     /// included, stops the agent.
     pub interruption: Option<Arc<dyn crate::agent_activity::false_interruption::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
-    pub video_sampler: Option<Arc<lk_agents_voice::room_io::_input::VideoSampler>>,
+    pub video_sampler: Option<lk_agents_voice::room_io::video_sampler::VideoSampler>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: crate::tool_executor::Toolset,
@@ -395,7 +397,6 @@ impl DriverBuilder {
             time: self.time.clone(),
             output: tokio::sync::watch::channel(outputs).0,
             recorder: Arc::new(std::sync::RwLock::new(None)),
-            recorder_observer: std::sync::Mutex::new(None),
             launch: crate::audio::LaunchGate::new(),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
@@ -448,7 +449,9 @@ impl DriverBuilder {
         sinks: &mut Sinks,
         queue: &Tx,
     ) -> Result<Option<RealtimeStart>, DriverError> {
-        let Some(model) = &self.realtime else { return Ok(None) };
+        let Some(model) = &self.realtime else {
+            return Ok(None);
+        };
         // Who ends the turn, decided once from the model's capabilities and the session's
         // inputs (`_resolve_rt_turn_detection_enabled`).
         let caps = model.capabilities();

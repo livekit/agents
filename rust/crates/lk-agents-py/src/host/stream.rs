@@ -61,11 +61,22 @@ impl<T> HostStream<T> {
     ) -> PyResult<Self> {
         let (event_loop, ctx) = captured_pair(py, context)?;
         let ctx = ctx.call_method0("copy")?;
+        Self::open_in(iterable, &event_loop, &ctx, convert, clock)
+    }
+
+    /// An iterable returned by a call whose context must also own every pull and its close.
+    pub(crate) fn open_in(
+        iterable: &Bound<'_, PyAny>,
+        event_loop: &Bound<'_, PyAny>,
+        ctx: &Bound<'_, PyAny>,
+        convert: Convert<T>,
+        clock: Arc<dyn Clock>,
+    ) -> PyResult<Self> {
         let iterator = ctx.call_method1("run", (iterable.getattr("__aiter__")?,))?;
         Ok(HostStream {
             iterator: iterator.unbind(),
-            event_loop: event_loop.unbind(),
-            ctx: ctx.unbind(),
+            event_loop: event_loop.clone().unbind(),
+            ctx: ctx.clone().unbind(),
             convert,
             clock,
             pending: None,
@@ -290,7 +301,7 @@ impl<I: Send + Sync + 'static> StreamSink<I> for HostSink<I> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Against a live interpreter and a running loop.
     use std::time::Duration;
 
@@ -362,7 +373,7 @@ class Duplex:
         self.ended.set()
 "#;
 
-    fn setup(py: Python<'_>) -> (Py<PyDict>, HostRef) {
+    pub(crate) fn setup(py: Python<'_>) -> (Py<PyDict>, HostRef) {
         let g = PyDict::new(py);
         py.run(&std::ffi::CString::new(SETUP).unwrap(), Some(&g), None).unwrap();
         let pair = g.get_item("capture").unwrap().unwrap().call1(("caller",)).unwrap();

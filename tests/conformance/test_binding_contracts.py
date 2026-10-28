@@ -75,16 +75,16 @@ def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> N
 @pytest.mark.parametrize("case", _cases("time"))
 async def test_duration_reports_validate_before_settling_playout(case: dict[str, Any]) -> None:
     tracker = _core.PlaybackTracker()
-    tracker.note_capture()
+    segment = _core._core_playback_note_capture(tracker)
     tracker.note_flush()
     value = float(case["value"])
     if "error" in case:
         with pytest.raises(ValueError, match=case["error"]):
-            tracker.playback_finished(value, False, None)
+            _core._core_playback_finished(tracker, segment, value, False, None)
         # Refusing a report must leave the outstanding segment available for a valid report.
-        assert tracker.playback_finished(0.125, False, None)
+        assert _core._core_playback_finished(tracker, segment, 0.125, False, None)
     else:
-        assert tracker.playback_finished(value, False, None)
+        assert _core._core_playback_finished(tracker, segment, value, False, None)
         position, interrupted, transcript = await tracker.wait_for_playout()
         assert position == case["expected"]
         assert not interrupted and transcript is None
@@ -133,7 +133,7 @@ def test_audio_byte_stream_copies_input_before_host_mutation(buffer_type: Any) -
 @pytest.mark.parametrize("case", _cases("cancellation"))
 async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, Any]) -> None:
     tracker = _core.PlaybackTracker()
-    tracker.note_capture()
+    segment = _core._core_playback_note_capture(tracker)
     tracker.note_flush()
 
     async def wait() -> tuple[float, bool, str | None]:
@@ -148,7 +148,7 @@ async def test_cancelling_native_wait_does_not_cancel_playout(case: dict[str, An
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
-        assert tracker.playback_finished(case["position"], False, "settled")
+        assert _core._core_playback_finished(tracker, segment, case["position"], False, "settled")
         assert await tracker.wait_for_playout() == (case["position"], False, "settled")
         assert waiter.cancelled(), "late completion revived the cancelled waiter"
     finally:

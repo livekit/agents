@@ -65,7 +65,10 @@ pub(super) async fn produce_segments(
         ReplySource::TextStream(rx) => {
             let rx = rx.lock().expect("say stream poisoned").take();
             if let Some(mut rx) = rx {
-                while let Some(chunk) = rx.recv().await {
+                loop {
+                    let Some(chunk) = until_stopped(tx.closed(), rx.recv()).await.flatten() else {
+                        break;
+                    };
                     one_segment(chunk);
                 }
             }
@@ -207,11 +210,14 @@ async fn read_llm_stream(
     let ended = loop {
         // Interruption is checked between chunks. A host stream's `next()` is never raced; a
         // native one's is, so a speech cut at `Closing` does not hold its stream open.
-        if handle.interrupted() {
+        if handle.interrupted() || tx.is_closed() {
             break Ok(());
         }
         let next = if stream.cancel_safe() {
-            match until_interrupted(handle, stream.next()).await {
+            let polled = until_stopped(tx.closed(), until_interrupted(handle, stream.next()))
+                .await
+                .flatten();
+            match polled {
                 Some(next) => next,
                 None => break Ok(()),
             }
@@ -362,17 +368,28 @@ pub(super) async fn retry(
     }
 }
 
-#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 pub(crate) async fn until_interrupted<T>(
     handle: &SpeechHandle,
     fut: impl std::future::Future<Output = T>,
 ) -> Option<T> {
-    tokio::pin!(fut);
-    tokio::select! {
-        biased;
-        () = handle.wait_for_interrupted() => None,
-        v = &mut fut => Some(v),
-    }
+    until_stopped(handle.wait_for_interrupted(), fut).await
+}
+
+/// Cancellation-safe waits only: finishing or dropping this future joins no host operation.
+async fn until_stopped<T>(
+    stopped: impl std::future::Future<Output = ()>,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    use std::future::poll_fn;
+    use std::task::Poll;
+    let (mut stopped, mut work) = (std::pin::pin!(stopped), std::pin::pin!(work));
+    poll_fn(|cx| {
+        if stopped.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(None);
+        }
+        work.as_mut().poll(cx).map(Some)
+    })
+    .await
 }
 
 pub(super) fn report_metrics(shared: &SessionShared, handle: &SpeechHandle, record: AgentMetrics) {

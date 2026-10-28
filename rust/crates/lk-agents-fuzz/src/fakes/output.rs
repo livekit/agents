@@ -74,11 +74,11 @@ impl VideoInput for FakeVideoInput {
         &self,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        lk_agents_abi::voice::io::Result<Option<lk_agents_rtc::VideoFrameRef>>,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_test_support::rtc::VideoFrameRef>>,
     > {
         Box::pin(async move {
             let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
-            Ok(Some(lk_agents_rtc::VideoFrameRef {
+            Ok(Some(lk_agents_test_support::rtc::VideoFrameRef {
                 media: MediaRef::new(ordinal, &self.refs),
                 width: 1280,
                 height: 720,
@@ -91,7 +91,7 @@ impl VideoInput for FakeVideoInput {
 /// The person's camera track as a resource the case feeds by `VideoFrames`.
 pub fn room_camera(
     registry: &Registry,
-    camera: Arc<lk_agents_rtc::FakeTrackPublication>,
+    camera: Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
     refs: Arc<dyn RefRegistry>,
 ) {
     registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera, refs));
@@ -100,7 +100,7 @@ pub fn room_camera(
 /// So many frames onto the person's camera track, minted as the host camera's are. Accepted
 /// when a reader took them.
 pub(super) fn feed_room_video(
-    camera: &lk_agents_rtc::FakeTrackPublication,
+    camera: &lk_agents_test_support::rtc::FakeTrackPublication,
     refs: &Arc<dyn RefRegistry>,
     video: u32,
     what: &Input,
@@ -112,7 +112,7 @@ pub(super) fn feed_room_video(
     drop(sender);
     let mut read = false;
     while let Ok(ordinal) = frames.try_recv() {
-        let frame = lk_agents_rtc::VideoFrameRef {
+        let frame = lk_agents_test_support::rtc::VideoFrameRef {
             media: MediaRef::new(ordinal, refs),
             width: 1280,
             height: 720,
@@ -174,6 +174,7 @@ struct PlayoutState {
     duration: Duration,
     /// The segment taking frames, once its first frame gave it an identity.
     open: Option<u32>,
+    keys: BTreeMap<u32, lk_agents_abi::voice::io::PlaybackSegment>,
     /// Segments closed to frames and not yet reported or cleared, with the position each reports.
     flushed: BTreeMap<u32, Duration>,
     /// Segments whose start the speaker has reported.
@@ -235,7 +236,10 @@ impl Playout {
 
     /// The segment the frames since the last flush belong to.
     fn opened(&self, segment: u32) {
-        self.state.lock().unwrap().open = Some(segment);
+        let key = self.tracker.current_segment().expect("a captured frame has a segment key");
+        let mut state = self.state.lock().unwrap();
+        state.open = Some(segment);
+        state.keys.insert(segment, key);
     }
 
     /// The open segment is closed to new frames and carries what was captured for it. `None`
@@ -255,15 +259,16 @@ impl Playout {
     /// one and nothing else is playing: a real sink plays its queue in order, one segment at a
     /// time. A second start, a start out of order, or one for a segment gone is refused.
     pub(super) fn started(&self, segment: u32, at: Ts) -> bool {
-        {
+        let key = {
             let mut state = self.state.lock().unwrap();
             let oldest = state.flushed.keys().copied().chain(state.open).min();
             if oldest != Some(segment) || !state.started.is_empty() {
                 return false;
             }
             state.started.insert(segment);
-        }
-        self.tracker.playback_started(at);
+            state.keys[&segment]
+        };
+        self.tracker.playback_started(key, at);
         true
     }
 
@@ -287,10 +292,10 @@ impl Playout {
                 return false;
             }
             *so_far += played;
-            (offset, played)
+            (state.keys[&segment], offset, played)
         };
-        let (offset, played) = offset;
-        self.tracker.playback_progressed(at, offset, played);
+        let (key, offset, played) = offset;
+        self.tracker.playback_progressed(key, at, offset, played);
         true
     }
 
@@ -310,11 +315,14 @@ impl Playout {
     /// finish the product already settled for the sink (its lost-finish bound) is still the
     /// speaker's report: the tracker drops it, the segment is done (seed 11256).
     pub(super) fn report(&self, segment: u32) -> bool {
+        let Some(key) = self.state.lock().unwrap().keys.get(&segment).copied() else {
+            return false;
+        };
         let Some(position) = self.finished(segment) else { return false };
-        self.tracker.playback_finished(PlaybackFinished {
-            playback_position: position,
-            ..Default::default()
-        });
+        self.tracker.playback_finished(
+            key,
+            PlaybackFinished { playback_position: position, ..Default::default() },
+        );
         true
     }
 
@@ -345,6 +353,7 @@ impl Playout {
             let position = state.flushed.remove(&segment)?;
             state.started.remove(&segment);
             state.played.remove(&segment);
+            state.keys.remove(&segment);
             let frames = state.flushed_frames.remove(&segment).unwrap_or_default();
             (position, frames)
         };
@@ -356,7 +365,7 @@ impl Playout {
     /// reported interrupted where the speaker had played it to (nothing of one not started), the
     /// way a real output does.
     fn cleared(&self) -> Vec<u32> {
-        let cut: Vec<(u32, Duration)> = {
+        let cut: Vec<(u32, lk_agents_abi::voice::io::PlaybackSegment, Duration)> = {
             let mut state = self.state.lock().unwrap();
             let mut outstanding: Vec<(u32, Vec<(Option<u32>, Duration)>)> =
                 std::mem::take(&mut state.flushed)
@@ -368,6 +377,7 @@ impl Playout {
                 outstanding.push((open, std::mem::take(&mut state.frames)));
             }
             let played = std::mem::take(&mut state.played);
+            let keys = std::mem::take(&mut state.keys);
             state.started.clear();
             drop(state);
             outstanding
@@ -375,16 +385,21 @@ impl Playout {
                 .map(|(segment, frames)| {
                     let position = played.get(&segment).copied().unwrap_or_default();
                     self.heard(frames, position);
-                    (segment, position)
+                    (segment, keys[&segment], position)
                 })
                 .collect()
         };
-        let finished: Vec<PlaybackFinished> = cut
+        let finished: Vec<_> = cut
             .iter()
-            .map(|(_, position)| PlaybackFinished {
-                interrupted: true,
-                playback_position: *position,
-                ..Default::default()
+            .map(|(_, key, position)| {
+                (
+                    *key,
+                    PlaybackFinished {
+                        interrupted: true,
+                        playback_position: *position,
+                        ..Default::default()
+                    },
+                )
             })
             .collect();
         if let Some(world) = &self.lagging {
@@ -393,16 +408,16 @@ impl Playout {
                 for _ in 0..LAGGING_REPORT_HOPS {
                     tokio::task::yield_now().await;
                 }
-                for ev in finished {
-                    tracker.playback_finished(ev);
+                for (key, ev) in finished {
+                    tracker.playback_finished(key, ev);
                 }
             }));
         } else {
-            for ev in finished {
-                self.tracker.playback_finished(ev);
+            for (key, ev) in finished {
+                self.tracker.playback_finished(key, ev);
             }
         }
-        cut.into_iter().map(|(segment, _)| segment).collect()
+        cut.into_iter().map(|(segment, _, _)| segment).collect()
     }
 }
 
@@ -428,6 +443,12 @@ impl FakeAudioOutput {
     }
 }
 
+impl Drop for FakeAudioOutput {
+    fn drop(&mut self) {
+        self.registry.mark_closed(super::Slot { kind: Kind::Output, nth: self.id });
+    }
+}
+
 impl AudioOutput for FakeAudioOutput {
     fn label(&self) -> &str {
         "fake::audio_output"
@@ -435,6 +456,14 @@ impl AudioOutput for FakeAudioOutput {
 
     fn tracker(&self) -> &Arc<PlaybackTracker> {
         &self.playout.tracker
+    }
+
+    fn on_attached(&self) {
+        self.registry.output_attachment(self.id, true);
+    }
+
+    fn on_detached(&self) {
+        self.registry.output_attachment(self.id, false);
     }
 
     fn capabilities(&self) -> AudioOutputCapabilities {
@@ -506,9 +535,23 @@ impl FakeTextOutput {
     }
 }
 
+impl Drop for FakeTextOutput {
+    fn drop(&mut self) {
+        self.registry.mark_closed(super::Slot { kind: Kind::Output, nth: self.id });
+    }
+}
+
 impl TextOutput for FakeTextOutput {
     fn label(&self) -> &str {
         "fake::text_output"
+    }
+
+    fn on_attached(&self) {
+        self.registry.output_attachment(self.id, true);
+    }
+
+    fn on_detached(&self) {
+        self.registry.output_attachment(self.id, false);
     }
 
     fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {

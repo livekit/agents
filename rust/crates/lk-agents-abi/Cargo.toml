@@ -82,4 +82,5 @@ python = ["dep:pyo3", "pyo3/multiple-pymethods", "dep:pyo3-async-runtimes"]
 serde = []
 
 [dev-dependencies]
+lk-agents-test-support = { path = "../lk-agents-test-support" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "test-util"] }

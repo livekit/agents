@@ -69,9 +69,6 @@ pub(super) async fn voice_leg(
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
     let audio_enabled = shared.audio_enabled();
     let text_enabled = shared.transcription_enabled();
-    // No sink: the caller's frames are left undrained, so `say(audio=)` does not wait on them.
-    let has_sink = audio_enabled && shared.audio_output().is_some();
-    let voice = if has_sink { voice } else { Voice::Silent };
     let mut pump = Pump {
         shared,
         handle,
@@ -198,13 +195,17 @@ impl Pump<'_> {
             self.audio_enabled = self.gate.audio_enabled;
             self.text_enabled = self.gate.text_enabled;
         }
-        // Re-read at every segment's start: a swap moves the next segment (only a playing one is
-        // interrupted), and a synchroniser swapped in between segments gets their words.
-        let audio_out = self.audio_enabled.then(|| shared.audio_output()).flatten();
-        let text = self.text_enabled.then(|| shared.transcription_output()).flatten();
+        let Some(mut binding) = super::output::OutputBinding::acquire(shared, self.handle).await?
+        else {
+            return Ok(unheard());
+        };
+        let audio_out = binding.audio();
+        let text = binding.text();
         let text = self.nodes.text_output(text);
+        binding.retain_text_processing(text.clone());
         let synthesis = matches!(self.voice, Voice::Tts(_)) && audio_out.is_some();
-        if !synthesis && !self.gate.wait(shared, self.handle).await {
+        if !synthesis && (!self.gate.wait(shared, self.handle).await || !binding.activate().await?)
+        {
             return Ok(unheard());
         }
         // One transcript leg per segment: its flush is once-only and the next segment gets its own.
@@ -212,7 +213,7 @@ impl Pump<'_> {
         let (tx, rx) = mpsc::unbounded_channel();
         let deferred = (synthesis && self.gate.at.is_none()).then_some(&tx);
         let leg = (synthesis || text.is_some())
-            .then(|| TextLeg::new(text.as_deref(), deferred, shared, self.handle.id()));
+            .then(|| TextLeg::new(text.clone(), deferred, shared, self.handle.id()));
         let text_out = leg.as_ref();
         // The aligned path: an audio output, the option on, and a TTS that aligns. The leg then
         // carries the synthesiser's stamped words instead of the deltas.
@@ -236,8 +237,13 @@ impl Pump<'_> {
         if audio_out.is_none() && text_out.is_some() {
             first_text_started_speaking(shared, self.handle, self.acc);
         }
-        let mut playback =
-            SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate, nodes: self.nodes };
+        let mut playback = SynthesisPlayout {
+            tx: tx.clone(),
+            rx,
+            gate: &mut *self.gate,
+            text: text.clone(),
+            binding: &mut binding,
+        };
         let heard = match (&mut self.voice, audio_out.as_deref()) {
             (Voice::Tts(tts), Some(_)) => {
                 let tts = Arc::clone(tts);
@@ -261,13 +267,14 @@ impl Pump<'_> {
                         heard
                     }
                     // Cut before a frame played: nothing was heard, the words are dropped.
+                    Err(Lost { failure: Some(error), .. }) => return Err(error),
                     Err(Lost { lost: false, opening, .. }) => {
                         drain_segment_text(rx, opening, None).await;
                         unheard()
                     }
                     // The voice is gone for the rest of the step; the words are forwarded as text,
                     // and the item reads as cut short (`interrupted=... or out.tts_failed`).
-                    Err(Lost { lost: true, opening, synchronized, played }) => {
+                    Err(Lost { lost: true, opening, synchronized, played, .. }) => {
                         self.voice = Voice::Silent;
                         self.acc.cut_short();
                         match aligned.as_ref().filter(|a| a.stamped) {
@@ -325,12 +332,17 @@ impl Pump<'_> {
             && text_out.is_some_and(|leg| leg.forwarded.get())
             && heard.frames == 0
             && heard.complete
-            && let Some(out) = shared.audio_output()
+            && let Some(out) = audio_out.as_ref()
         {
-            end_unvoiced(shared, self.handle.id(), &*out);
+            end_unvoiced(shared, self.handle.id(), out.as_ref());
         }
         if synthesis {
-            playback.flush_text(shared, self.handle).await;
+            playback.flush_text(shared, self.handle).await?;
+        }
+        if let Some(text) = text {
+            let result = finish_text(text.as_ref(), self.handle, false).await;
+            binding.text_drained();
+            result?;
         }
         Ok(heard)
     }
@@ -360,7 +372,7 @@ impl Segment for Frames<'_> {
 /// `perform_text_forwarding`'s sink for one segment: a once-only flush issued from all three end
 /// points. `buffered` queues the words behind the audio synthesised before authorization.
 pub(super) struct TextLeg<'a> {
-    out: Option<&'a dyn TextOutput>,
+    out: Option<Arc<dyn TextOutput>>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
     /// Every user of the leg runs in one task (it borrows the reply's state), so checking and
@@ -375,7 +387,7 @@ pub(super) struct TextLeg<'a> {
 impl<'a> TextLeg<'a> {
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) fn new(
-        out: Option<&'a dyn TextOutput>,
+        out: Option<Arc<dyn TextOutput>>,
         buffered: Option<&'a mpsc::UnboundedSender<SynthesisEvent>>,
         shared: &'a Arc<SessionShared>,
         speech: SpeechId,
@@ -407,7 +419,7 @@ impl<'a> TextLeg<'a> {
             let _ = tx.send(event);
             return;
         }
-        let Some(out) = self.out else { return };
+        let Some(out) = self.out.as_deref() else { return };
         let (text, start_time) = match event {
             SynthesisEvent::Text(text) => {
                 let _ = out.capture_text(&text).await;
@@ -429,7 +441,7 @@ impl<'a> TextLeg<'a> {
             self.flushed.set(true);
             if let Some(tx) = self.buffered {
                 let _ = tx.send(SynthesisEvent::FlushText);
-            } else if let Some(out) = self.out {
+            } else if let Some(out) = self.out.as_deref() {
                 out.flush();
             }
         }
@@ -500,4 +512,32 @@ pub(super) async fn drain_segment_text(
 ) -> Visible {
     take_text(rx, &mut words, text_out, true).await;
     words
+}
+
+/// A segment owns its text node until output delivery or cancellation cleanup settles.
+pub(super) async fn finish_text(
+    text: &dyn TextOutput,
+    handle: &SpeechHandle,
+    cancel: bool,
+) -> Result<(), DriverError> {
+    if cancel {
+        text.cancel_flush();
+        return text.wait_for_flush().await.map_err(DriverError::TextOutput);
+    }
+    let mut completion = text.wait_for_flush();
+    let mut interrupted = Box::pin(handle.wait_for_interrupted());
+    let outcome = std::future::poll_fn(|cx| {
+        if interrupted.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(None);
+        }
+        completion.as_mut().poll(cx).map(Some)
+    })
+    .await;
+    match outcome {
+        Some(result) => result.map_err(DriverError::TextOutput),
+        None => {
+            text.cancel_flush();
+            completion.await.map_err(DriverError::TextOutput)
+        }
+    }
 }

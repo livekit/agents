@@ -1,0 +1,151 @@
+use super::*;
+use crate::room_io::owner::tests::pending;
+use lk_agents_abi::Ts;
+
+#[tokio::test]
+async fn failed_registration_does_not_remove_another_stream_owner() {
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let room = rtc.room("registration-owner");
+    let mut original = room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).unwrap();
+    let handler = PreConnectAudioHandler::new(
+        room.clone(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        clock,
+        Duration::from_secs(3),
+        (24_000, 1),
+    );
+    assert!(!handler.register());
+    handler.aclose().await;
+    let info = lk_agents_abi::voice::rtc::StreamInfo {
+        id: "original-owner".into(),
+        topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+        ..Default::default()
+    };
+    room.send_byte_stream("user", info, [vec![1, 2]]).unwrap();
+    let mut stream = original.next().await.unwrap().unwrap();
+    assert_eq!(stream.chunks.next().await.unwrap().unwrap(), vec![1, 2]);
+    let deadline = Ts::from_nanos(u64::MAX);
+    assert_eq!(stream.close(deadline).await, Closed::Clean);
+    assert_eq!(original.close(deadline).await, Closed::Clean);
+}
+
+#[tokio::test]
+async fn closed_preconnect_input_cannot_register_again() {
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let room = rtc.room("closed-registration");
+    let handler = PreConnectAudioHandler::new(
+        room.clone(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        clock,
+        Duration::from_secs(3),
+        (24_000, 1),
+    );
+    handler.aclose().await;
+    assert!(!handler.register());
+    assert!(room.byte_streams(PRE_CONNECT_AUDIO_BUFFER_STREAM).is_ok());
+}
+
+fn pcm_info(track: &str) -> lk_agents_abi::voice::rtc::StreamInfo {
+    lk_agents_abi::voice::rtc::StreamInfo {
+        id: track.into(),
+        topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+        attributes: [
+            ("trackId".into(), track.into()),
+            ("sampleRate".into(), "24000".into()),
+            ("channels".into(), "1".into()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn preconnect_overload_preserves_already_admitted_tracks() {
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let room = rtc.room("track-capacity");
+    let handler = PreConnectAudioHandler::new(
+        room.clone(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        clock,
+        Duration::from_secs(3),
+        (24_000, 1),
+    );
+    assert!(handler.register());
+    let tracks = (0..lk_agents_voice::room_io::pre_connect_state::MAX_TRACKS)
+        .map(|n| TrackSid::from(format!("TR_{n}")))
+        .collect::<Vec<_>>();
+    let mut waiters =
+        tracks.iter().map(|track| Box::pin(handler.wait_for_data(track))).collect::<Vec<_>>();
+    for waiter in &mut waiters {
+        pending(waiter.as_mut()).await;
+    }
+    assert!(matches!(
+        handler.wait_for_data(&"TR_overload".into()).await,
+        Err(IoError::PreConnectMalformed(error)) if error.contains("track capacity")
+    ));
+    room.send_byte_stream("user", pcm_info("TR_0"), [vec![1; 960]]).unwrap();
+    let frames = waiters.remove(0).await.unwrap();
+    assert_eq!(frames.iter().map(|frame| frame.data.len()).sum::<usize>(), 960);
+    handler.aclose().await;
+    for waiter in waiters {
+        assert!(waiter.await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn preconnect_receive_deadline_discards_partial_pcm() {
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let room = rtc.room("receive-deadline");
+    let handler = PreConnectAudioHandler::new(
+        room.clone(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        clock.clone(),
+        Duration::from_secs(3),
+        (24_000, 1),
+    );
+    assert!(handler.register());
+    let chunks = room.open_byte_stream("user", pcm_info("TR_expired")).unwrap();
+    chunks.send(vec![1; 960]).await.unwrap();
+    let track = TrackSid::from("TR_expired");
+    let mut result = Box::pin(handler.wait_for_data(&track));
+    pending(result.as_mut()).await;
+    tokio::task::yield_now().await;
+    clock.advance(Duration::from_secs(3));
+    assert!(result.await.is_err());
+    tokio::task::yield_now().await;
+    assert!(chunks.send(vec![2; 960]).await.is_err(), "expired input must be closed");
+    handler.aclose().await;
+}
+
+#[tokio::test]
+async fn preconnect_duration_is_bounded_before_transfer() {
+    let (rtc, clock) = crate::test_support_rtc::FakeRtc::with_virtual_clock();
+    let room = rtc.room("duration");
+    let handler = PreConnectAudioHandler::new(
+        room.clone(),
+        Arc::new(lk_agents_abi::TokioSpawner::current()),
+        clock,
+        Duration::from_secs(3),
+        (24_000, 1),
+    );
+    let info = lk_agents_abi::voice::rtc::StreamInfo {
+        id: "buffer".into(),
+        topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
+        attributes: [
+            ("trackId".into(), "TR_buffer".into()),
+            ("sampleRate".into(), "24000".into()),
+            ("channels".into(), "1".into()),
+        ]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    assert!(handler.register());
+    room.send_byte_stream("user", info, (0..501).map(|_| vec![1; 960])).unwrap();
+    assert!(
+        handler.wait_for_data(&"TR_buffer".into()).await.is_err(),
+        "more than ten seconds of pre-connect PCM must be refused"
+    );
+    handler.aclose().await;
+}

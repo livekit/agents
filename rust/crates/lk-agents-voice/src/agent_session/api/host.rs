@@ -8,7 +8,6 @@ use super::{
     session_usage_updated,
 };
 use crate::agent_activity::DriverConfig;
-use crate::agent_session::DriverBuilder;
 use crate::agent_session::commands::{
     ActivityCommand, Command, DrainRefused, DtmfCommand, FillerSource, HoldId, HostAudio,
     HostVideo, IdleRefused, IoKind, IvrCommand, Origin, SayText, SpeechCommand, ToolUpdate,
@@ -16,6 +15,7 @@ use crate::agent_session::commands::{
 };
 use crate::agent_session::nodes::{Nodes, OutputNodes};
 use crate::agent_session::{Answer, CommitSuperseded, HostEvent};
+use crate::agent_session::{DriverBuilder, Timebase};
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::speech_handle::SpeechHandle;
@@ -34,7 +34,7 @@ impl SessionApi {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Assemble a session; the loop begins at `start()`.
     ///
-    /// `room` is a `livekit.rtc.Room`, a `_core.FakeRoom` or a `_core.OfflineRoom`. `on_event`
+    /// `room` supplies runtime room I/O, or no RTC attachment. `on_event`
     /// receives one `dict` per session event, on the calling loop. Must be called inside a running
     /// asyncio loop: the host objects' loop is captured here.
     #[host(new(
@@ -126,40 +126,35 @@ impl SessionApi {
         // The job whose room this is: `start()` connects it beside the opening.
         job: Option<Arc<dyn SessionJob>>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
-        use crate::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig};
+    ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
         let agents = super::HostAgents::default();
         agents.install(&agent, agent_host);
-        let time = room.timebase();
+        let time = match room.virtual_clock() {
+            Some(clock) => Timebase::from_virtual(clock),
+            None => Timebase::of_clock(room.clock()),
+        };
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
-        let mut config = room_io_config.unwrap_or_else(|| RoomIoConfig {
-            participant_identity: participant_identity.map(Into::into),
-            audio_input: Some(AudioInputConfig {
-                sample_rate: input_sample_rate,
-                auto_gain_control,
-                ..AudioInputConfig::default()
-            }),
-            audio_output: Some(AudioOutputConfig {
-                publish: lk_agents_rtc::TrackPublishOptions {
-                    sample_rate: output_sample_rate,
-                    ..Default::default()
-                },
-            }),
-            text_output: text_output.then(TextOutputConfig::default),
-            ..RoomIoConfig::default()
-        });
+        let mut config = crate::room_io::options::resolve_config(
+            room_io_config,
+            participant_identity,
+            input_sample_rate,
+            output_sample_rate,
+            auto_gain_control,
+            text_output,
+        );
         let host_audio_input =
             host_audio_input.or_else(|| console.as_ref().map(|c| c.clone().as_audio_input()));
         let host_audio_output =
             host_audio_output.or_else(|| console.as_ref().map(|c| c.clone().as_audio_output()));
+        let rtc_room = room.rtc();
         // `start()`: an audio leg the host set replaces the room's, which is then neither published
         // nor subscribed ("RoomIO audio output is enabled but output.audio is already set,
         // ignoring"). The room's text output stays: it paces a host transcription leg.
         if host_audio_input.is_some() {
             config.audio_input = None;
         }
-        if host_audio_output.is_some() || room.offline() {
+        if host_audio_output.is_some() || rtc_room.is_none() {
             config.audio_output = None;
         }
         // A host sink's playback reports are stamped on the session's clock.
@@ -202,26 +197,30 @@ impl SessionApi {
         let interruption = interruption_detector
             .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
         let toolset = host_toolset(tools, tools_host, tool_runner);
-        let offline = room.offline();
-        let room = room.rtc();
-        let remote = remote_session.map(|port| {
-            let transport = match &console {
-                Some(console) => console.clone().as_transport(spawner.clone()),
-                None => Arc::new(crate::remote_session::room::RoomTransport::new(
-                    Arc::clone(&room),
+        let remote = remote_session
+            .map(|port| -> Result<_, lk_agents_abi::voice::rtc::RtcError> {
+                let transport = match &console {
+                    Some(console) => console.clone().as_transport(spawner.clone()),
+                    None => Arc::new(crate::remote_session::room::RoomTransport::new(
+                        rtc_room.clone().ok_or(lk_agents_abi::voice::rtc::RtcError::Closed(
+                            "remote RTC session",
+                        ))?,
+                        clock.clone(),
+                        spawner.clone(),
+                    ))
+                        as Arc<dyn crate::remote_session::SessionTransport>,
+                };
+                let wall = time.clone();
+                Ok(Arc::new(crate::remote_session::driver::Hosting::new(
+                    port,
+                    transport,
+                    console.as_ref().map(|c| c.clone().as_console()),
+                    clock.clone(),
                     spawner.clone(),
-                )) as Arc<dyn crate::remote_session::SessionTransport>,
-            };
-            let wall = time.clone();
-            Arc::new(crate::remote_session::driver::Hosting::new(
-                port,
-                transport,
-                console.as_ref().map(|c| c.clone().as_console()),
-                clock.clone(),
-                spawner.clone(),
-                Box::new(move || wall.wall_secs()),
-            ))
-        });
+                    Box::new(move || wall.wall_secs()),
+                )))
+            })
+            .transpose()?;
 
         // **Nothing starts here**; the loop begins at `start()`. Synchronous so a host can bind the
         // room's legs and recorder before starting. Read before the config moves into `RoomIo`.
@@ -229,16 +228,9 @@ impl SessionApi {
         let room_link = crate::room_io::RoomLinkConfig {
             close_on_disconnect: config.close_on_disconnect,
             delete_room_on_close: config.delete_room_on_close,
-            room: room.name().to_owned(),
+            room: rtc_room.as_ref().map(|room| room.name()).transpose()?.unwrap_or_default(),
         };
-        let room_io = crate::room_io::RoomIo::new(
-            Arc::clone(&room),
-            clock.clone(),
-            spawner.clone(),
-            Arc::new(crate::room_io::_output::transcription::SegmentIds::default()),
-            config,
-            None,
-        );
+        let room_io = room.room_io(spawner.clone(), config);
 
         // An avatar's sink is an audio output the room does not know; the transcript syncs to it.
         let has_external_audio_output = host_audio_output.is_some();
@@ -307,7 +299,7 @@ impl SessionApi {
             spawner: spawner.clone(),
             interruption: None,
             video_sampler: video_sampler.map(|(speaking, silent)| {
-                Arc::new(crate::room_io::_input::VideoSampler::new(speaking, silent))
+                crate::room_io::video_sampler::VideoSampler::new(speaking, silent)
             }),
             // **The one resolution**; no default restated beside it.
             config,
@@ -340,18 +332,14 @@ impl SessionApi {
             video_in: if host_video_sampler {
                 None
             } else {
-                host_video_input.or_else(|| {
-                    room_io
-                        .video_input()
-                        .map(|v| v as Arc<dyn lk_agents_abi::voice::io::VideoInput>)
-                })
+                host_video_input.or_else(|| room_io.video_input().map(|v| v.as_video_input()))
             },
             recorder: None,
             audio_out,
             text_out,
-            room_events: Some(room.events()),
             // Installed at `open`, once `RoomIo` has been started and its stream taken.
             room_io_events: None,
+            room_events: None,
             room_link: Some(room_link),
             toolset,
         };
@@ -378,12 +366,12 @@ impl SessionApi {
             handoffs: Arc::default(),
             eot: turn_detector,
             has_options: options.is_some(),
-            call_room: (!offline).then(|| Arc::clone(&room)),
+            call_room: rtc_room.clone(),
             remote,
             job,
             usage: Arc::default(),
         };
-        api
+        Ok(api)
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
@@ -508,14 +496,14 @@ impl SessionApi {
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.
     #[host(getter)]
-    pub fn audio_input(&self) -> Option<Arc<crate::room_io::_input::ParticipantAudioInput>> {
+    pub fn audio_input(&self) -> Option<Arc<lk_agents_abi::voice::room_owner::RoomAudioInput>> {
         self.room_io.audio_input_leg()
     }
 
     /// The room's video leg, when `RoomIoConfig(video_input=True)` asked for one, else `None`. A
     /// fresh handle each call over the same leg; safe before or after `start()`.
     #[host(getter)]
-    pub fn video_input(&self) -> Option<Arc<crate::room_io::_input::ParticipantVideoInput>> {
+    pub fn video_input(&self) -> Option<Arc<lk_agents_abi::voice::room_owner::RoomVideoInput>> {
         self.room_io.video_input()
     }
 
@@ -678,18 +666,14 @@ impl SessionApi {
         #[host(required)] source: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     ) -> Result<(), SessionRefused>;
 
-    /// `session.output.audio = ..` after `start()`: the next speech plays into the new sink, one
-    /// in flight is interrupted. `None` takes the sink away. The room's own leg handed back is the
-    /// sink the driver already plays into, as the reference's `sink is self._audio_sink` return.
+    /// Select the destination for subsequent output segments. Current work retains its admitted
+    /// binding, including when the same endpoint object is selected again.
     #[host(method)]
     pub fn set_audio_output(
         &self,
         #[host(required)] sink: Option<Arc<dyn AudioOutput>>,
     ) -> Result<(), SessionRefused> {
         if let Some(sink) = &sink {
-            if self.room_io.audio_output().is_some_and(|room| Arc::ptr_eq(&room, sink)) {
-                return Ok(());
-            }
             sink.tracker().anchor_to(self.anchor);
         }
         let sink = sink.map(|s| self.resources.register_audio_output(s));
@@ -782,7 +766,9 @@ impl SessionApi {
     /// a non-image part raises.
     #[host(method(name = "push_video"))]
     pub fn host_push_video(&self, content: lk_agents_abi::ChatContent) -> Result<bool, NotAnImage> {
-        let lk_agents_abi::ChatContent::Image(image) = content else { return Err(NotAnImage) };
+        let lk_agents_abi::ChatContent::Image(image) = content else {
+            return Err(NotAnImage);
+        };
         Ok(self.push_video(image))
     }
 
@@ -796,7 +782,9 @@ impl SessionApi {
         error: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), SessionRefused> {
         // A handle the loop has not created yet has no speech: the caller is outside any speech.
-        let Some(speech) = speech.created() else { return Ok(()) };
+        let Some(speech) = speech.created() else {
+            return Ok(());
+        };
         let output = match (value, error) {
             (_, Some(err)) => crate::run_result::RunOutput::Error(err),
             (Some(v), None) => crate::run_result::RunOutput::Value(v),
@@ -961,14 +949,17 @@ impl SessionApi {
     /// someone else, mid-session. `None` unlinks, like `unset_participant()`. The old link is
     /// forgotten first, then the new participant is looked up in the room.
     #[host(method)]
-    pub fn set_participant(&self, #[host(required)] identity: Option<String>) -> Reply<()> {
+    pub fn set_participant(
+        &self,
+        #[host(required)] identity: Option<String>,
+    ) -> Reply<lk_agents_abi::voice::io::Result<()>> {
         let room_io = Arc::clone(&self.room_io);
         Reply::new(async move { room_io.set_participant(identity.map(Into::into)).await })
     }
 
     /// `RoomIO.unset_participant()`. Idempotent.
     #[host(method)]
-    pub fn unset_participant(&self) -> Reply<()> {
+    pub fn unset_participant(&self) -> Reply<lk_agents_abi::voice::io::Result<()>> {
         let room_io = Arc::clone(&self.room_io);
         Reply::new(async move { room_io.unset_participant().await })
     }
@@ -1147,7 +1138,9 @@ impl SessionApi {
     /// say), or once a realtime model's own reply to the tool result is.
     #[host(method)]
     pub fn end_call(&self, speech: &SpeechHandle) -> Result<(), SessionRefused> {
-        let Some(speech) = speech.created() else { return Ok(()) };
+        let Some(speech) = speech.created() else {
+            return Ok(());
+        };
         self.send(SpeechCommand::EndCall { speech })
     }
 

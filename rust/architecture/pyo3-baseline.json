@@ -2,7 +2,6 @@
   "pyo3-dependency:lk-agents-abi:pyo3",
   "pyo3-dependency:lk-agents-abi:pyo3-async-runtimes",
   "pyo3-dependency:lk-agents-inference:pyo3",
-  "pyo3-dependency:lk-agents-rtc:pyo3",
   "pyo3-dependency:lk-agents-runtime:pyo3",
   "pyo3-dependency:lk-agents-voice:pyo3",
   "pyo3-file:rust/crates/lk-agents-abi/src/a2a/auth.rs",

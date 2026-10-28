@@ -1386,6 +1386,7 @@ dependencies = [
  "inventory",
  "livekit-protocol",
  "lk-agents-host-derive",
+ "lk-agents-test-support",
  "log",
  "pbjson-types",
  "pyo3",
@@ -1462,7 +1463,7 @@ dependencies = [
  "lk-agents-inference",
  "lk-agents-media",
  "lk-agents-net",
- "lk-agents-rtc",
+ "lk-agents-test-support",
  "lk-agents-voice",
  "prost",
  "serde_json",
@@ -1558,25 +1559,14 @@ dependencies = [
  "async-trait",
  "indexmap",
  "lk-agents-abi",
- "lk-agents-rtc",
  "lk-agents-runtime",
+ "lk-agents-test-support",
  "lk-agents-voice",
  "log",
  "pyo3",
  "pyo3-log",
  "serde",
  "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "lk-agents-rtc"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "lk-agents-abi",
- "pyo3",
- "thiserror 2.0.20",
  "tokio",
 ]
 
@@ -1600,6 +1590,7 @@ dependencies = [
  "lk-agents-media",
  "lk-agents-net",
  "lk-agents-storage",
+ "lk-agents-test-support",
  "lk-agents-voice",
  "lk-agents-worker",
  "log",
@@ -1652,6 +1643,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lk-agents-test-support"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lk-agents-abi",
+ "lk-agents-media",
+ "lk-agents-voice",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lk-agents-voice"
 version = "0.1.0"
 dependencies = [
@@ -1663,7 +1666,7 @@ dependencies = [
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-media",
- "lk-agents-rtc",
+ "lk-agents-test-support",
  "log",
  "pbjson-types",
  "prost",

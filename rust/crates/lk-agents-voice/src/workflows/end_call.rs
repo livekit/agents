@@ -36,7 +36,9 @@ impl Driver {
     pub(crate) fn end_call_on_event(&mut self, now: Ts, ev: &SessionEvent, out: &mut Out) {
         let Some(state) = self.activity.end_call else { return };
         match (state, ev) {
-            (EndCall::AfterSpeech(id), SessionEvent::SpeechDone { speech, .. }) if *speech == id => {
+            (EndCall::AfterSpeech(id), SessionEvent::SpeechDone { speech, .. })
+                if *speech == id =>
+            {
                 let auto_reply = self.activity.rt_session.is_some()
                     && self.activity.realtime_state.auto_tool_reply();
                 if auto_reply {

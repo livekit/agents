@@ -14,15 +14,27 @@ fn clean(setup: Setup, inputs: Vec<Input>) {
     assert!(outcome.expectations.get("output_replacement_is_clean").is_some_and(|n| *n > 0));
 }
 
-// Catches: `output_replacement_is_clean` counting a synchroniser's closing flushes on the text
-// output it wrapped (one when the swap rotates it, one when the session closes it) as output
-// escaping onto a detached sink (`_capture_task`'s `finally`; survey seeds 0, 34, 278).
+// A physically admitted old text destination gets its segment's closing flush while retained.
+// The replacement must not force that work onto the new destination or retire it before delivery.
 #[test]
 fn a_synchroniser_flushes_its_old_output_as_it_closes() {
     let setup = Setup { sync_transcription: true, ..Setup::default() };
     let inputs = vec![
+        Input::Say {
+            text: AgentText("Hello there, thanks for calling the front desk.".into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        },
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutStarted { segment: Ref::new(0) },
+        Input::Advance { ms: Millis(200) },
+        Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(200) },
         Input::SetTranscriptionOutput { attach: true },
         Input::Advance { ms: Millis(20) },
+        Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(10_000) },
+        Input::PlayoutFinished { segment: Ref::new(0) },
+        Input::Advance { ms: Millis(100) },
         Input::Close { drain: true },
     ];
     clean(setup, inputs);

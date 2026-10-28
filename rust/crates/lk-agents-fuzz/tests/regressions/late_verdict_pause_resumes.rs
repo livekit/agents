@@ -1,5 +1,5 @@
 //! A speech paused by a detector verdict that came after the person stopped resumes.
-use lk_agents_fuzz::drive::{Case, RealtimeSetup, Setup, run};
+use lk_agents_fuzz::drive::{Case, Outcome, RealtimeSetup, Run, Setup, finish, simulate};
 use lk_agents_fuzz::input::{Count, Input, Millis, Ref};
 
 // Catches: the adaptive detector's verdict landing after the person's end of speech paused the
@@ -19,23 +19,38 @@ fn a_late_verdicts_pause_resumes() {
         pausable_output: true,
         ..Setup::default()
     };
-    let inputs = vec![
-        Input::GenerateReply { user_input: None, instructions: None, allow: None },
-        Input::Advance { ms: Millis(3_000) },
-        Input::PlayoutStarted { segment: Ref::new(0) },
-        // Past the echo canceller's warm-up.
-        Input::Advance { ms: Millis(4_000) },
-        Input::Drain { wait: false },
-        Input::VadStart { vad: Ref::new(0), speech_ms: Millis(100) },
-        Input::MicFrames { mic: Ref::new(0), chunks: Count(30) },
-        Input::Advance { ms: Millis(300) },
-        Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(300) },
-        Input::Advance { ms: Millis(100) },
-        // The detector rules after the person has stopped.
-        Input::OverlapVerdict { port: Ref::new(0), is_interruption: true, agent_ended: false },
-        Input::Advance { ms: Millis(10_000) },
-    ];
-    let outcome = run(Case { setup, inputs, ..Case::default() });
+    let outcome = simulate(async {
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        // Warm up echo cancellation on a completed, observed first reply. The tested reply
+        // then gets its overlap before its own missing-completion deadline can expire.
+        run.apply(&Input::GenerateReply { user_input: None, instructions: None, allow: None })
+            .await;
+        super::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(10_000) }).await;
+        let next_segment = run.record.live().opened(lk_agents_fuzz::record::Kind::Segment);
+        let inputs = vec![
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(1_000) },
+            Input::PlayoutStarted { segment: Ref::new(next_segment) },
+            Input::Advance { ms: Millis(500) },
+            Input::Drain { wait: false },
+            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(100) },
+            Input::MicFrames { mic: Ref::new(0), chunks: Count(30) },
+            Input::Advance { ms: Millis(300) },
+            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(300) },
+            Input::Advance { ms: Millis(100) },
+            // The detector rules after the person has stopped.
+            Input::OverlapVerdict { port: Ref::new(0), is_interruption: true, agent_ended: false },
+            Input::Advance { ms: Millis(10_000) },
+        ];
+        for input in &inputs {
+            run.apply(input).await;
+        }
+        finish(
+            run,
+            Outcome { case: Case { setup, inputs, ..Case::default() }, ..Outcome::default() },
+        )
+        .await
+    });
     let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.as_str()).collect();
     assert!(!failed.contains(&"pause_resolves"), "{:#?}", outcome.failures);
     assert!(outcome.expectations.get("pause_resolves").is_some_and(|n| *n > 0), "no pause");

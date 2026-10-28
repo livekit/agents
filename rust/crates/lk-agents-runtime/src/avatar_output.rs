@@ -13,7 +13,7 @@ use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
 use lk_agents_abi::{AudioFrame, Closed};
 
 pub struct DataStreamAudioOutput {
-    output: Arc<lk_agents_voice::avatar::DataStreamAudioOutput>,
+    output: Arc<crate::avatar::output::DataStreamAudioOutput>,
     spawner: TokioSpawner,
     cleanup: Arc<TaskSet>,
     cleanup_clock: Arc<dyn Clock>,
@@ -26,7 +26,7 @@ impl DataStreamAudioOutput {
     }
 
     pub fn from_native(
-        output: lk_agents_voice::avatar::DataStreamAudioOutput,
+        output: crate::avatar::output::DataStreamAudioOutput,
         spawner: TokioSpawner,
         cleanup_clock: Arc<dyn Clock>,
     ) -> Self {
@@ -41,7 +41,7 @@ impl DataStreamAudioOutput {
 }
 
 async fn close_observed(
-    output: &lk_agents_voice::avatar::DataStreamAudioOutput,
+    output: &crate::avatar::output::DataStreamAudioOutput,
     clock: &dyn Clock,
     incomplete: &AtomicBool,
 ) {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_session::FixedRoom;
+use crate::test_support::FixedRoom;
 
 fn file(path: &str, probability: f64) -> Sound {
     Sound::for_host(Some(path.to_owned()), None, 1.0, probability, 0.0, 0.0)
@@ -24,10 +24,9 @@ impl FrameStream for Frames {
     }
 }
 
-async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_rtc::FakeRoom>) {
-    let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+async fn started() -> (Arc<BackgroundAudioPlayer>, Arc<lk_agents_test_support::rtc::FakeRoom>) {
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
     let room = rtc.room("background");
-    std::mem::forget(rtc);
     let fixed = FixedRoom {
         rtc: room.clone(),
         time: crate::agent_session::time::Timebase::from_virtual(clock),

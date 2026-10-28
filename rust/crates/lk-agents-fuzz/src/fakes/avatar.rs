@@ -22,19 +22,21 @@ use std::{
 };
 
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
+use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::{
     AudioFrame, Clock, Ts,
     errors::{ApiError, ProviderError},
 };
-use lk_agents_rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
+use lk_agents_test_support::avatar_receiver::DataStreamAudioReceiver;
+use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind, Sent, StreamInfo};
 use lk_agents_voice::{
-    avatar::{DataStreamAudioReceiver, RPC_CLEAR_BUFFER, Received, ReceiverEnd},
+    avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{
-        AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner,
+        AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarIo, AvatarMedia, AvatarRunner,
         AvatarVideoGenerator, Event,
     },
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use crate::record::{AvatarFrameLabel, AvatarStep, Observed, Stamps};
 
@@ -141,6 +143,10 @@ impl Receiver {
     }
 }
 
+fn receiver_error(error: ReceiverEnd) -> ProviderError {
+    ProviderError::Local(ApiError::new(format!("{error:?}")))
+}
+
 impl AvatarAudioReceiver for Receiver {
     fn open_audio(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { Ok(()) })
@@ -148,15 +154,20 @@ impl AvatarAudioReceiver for Receiver {
 
     fn next_audio(
         &self,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(u64, bool, Option<AvatarFrame>), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
+            ProviderError,
+        >,
+    > {
         Box::pin(async move {
             match self.rx.recv().await {
-                Ok(Received::Audio(frame)) => {
-                    let (segment, starts_segment, epoch) = {
+                Ok((epoch, starts_segment, key, Some(Received::Audio(frame)))) => {
+                    let segment = {
                         let mut segment = self.segment.lock().unwrap();
-                        let observation = (segment.0, !segment.1, segment.2);
                         segment.1 = true;
-                        observation
+                        segment.0
                     };
                     let from = record(&self.log, &self.stamps, AvatarStep::Received { segment });
                     let entry = Entry::Received {
@@ -168,44 +179,45 @@ impl AvatarAudioReceiver for Receiver {
                     Ok((
                         epoch,
                         starts_segment,
-                        Some(AvatarFrame::Audio(self.frames.audio(
+                        key,
+                        Some(AudioReceiverFrame::Audio(self.frames.audio(
                             entry,
                             frame.samples_per_channel,
                             frame.sample_rate,
                         ))),
                     ))
                 }
-                Ok(Received::SegmentEnd) => {
+                Ok((epoch, _, key, Some(Received::SegmentEnd))) => {
                     record(&self.log, &self.stamps, AvatarStep::ReceivedEnd);
                     self.next_segment();
-                    Ok((self.segment.lock().unwrap().2, false, Some(AvatarFrame::SegmentEnd)))
+                    Ok((epoch, false, key, Some(AudioReceiverFrame::SegmentEnd)))
                 }
-                Ok(Received::Video(_)) => {
-                    Err(ProviderError::Local(ApiError::new("video from the receiver")))
-                }
-                Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None)),
-                Err(e) => Err(ProviderError::Local(ApiError::new(format!("{e:?}")))),
+                Ok((epoch, _, key, None)) => Ok((epoch, false, key, None)),
+                Err(ReceiverEnd::Closed) => Ok((self.segment.lock().unwrap().2, false, None, None)),
+                Err(error) => Err(receiver_error(error)),
             }
         })
     }
 
-    fn notify_playback_started(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn notify_playback_started(
+        &self,
+        segment: AvatarPlaybackSegment,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             record(&self.log, &self.stamps, AvatarStep::ReportedStarted);
-            self.rx.notify_playback_started();
-            Ok(())
+            self.rx.notify_playback_started(segment).map_err(receiver_error)
         })
     }
 
     fn notify_playback_finished(
         &self,
+        segment: AvatarPlaybackSegment,
         position: f64,
         interrupted: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             record(&self.log, &self.stamps, AvatarStep::ReportedFinished { interrupted });
-            self.rx.notify_playback_finished(position, interrupted);
-            Ok(())
+            self.rx.notify_playback_finished(segment, position, interrupted).map_err(receiver_error)
         })
     }
 
@@ -507,7 +519,7 @@ impl AvatarMedia for Synchronizer {
 #[derive(Default)]
 struct Relay {
     sent: usize,
-    streams: HashMap<usize, UnboundedSender<Vec<u8>>>,
+    streams: HashMap<usize, Sender<Vec<u8>>>,
     reports: usize,
 }
 
@@ -545,7 +557,7 @@ impl FakeAvatarWorker {
         fps: u64,
         latency_ms: u64,
     ) -> Arc<FakeAvatarWorker> {
-        let room = lk_agents_rtc::FakeRtc::new(clock.clone()).room(name);
+        let room = lk_agents_test_support::rtc::FakeRtc::new(clock.clone()).room(name);
         room.add_participant(Self::AGENT, ParticipantKind::Agent);
         let (frames, log): (Arc<Frames>, Log) = Default::default();
         let period_ms = 1000 / fps;
@@ -645,7 +657,7 @@ impl FakeAvatarWorker {
                         changed = worker_sent.changed() => if changed.is_err() { return },
                     }
                     match weak.upgrade() {
-                        Some(worker) => worker.relay(),
+                        Some(worker) => worker.relay().await,
                         None => return,
                     }
                 }
@@ -660,13 +672,12 @@ impl FakeAvatarWorker {
 
     /// Carry what each side sent since the last relay to the other, in the order it was sent: the
     /// agent's segment streams and its clears to the worker, the worker's reports to the agent.
-    pub fn relay(&self) {
+    pub async fn relay(&self) {
         let avatar = self.avatar.as_str();
-        let mut relay = self.relay.lock().unwrap();
         let local = self.agent.local_participant();
-        let sent = local.sent_since(relay.sent);
-        relay.sent += sent.len();
+        let sent = local.sent_since(self.relay.lock().unwrap().sent);
         for item in sent {
+            self.relay.lock().unwrap().sent += 1;
             match item {
                 Sent::StreamOpened(index) => {
                     let Some(stream) = local.byte_streams().into_iter().nth(index) else {
@@ -676,7 +687,8 @@ impl FakeAvatarWorker {
                         continue;
                     }
                     let info = StreamInfo {
-                        id: stream.opts.name.clone(),
+                        name: Some(stream.opts.name.clone()),
+                        id: stream.id.clone(),
                         topic: stream.opts.topic.clone(),
                         mime_type: "application/octet-stream".into(),
                         total_length: None,
@@ -685,16 +697,17 @@ impl FakeAvatarWorker {
                         attachments: Vec::new(),
                     };
                     if let Ok(tx) = self.room.open_byte_stream(Self::AGENT, info) {
-                        relay.streams.insert(index, tx);
+                        self.relay.lock().unwrap().streams.insert(index, tx);
                     }
                 }
                 Sent::StreamChunk(index, chunk) => {
-                    if let Some(tx) = relay.streams.get(&index) {
-                        let _ = tx.send(chunk);
+                    let tx = self.relay.lock().unwrap().streams.get(&index).cloned();
+                    if let Some(tx) = tx {
+                        let _ = tx.send(chunk).await;
                     }
                 }
                 Sent::StreamClosed(index) => {
-                    relay.streams.remove(&index);
+                    self.relay.lock().unwrap().streams.remove(&index);
                 }
                 Sent::Rpc { destination, method, .. } => {
                     if destination.0 == avatar && method == RPC_CLEAR_BUFFER {
@@ -703,12 +716,12 @@ impl FakeAvatarWorker {
                 }
             }
         }
-        let reports = self.room.local_participant().sent_since(relay.reports);
-        relay.reports += reports.len();
+        let reports = self.room.local_participant().sent_since(self.relay.lock().unwrap().reports);
         for item in reports {
             if let Sent::Rpc { method, payload, .. } = item {
                 local.invoke_rpc(&method, avatar, &payload);
             }
+            self.relay.lock().unwrap().reports += 1;
         }
     }
 

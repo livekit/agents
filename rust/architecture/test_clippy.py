@@ -198,7 +198,7 @@ class ClippyContracts(unittest.TestCase):
                 clippy.compiler_messages("\n".join(map(json.dumps, records)))
 
     def test_configuration_removal_fails_with_crate_and_method(self):
-        for crate in ("lk-agents-abi", "lk-agents-rtc"):
+        for crate in ("lk-agents-abi", "lk-agents-voice"):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 path = root / f"rust/crates/{crate}/clippy.toml"

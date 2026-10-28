@@ -1,9 +1,8 @@
-"""Waiting on a room for a participant, an attribute or a track. The core waits
-(``lk-agents-rtc``'s ``wait``) on the room's events; these return the SDK's objects for what it
-found."""
+"""Wait on a room for a participant, an attribute or a track."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal, overload
 
 from livekit import rtc
@@ -11,8 +10,16 @@ from livekit import rtc
 from .. import _core
 
 
-def _kinds(kind: list[int] | int | None) -> list[int] | None:
-    return kind if kind is None or isinstance(kind, list) else [kind]
+def _kinds(kind: Sequence[int] | int | None) -> list[int] | None:
+    if kind is None:
+        return None
+    return [kind] if isinstance(kind, int) else list(kind)
+
+
+def _room_session(room: rtc.Room) -> _core._core_RoomSession:
+    from ..voice.room_io import Room
+
+    return _core._core_create_room_session(Room.of(room))
 
 
 async def wait_for_agent(
@@ -34,7 +41,7 @@ async def wait_for_agent(
     Raises:
         RuntimeError: If the room is not connected.
     """
-    identity = await _core.wait_for_agent(room, agent_name)
+    identity = await _core.wait_for_agent(_room_session(room), agent_name)
     return room.remote_participants[identity]
 
 
@@ -52,7 +59,7 @@ async def wait_for_participant_attribute(
     present, the participant disconnects, or the room disconnects before the
     attribute is set.
     """
-    await _core.wait_for_participant_attribute(room, identity, attribute, value)
+    await _core.wait_for_participant_attribute(_room_session(room), identity, attribute, value)
 
 
 @overload
@@ -89,7 +96,9 @@ async def wait_for_participant(
 
     When `include_local` is True, the local participant is also considered.
     """
-    found = await _core.wait_for_participant(room, identity, _kinds(kind), include_local)
+    found = await _core.wait_for_participant(
+        _room_session(room), identity, _kinds(kind), include_local
+    )
     return room.local_participant if found is None else room.remote_participants[found]
 
 
@@ -136,7 +145,7 @@ async def wait_for_track_publication(
     on a participant that is gone.
     """
     publisher, sid = await _core.wait_for_track_publication(
-        room, identity, _kinds(kind), include_local, wait_for_subscription
+        _room_session(room), identity, _kinds(kind), include_local, wait_for_subscription
     )
     participant: rtc.Participant = (
         room.local_participant if publisher is None else room.remote_participants[publisher]

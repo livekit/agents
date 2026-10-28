@@ -26,15 +26,18 @@ impl Run {
         let (registry, records) = Registry::new(stamps.clone(), world.clone());
         // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
         // and the survey runs seeds side by side in one process.
-        let room = lk_agents_rtc::FakeRtc::new(time.clock()).room(&format!("room-{schedule}"));
+        let room = lk_agents_test_support::rtc::FakeRtc::new(time.clock())
+            .room(&format!("room-{schedule}"));
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.
         let adaptive = setup.interruption
             && matches!(
                 resolve_interruption_detector(&InterruptionGateInputs {
-                    stt: (setup.stt && setup.realtime.is_none())
-                        .then_some(SttGate { aligned_transcript: true, streaming: true }),
+                    stt: (setup.stt && setup.realtime.is_none()).then_some(SttGate {
+                        aligned_transcript: true,
+                        streaming: true
+                    }),
                     realtime: setup.realtime.is_some().then_some(RealtimeGate {
                         server_turn_detection: !setup.vad && !setup.stt
                     }),
@@ -53,7 +56,9 @@ impl Run {
         // person's track, minted when they join.
         let legs = setup.room_legs;
         // The console's socket is a leg of the host's like the fakes, so the room's stay off.
-        let console = setup.console.then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
+        let console = setup
+            .console
+            .then(|| fakes::FakeCli::connect(world.clone(), time.clock()));
         let host_mic = (legs.is_none() && console.is_none()).then(|| {
             let (mic, frames) = fakes::FakeAudioInput::new();
             (mic, frames, registry.new_mic())
@@ -72,7 +77,7 @@ impl Run {
                 ..AudioInputConfig::default()
             }),
             audio_output: legs.map(|_| AudioOutputConfig {
-                publish: lk_agents_rtc::TrackPublishOptions {
+                publish: lk_agents_test_support::rtc::TrackPublishOptions {
                     sample_rate: SAMPLE_RATE,
                     ..Default::default()
                 },
@@ -98,13 +103,17 @@ impl Run {
                 setup.tts_alignment,
             ) as Arc<Tts>
         });
-        let providers = Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone() };
+        let providers = Legs {
+            llm: llm.clone(),
+            tts: tts.clone(),
+            stt: stt.clone(),
+        };
         let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
         // The avatar worker is in the room before its stream is opened to it. Its reports cross
         // as they are sent, so the sink gives up on one after a clear as in production.
         let avatar_sink = (setup.avatar && console.is_none()).then(|| {
             room.add_participant(AVATAR, ParticipantKind::Agent);
-            Arc::new(lk_agents_voice::avatar::DataStreamAudioOutput::new(
+            Arc::new(lk_agents_test_support::avatar_output::FakeAvatarOutput::new(
                 room.clone(),
                 AVATAR.into(),
                 Some(SAMPLE_RATE),
@@ -115,133 +124,160 @@ impl Run {
                 tasks.clone(),
             ))
         });
-        let api = Arc::new(SessionApi::host_new(
-            Arc::new(FixedRoom { rtc: room.clone(), time: time.clone() }),
-            Some(instructions(&setup.instructions)),
-            None,
-            OPENING_AGENT.into(),
-            None,
-            None,
-            // The thread's storage: the voice storage core runs in the storage survey.
-            None,
-            stt,
-            setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
-            llm,
-            setup.realtime.map(|server| {
-                let vad = server.turn_detection.then_some(if server.semantic {
-                    fakes::RealtimeVad::Semantic
-                } else {
-                    fakes::RealtimeVad::Server
-                });
-                let fake = |seed: u64, connect: Duration| {
-                    let setup = fakes::ServerSetup {
-                        vad,
-                        seed,
-                        connect,
-                        tool_calls: server.tool_calls,
-                        text_only: server.text_only,
-                    };
-                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
-                        as Arc<dyn Realtime>
-                };
-                if server.duplex {
-                    let clock = time.clock();
-                    let duplex =
-                        fakes::FakeDuplex::new(registry.clone(), server.seed, clock, tasks.clone());
-                    return duplex as Arc<dyn Realtime>;
-                }
-                if !server.fallback {
-                    return fake(server.seed, connect);
-                }
-                let children = vec![
-                    fake(server.seed, connect),
-                    // The fallback is a healthy model, connecting at once.
-                    fake(server.seed.rotate_left(17), Duration::ZERO),
-                ];
-                fakes::FallbackRealtime::new(children, time.clock()) as Arc<dyn Realtime>
-            }),
-            None,
-            tts,
-            Some(Arc::new(WireSink)),
-            // The run answers the hook calls itself (`HookAnswer`).
-            None,
-            None,
-            true,
-            SAMPLE_RATE,
-            SAMPLE_RATE,
-            Some(&options),
-            None,
-            None,
-            setup.agent_aligned_transcript,
-            setup.eot.then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
-            adaptive.then(|| {
-                Arc::new(fakes::FakeInterruptionSource(registry.clone()))
-                    as Arc<dyn InterruptionSource>
-            }),
-            true,
-            Some(room_io),
-            Some(tool_specs(&setup.tools)),
-            None,
-            Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
-            nodes.transcription,
-            nodes.realtime_audio,
-            nodes.llm,
-            nodes.tts,
-            nodes.stt,
-            match &console {
-                Some((io, _)) => Some(io.clone().as_audio_input()),
-                None => host_mic.as_ref().map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
-            },
-            match &console {
-                Some((io, _)) => Some(io.clone().as_audio_output()),
-                None if setup.avatar => avatar_sink
-                    .as_ref()
-                    .map(|sink| sink.clone() as Arc<dyn lk_agents_abi::voice::io::AudioOutput>),
-                None => legs.is_none().then(|| {
-                    fakes::FakeAudioOutput::new(
-                        registry.clone(),
-                        setup.pausable_output,
-                        setup.lagging_output,
-                    ) as _
+        let api = Arc::new(
+            SessionApi::host_new(
+                Arc::new(FixedRoom {
+                    rtc: room.clone(),
+                    time: time.clone(),
                 }),
-            },
-            setup
-                .video
-                .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
-            setup.video_sampler.then_some((1.0, 0.3)),
-            false,
-            legs.is_none().then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
-            false,
-            setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
-            setup.max_unrecoverable_errors,
-            (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(|| {
-                SttContextConfig {
-                    keyterms: Some(setup.keyterms.clone()),
-                    keyterm_detection: setup.keyterm_detection.map(|k| KeytermDetectionConfig {
-                        enabled: Some(true),
-                        llm: Some(DetectionLlm::Instance),
-                        turn_interval: Some(k.turn_interval),
-                        max_keyterms: k.max_keyterms,
-                        instructions: None,
-                        timeout: k.timeout_ms.map(|ms| ms as f64 / 1000.0),
+                Some(instructions(&setup.instructions)),
+                None,
+                OPENING_AGENT.into(),
+                None,
+                None,
+                // The thread's storage: the voice storage core runs in the storage survey.
+                None,
+                stt,
+                setup
+                    .vad
+                    .then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
+                llm,
+                setup.realtime.map(|server| {
+                    let vad = server.turn_detection.then_some(if server.semantic {
+                        fakes::RealtimeVad::Semantic
+                    } else {
+                        fakes::RealtimeVad::Server
+                    });
+                    let fake = |seed: u64, connect: Duration| {
+                        let setup = fakes::ServerSetup {
+                            vad,
+                            seed,
+                            connect,
+                            tool_calls: server.tool_calls,
+                            text_only: server.text_only,
+                        };
+                        fakes::FakeRealtime::new(
+                            registry.clone(),
+                            setup,
+                            time.clock(),
+                            tasks.clone(),
+                        ) as Arc<dyn Realtime>
+                    };
+                    if server.duplex {
+                        let clock = time.clock();
+                        let duplex = fakes::FakeDuplex::new(
+                            registry.clone(),
+                            server.seed,
+                            clock,
+                            tasks.clone(),
+                        );
+                        return duplex as Arc<dyn Realtime>;
+                    }
+                    if !server.fallback {
+                        return fake(server.seed, connect);
+                    }
+                    let children = vec![
+                        fake(server.seed, connect),
+                        // The fallback is a healthy model, connecting at once.
+                        fake(server.seed.rotate_left(17), Duration::ZERO),
+                    ];
+                    fakes::FallbackRealtime::new(children, time.clock()) as Arc<dyn Realtime>
+                }),
+                None,
+                tts,
+                Some(Arc::new(WireSink)),
+                // The run answers the hook calls itself (`HookAnswer`).
+                None,
+                None,
+                true,
+                SAMPLE_RATE,
+                SAMPLE_RATE,
+                Some(&options),
+                None,
+                None,
+                setup.agent_aligned_transcript,
+                setup
+                    .eot
+                    .then(|| fakes::FakeEot::new(registry.clone()) as Arc<EotDet>),
+                adaptive.then(|| {
+                    Arc::new(fakes::FakeInterruptionSource(registry.clone()))
+                        as Arc<dyn InterruptionSource>
+                }),
+                true,
+                Some(room_io),
+                Some(tool_specs(&setup.tools)),
+                None,
+                Some(fakes::FakeTools::new(registry.clone()) as Arc<dyn HostToolRunner>),
+                nodes.transcription,
+                nodes.realtime_audio,
+                nodes.llm,
+                nodes.tts,
+                nodes.stt,
+                match &console {
+                    Some((io, _)) => Some(io.clone().as_audio_input()),
+                    None => host_mic
+                        .as_ref()
+                        .map(|(mic, _, _)| mic.clone() as Arc<AudioIn>),
+                },
+                match &console {
+                    Some((io, _)) => Some(io.clone().as_audio_output()),
+                    None if setup.avatar => avatar_sink
+                        .as_ref()
+                        .map(|sink| sink.clone() as Arc<dyn lk_agents_abi::voice::io::AudioOutput>),
+                    None => legs.is_none().then(|| {
+                        fakes::FakeAudioOutput::new(
+                            registry.clone(),
+                            setup.pausable_output,
+                            setup.lagging_output,
+                        ) as _
                     }),
-                    ..SttContextConfig::default()
-                }
-            }),
-            // `KeytermDetectionOptions(llm=...)`: the detection LLM the host resolved.
-            setup.keyterm_detection.map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
-            None,
-            lk_agents_abi::Maybe::NotGiven,
-            Some("AS_fuzz".into()),
-            // `ConsoleCall`: the session hosts the CLI's requests on the console's socket.
-            console.as_ref().map(|_| {
-                Arc::new(fakes::FakeConsolePort)
-                    as Arc<dyn lk_agents_voice::remote_session::SessionPort>
-            }),
-            console.as_ref().map(|(io, _)| io.clone() as Arc<dyn ConsolePort>),
-            None,
-            tasks.clone(),
-        ));
+                },
+                setup
+                    .video
+                    .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
+                setup.video_sampler.then_some((1.0, 0.3)),
+                false,
+                legs.is_none()
+                    .then(|| fakes::FakeTextOutput::new(registry.clone()) as _),
+                false,
+                setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
+                setup.max_unrecoverable_errors,
+                (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(|| {
+                    SttContextConfig {
+                        keyterms: Some(setup.keyterms.clone()),
+                        keyterm_detection: setup.keyterm_detection.map(|k| {
+                            KeytermDetectionConfig {
+                                enabled: Some(true),
+                                llm: Some(DetectionLlm::Instance),
+                                turn_interval: Some(k.turn_interval),
+                                max_keyterms: k.max_keyterms,
+                                instructions: None,
+                                timeout: k.timeout_ms.map(|ms| ms as f64 / 1000.0),
+                            }
+                        }),
+                        ..SttContextConfig::default()
+                    }
+                }),
+                // `KeytermDetectionOptions(llm=...)`: the detection LLM the host resolved.
+                setup
+                    .keyterm_detection
+                    .map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+                None,
+                lk_agents_abi::Maybe::NotGiven,
+                Some("AS_fuzz".into()),
+                // `ConsoleCall`: the session hosts the CLI's requests on the console's socket.
+                console.as_ref().map(|_| {
+                    Arc::new(fakes::FakeConsolePort)
+                        as Arc<dyn lk_agents_voice::remote_session::SessionPort>
+                }),
+                console.as_ref().map(|(io, _)| {
+                    io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>
+                }),
+                None,
+                tasks.clone(),
+            )
+            .expect("the configured voice fixture is valid"),
+        );
         registry.attach_session(api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
@@ -256,7 +292,11 @@ impl Run {
             let mut instant = (tokio::time::Instant::now(), 0u32);
             let step = Box::new(move |step: &Step| {
                 let now = tokio::time::Instant::now();
-                instant = if now == instant.0 { (now, instant.1 + 1) } else { (now, 0) };
+                instant = if now == instant.0 {
+                    (now, instant.1 + 1)
+                } else {
+                    (now, 0)
+                };
                 let at = step_stamps.next();
                 if instant.1 >= NO_PROGRESS_STEPS {
                     let detail = format!(
@@ -287,16 +327,20 @@ impl Run {
         let cores = cores_rx.await.expect("the probe takes the session's cores");
         // The session started its host on the console's socket, which then carries the microphone.
         let console = console.map(|(_, cli)| cli);
-        let console_mic = console.as_ref().map(|cli| (registry.new_mic(), cli.clone()));
+        let console_mic = console
+            .as_ref()
+            .map(|cli| (registry.new_mic(), cli.clone()));
         // The answering-machine detector, as `AMD.__aenter__` attaches it once the call is up:
         // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
             use lk_agents_abi::voice::amd::{AmdConfigKwargs, TranscriptSource};
             let llm = fakes::FakeLlm::new(registry.clone());
-            let stt =
-                amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
-            let activity =
-                api.resolved_options().map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
+            let stt = amd
+                .own_stt
+                .then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
+            let activity = api
+                .resolved_options()
+                .map(|o| Duration::from_secs_f64(o.endpointing.max_delay));
             let cfg = AmdConfigKwargs {
                 max_endpointing_delay: Some(
                     lk_agents_voice::amd::classifier::resolve_max_endpointing_delay_for_host(
@@ -314,7 +358,8 @@ impl Run {
                 ivr_detection: amd.ivr_detection,
                 ..AmdConfigKwargs::default()
             };
-            api.host_attach_amd(cfg, llm, None, stt, None).expect("attach the AMD");
+            api.host_attach_amd(cfg, llm, None, stt, None)
+                .expect("attach the AMD");
         }
         let mut run = Run {
             api,
@@ -355,7 +400,8 @@ impl Run {
             setup: setup.clone(),
             record: Recording::default(),
         };
-        run.record.set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
+        run.record
+            .set_conn(setup.conn.unwrap_or(ConnSetup::DEFAULT), setup.chunked_tts);
         run.record.set_transcript(TranscriptSetup {
             synchronized: setup.sync_transcription,
             aligned: setup.agent_aligned_transcript.or(setup.aligned_transcript) == Some(true),
@@ -372,9 +418,14 @@ impl Run {
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
             let player = Arc::new(BackgroundAudioPlayer::for_host(SAMPLE_RATE, 1, 2_400, 200));
-            let room = Arc::new(FixedRoom { rtc: run.room.clone(), time: run.time.clone() });
+            let room = Arc::new(FixedRoom {
+                rtc: run.room.clone(),
+                time: run.time.clone(),
+            });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
-            let _ = player.start_for_host(room, fakes::HALF, ambient, true, None).await;
+            let _ = player
+                .start_for_host(room, fakes::HALF, ambient, true, None)
+                .await;
             run.background = Some(player);
         }
         if setup.avatar {
@@ -395,7 +446,10 @@ impl Run {
             run.avatar = Some(worker);
         }
         // The person joins the call the agent just answered; the callee AMD awaits may not have.
-        if setup.amd.map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing) {
+        if setup
+            .amd
+            .map_or(legs.is_some(), |amd| amd.answer != AmdAnswer::Missing)
+        {
             run.join_caller();
         }
         run.collect();
@@ -407,8 +461,15 @@ impl Run {
     /// the agent was there, as the setup says. AMD's callee joins as the setup's answer says: a
     /// SIP call still ringing, and with their audio even when no leg of the session hears it.
     pub(super) fn join_caller(&mut self) {
-        let sip = self.setup.amd.is_some_and(|amd| amd.answer == AmdAnswer::Sip);
-        let kind = if sip { ParticipantKind::Sip } else { ParticipantKind::Standard };
+        let sip = self
+            .setup
+            .amd
+            .is_some_and(|amd| amd.answer == AmdAnswer::Sip);
+        let kind = if sip {
+            ParticipantKind::Sip
+        } else {
+            ParticipantKind::Standard
+        };
         let caller = self.room.add_participant(CALLER, kind);
         if sip {
             caller.set_attribute(lk_agents_abi::voice::amd::SIP_CALL_STATUS_ATTR, "ringing");
@@ -426,13 +487,16 @@ impl Run {
         let track = format!("TR_mic_{}", self.joins);
         let mic = caller.publish_microphone(track.as_str());
         if let Some(pre_connect) = legs.pre_connect {
-            mic.set_audio_features(vec![lk_agents_rtc::AudioTrackFeature::PreconnectBuffer]);
-            let mut attributes = std::collections::HashMap::from([("trackId".into(), track)]);
+            mic.set_audio_features(vec![
+                lk_agents_test_support::rtc::AudioTrackFeature::PreconnectBuffer,
+            ]);
+            let mut attributes = std::collections::BTreeMap::from([("trackId".into(), track)]);
             if pre_connect != PreConnect::Malformed {
                 attributes.insert("sampleRate".into(), SAMPLE_RATE.to_string());
                 attributes.insert("channels".into(), "1".into());
             }
-            let info = lk_agents_rtc::StreamInfo {
+            let info = lk_agents_test_support::rtc::StreamInfo {
+                name: None,
                 id: format!("pre_connect_{}", self.joins),
                 topic: PRE_CONNECT_AUDIO_BUFFER_STREAM.into(),
                 mime_type: "audio/pcm".into(),
@@ -449,12 +513,22 @@ impl Run {
             }
         }
         let nth = self.registry.new_mic();
-        self.mics.insert(nth, (Mic::Room { track: mic, burst: (0, 0), read: None }, 0));
+        self.mics.insert(
+            nth,
+            (
+                Mic::Room {
+                    track: mic,
+                    burst: (0, 0),
+                    read: None,
+                },
+                0,
+            ),
+        );
         // `RoomOptions(video_input=True)`: their camera, which the case feeds like the host's.
         if self.setup.room_camera {
             let camera = caller.publish_track(
                 format!("TR_cam_{}", self.joins).as_str(),
-                lk_agents_rtc::TrackSource::Camera,
+                lk_agents_test_support::rtc::TrackSource::Camera,
             );
             fakes::room_camera(&self.registry, camera, self.refs.clone());
         }
@@ -516,7 +590,9 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         stt_context_options: HostValue::NotGiven,
         tool_handling: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
-        use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
+        use_tts_aligned_transcript: setup
+            .aligned_transcript
+            .map_or(Maybe::NotGiven, Maybe::Given),
         tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
         min_consecutive_speech_delay: secs(setup.speech_gap_ms.unwrap_or(0)),
         expressive: Default::default(),
@@ -531,7 +607,11 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
                 retry_interval: secs(c.interval_ms),
                 ..lk_agents_abi::ApiConnectOptions::default()
             };
-            SessionConnOptions { stt: leg(c.stt), llm: leg(c.llm), tts: leg(c.tts) }
+            SessionConnOptions {
+                stt: leg(c.stt),
+                llm: leg(c.llm),
+                tts: leg(c.tts),
+            }
         }),
     }
 }
@@ -545,12 +625,19 @@ pub(super) type EotDet = dyn lk_agents_abi::EotDetector;
 pub(super) type VideoIn = dyn lk_agents_abi::voice::io::VideoInput;
 
 pub(super) fn instructions(common: &str) -> Instructions {
-    Instructions { common: common.into(), audio: None, text: None }
+    Instructions {
+        common: common.into(),
+        audio: None,
+        text: None,
+    }
 }
 
 /// The tools advertised to the model; each is run by the controlled tool runner.
 pub(super) fn tool_specs(tools: &[String]) -> Vec<lk_agents_abi::ToolSpec> {
-    tools.iter().map(|name| fakes::tools::tool_spec(name)).collect()
+    tools
+        .iter()
+        .map(|name| fakes::tools::tool_spec(name))
+        .collect()
 }
 
 /// A new agent with the same fakes behind it, as `update_agent` and `enter_task` take it. Every
@@ -582,7 +669,9 @@ pub(crate) fn overrides(setup: &Setup, agent: &str) -> Option<NodeSetup> {
     if agent == OPENING_AGENT {
         return Some(on);
     }
-    let bits = agent.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let bits = agent
+        .bytes()
+        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
     let flip = |bit: u32| bits & (1 << bit) != 0;
     Some(NodeSetup {
         llm: on.llm ^ flip(0),
@@ -599,7 +688,9 @@ pub(super) fn agent_nodes(
     agent: &str,
     legs: &Legs,
 ) -> AgentNodes {
-    let Some(on) = overrides(setup, agent) else { return AgentNodes::default() };
+    let Some(on) = overrides(setup, agent) else {
+        return AgentNodes::default();
+    };
     let node = |wanted: bool| {
         wanted.then(|| {
             fakes::FakeNodes::new(
@@ -641,8 +732,11 @@ pub(super) fn frame(
         args.transcription_node = nodes.transcription;
         args.realtime_audio_output_node = nodes.realtime_audio;
         args.stt = Maybe::Given(legs.stt.clone());
-        args.llm =
-            if setup.realtime.is_none() { Maybe::Given(legs.llm.clone()) } else { Maybe::NotGiven };
+        args.llm = if setup.realtime.is_none() {
+            Maybe::Given(legs.llm.clone())
+        } else {
+            Maybe::NotGiven
+        };
         args.tts = Maybe::Given(legs.tts.clone());
     }
     args
@@ -681,7 +775,10 @@ fn plain_frame(
 
 /// The session's recogniser: one that takes keyterms when the setup's detection says so.
 pub(super) fn session_stt(setup: &Setup, registry: &Arc<Registry>, connect: Duration) -> Arc<Stt> {
-    if setup.keyterm_detection.is_some_and(|k| k.stt_takes_keyterms) {
+    if setup
+        .keyterm_detection
+        .is_some_and(|k| k.stt_takes_keyterms)
+    {
         fakes::FakeStt::taking_keyterms(registry.clone(), connect)
     } else {
         fakes::FakeStt::new(registry.clone(), connect)

@@ -42,7 +42,7 @@ use lk_agents_abi::{
         SessionKwargs, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
-use lk_agents_rtc::{FakeRoom, ParticipantKind};
+use lk_agents_test_support::rtc::{FakeRoom, ParticipantKind};
 use lk_agents_voice::background_audio::BackgroundAudioPlayer;
 use lk_agents_voice::remote_session::{
     proto,
@@ -56,9 +56,8 @@ use lk_agents_voice::{
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        Event, FixedRoom, HoldId, HookId, HostEvent, IoKind, Origin, Probe, Pusher, SessionApi,
-        SessionEvents, SpeechCommand, Timebase, TurnCommand, UpdateAgentArgs, api::NodeFactory,
-        effects::Decision,
+        Event, HoldId, HookId, HostEvent, IoKind, Origin, Probe, Pusher, SessionApi, SessionEvents,
+        SpeechCommand, Timebase, TurnCommand, UpdateAgentArgs, api::NodeFactory, effects::Decision,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
@@ -95,6 +94,7 @@ mod collect;
 mod executor;
 mod finish;
 pub mod queue;
+mod recorder;
 mod start;
 
 pub use apply::BUDGET_MS;
@@ -593,7 +593,7 @@ enum Mic {
     /// it, since when it is subscribed: past that instant the room io had its turn to read it
     /// again, so words spoken into it are owed to the session even when nothing reads them.
     Room {
-        track: Arc<lk_agents_rtc::FakeTrackPublication>,
+        track: Arc<lk_agents_test_support::rtc::FakeTrackPublication>,
         burst: (u64, u32),
         read: Option<u64>,
     },
@@ -672,7 +672,7 @@ pub struct Run {
     /// The avatar worker the agent's voice streams to, in its own room.
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.
-    avatar_sink: Option<Arc<lk_agents_voice::avatar::DataStreamAudioOutput>>,
+    avatar_sink: Option<Arc<lk_agents_test_support::avatar_output::FakeAvatarOutput>>,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,
@@ -694,3 +694,5 @@ impl Run {
         self.queue.order()
     }
 }
+
+use lk_agents_test_support::room_io::FixedRoom;

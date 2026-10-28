@@ -108,7 +108,12 @@ Audio, video and text endpoints may be implemented in Rust, Python or Node.
 They use the same typed capability and stream contracts as provider plugins;
 language adapters handle invocation, backpressure, errors and cleanup. An
 `AudioOutput` reports playback progress and completion separately from frame
-acceptance.
+acceptance. The session calls `begin_segment(PlaybackSegment)` before capture.
+A custom sink latches `playback_segment` when it accepts audio and supplies that
+same key to `on_playback_started`, `on_playback_progressed` and
+`on_playback_finished`. Delayed reports retain the captured key rather than
+looking up the current segment when they complete. Wrapper outputs forward the
+key to their downstream output.
 
 VAD streams bound pending audio and output. Pushing audio beyond capacity or
 an oversized frame raises an API error and retains no refused audio. Close

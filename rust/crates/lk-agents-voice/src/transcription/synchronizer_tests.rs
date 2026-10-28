@@ -1,33 +1,9 @@
 use super::*;
 use lk_agents_abi::Ts;
+use lk_agents_test_support::playback::KeyedPlayback;
 use tokio::sync::watch;
 
 // ----------------------------------------------------------------------------- the chain
-
-/// The sink below the synchroniser: it reports playback as the case says.
-struct Leaf(Arc<PlaybackTracker>);
-
-impl AudioOutput for Leaf {
-    fn label(&self) -> &str {
-        "leaf"
-    }
-
-    fn tracker(&self) -> &Arc<PlaybackTracker> {
-        &self.0
-    }
-
-    fn capabilities(&self) -> AudioOutputCapabilities {
-        AudioOutputCapabilities { pause: true }
-    }
-
-    fn capture<'a>(&'a self, _frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn flush_segment(&self) {}
-
-    fn clear_buffer(&self) {}
-}
 
 /// The words the synchroniser released, with where each one's audio starts.
 struct Shown(watch::Sender<Vec<(String, f64)>>);
@@ -45,13 +21,15 @@ struct Chain {
     sync: Arc<TranscriptSynchronizer>,
     leaf: Arc<PlaybackTracker>,
     shown: watch::Sender<Vec<(String, f64)>>,
+    output: Arc<KeyedPlayback>,
 }
 
 impl Chain {
     fn new() -> Chain {
-        let leaf = Arc::new(PlaybackTracker::new());
+        let output = Arc::new(KeyedPlayback::default());
+        let leaf = output.tracker().clone();
         let sync = TranscriptSynchronizer::new(SyncConfig {
-            audio_next: Arc::new(Leaf(Arc::clone(&leaf))),
+            audio_next: output.clone() as Arc<dyn AudioOutput>,
             text_next: None,
             speed: 1.0,
             hyphenator: Arc::new(Liang),
@@ -60,7 +38,7 @@ impl Chain {
         });
         let shown = watch::Sender::new(Vec::new());
         sync.audio_output().tracker().observe(Arc::new(Shown(shown.clone())));
-        Chain { sync, leaf, shown }
+        Chain { sync, leaf, shown, output }
     }
 
     async fn text(&self, text: &str) {
@@ -92,18 +70,25 @@ impl Chain {
         out.flush();
     }
 
+    fn key(&self) -> lk_agents_abi::voice::io::PlaybackSegment {
+        self.output.segment()
+    }
+
     fn played(&self, offset_ms: u64, ms: u64) {
         let at = Duration::from_millis;
-        self.leaf.playback_progressed(Ts::ZERO, at(offset_ms), at(ms));
+        self.leaf.playback_progressed(self.key(), Ts::ZERO, at(offset_ms), at(ms));
     }
 
     fn finished(&self, at_ms: u64) {
         let playback_position = Duration::from_millis(at_ms);
-        self.leaf.playback_finished(PlaybackFinished {
-            playback_position,
-            interrupted: false,
-            synchronized_transcript: None,
-        });
+        self.leaf.playback_finished(
+            self.key(),
+            PlaybackFinished {
+                playback_position,
+                interrupted: false,
+                synchronized_transcript: None,
+            },
+        );
     }
 
     /// What was shown since the last call.
@@ -121,7 +106,7 @@ async fn a_segment_closed_while_playing_paces_nothing_after_it() {
     let c = Chain::new();
     c.text("one two three four five six").await;
     c.audio(2).await;
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     c.played(0, 500);
     let audio = c.sync.audio_output();
     audio.on_detached();
@@ -132,7 +117,7 @@ async fn a_segment_closed_while_playing_paces_nothing_after_it() {
 
     c.aligned(&[("alpha ", 0.0, 0.5), ("bravo ", 0.5, 1.0), ("charlie ", 1.0, 1.5)]).await;
     c.audio(2).await;
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     let early: Vec<_> = c.take_shown().into_iter().filter(|(_, start)| *start > 1e-9).collect();
     assert!(early.is_empty(), "shown before their audio: {early:?}");
 }
@@ -158,7 +143,7 @@ async fn a_segment_with_no_audio_shows_its_text_and_pairs_with_nothing() {
     assert_eq!(shown, "Ref two.");
     c.text("after words").await;
     c.audio(1).await;
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     assert!(c.take_shown().iter().all(|(_, start)| *start <= 1e-9));
     c.played(0, 1_100);
     c.finished(1_100);
@@ -176,7 +161,7 @@ async fn frames_after_a_sink_reset_open_their_own_segment() {
     let out = c.sync.audio_output();
     let frame = AudioFrame::new(vec![0u8; 4800], 24_000, 1, 2_400);
     out.capture_frame(&frame).await.unwrap();
-    c.leaf.playback_finished(PlaybackFinished { interrupted: true, ..Default::default() });
+    c.leaf.playback_finished(c.key(), PlaybackFinished { interrupted: true, ..Default::default() });
     c.leaf.reset();
     out.capture_frame(&frame).await.unwrap();
     out.flush();
@@ -204,14 +189,14 @@ async fn a_playout_reset_mid_segment_plays_on_with_its_words() {
     for _ in 0..10 {
         out.capture_frame(&frame).await.unwrap();
     }
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     c.played(0, 600);
     let cut = PlaybackFinished {
         playback_position: Duration::from_millis(600),
         interrupted: true,
         synchronized_transcript: None,
     };
-    c.leaf.playback_finished(cut);
+    c.leaf.playback_finished(c.key(), cut);
     c.leaf.reset();
     let shown: Vec<_> = c.take_shown().into_iter().map(|(w, _)| w).collect();
     assert_eq!(shown.concat().trim(), "one two");
@@ -221,7 +206,7 @@ async fn a_playout_reset_mid_segment_plays_on_with_its_words() {
         out.capture_frame(&frame).await.unwrap();
     }
     out.flush();
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     c.played(0, 500);
     let starts: Vec<_> = c.take_shown().into_iter().filter(|(w, _)| !w.trim().is_empty()).collect();
     assert_eq!(starts, [("three".to_owned(), 1.0)]);
@@ -238,9 +223,35 @@ async fn a_segment_cut_before_its_audio_shows_nothing() {
     c.sync.audio_output().clear_buffer();
     c.text("said").await;
     c.audio(1).await;
-    c.leaf.playback_started(Ts::ZERO);
+    c.leaf.playback_started(c.key(), Ts::ZERO);
     c.played(0, 1_000);
     c.finished(1_000);
     let shown: String = c.take_shown().into_iter().map(|(w, _)| w).collect();
     assert_eq!(shown.trim(), "said");
+}
+
+#[tokio::test]
+async fn a_delayed_old_observation_does_not_release_the_next_segments_words() {
+    let c = Chain::new();
+    c.aligned(&[("old", 0.0, 1.0)]).await;
+    c.audio(1).await;
+    let old = c.key();
+    c.leaf.playback_started(old, Ts::ZERO);
+    c.played(0, 1_000);
+    c.finished(1_000);
+    c.take_shown();
+
+    c.aligned(&[("next ", 0.0, 0.5), ("words", 0.5, 1.0)]).await;
+    c.audio(1).await;
+    let new = c.key();
+    c.sync.audio.handle_playback(&PlaybackEvent::Finished {
+        segment: old,
+        event: PlaybackFinished { playback_position: Duration::from_secs(1), ..Default::default() },
+    });
+    assert!(c.take_shown().is_empty(), "a late observation released words before their audio");
+    c.leaf.playback_started(new, Ts::ZERO);
+    c.played(0, 1_000);
+    c.finished(1_000);
+    let shown: String = c.take_shown().into_iter().map(|(word, _)| word).collect();
+    assert_eq!(shown, "next words");
 }

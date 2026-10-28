@@ -17,3 +17,5 @@ pub mod session_options;
 pub mod workflows;
 
 pub mod console;
+
+pub mod room_owner;

@@ -1,16 +1,7 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -18,9 +9,22 @@ use std::time::Duration;
 use lk_agents_abi::{AudioFrame, HostRef, MediaRef};
 use lk_agents_host_derive::Host;
 
+pub mod capabilities;
 mod error;
+pub mod events;
+pub mod playout;
+pub mod ports;
+pub mod wait;
+pub use capabilities::{
+    AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcHost,
+    RtcRoom, TextStreamWriter, TrackPublication,
+};
+pub use events::{RoomEvent, RoomEventBus, RoomEventSink};
+pub use ports::{ByteStream, ByteStreamSender, Receiver, RpcHandler, TextStream, TextStreamSender};
 
 pub use error::RtcError;
+
+pub type Result<T, E = RtcError> = std::result::Result<T, E>;
 
 /// A participant's stable identity string. `room_io/` keys everything on this and never on `sid`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -112,6 +116,7 @@ pub fn silence_frame(samples_per_channel: u32, sample_rate: u32, num_channels: u
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Default)]
+#[crate::host(handwritten(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum ConnectionState {
     /// The honest read of a room nobody has reported on (and of a failed read).
@@ -206,6 +211,7 @@ impl std::error::Error for UnknownDisconnectReason {}
 /// `rtc.ParticipantKind`; must match the SDK's set, or an accepted participant is invisible. The
 /// host adapter folds an unknown kind to `standard`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[crate::host(handwritten(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum ParticipantKind {
     /// An unmapped kind must not make an accepted participant invisible.
@@ -223,6 +229,7 @@ wire_i32!(ParticipantKind, "ParticipantKind");
 
 /// `rtc.TrackSource`. The host adapter folds an unknown source to `unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[crate::host(handwritten(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum TrackSource {
     #[default]
@@ -239,6 +246,7 @@ wire_i32!(TrackSource, "TrackSource");
 /// [`PreconnectBuffer`](Self::PreconnectBuffer). The host adapter drops a feature this build has
 /// no variant for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[crate::host(handwritten(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum AudioTrackFeature {
     Stereo,
@@ -326,6 +334,9 @@ impl Default for TrackPublishOptions {
 #[derive(Debug, Clone)]
 #[crate::class]
 pub struct AudioStreamOptions {
+    /// The participant selected by the room coordinator, for the host's per-track selector callback.
+    pub participant_identity: ParticipantIdentity,
+
     /// `None` leaves the track's own rate. `AudioInputOptions.sample_rate` defaults to 24000.
     pub sample_rate: Option<u32>,
     pub num_channels: Option<u16>,
@@ -343,12 +354,17 @@ pub struct AudioStreamOptions {
 #[crate::host(object)]
 impl AudioStreamOptions {
     #[host(getter)]
-    pub fn sample_rate(&self) -> Option<u32> {
-        self.sample_rate
+    pub fn participant_identity(&self) -> ParticipantIdentity {
+        self.participant_identity.clone()
+    }
+
+    #[host(getter)]
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate.unwrap_or(48_000)
     }
     #[host(getter)]
-    pub fn num_channels(&self) -> Option<u16> {
-        self.num_channels
+    pub fn num_channels(&self) -> u16 {
+        self.num_channels.unwrap_or(1)
     }
     #[host(getter)]
     pub fn frame_size_ms(&self) -> Option<u32> {
@@ -373,6 +389,7 @@ impl AudioStreamOptions {
 impl Default for AudioStreamOptions {
     fn default() -> Self {
         AudioStreamOptions {
+            participant_identity: ParticipantIdentity::default(),
             sample_rate: None,
             num_channels: None,
             frame_size_ms: None,
@@ -412,14 +429,14 @@ impl VideoFrameRef {
 pub const VIDEO_QUEUE_FRAMES: usize = 4;
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[crate::class]
 pub struct StreamTextOptions {
     pub topic: String,
     /// Absent means omit the key: the writer then defaults to the local participant's identity.
     pub sender_identity: Option<ParticipantIdentity>,
-    pub attributes: HashMap<String, String>,
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// The host's view: `_core_rtc.LocalParticipant._core_stream_text` spreads it into
@@ -435,22 +452,22 @@ impl StreamTextOptions {
     pub fn sender_identity(&self) -> Option<ParticipantIdentity> {
         self.sender_identity.clone()
     }
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     #[host(getter)]
-    pub fn attributes(&self) -> HashMap<String, String> {
+    pub fn attributes(&self) -> BTreeMap<String, String> {
         self.attributes.clone()
     }
 }
 
 /// `LocalParticipant.stream_bytes(...)`'s keyword arguments.
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[crate::class]
 pub struct StreamBytesOptions {
     pub name: String,
     pub topic: String,
     pub destination_identities: Vec<ParticipantIdentity>,
-    pub attributes: HashMap<String, String>,
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// The host's view: `_core_rtc.LocalParticipant._core_stream_bytes` spreads it into
@@ -469,9 +486,9 @@ impl StreamBytesOptions {
     pub fn destination_identities(&self) -> Vec<ParticipantIdentity> {
         self.destination_identities.clone()
     }
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+
     #[host(getter)]
-    pub fn attributes(&self) -> HashMap<String, String> {
+    pub fn attributes(&self) -> BTreeMap<String, String> {
         self.attributes.clone()
     }
 }
@@ -523,7 +540,7 @@ impl Transcription {
 
 /// What one `wait_for_playout` covered, measured since the previous one returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[crate::class]
+#[crate::class(from_py_object)]
 pub struct PlaybackInfo {
     /// Audio that reached the speaker.
     pub played: Duration,
@@ -552,10 +569,12 @@ impl PlaybackInfo {
 }
 
 /// Header of an incoming byte or text stream: `rtc.ByteStreamInfo` / `rtc.TextStreamInfo`.
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Host)]
 #[binding(extract, emit)]
 pub struct StreamInfo {
+    #[binding(default)]
+    pub name: Option<String>,
     #[host(rename = "stream_id")]
     pub id: String,
     pub topic: String,
@@ -565,7 +584,7 @@ pub struct StreamInfo {
     pub total_length: Option<u64>,
     // `_pre_connect_audio.py` fails on a missing `trackId`, `sampleRate` or `channels`; the host
     // adapter hands `None` over as an empty map.
-    pub attributes: HashMap<String, String>,
+    pub attributes: BTreeMap<String, String>,
     // Carried whole so the host can rebuild its `TextStreamInfo` for `TextInputEvent.info`.
     pub timestamp: i64,
     // Only a text stream has attachments: a byte stream's header reads as none.

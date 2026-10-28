@@ -5,6 +5,7 @@
 pub mod console;
 mod effects;
 mod legs;
+mod recorder;
 mod storage;
 
 pub use legs::Executor;
@@ -31,6 +32,7 @@ pub struct Runtime {
     forwarder: AudioForwarder,
     /// One refused-audio warning per active stream, retired when that input ends.
     push_warned: std::collections::BTreeSet<ResourceId>,
+    recorder_observers: recorder::RecorderOutputs,
 
     /// Every source's events, in arrival order. Frames never come this way.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
@@ -97,6 +99,7 @@ impl Runtime {
             peer,
             forwarder,
             push_warned: Default::default(),
+            recorder_observers: Default::default(),
             queue,
             frames,
             reports,
@@ -113,8 +116,13 @@ impl Runtime {
             predictions: Vec::new(),
             interruption,
         };
-        if let Some(rx) = room_io {
-            runtime.forward(rx);
+        if let Some(room_io) = room_io {
+            let io_queue = runtime.reports.clone();
+            let rtc_queue = runtime.reports.clone();
+            room_io.forward_events(
+                Arc::new(move |event| io_queue.send(event).is_ok()),
+                Arc::new(move |event| rtc_queue.send(event).is_ok()),
+            );
         }
         if let Some(rx) = room {
             runtime.forward(rx);

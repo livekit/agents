@@ -13,7 +13,6 @@ use pyo3::prelude::*;
 
 // Linked for their registrations alone: nothing here names their items, and a crate the binary
 // never mentions is not linked (its `inventory` entries with it). The runtime links the others.
-extern crate lk_agents_rtc as _;
 extern crate lk_agents_voice as _;
 
 /// SDK room conversion for the declared avatar sink; runtime retains teardown ownership.
@@ -52,6 +51,12 @@ impl generated::Implementations for Selected {
     type AudioDecoder = lk_agents_runtime::codecs::StreamDecoder;
     type StreamBuffer = lk_agents_runtime::codecs::StreamBuffer;
     type AudioEmitter = lk_agents_runtime::audio_emitter::AudioEmitter;
+    type DataStreamAudioReceiver = lk_agents_runtime::avatar_receiver::DataStreamAudioReceiver;
+    type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
+    type PlayoutLedger = lk_agents_runtime::rtc::playout::PlayoutLedger;
+    type RoomRuntime = lk_agents_runtime::room_io::RoomFactory;
+    type RtcRuntime = lk_agents_runtime::rtc::events::RoomEventBus;
+
     type ConsoleIo = lk_agents_runtime::voice::console::ConsoleIo;
     type VoiceSessionExecution = Selected;
     type TtsTokenLog = lk_agents_runtime::cores::TtsTokenLog;

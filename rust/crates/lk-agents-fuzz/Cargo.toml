@@ -20,7 +20,7 @@ lk-agents-core = { path = "../lk-agents-core" }
 # The recorder trait the recorder fake implements, and the video frame type the video input
 # fake's signature names. Both already come in through lk-agents-voice.
 lk-agents-media = { path = "../lk-agents-media" }
-lk-agents-rtc = { path = "../lk-agents-rtc" }
+lk-agents-test-support = { path = "../lk-agents-test-support" }
 # The avatar fake's video frames hold their tag as shared bytes.
 bytes = "1"
 # The realtime fake runs the production native session (its wire machine, reconnects and all)

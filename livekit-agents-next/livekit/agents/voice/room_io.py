@@ -1,14 +1,13 @@
 """The room a session runs in: its options (``RoomOptions`` and the per-track input and output
-options), and ``livekit.rtc`` as the core's room traits see it (``lk-agents-rtc``'s ``RtcRoom`` and
+options), and ``livekit.rtc`` as the core's room traits see it (``RtcRoom`` and
 its participants, publications, sources and stream writers): each ``_core_<method>`` is one SDK
 call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()``."""
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 
 from livekit import rtc
 
@@ -228,7 +227,6 @@ class RoomOptions:
 
 
 _CONNECTION, _DISCONNECT, _KINDS, _SOURCES, _FEATURES = _core.rtc_wire_names()
-_Chunk = TypeVar("_Chunk")
 
 
 def _name(names: list[str], value: int, unknown: str) -> str:
@@ -249,75 +247,81 @@ class Room:
 
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
-        self._bus = _core.RoomEventBus()
+        self._bus = _core._core_create_room_event_bus()
         self._local = LocalParticipant(self)
-        self._tasks: set[asyncio.Task[None]] = set()
-        # SDK processing objects belonging to each live stream, also used for its buffered head.
-        self._processors: dict[
-            str,
-            tuple[rtc.FrameProcessor[rtc.AudioFrame] | None, rtc.AudioProcessingModule | None],
-        ] = {}
         bus = self._bus
         room.on(
             "track_subscribed",
-            lambda track, pub, p: bus.track_subscribed(self._remote(p), self._publication(pub)),
+            lambda track, pub, p: _core._core_room_track_subscribed(
+                bus, self._remote(p), self._publication(pub)
+            ),
         )
         room.on(
             "track_unsubscribed",
-            lambda track, pub, p: bus.track_unsubscribed(self._remote(p), self._publication(pub)),
+            lambda track, pub, p: _core._core_room_track_unsubscribed(
+                bus, self._remote(p), self._publication(pub)
+            ),
         )
         room.on(
             "track_published",
-            lambda pub, p: bus.track_published(self._remote(p), self._publication(pub)),
+            lambda pub, p: _core._core_room_track_published(
+                bus, self._remote(p), self._publication(pub)
+            ),
         )
         room.on(
             "track_unpublished",
-            lambda pub, p: bus.track_unpublished(self._remote(p), self._publication(pub)),
+            lambda pub, p: _core._core_room_track_unpublished(
+                bus, self._remote(p), self._publication(pub)
+            ),
         )
         room.on(
             "local_track_published",
-            lambda pub, track: bus.local_track_published(self._publication(pub)),
+            lambda pub, track: _core._core_room_local_track_published(bus, self._publication(pub)),
         )
-        room.on("participant_connected", lambda p: bus.participant_connected(self._remote(p)))
-        room.on("participant_active", lambda p: bus.participant_active(self._remote(p)))
+        room.on(
+            "participant_connected",
+            lambda p: _core._core_room_participant_connected(bus, self._remote(p)),
+        )
+        room.on(
+            "participant_active",
+            lambda p: _core._core_room_participant_active(bus, self._remote(p)),
+        )
         room.on("participant_attributes_changed", self._attributes_changed)
         room.on(
             "participant_disconnected",
-            lambda p: bus.participant_disconnected(
-                self._remote(p), _name(_DISCONNECT, p.disconnect_reason, "unknown_reason")
+            lambda p: _core._core_room_participant_disconnected(
+                bus, self._remote(p), _name(_DISCONNECT, p.disconnect_reason, "unknown_reason")
             ),
         )
         room.on(
             "connection_state_changed",
-            lambda state: bus.connection_state_changed(_name(_CONNECTION, state, "disconnected")),
+            lambda state: _core._core_room_connection_state_changed(
+                bus, _name(_CONNECTION, state, "disconnected")
+            ),
         )
         room.on(
             "disconnected",
-            lambda reason: bus.disconnected(_name(_DISCONNECT, reason, "unknown_reason")),
+            lambda reason: _core._core_room_disconnected(
+                bus, _name(_DISCONNECT, reason, "unknown_reason")
+            ),
         )
         room.on(
             "sip_dtmf_received",
-            lambda ev: bus.sip_dtmf_received(
-                ev.digit, ev.participant.identity if ev.participant is not None else None
+            lambda ev: _core._core_room_sip_dtmf_received(
+                bus, ev.digit, ev.participant.identity if ev.participant is not None else None
             ),
         )
 
     def _attributes_changed(self, changed: list[str], participant: rtc.Participant) -> None:
         # the agent's own attributes are not a remote participant's
         if isinstance(participant, rtc.RemoteParticipant):
-            self._bus.participant_attributes_changed(self._remote(participant))
+            _core._core_room_participant_attributes_changed(self._bus, self._remote(participant))
 
     def _remote(self, participant: rtc.RemoteParticipant) -> RemoteParticipant:
         return RemoteParticipant(self, participant)
 
     def _publication(self, publication: rtc.TrackPublication) -> TrackPublication:
         return TrackPublication(self, publication)
-
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = asyncio.ensure_future(coro)
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return task
 
     def _core_rtc(self) -> Room:
         return self
@@ -341,67 +345,12 @@ class Room:
     def _core_event_bus(self) -> _core.RoomEventBus:
         return self._bus
 
-    def _forward_stream(
-        self,
-        reader: AsyncIterator[_Chunk],
-        push: Callable[[_Chunk], bool],
-        close_sink: Callable[[], None],
-        close_reader: Callable[[], Coroutine[Any, Any, None]],
-    ) -> None:
-        cleanup: asyncio.Task[None] | None = None
-        cleanup_observed = False
-
-        async def release() -> None:
-            try:
-                close_sink()
-            finally:
-                await close_reader()
-
-        def close() -> asyncio.Task[None]:
-            nonlocal cleanup
-            if cleanup is None:
-                cleanup = self._spawn(release())
-            return cleanup
-
-        async def pump() -> None:
-            nonlocal cleanup_observed
-            failure: BaseException | None = None
-            try:
-                async for chunk in reader:
-                    if not push(chunk):
-                        break
-            except BaseException as error:
-                failure = error
-                raise
-            finally:
-                try:
-                    await asyncio.shield(close())
-                except BaseException as cleanup_error:
-                    cleanup_observed = not isinstance(cleanup_error, asyncio.CancelledError)
-                    if failure is None:
-                        raise
-                    if cleanup_observed:
-                        failure.add_note(f"Room stream cleanup failed: {cleanup_error!r}")
-
-        def report_cleanup(task: asyncio.Task[None]) -> None:
-            if not task.cancelled():
-                error = task.exception()
-                if error is not None and not cleanup_observed:
-                    logger.error("Room stream cleanup failed", exc_info=error)
-
-        task = self._spawn(pump())
-        # Cancellation before the first poll never enters pump's finally block. A cleanup
-        # failure after the reader ended has no caller left to observe it.
-        task.add_done_callback(lambda _: close().add_done_callback(report_cleanup))
-
     def _core_register_byte_stream_handler(
         self, topic: str, streams: _core.ByteStreamSender
     ) -> None:
         def opened(reader: rtc.ByteStreamReader, sender: str) -> None:
-            if (chunks := streams.open(reader.info, sender)) is None:
+            if not streams.open(reader.info, sender, reader):
                 reader.close()
-                return
-            self._forward_stream(reader, chunks.push, chunks.close, reader.aclose)
 
         self._room.register_byte_stream_handler(topic, opened)
 
@@ -412,10 +361,8 @@ class Room:
         self, topic: str, streams: _core.TextStreamSender
     ) -> None:
         def opened(reader: rtc.TextStreamReader, sender: str) -> None:
-            if (chunks := streams.open(reader.info, sender)) is None:
+            if not streams.open(reader.info, sender, reader):
                 reader.close()
-                return
-            self._forward_stream(reader, chunks.push, chunks.close, reader.aclose)
 
         self._room.register_text_stream_handler(topic, opened)
 
@@ -507,10 +454,13 @@ class LocalParticipant:
         except rtc.RpcError as e:
             return e.code, e.message
 
+    def _core_unregister_rpc_method(self, method: str) -> None:
+        self._participant.unregister_rpc_method(method)
+
     async def _core_publish_dtmf(self, code: int, digit: str) -> None:
         await self._participant.publish_dtmf(code=code, digit=digit)
 
-    def _core_register_rpc_method(self, method: str, handler: Any) -> None:
+    def _core_register_rpc_method(self, method: str, handler: _core.RpcHandler) -> None:
         self._participant.register_rpc_method(
             method, lambda data: handler.call(data.caller_identity, data.payload)
         )
@@ -519,6 +469,9 @@ class LocalParticipant:
 class ByteStreamWriter:
     def __init__(self, writer: rtc.ByteStreamWriter) -> None:
         self._writer = writer
+
+    def _core_id(self) -> str:
+        return self._writer.info.stream_id
 
     async def _core_write(self, data: bytes) -> None:
         await self._writer.write(data)
@@ -572,6 +525,9 @@ class RemoteParticipant:
         self._room = room
         self._participant = participant
 
+    def _core_sid(self) -> str:
+        return self._participant.sid
+
     def _core_identity(self) -> str:
         return self._participant.identity
 
@@ -621,75 +577,146 @@ class TrackPublication:
         assert isinstance(self._publication, rtc.LocalTrackPublication)
         await self._publication.wait_for_subscription()
 
-    async def _core_process_audio(self, frames: list[rtc.AudioFrame]) -> list[rtc.AudioFrame]:
-        if (processing := self._room._processors.get(self._publication.sid)) is None:
-            return frames
-        processor, apm = processing
-        processed = []
-        for frame in frames:
-            if processor is not None:
-                frame = processor._process(frame)
-            if apm is not None:
-                apm.process_stream(frame)
-            processed.append(frame)
-        return processed
-
-    def _core_open_audio_stream(self, opts: _core.AudioStreamOptions, frames: Any) -> None:
+    def _core_open_audio_stream(self, opts: _core.AudioStreamOptions) -> _AudioStream:
         track = self._publication.track
         if track is None:
-            frames.close()
             raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")
-        sid = self._publication.sid
         noise_cancellation = opts.noise_cancellation
-        # a selector picks per track; what it returns lives as long as this stream
         owned = False
         if callable(noise_cancellation) and not isinstance(noise_cancellation, rtc.FrameProcessor):
             owned = True
-            participant = next(
-                p
-                for p in self._room._room.remote_participants.values()
-                if sid in p.track_publications
-            )
+            participant = self._room._room.remote_participants[opts.participant_identity]
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
-        processor = (
-            noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
-        )
-        stream = rtc.AudioStream.from_track(
-            track=track,
-            capacity=opts.queue_capacity,
-            sample_rate=opts.sample_rate or 48000,
-            num_channels=opts.num_channels or 1,
-            frame_size_ms=opts.frame_size_ms,
-            noise_cancellation=noise_cancellation,
-            auto_close_noise_cancellation=owned,
-        )
-        apm = rtc.AudioProcessingModule(auto_gain_control=True) if opts.auto_gain_control else None
-        processing = (processor, apm)
-        self._room._processors[sid] = processing
+        try:
+            apm = (
+                rtc.AudioProcessingModule(auto_gain_control=True)
+                if opts.auto_gain_control
+                else None
+            )
+            stream = rtc.AudioStream.from_track(
+                track=track,
+                capacity=opts.queue_capacity,
+                sample_rate=opts.sample_rate,
+                num_channels=opts.num_channels,
+                frame_size_ms=opts.frame_size_ms,
+                noise_cancellation=(
+                    noise_cancellation
+                    if isinstance(noise_cancellation, rtc.NoiseCancellationOptions)
+                    else None
+                ),
+            )
+        except BaseException as error:
+            if owned and isinstance(noise_cancellation, rtc.FrameProcessor):
+                try:
+                    noise_cancellation._close()
+                except BaseException as cleanup_error:
+                    error.add_note(f"Audio input processor cleanup failed: {cleanup_error!r}")
+            raise
+        return _AudioStream(stream, noise_cancellation, apm, owns_processor=owned)
 
-        def push(event: rtc.AudioFrameEvent) -> bool:
-            if apm is not None:
-                apm.process_stream(event.frame)
-            return bool(frames.push(event.frame))
-
-        def close() -> None:
-            try:
-                frames.close()
-            finally:
-                if self._room._processors.get(sid) is processing:
-                    self._room._processors.pop(sid, None)
-
-        self._room._forward_stream(stream, push, close, stream.aclose)
-
-    def _core_open_video_stream(self, frames: Any) -> None:
+    def _core_open_video_stream(self) -> _VideoStream:
         track = self._publication.track
         if track is None:
-            frames.close()
             raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")
-        stream = rtc.VideoStream.from_track(track=track, capacity=_core.video_queue_frames())
+        return _VideoStream(
+            rtc.VideoStream.from_track(track=track, capacity=_core.video_queue_frames())
+        )
 
-        def push(event: rtc.VideoFrameEvent) -> bool:
-            frame = event.frame
-            return bool(frames.push(frame, frame.width, frame.height, event.timestamp_us))
 
-        self._room._forward_stream(stream, push, frames.close, stream.aclose)
+class AudioProcessingError(RuntimeError):
+    """An input processing span failed and was forwarded without processing."""
+
+
+class _AudioStream(AsyncIterator[rtc.AudioFrame]):
+    def __init__(
+        self,
+        stream: rtc.AudioStream,
+        noise_cancellation: rtc.NoiseCancellationOptions
+        | rtc.FrameProcessor[rtc.AudioFrame]
+        | None,
+        apm: rtc.AudioProcessingModule | None,
+        *,
+        owns_processor: bool = False,
+    ) -> None:
+        self._stream = stream
+        self._noise_cancellation = noise_cancellation
+        self._apm = apm
+        self._owned_processor = (
+            noise_cancellation
+            if owns_processor and isinstance(noise_cancellation, rtc.FrameProcessor)
+            else None
+        )
+
+    def _core_frames(self) -> _AudioStream:
+        return self
+
+    async def _core_process_audio(self, frames: list[rtc.AudioFrame]) -> list[rtc.AudioFrame]:
+        if isinstance(self._noise_cancellation, rtc.NoiseCancellationOptions):
+            self._report_processing_error(
+                RuntimeError("the SDK native audio filter does not support pre-connect replay")
+            )
+            return frames
+        return [self._process_frame(frame) for frame in frames]
+
+    def _process_frame(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        if not isinstance(self._noise_cancellation, rtc.FrameProcessor) and self._apm is None:
+            return frame
+        # Processors may mutate their input before raising; preserve the original PCM span.
+        original_frame = frame
+        original = bytes(frame.data)
+        try:
+            if (
+                isinstance(self._noise_cancellation, rtc.FrameProcessor)
+                and self._noise_cancellation.enabled
+            ):
+                frame = self._noise_cancellation._process(frame)
+            if self._apm is not None:
+                self._apm.process_stream(frame)
+            return frame
+        except Exception as cause:
+            self._report_processing_error(cause)
+            return rtc.AudioFrame(
+                original,
+                original_frame.sample_rate,
+                original_frame.num_channels,
+                original_frame.samples_per_channel,
+                userdata=original_frame.userdata,
+            )
+
+    @staticmethod
+    def _report_processing_error(cause: Exception) -> None:
+        error = AudioProcessingError("input audio processing failed; forwarding the original span")
+        error.__cause__ = cause
+        logger.warning(str(error), exc_info=(type(error), error, None))
+
+    def __aiter__(self) -> _AudioStream:
+        return self
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        event = await self._stream.__anext__()
+        return self._process_frame(event.frame)
+
+    async def aclose(self) -> None:
+        try:
+            await self._stream.aclose()
+        finally:
+            processor, self._owned_processor = self._owned_processor, None
+            if processor is not None:
+                processor._close()
+
+
+class _VideoStream(AsyncIterator[_core.VideoFrameRef]):
+    def __init__(self, stream: rtc.VideoStream) -> None:
+        self._stream = stream
+
+    def __aiter__(self) -> _VideoStream:
+        return self
+
+    async def __anext__(self) -> _core.VideoFrameRef:
+        event = await self._stream.__anext__()
+        return _core.VideoFrameRef(
+            event.frame, event.frame.width, event.frame.height, event.timestamp_us
+        )
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()

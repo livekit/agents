@@ -11,6 +11,11 @@ pub enum RtcError {
     #[host(delegate)]
     Host(#[from] crate::errors::HostError),
 
+    /// The shared stream lifecycle failed while delivering RTC observations.
+    #[error(transparent)]
+    #[host(delegate)]
+    Stream(#[from] crate::errors::ProviderError),
+
     /// The room is not connected.
     ///
     /// Its own variant because it is the one failure `room_io` *predicts* rather than catches:
@@ -35,6 +40,14 @@ pub enum RtcError {
     /// The source, writer or room was already closed. Idempotent teardown paths ignore it.
     #[error("{0} is closed")]
     Closed(&'static str),
+
+    /// Incoming data exceeded an admission bound before its payload was retained.
+    #[error("RTC stream {resource} exceeds limit {limit}")]
+    StreamLimit { resource: &'static str, limit: usize },
+
+    /// An ingress writer allows one pending push, so backpressure cannot accumulate waiters.
+    #[error("an RTC stream push is already pending")]
+    StreamBusy,
 
     /// A method that does not exist on this side of the object.
     ///

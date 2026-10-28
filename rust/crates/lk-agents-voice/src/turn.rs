@@ -5,8 +5,8 @@ use crate::agent_activity::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
-    EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode,
-    PreemptiveKwargs, TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
+    EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode, PreemptiveKwargs,
+    TurnDetection, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
 };
 use std::time::Duration;
 

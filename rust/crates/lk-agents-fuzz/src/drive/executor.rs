@@ -55,6 +55,7 @@ pub(crate) struct Executor {
     calls: BTreeMap<RequestId, ReplyTo>,
     /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, AbortHandle)>,
+    recorder_observers: super::recorder::RecorderOutputs,
     /// Each realtime speech's player, fed the socket's events.
     realtime_players: BTreeMap<SpeechId, mpsc::Sender<lk_agents_abi::llm::realtime::Event>>,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
@@ -174,6 +175,7 @@ impl Executor {
             source: None,
             calls: BTreeMap::new(),
             keyterms: None,
+            recorder_observers: Default::default(),
             realtime_players: BTreeMap::new(),
             video_parts,
             video_forwarder: None,
@@ -184,8 +186,13 @@ impl Executor {
             interruption,
         };
         // The legs the session opens with, as the runtime starts them.
-        if let Some(rx) = room_io {
-            executor.forward(rx);
+        if let Some(room_io) = room_io {
+            let io_reports = executor.reports.clone();
+            let rtc_reports = executor.reports.clone();
+            room_io.forward_events(
+                Arc::new(move |event| io_reports.send(event).is_ok()),
+                Arc::new(move |event| rtc_reports.send(event).is_ok()),
+            );
         }
         if let Some(rx) = room {
             executor.forward(rx);
@@ -342,7 +349,9 @@ impl Executor {
     }
 
     fn read(&mut self, source: ResourceId) {
-        let Some(input) = self.shared.resources.audio_input(source) else { return };
+        let Some(input) = self.shared.resources.audio_input(source) else {
+            return;
+        };
         let reader = read_audio(
             input,
             self.frames_tx.clone(),
@@ -412,7 +421,9 @@ impl Executor {
         let resources = &shared.resources;
         match effect {
             Effect::RealtimePlayer { speech, event } => {
-                let Some(player) = self.realtime_players.get(&speech) else { return };
+                let Some(player) = self.realtime_players.get(&speech) else {
+                    return;
+                };
                 if player.try_send(*event).is_err() {
                     self.realtime_players.remove(&speech);
                     let _ = self.reports.send(RealtimeWake::PlayerEnded(speech));
@@ -423,15 +434,17 @@ impl Executor {
             }
             Effect::CloseRealtimePlayers => self.realtime_players.clear(),
             Effect::CancelSpeech(handle) => handle.cancel_tasks(),
-            Effect::AttachRecorder { recorder, output } => {
-                shared.unobserve_recorder(output);
+            Effect::AttachRecorder { recorder, output: _ } => {
+                self.recorder_observers.detach(&shared, None);
                 let tap =
                     lk_agents_voice::recorder_io::RecorderTap::new(recorder.0, shared.time.clock());
                 *shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
-                shared.observe_recorder(None, output);
+                for output in self.driver.active_audio_outputs() {
+                    self.recorder_observers.attach(&shared, output);
+                }
             }
-            Effect::DetachRecorder(output) => {
-                shared.unobserve_recorder(output);
+            Effect::DetachRecorder(_) => {
+                self.recorder_observers.detach(&shared, None);
                 *shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
             }
             Effect::FlushRecorder(at) => {
@@ -480,7 +493,9 @@ impl Executor {
             }
             Effect::DiscardLeg(sink) => {
                 resources.release(sink);
-                let Some(stream) = self.pending_legs.remove(&sink) else { return };
+                let Some(stream) = self.pending_legs.remove(&sink) else {
+                    return;
+                };
                 let deadline = shared.time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
                 shared.spawner.spawn_unboxed(async move {
                     match stream {
@@ -610,7 +625,9 @@ impl Executor {
             Effect::ProviderPrewarm(id) => resources.prewarm(id),
             Effect::ProviderRelease(id) => resources.release(id),
             Effect::RealtimeClose(id) => {
-                let Some(session) = resources.realtime(id) else { return };
+                let Some(session) = resources.realtime(id) else {
+                    return;
+                };
                 let reports = self.reports.clone();
                 shared.spawner.spawn_unboxed(async move {
                     session.aclose().await;
@@ -623,7 +640,9 @@ impl Executor {
                 }
             }
             Effect::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
-                let Some(sink) = resources.audio_output(output) else { return };
+                let Some(sink) = resources.audio_output(output) else {
+                    return;
+                };
                 match op {
                     GateOp::Pause => sink.pause(),
                     GateOp::Resume => sink.resume(),
@@ -631,28 +650,25 @@ impl Executor {
                 }
             }
             Effect::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
-                let old = previous.and_then(|id| resources.audio_output(id));
-                let new = next.and_then(|id| resources.audio_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
+                if let Some(id) = previous {
+                    self.recorder_observers.detach(&shared, Some(id));
+                    if let Some(old) = resources.audio_output(id) {
                         old.on_detached();
-                    }
-                    if let Some(new) = &new {
-                        if enabled { new.on_attached() } else { new.on_detached() }
                     }
                 }
-                shared.observe_recorder(old.as_deref(), next);
-            }
-            Effect::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
-                let old = previous.and_then(|id| resources.text_output(id));
-                let new = next.and_then(|id| resources.text_output(id));
-                if !same_sink(&old, &new) {
-                    if let Some(old) = &old {
-                        old.on_detached();
-                    }
-                    if let Some(new) = &new {
+                if let Some(id) = next {
+                    if let Some(new) = resources.audio_output(id) {
                         if enabled { new.on_attached() } else { new.on_detached() }
                     }
+                    self.recorder_observers.attach(&shared, id);
+                }
+            }
+            Effect::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
+                if let Some(old) = previous.and_then(|id| resources.text_output(id)) {
+                    old.on_detached();
+                }
+                if let Some(new) = next.and_then(|id| resources.text_output(id)) {
+                    if enabled { new.on_attached() } else { new.on_detached() }
                 }
             }
             Effect::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => match output {
@@ -785,7 +801,9 @@ impl Executor {
 
     /// The prediction off the loop; its answer joins the queue unless the session is closing.
     fn predict(&mut self, req: lk_agents_abi::ReqId, timeout: Option<std::time::Duration>) {
-        let Some(detector) = self.eot.clone() else { return };
+        let Some(detector) = self.eot.clone() else {
+            return;
+        };
         let queue = self.reports.clone();
         let closing = self.shared.closing.subscribe();
         let task = self.shared.spawner.spawn_unboxed(async move {
@@ -836,14 +854,6 @@ impl Executor {
                 }
             }
         });
-    }
-}
-
-fn same_sink<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b)),
-        (None, None) => true,
-        _ => false,
     }
 }
 

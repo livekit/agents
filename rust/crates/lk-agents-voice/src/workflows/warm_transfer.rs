@@ -16,11 +16,14 @@ use crate::workflows::instructions::render;
 use crate::workflows::prompts::warm_transfer as p;
 
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::voice::room_owner::RoomSession;
+use lk_agents_abi::voice::rtc::{
+    DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO,
+};
 use lk_agents_abi::voice::workflows::{
     InstructionsArg, IoEnableState, SipParticipantRequest, TwilioDial,
 };
 use lk_agents_abi::{ChatContext, HostRef, Maybe};
-use lk_agents_rtc::{DisconnectReason, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use serde_json::{Value, json};
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
@@ -166,7 +169,7 @@ pub trait TransferHost: Send + Sync {
         &self,
         room_name: String,
         identity: String,
-    ) -> Result<Arc<dyn RtcRoom>, HostError>;
+    ) -> Result<RoomSession, HostError>;
     /// Start the human agent's session (the briefing agent) on the connected room.
     async fn start_human(&self) -> Result<(), HostError>;
     /// Shut the human agent's session down, after its speech when `drain`.
@@ -389,8 +392,12 @@ impl HostWarmTransfer {
     pub async fn run(
         self: &Arc<Self>,
         host: Arc<dyn TransferHost>,
-        caller: Arc<dyn RtcRoom>,
+        caller: RoomSession,
     ) -> Result<String, TransferFailed> {
+        let caller = caller
+            .0
+            .rtc()
+            .ok_or_else(|| HostError::new("warm transfer requires a connected caller RTC room"))?;
         {
             let mut running = self.lock();
             *running = Running {
@@ -523,9 +530,13 @@ impl HostWarmTransfer {
         host: &Arc<dyn TransferHost>,
         caller: &Arc<dyn RtcRoom>,
     ) -> Result<(), DialError> {
-        let room_name = human_agent_room_name(&caller.name());
-        let room =
-            host.connect_human(room_name.clone(), caller.local().identity().to_string()).await?;
+        let room_name = human_agent_room_name(&caller.name()?);
+        let room = host
+            .connect_human(room_name.clone(), caller.local().identity()?.to_string())
+            .await?
+            .0
+            .rtc()
+            .ok_or_else(|| HostError::new("warm transfer requires a connected human RTC room"))?;
         let events = room.events();
         let this = self.clone();
         {
@@ -575,8 +586,16 @@ impl HostWarmTransfer {
     }
 
     /// The human agent's room closing settles the transfer, unless they are being moved.
-    async fn watch_human(&self, mut events: lk_agents_rtc::Receiver<RoomEvent>) {
-        while let Some(event) = events.recv().await {
+    async fn watch_human(&self, mut events: lk_agents_abi::voice::rtc::Receiver<RoomEvent>) {
+        loop {
+            let event = match events.next().await {
+                Ok(Some(event)) => event,
+                Ok(None) => return,
+                Err(error) => {
+                    self.settle(Err(TransferFailed::Host(HostError::new(error.to_string()))));
+                    return;
+                }
+            };
             if let RoomEvent::Close { reason } = event {
                 log::debug!(target: LOG, "human agent's room closed: {reason:?}");
                 if !self.lock().merging {
@@ -599,7 +618,9 @@ impl HostWarmTransfer {
             running.merging = true;
             (host, caller)
         };
-        let caller_room = caller.name();
+        let caller_room = caller
+            .name()
+            .map_err(|error| TransferFailed::Host(HostError::new(error.to_string())))?;
         log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
         host.move_participant(
             human_agent_room_name(&caller_room),
@@ -610,7 +631,15 @@ impl HostWarmTransfer {
         self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
         let mut events = caller.events();
         tokio::spawn(async move {
-            while let Some(event) = events.recv().await {
+            loop {
+                let event = match events.next().await {
+                    Ok(Some(event)) => event,
+                    Ok(None) => return,
+                    Err(error) => {
+                        log::error!(target: LOG, "caller room event stream failed after transfer: {error}");
+                        return;
+                    }
+                };
                 let RoomEvent::ParticipantDisconnected { participant, .. } = event else {
                     continue;
                 };
@@ -651,7 +680,7 @@ enum DialError {
     #[error("supervisor did not answer")]
     NoAnswer,
     #[error(transparent)]
-    Rtc(#[from] lk_agents_rtc::RtcError),
+    Rtc(#[from] lk_agents_abi::voice::rtc::RtcError),
 }
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
@@ -804,8 +833,7 @@ async fn twilio_originate(
         created = guard.created().await;
     }
     created?;
-    let answered = lk_agents_rtc::wait_for_track_publication(
-        room.clone(),
+    let answered = room.wait_for_track_publication(
         Some(HUMAN_AGENT_IDENTITY.to_owned()),
         Some(vec![TRACK_KIND_AUDIO]),
         false,

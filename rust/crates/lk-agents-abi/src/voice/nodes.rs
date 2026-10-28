@@ -35,11 +35,17 @@ pub trait NodeFactory: Send + Sync {
 // Text is handed to the node on its loop and never awaited: a `transcription_node` may hold text
 // back arbitrarily long, and awaiting it per delta would pace the LLM leg by the node.
 
-/// A transcription node: pushes are fire-and-forget.
+/// A transcription node: pushes queue input; draining settles its flushed segment.
 pub trait TextNode: Send + Sync {
     fn capture_text(&self, text: &str);
     fn capture_timed(&self, text: &TimedString);
     fn flush(&self);
+    /// Retain the binding's owner until the same drain receipt is complete.
+    fn retain_until_drained(&self, owner: Box<dyn Send>);
+    /// Stop this segment's processing and settle its drain after owned cleanup.
+    fn cancel(&self);
+    /// The flushed segment's output has been delivered, or processing failed.
+    fn drain(&self) -> crate::BoxFuture<'_, crate::voice::io::Result<()>>;
 }
 
 /// `Agent.realtime_audio_output_node`: one realtime generation's audio, on its way to the speaker

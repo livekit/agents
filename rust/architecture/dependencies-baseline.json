@@ -32,8 +32,5 @@
   "dependency:lk-agents-voice:pyo3-macros-backend",
   "dependency:lk-agents-voice:tokio",
   "dependency:lk-agents-voice:tokio-macros",
-  "direction:lk-agents-fuzz:lk-agents-rtc",
-  "direction:lk-agents-py:lk-agents-rtc",
-  "direction:lk-agents-py:lk-agents-voice",
-  "direction:lk-agents-voice:lk-agents-rtc"
+  "direction:lk-agents-py:lk-agents-voice"
 ]

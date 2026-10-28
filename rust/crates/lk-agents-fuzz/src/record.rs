@@ -31,6 +31,9 @@ use lk_agents_voice::{
 use crate::input::Input;
 
 mod views;
+
+#[cfg(test)]
+mod tests;
 pub use views::*;
 
 // ==============================================================================================
@@ -409,7 +412,11 @@ impl Tag {
         let magnitude = sample.unsigned_abs() as i16;
         let from_mic = magnitude & Self::MIC != 0;
         let value = (magnitude & !Self::MIC) as u16;
-        let (id, chunk) = ((value >> 6) as u32 - 1, value & 0x3f);
+        let producer = value >> 6;
+        if producer == 0 {
+            return Tag::Unknown(sample);
+        }
+        let (id, chunk) = (u32::from(producer - 1), value & 0x3f);
         match (user_side, from_mic) {
             (false, true) => Tag::Generated { generation: id, chunk },
             (false, false) => Tag::Synthesized { tts: id, chunk },
@@ -647,6 +654,7 @@ pub struct Recording {
     /// Each node the session opened, and the agent whose override it is.
     nodes: Vec<(Observed, String, NodeUse)>,
     sink: Vec<(Observed, Sink)>,
+    output_attachments: Vec<(Observed, u32, bool)>,
     host: Vec<(Observed, Host)>,
     avatar: Vec<(Observed, AvatarStep)>,
     journal: Vec<(Observed, Step)>,
@@ -851,6 +859,11 @@ impl Recording {
     }
 
     /// The case sent this input, and the thing it was sent to took it or refused it.
+    /// A physical attachment callback, including overlapping attachments of one object.
+    pub fn record_output_attachment(&mut self, at: Observed, output: u32, attached: bool) {
+        self.output_attachments.push((at, output, attached));
+    }
+
     pub fn record_applied(&mut self, at: Observed, input: Input, accepted: bool) {
         self.applied.push(Applied { at, input, accepted });
     }

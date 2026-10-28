@@ -1,9 +1,12 @@
 //! `SessionApi` over a fake room: the host's `start()` / `aclose()` pair without a host.
 
+mod playback;
+
 use super::*;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::CloseReason;
+use lk_agents_test_support::room_io::FixedRoom;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
@@ -38,8 +41,8 @@ fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
 }
 
 /// A fake room on a virtual clock, and the same room as a session's.
-fn fake_room(name: &str) -> (Arc<lk_agents_voice::room_io::rooms::FakeRoom>, FixedRoom) {
-    let (rtc, clock) = lk_agents_voice::room_io::rooms::FakeRtc::with_virtual_clock();
+fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRoom) {
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
     let room = rtc.room(name);
     // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
     std::mem::forget(rtc);
@@ -96,7 +99,7 @@ fn assembled(
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
         None, None, None, spawner,
     );
-    api
+    api.expect("valid native room ports")
 }
 
 // Catches: a `close` that waits for the host's drain while still holding a `PeerHandle` sender on

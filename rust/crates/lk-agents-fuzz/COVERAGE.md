@@ -496,7 +496,7 @@ Ranked by what a person on the call or a developer would hit:
 
 The fuzzer drives the core as its host does. `Run::start` (`src/drive/start.rs`) assembles the
 session with `SessionApi::host_new`, the `VoiceSession(...)` `lk-agents-py` binds, over a
-`FakeRoom` from `lk-agents-rtc` and the fakes, with the setup as `SessionOptions` kwargs, and
+`FakeRoom` from `lk-agents-test-support` and the fakes, with the setup as `SessionOptions` kwargs, and
 awaits `start()`. Every input that is a host call (`src/drive/apply.rs`) is that method with its
 argument shapes: `say`/`say_stream`/`say_audio` and their pushers, `generate_reply`,
 `interrupt`, `SpeechHandle.interrupt` and `.allow_interruptions`, `commit_user_turn`,
@@ -776,7 +776,7 @@ Measured nowhere here, and each a separate source of production risk:
 - Real provider behaviour beyond what was recorded: section 13 lists what each fake is
   calibrated from and what it still cannot do.
 - `lk-agents-inference` (native gateway clients, fallback adapters), `lk-agents-media`,
-  `lk-agents-rtc`.
+  the real RTC SDK adapter.
 
 ## 12. Keeping it true
 

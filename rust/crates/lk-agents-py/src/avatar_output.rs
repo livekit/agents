@@ -16,7 +16,7 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
         clear_buffer_timeout: Option<f64>,
         wait_playback_start: bool,
     ) -> std::result::Result<Self, ProviderError> {
-        use lk_agents_abi::python::{FromHostErr, HostProxy};
+        use lk_agents_abi::python::FromHostErr;
         use pyo3::prelude::*;
 
         let (room, timeout) = Python::attach(|py| -> PyResult<_> {
@@ -26,14 +26,18 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
                 })
                 .transpose()?;
             let room = (&room).into_pyobject(py)?;
-            Ok((<dyn lk_agents_rtc::RtcRoom as HostProxy>::from_host(&room, None)?, timeout))
+            let factory =
+                py.import("livekit.agents.voice.room_io")?.getattr("Room")?.getattr("of")?;
+            let room = crate::host::construct(&factory, (room,), None)?;
+            Ok((crate::generated::voice::RtcRoomProxy::from_host(&room)?, timeout))
         })
         .map_err(|error| Python::attach(|py| ProviderError::from_host(py, &error)))?;
+        let room = lk_agents_runtime::rtc::room::Room::wrap(room);
         let handle = lk_agents_runtime::process::handle().map_err(|error| {
             ProviderError::from(lk_agents_abi::errors::ApiError::new(error.to_string()))
         })?;
         let spawner = TokioSpawner::new(handle);
-        let output = lk_agents_voice::avatar::DataStreamAudioOutput::new(
+        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
             room,
             destination_identity,
             sample_rate,
@@ -93,12 +97,11 @@ impl AudioOutput for DataStreamAudioOutput {
 
 #[cfg(test)]
 mod tests {
-    use lk_agents_abi::voice::io::AudioOutput;
     use lk_agents_abi::voice::io::AudioOutputExt;
     use lk_agents_abi::{AudioFrame, VirtualClock};
     use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, RealClock, TokioSpawner};
-    use lk_agents_rtc::{FakeRoom, FakeRtc, ParticipantKind};
     use lk_agents_runtime::avatar_output::DataStreamAudioOutput;
+    use lk_agents_test_support::rtc::{FakeRoom, FakeRtc, ParticipantKind};
     use std::sync::Arc;
 
     fn fixture(name: &str) -> (DataStreamAudioOutput, Arc<FakeRoom>, Arc<VirtualClock>) {
@@ -106,7 +109,7 @@ mod tests {
         let room = rtc.room(name);
         room.add_participant("avatar", ParticipantKind::Agent);
         let spawner = TokioSpawner::current();
-        let output = lk_agents_voice::avatar::DataStreamAudioOutput::new(
+        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
             room.clone(),
             "avatar".into(),
             None,
@@ -174,7 +177,7 @@ mod tests {
         room.add_participant("avatar", ParticipantKind::Agent);
         let clock = Arc::new(RealClock::new());
         let spawner = TokioSpawner::new(native.clone());
-        let output = lk_agents_voice::avatar::DataStreamAudioOutput::new(
+        let output = lk_agents_runtime::avatar::output::DataStreamAudioOutput::new(
             room.clone(),
             "avatar".into(),
             None,

@@ -5,7 +5,7 @@
 //! session), or from a refusal the driver journals itself.
 use lk_agents_voice::{
     events::{ErrorSource, SessionEvent},
-    trace::{SpeechStep, Step},
+    trace::{PlayoutStep, SpeechStep, Step},
 };
 
 use crate::{
@@ -20,19 +20,27 @@ pub struct SpeechErrorIsInjected;
 impl Rule for SpeechErrorIsInjected {
     const CONTRACT: Contract = Contract {
         id: "speech_error_is_injected",
-        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, or was a say the driver refused on the journal.",
-        examples: &[failed_by_injection],
-        counterexamples: &[failed_without_injection],
+        guarantee: "A failed speech had a provider failure delivered to one of its own requests, lost the realtime socket it waited on or heard its server err, was refused by Close before scheduling, was a say the driver refused on the journal, or lost its own keyed sink completion after its declared deadline.",
+        examples: &[
+            failed_by_injection,
+            failed_from_its_own_missing_playback,
+            output_refusal_with_its_own_diagnostic,
+            transcription_refusal_with_its_own_diagnostic,
+        ],
+        counterexamples: &[
+            failed_without_injection,
+            playback_timeout_without_its_own_deadline,
+            output_refusal_without_its_own_diagnostic,
+            transcription_refusal_for_another_speech,
+            transcription_refusal_for_another_resource,
+            transcription_refusal_without_diagnostic,
+        ],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let inputs = r.inputs_view();
-        let (host, internal, inference) = (
-            r.host_view(),
-            r.internal_view(),
-            r.inference_view(),
-        );
+        let (host, internal, inference) = (r.host_view(), r.internal_view(), r.inference_view());
         for speech in host.speeches() {
             let Some(error) = speech.error() else { continue };
 
@@ -77,7 +85,9 @@ impl Rule for SpeechErrorIsInjected {
             let server_erred = host.events().iter().any(|(at, ev)| {
                 matches!(ev, SessionEvent::Error(e) if e.source == ErrorSource::Realtime)
                     && speech.done_at().is_none_or(|done| at.at_ms <= done.at_ms)
-            }) || crate::fakes::realtime::server::REFUSALS.iter().any(|code| error.contains(code));
+            }) || crate::fakes::realtime::server::REFUSALS
+                .iter()
+                .any(|code| error.contains(code));
             let refused_by_close = inputs.close_asked_at().is_some() && !speech.is_scheduled();
             // A `say` the driver refused on its own terms -- words with no voice to speak them --
             // fails without ever making a request; the refusal is on the journal.
@@ -86,13 +96,45 @@ impl Rule for SpeechErrorIsInjected {
                     .steps()
                     .iter()
                     .any(|(_, step)| matches!(step, Step::Speech(SpeechStep::SayRefused { .. })));
+            // Missing external completion is a sink failure, not a provider failure. Accept only
+            // the keyed diagnostic for this speech after its own declared completion deadline.
+            let missing_playback = internal.steps().iter().any(|(lost_at, step)| {
+                let Step::Playout(PlayoutStep::FinishLost { speech: lost_speech, segment, .. }) =
+                    step
+                else {
+                    return false;
+                };
+                lost_speech.0 == speech.id
+                    && error.contains(&format!(
+                        "playback report timed out for attachment {} segment {}",
+                        segment.attachment, segment.segment,
+                    )) && internal.steps().iter().any(|(due_at, step)| {
+                    matches!(step, Step::Playout(PlayoutStep::FinishDue { speech: due_speech, at })
+                            if due_speech == lost_speech
+                                && due_at <= lost_at
+                                && at.saturating_duration_since(lk_agents_abi::Ts::ZERO).as_millis()
+                                    <= u128::from(lost_at.at_ms))
+                })
+            });
+            let output_refused = internal.steps().iter().any(|(_, step)| {
+                matches!(step, Step::Playout(PlayoutStep::OutputRefused { speech: refused, reason })
+                    if refused.0 == speech.id && error.contains(&format!("output admission refused: {reason}")))
+            });
+            let transcription_refused = internal.steps().iter().any(|(_, step)| {
+                matches!(step, Step::Playout(PlayoutStep::TranscriptionRefused { speech: refused, resource })
+                    if refused.0 == speech.id && error.contains(&format!("text output: {}",
+                        lk_agents_abi::voice::io::IoError::TranscriptionCapacity(resource.clone()))))
+            });
             let accounted = injected
                 || voice_failed
                 || voice_down
                 || socket_dropped
                 || server_erred
                 || refused_by_close
-                || refused_by_driver;
+                || refused_by_driver
+                || missing_playback
+                || output_refused
+                || transcription_refused;
             check.expect(
                 &speech,
                 accounted,
@@ -116,4 +158,89 @@ fn failed_by_injection() -> Recording {
 /// A speech failed; nothing was ever injected and nobody closed.
 fn failed_without_injection() -> Recording {
     Authored::new().speech(4, Handle::finished().failed("boom")).done()
+}
+
+fn playback_timeout_record(deadline: bool) -> Recording {
+    use lk_agents_abi::{Ts, voice::io::PlaybackSegment};
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    let segment = PlaybackSegment { attachment: 8, segment: 3 };
+    let mut authored = Authored::new();
+    if deadline {
+        authored = authored
+            .journal(Step::Playout(PlayoutStep::FinishDue { speech: SpeechId(4), at: Ts::ZERO }));
+    }
+    authored
+        .journal(Step::Playout(PlayoutStep::FinishLost {
+            speech: SpeechId(4),
+            segment,
+            position: std::time::Duration::ZERO,
+        }))
+        .speech(
+            4,
+            Handle::finished().failed("playback report timed out for attachment 8 segment 3"),
+        )
+        .done()
+}
+
+fn failed_from_its_own_missing_playback() -> Recording {
+    playback_timeout_record(true)
+}
+
+fn playback_timeout_without_its_own_deadline() -> Recording {
+    playback_timeout_record(false)
+}
+
+fn output_refusal_record(traced: bool) -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::output::OutputBindingError;
+    let reason = OutputBindingError::Capacity;
+    let mut authored = Authored::new();
+    if traced {
+        authored = authored
+            .journal(Step::Playout(PlayoutStep::OutputRefused { speech: SpeechId(4), reason }));
+    }
+    authored
+        .speech(4, Handle::finished().failed(&format!("output admission refused: {reason}")))
+        .done()
+}
+
+fn output_refusal_with_its_own_diagnostic() -> Recording {
+    output_refusal_record(true)
+}
+
+fn output_refusal_without_its_own_diagnostic() -> Recording {
+    output_refusal_record(false)
+}
+
+fn transcription_refusal_record(speech: Option<u64>, resource: &str) -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    let mut authored = Authored::new();
+    if let Some(speech) = speech {
+        authored = authored.journal(Step::Playout(PlayoutStep::TranscriptionRefused {
+            speech: SpeechId(speech),
+            resource: resource.into(),
+        }));
+    }
+    authored
+        .speech(
+            4,
+            Handle::finished().failed("text output: transcription streams capacity exceeded"),
+        )
+        .done()
+}
+
+fn transcription_refusal_with_its_own_diagnostic() -> Recording {
+    transcription_refusal_record(Some(4), "streams")
+}
+
+fn transcription_refusal_for_another_speech() -> Recording {
+    transcription_refusal_record(Some(5), "streams")
+}
+
+fn transcription_refusal_for_another_resource() -> Recording {
+    transcription_refusal_record(Some(4), "queued batches")
+}
+
+fn transcription_refusal_without_diagnostic() -> Recording {
+    transcription_refusal_record(None, "streams")
 }

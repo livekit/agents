@@ -1,27 +1,12 @@
-//! A replaced output instance receives nothing more, but what a step already running owes it.
+//! A retained attachment may finish its old segment; retirement ends that permission.
 //!
-//! Attaching an output creates a new instance; the case keeps the old one's identity, so a call
-//! that lands on it after the replacement is buffered work escaping onto a sink the host has
-//! detached. Each kind is tracked separately: replacing the audio output says nothing about the
-//! transcription one.
-//!
-//! Two calls are the reference's own, so they are allowed. A step running when the output was
-//! replaced read the output at its start and finishes on it (`_pipeline_reply_task_impl`,
-//! `_tts_task`, `_realtime_generation_task_impl` take `self._session.output` once). And a text
-//! output gets a closing flush from the synchroniser that wrapped it each time that synchroniser
-//! closes a segment's writer on it (`_capture_task`'s `finally`): once when the swap rotates it,
-//! once when the session closes it. A swap made while the session closes owes both at the close.
-use lk_agents_voice::{
-    events::SessionEvent,
-    agent_session::effects::GateOp,
-    trace::{InterruptStep, PlayoutStep, SpeechStep, Step, ToolStep},
-};
-
+//! Physical attachment callbacks are the boundary facts. A host object can have overlapping
+//! attachments, so one detach cannot retire a different attachment of that same object.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule},
     input::Input,
-    record::{Observed, Recording, Sink, Tag},
+    record::{Recording, Sink, Tag},
 };
 
 pub struct OutputReplacementIsClean;
@@ -29,89 +14,30 @@ pub struct OutputReplacementIsClean;
 impl Rule for OutputReplacementIsClean {
     const CONTRACT: Contract = Contract {
         id: "output_replacement_is_clean",
-        guarantee: "Once an output of a kind is replaced, the replaced instance receives no further calls but those of steps already running and a synchroniser's closing flushes.",
-        examples: &[calls_stop_at_replacement, replaced_while_closing],
-        counterexamples: &[captured_after_replacement, flushed_after_replacement],
+        guarantee: "A replaced output receives calls only while a physical attachment still retains it; no call reaches it after its last attachment retires.",
+        examples: &[calls_stop_at_replacement, replaced_while_closing, overlapping_attachments],
+        counterexamples: &[
+            captured_after_replacement,
+            flushed_after_replacement,
+            called_after_retirement,
+        ],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
-        let host = r.host_view();
-        let steps = step_windows(r);
-        let close = r.inputs_view().close_asked_at().unwrap_or(Observed::END);
-        for output in host.outputs() {
-            // The next instance of the same kind; until one exists this output is still current.
+        for output in r.host_view().outputs() {
             let Some(replaced_at) = output.replaced_at() else { continue };
-            // When the driver swapped the new one in: until then this one was still current. Its
-            // own command's swap, not an earlier attach's handled in the same burst (seed 49224).
-            let asked = r
-                .inputs_view()
-                .attach_received(output.is_audio(), replaced_at)
-                .unwrap_or(replaced_at);
-            let swapped = r
-                .internal_view()
-                .steps()
-                .iter()
-                .find(|(at, step)| {
-                    *at >= asked
-                        && matches!(step, Step::Playout(PlayoutStep::OutputReplaced { .. }))
-                })
-                .map_or(replaced_at, |(at, _)| *at);
-            // The steps that had begun and not ended at the swap, and when the last of them ended:
-            // until then the old instance is theirs.
-            let running = steps
-                .iter()
-                .filter(|(from, to)| *from < swapped && to.is_none_or(|to| to > swapped))
-                .map(|(_, to)| to.unwrap_or(Observed::END))
-                .max();
-            // A pause the old instance held is released on it as the swap happens: the speech it
-            // was paused under keeps that instance.
-            let released = r.internal_view().steps().iter().any(|(at, step)| {
-                *at >= replaced_at
-                    && *at <= swapped
-                    && matches!(
-                        step,
-                        Step::Interrupt(InterruptStep::PlayoutGate { op: GateOp::Resume, .. })
-                    )
-            });
-            let mut release_owed = released && output.is_audio();
-            // One closing flush for the swap's rotation and one for the session's close, text
-            // outputs only: before the close only the swap's are owed, after it any may be. An
-            // output toggled just before the swap rotated too, delivered after it (seed 45765).
-            let text = !output.is_audio();
-            let mut swap_flushes =
-                if text { 1 + r.inputs_view().toggles_before(swapped) } else { 0 };
-            let mut close_flush = text;
-            let mut take_swap = || {
-                let owed = swap_flushes > 0;
-                swap_flushes = swap_flushes.saturating_sub(1);
-                owed
-            };
             for (at, sink) in output.received() {
-                let owed = at < swapped
-                    // The synchroniser releases a step's heard words as its playback finishes,
-                    // reaching the text output in that same instant (seed 88522).
-                    || running.is_some_and(|end| {
-                        at <= end || (!output.is_audio() && at.at_ms == end.at_ms)
-                    })
-                    || (matches!(sink, Sink::Resumed { .. }) && std::mem::take(&mut release_owed))
-                    || (matches!(sink, Sink::TextFlush { .. })
-                        && if at < close {
-                            take_swap()
-                        } else {
-                            std::mem::take(&mut close_flush) || take_swap()
-                        });
-                // Anything else reaching this instance after its replacement was attached is
-                // output the host had already taken away.
+                let active = output
+                    .attachments()
+                    .take_while(|(event, _)| *event < at)
+                    .fold(0i32, |count, (_, attached)| count + if attached { 1 } else { -1 });
                 check.expect(
                     &output,
-                    owed,
+                    at < replaced_at || active > 0,
                     format!(
-                        "output {} (audio: {}) received {sink:?} at seq {} after being replaced at seq {}",
-                        output.nth(),
-                        output.is_audio(),
-                        at.seq,
-                        replaced_at.seq
+                        "output {} (audio: {}) received {sink:?} at seq {} after replacement at seq {} with {active} retained attachments; callbacks {:?}",
+                        output.nth(), output.is_audio(), at.seq, replaced_at.seq, output.attachments().collect::<Vec<_>>()
                     ),
                 );
             }
@@ -119,32 +45,6 @@ impl Rule for OutputReplacementIsClean {
     }
 }
 
-/// Every reply task the journal shows, from where the reference reads the outputs (the speech's
-/// creation, or a tool step's start) to the task's end, which drains what its step still had to
-/// write (`None` while it had not ended).
-fn step_windows(r: &Recording) -> Vec<(Observed, Option<Observed>)> {
-    let mut open: std::collections::BTreeMap<u64, Observed> = Default::default();
-    let mut windows = Vec::new();
-    for (at, step) in r.internal_view().steps() {
-        match step {
-            Step::Speech(SpeechStep::ReplyCreated { speech })
-            | Step::Tool(ToolStep::StepStarted { speech, .. }) => {
-                open.entry(speech.0).or_insert(*at);
-            }
-            Step::Speech(SpeechStep::ReplyFinished { speech, .. })
-            | Step::Emitted(SessionEvent::SpeechDone { speech, .. }) => {
-                if let Some(from) = open.remove(&speech.0) {
-                    windows.push((from, Some(*at)));
-                }
-            }
-            _ => {}
-        }
-    }
-    windows.extend(open.into_values().map(|from| (from, None)));
-    windows
-}
-
-/// The first instance is written to, then replaced, then only the new one is written to.
 fn calls_stop_at_replacement() -> Recording {
     Authored::new()
         .output(true)
@@ -154,20 +54,31 @@ fn calls_stop_at_replacement() -> Recording {
         .done()
 }
 
-/// The transcription output replaced after the close was asked for: the swap's rotation and the
-/// close each flush the old instance once. Catches: the rotation's flush counted as the close's
-/// (survey seed 4496).
+/// Closing drains an admitted old destination before its physical attachment retires.
 fn replaced_while_closing() -> Recording {
     Authored::new()
         .output(false)
+        .output_attachment(0, true)
         .sent(Input::Close { drain: true })
         .output(false)
         .sink(Sink::TextFlush { output: 0 })
         .sink(Sink::TextFlush { output: 0 })
+        .output_attachment(0, false)
         .done()
 }
 
-/// Audio reaches the old instance after the new one was attached.
+fn overlapping_attachments() -> Recording {
+    Authored::new()
+        .output(false)
+        .output_attachment(0, true)
+        .output_attachment(0, true)
+        .output(false)
+        .output_attachment(0, false)
+        .sink(Sink::TextFlush { output: 0 })
+        .output_attachment(0, false)
+        .done()
+}
+
 fn captured_after_replacement() -> Recording {
     Authored::new()
         .output(true)
@@ -176,13 +87,21 @@ fn captured_after_replacement() -> Recording {
         .done()
 }
 
-/// A segment is flushed on the old instance after the new one was attached, twice before any
-/// close: one closing flush is the synchroniser's rotation, a second is not.
 fn flushed_after_replacement() -> Recording {
     Authored::new()
         .output(false)
         .output(false)
         .sink(Sink::TextFlush { output: 0 })
+        .sink(Sink::TextFlush { output: 0 })
+        .done()
+}
+
+fn called_after_retirement() -> Recording {
+    Authored::new()
+        .output(false)
+        .output_attachment(0, true)
+        .output(false)
+        .output_attachment(0, false)
         .sink(Sink::TextFlush { output: 0 })
         .done()
 }

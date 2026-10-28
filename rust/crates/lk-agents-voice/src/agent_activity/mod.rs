@@ -6,6 +6,7 @@ pub mod drain;
 pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
+mod idle;
 pub mod io;
 pub mod options;
 pub mod realtime;
@@ -16,13 +17,13 @@ pub mod tools;
 pub mod voice_task;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
-use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
+use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
-use crate::agent_session::effects::{AudioOp, Effect, Out};
+use crate::agent_session::effects::{Effect, Out};
 use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
 use crate::audio_recognition::AudioRecognition;
-use crate::trace::{GenerationStep, InputStep, InterruptCause, PlayoutStep, ToolStep};
+use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::{ChatItem, Modality, Ts};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -368,41 +369,10 @@ impl Driver {
             ActivityCommand::Drain { call } => self.drain(call.into_iter().collect(), out),
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
-                // Replacement takes effect at a segment boundary and interrupts nothing: a segment
-                // in flight finishes on the sink it started with; the next one reads the new sink.
-                let next = output.as_ref().map(|o| o.id);
-                let now = self.step.now;
-                self.release_pause_before_swap(now, out);
-                let previous = self.set_outputs(|o| std::mem::replace(&mut o.audio, output));
-                let (previous, enabled) =
-                    (previous.map(|o| o.id), self.session.outputs.audio_enabled);
-                let op = AudioOp::SetAudioOutput { previous, next, enabled };
-                out.machine().push(Effect::Audio(op));
-                if !audio {
-                    // Removed with no replacement: nobody hears what plays, so it is cut (and the
-                    // realtime socket's response, once) rather than reported as a playout.
-                    let socket_told = match self.activity.speech_scheduler.current_speech() {
-                        Some(speech) => {
-                            let realtime = self.is_realtime_speech(speech);
-                            match self.interrupt_speech(
-                                now,
-                                speech,
-                                InterruptCause::OutputReplaced,
-                                true,
-                                out,
-                            ) {
-                                Ok(InterruptOutcome::Now) => realtime,
-                                Ok(InterruptOutcome::Already) | Err(_) => false,
-                            }
-                        }
-                        None => false,
-                    };
-                    if !socket_told {
-                        self.realtime_interrupt(InterruptCause::OutputReplaced, out);
-                    }
-                }
-                // `can_pause` and "audio enabled" are the new sink's; release a pause it can't hold.
-                self.refresh_pause_facts(now, out);
+                self.set_outputs(|o| o.audio = output);
+                // Selection changes future admissions. Existing segments keep their binding,
+                // including its pause and cleanup controls, until their release arrives.
+                self.retire_outputs(out);
                 out.trace(PlayoutStep::OutputReplaced {
                     audio,
                     transcription: self.session.outputs.shows_transcription(),
@@ -410,15 +380,8 @@ impl Driver {
             }
             ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
-                let next = output.as_ref().map(|o| o.id);
-                let previous =
-                    self.set_outputs(|o| std::mem::replace(&mut o.transcription, output));
-
-                let (previous, enabled) =
-                    (previous.map(|o| o.id), self.session.outputs.transcription_enabled);
-                let op = AudioOp::SetTranscriptionOutput { previous, next, enabled };
-                out.machine().push(Effect::Audio(op));
-
+                self.set_outputs(|o| o.transcription = output);
+                self.retire_outputs(out);
                 out.trace(PlayoutStep::OutputReplaced {
                     audio: self.session.outputs.plays_audio(),
                     transcription,

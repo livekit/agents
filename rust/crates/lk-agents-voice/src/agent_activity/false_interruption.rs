@@ -279,7 +279,7 @@ impl Driver {
         // answers it with where playback stopped.
         let in_the_sink = self.activity.speech_scheduler.current_speech() == Some(speech)
             || self.activity.paused_speech.paused_handle() == Some(speech);
-        let sink = self.session.outputs.audio.as_ref().map(|a| a.id).filter(|_| in_the_sink);
+        let sink = self.session.output_bindings.active_speech_audio(speech).filter(|_| in_the_sink);
         out.trace(InterruptStep::Interrupted { speech, cause, force });
         // A filler dies with the interruption of the speech that owns its tool.
         self.fillers_speech_ended(speech, out);
@@ -313,7 +313,13 @@ impl Driver {
     /// The one place the loop moves the playout sink, journalled as `PlayoutGate{speech, op,
     /// cause}`. No sink, no op, no step.
     fn gate_op(&self, out: &mut Out, speech: SpeechId, op: GateOp, cause: GateCause) {
-        if let Some(output) = self.session.outputs.audio.as_ref().map(|a| a.id) {
+        if let Some(output) = self
+            .session
+            .output_bindings
+            .speech_outputs(speech)
+            .and_then(|outputs| outputs.audio.as_ref())
+            .map(|a| a.id)
+        {
             out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
     }
@@ -554,19 +560,6 @@ impl Driver {
         }
     }
 
-    /// The audio output is about to be replaced: a pause held on the old sink is released there.
-    /// The paused speech keeps the sink it started with, which nothing would resume (every later
-    /// gate goes to the new one), so it would play nothing until the close. The user speaking
-    /// interrupts it first, as any release does.
-    pub(crate) fn release_pause_before_swap(&mut self, now: Ts, out: &mut Out) {
-        let Some(paused) = self.activity.paused_speech.take_paused() else { return };
-        self.cancel_false_interruption_timer(out);
-        if self.activity.audio_recognition.user_speaking() {
-            self.interrupt_paused(now, paused.handle, out);
-        }
-        self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
-    }
-
     /// `on_start_of_speech`'s pause: cancel the resume timer (the pause survives), then pause the
     /// current speech if not already paused (an onset before the agent flipped to `speaking`).
     pub(crate) fn on_start_of_speech(&mut self, out: &mut Out) {
@@ -669,7 +662,14 @@ impl Driver {
     /// copy. A change that no longer permits the pause **releases** it; the user speaking at the
     /// change interrupts the parked speech first, or resuming would play it into the user.
     pub(crate) fn refresh_pause_facts(&mut self, now: Ts, out: &mut Out) {
-        let (sink, audio_enabled) = self.session.outputs.pause_facts();
+        let speech = self
+            .activity
+            .paused_speech
+            .paused_handle()
+            .or_else(|| self.activity.speech_scheduler.current_speech());
+        let outputs =
+            speech.map(|speech| self.speech_outputs(speech)).unwrap_or(&self.session.outputs);
+        let (sink, audio_enabled) = outputs.pause_facts();
         let Some(paused) = self.activity.paused_speech.refresh_facts(sink, audio_enabled) else {
             return;
         };

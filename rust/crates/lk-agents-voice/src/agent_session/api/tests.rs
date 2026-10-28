@@ -1,5 +1,7 @@
 //! Session decisions and host hook outcomes, without a voice executor.
 
+mod recorder;
+
 use super::*;
 use crate::tts::markup::ChatMessageExt;
 use crate::agent_activity::scheduling::SpeechId;
@@ -7,6 +9,7 @@ use crate::agent_session::commands::{HookId, HookOutcome};
 use crate::agent_session::host_events::HookCall;
 use crate::agent_session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor};
 use crate::events::SessionEvent;
+use crate::test_support::FixedRoom;
 use lk_agents_abi::errors::ProviderError;
 
 /// Builds the cores of a session with no STT or VAD; nothing here runs them.
@@ -166,8 +169,8 @@ async fn late_realtime_transcript_keeps_its_source_without_starting_another_spee
 }
 
 /// A fake room on a virtual clock, and the same room as a session's.
-fn fake_room(name: &str) -> (Arc<lk_agents_rtc::FakeRoom>, FixedRoom) {
-    let (rtc, clock) = lk_agents_rtc::FakeRtc::with_virtual_clock();
+fn fake_room(name: &str) -> (Arc<lk_agents_test_support::rtc::FakeRoom>, FixedRoom) {
+    let (rtc, clock) = lk_agents_test_support::rtc::FakeRtc::with_virtual_clock();
     let room = rtc.room(name);
     // The `FakeRtc` is the room's owner; the room keeps it alive through its own `Arc`.
     std::mem::forget(rtc);
@@ -194,7 +197,7 @@ fn assembled(
         None, None, None, None, false, None, false, hook_bound, 3, None, None, None, Maybe::NotGiven, None,
         None, None, None, spawner,
     );
-    api
+    api.expect("valid native room ports")
 }
 
 // Catches: a second session in one job recording, or hosting the remote session, or a requested

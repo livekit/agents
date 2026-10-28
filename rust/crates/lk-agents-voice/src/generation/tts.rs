@@ -2,7 +2,7 @@
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{Retried, SegEvent, extend, report_metrics, retry};
-use super::pipeline_reply::{fatal, teardown_deadline};
+use super::pipeline_reply::teardown_deadline;
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
@@ -13,6 +13,7 @@ use crate::transcription::Heard;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::provider::{Context, TtsMetricState};
+use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::transcription::Visible;
 use lk_agents_voice::transcription::{Pipeline, TextTransform as _};
@@ -28,6 +29,7 @@ const MAX_BUFFERED_TTS_FRAMES: usize = 256;
 /// `synchronized`: the synchroniser's words up to where the failed synthesis played. `played`:
 /// the failed synthesis produced audio; with none, none of its words were heard.
 pub(super) struct Lost {
+    pub(super) failure: Option<DriverError>,
     pub(super) lost: bool,
     pub(super) opening: Visible,
     pub(super) synchronized: Option<String>,
@@ -37,7 +39,7 @@ pub(super) struct Lost {
 /// One failed duplex stream: the error, whether audio came first, the words fed, and the
 /// synchroniser's words up to where its audio played.
 struct Failed {
-    error: ProviderError,
+    error: DriverError,
     produced: bool,
     words: Visible,
     synchronized: Option<String>,
@@ -68,7 +70,13 @@ pub(super) async fn perform_tts_inference(
     loop {
         // Never open for a speech that is over or a closing session.
         if handle.interrupted() || *shared.closing.borrow() {
-            return Err(Lost { lost: false, opening: text, synchronized: None, played: false });
+            return Err(Lost {
+                failure: None,
+                lost: false,
+                opening: text,
+                synchronized: None,
+                played: false,
+            });
         }
         // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
         // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
@@ -78,7 +86,7 @@ pub(super) async fn perform_tts_inference(
             input_done = take_text(rx, &mut text, text_out, false).await;
         }
         let (error, produced) = match tts.stream().await {
-            Err(error) => (error, false),
+            Err(error) => (DriverError::Provider(error), false),
             Ok((sink, mut source)) => {
                 // A voice that does not stream retries its sentences itself: each retry is the
                 // session's recoverable error and a retry the journal waits out.
@@ -126,6 +134,18 @@ pub(super) async fn perform_tts_inference(
                 }
             }
         };
+        let error = match error {
+            DriverError::Provider(error) => error,
+            error => {
+                return Err(Lost {
+                    failure: Some(error),
+                    lost: false,
+                    opening: text,
+                    synchronized,
+                    played: produced,
+                });
+            }
+        };
         if produced {
             attempt.produced_output();
         }
@@ -133,10 +153,22 @@ pub(super) async fn perform_tts_inference(
         match retry(shared, handle, &mut attempt, ProviderKind::Tts, &error, &failed).await {
             Retried::Again => {}
             Retried::Interrupted => {
-                return Err(Lost { lost: false, opening: text, synchronized: None, played: false });
+                return Err(Lost {
+                    failure: None,
+                    lost: false,
+                    opening: text,
+                    synchronized: None,
+                    played: false,
+                });
             }
             Retried::GiveUp => {
-                return Err(Lost { lost: true, opening: text, synchronized, played: produced });
+                return Err(Lost {
+                    failure: None,
+                    lost: true,
+                    opening: text,
+                    synchronized,
+                    played: produced,
+                });
             }
         }
     }
@@ -184,11 +216,7 @@ async fn synthesize(
             }
             (Ok(heard), true)
         }
-        Err(SourceFailed { error, synchronized }) => {
-            let error = match error {
-                DriverError::Provider(error) => error,
-                other => fatal(other.to_string()),
-            };
+        Err(SourceFailed { error, synchronized, .. }) => {
             (Err(Failed { error, produced, words, synchronized }), input_done)
         }
     }
@@ -432,13 +460,14 @@ pub(super) enum SynthesisEvent {
 }
 
 pub(super) struct SynthesisPlayout<'a> {
+    pub(super) binding: &'a mut super::output::OutputBinding,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) tx: mpsc::UnboundedSender<SynthesisEvent>,
     #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     pub(super) rx: mpsc::UnboundedReceiver<SynthesisEvent>,
     pub(super) gate: &'a mut PlaybackGate,
-    /// The reply's agent's `transcription_node`.
-    pub(super) nodes: &'a crate::agent_session::nodes::OutputNodes,
+    /// The segment's one processed transcript leg, shared with its completion receipt.
+    pub(super) text: Option<Arc<dyn TextOutput>>,
 }
 
 impl SynthesisPlayout<'_> {
@@ -474,24 +503,29 @@ impl SynthesisPlayout<'_> {
         };
         let consume = async {
             let mut started_at = None;
-            let result = if self.gate.wait(shared, handle).await {
-                // Outputs can change while a speculative reply waits for its turn.
-                let audio = self.gate.audio_enabled.then(|| shared.audio_output()).flatten();
-                let text = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
-                let text = self.nodes.text_output(text);
-                let leg = TextLeg::new(text.as_deref(), None, shared, handle.id());
-                let mut buffered = SynthesizedSegment {
-                    rx: &mut self.rx,
-                    text: String::new(),
-                    leg: &leg,
-                    started_at: None,
-                };
-                let result =
-                    perform_audio_forwarding(shared, handle, audio.as_deref(), &mut buffered).await;
-                started_at = buffered.started_at;
-                result
+            let admission = if self.gate.wait(shared, handle).await {
+                self.binding.activate().await
             } else {
-                Ok(unheard())
+                Ok(false)
+            };
+            let result = match admission {
+                Err(error) => Err(SourceFailed::from(error)),
+                Ok(true) => {
+                    let audio = self.binding.audio();
+                    let leg = TextLeg::new(self.text.clone(), None, shared, handle.id());
+                    let mut buffered = SynthesizedSegment {
+                        rx: &mut self.rx,
+                        text: String::new(),
+                        leg: &leg,
+                        started_at: None,
+                    };
+                    let result =
+                        perform_audio_forwarding(shared, handle, audio.as_deref(), &mut buffered)
+                            .await;
+                    started_at = buffered.started_at;
+                    result
+                }
+                Ok(false) => Ok(unheard()),
             };
             // A failed output stops synthesis too; the caller still ends input and closes the source.
             stopped.notify_one();
@@ -505,16 +539,19 @@ impl SynthesisPlayout<'_> {
     }
 
     /// A failed synthesis can leave text without audio. It still belongs behind authorization.
-    pub(super) async fn flush_text(&mut self, shared: &Arc<SessionShared>, handle: &SpeechHandle) {
-        if !self.gate.wait(shared, handle).await {
-            return;
+    pub(super) async fn flush_text(
+        &mut self,
+        shared: &Arc<SessionShared>,
+        handle: &SpeechHandle,
+    ) -> Result<(), DriverError> {
+        if !self.gate.wait(shared, handle).await || !self.binding.activate().await? {
+            return Ok(());
         }
-        let out = self.gate.text_enabled.then(|| shared.transcription_output()).flatten();
-        let out = self.nodes.text_output(out);
-        let leg = TextLeg::new(out.as_deref(), None, shared, handle.id());
+        let leg = TextLeg::new(self.text.clone(), None, shared, handle.id());
         while let Ok(event) = self.rx.try_recv() {
             leg.forward(event).await;
         }
+        Ok(())
     }
 }
 
