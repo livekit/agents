@@ -262,12 +262,24 @@ async fn closing_at_every_await_point_releases_the_attempt() {
     }
 
     // During the retry backoff: no attempt is live, and none launches after close.
-    let peer = Peer::start(vec![Reply::Status(503, "busy"), Reply::Silent]).await;
+    let peer = Peer::start(vec![Reply::Status(503, "busy"), Reply::Status(503, "busy")]).await;
     let llm = llm(&peer);
     let mut chunks = open(&llm, RequestPolicy { retry_interval: Duration::from_secs(5), ..policy(3, 10_000) });
-    eventually("the first attempt was never sent", || peer.requests.load(Ordering::SeqCst) == 1).await;
-    let _ = tokio::time::timeout(Duration::from_millis(300), chunks.next()).await;
+    let _ = tokio::time::timeout(Duration::from_millis(400), chunks.next()).await;
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "the 100 ms first retry ran, the next waits 5 s");
     assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "the 100 ms first retry ran; nothing after close");
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 2, "nothing launches after close");
+}
+
+// Catches: `chat()` sending the request before anyone reads the stream (a stream opened and
+// dropped must cost nothing).
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_is_sent_before_the_first_pull() {
+    let peer = Peer::start(vec![Reply::Silent]).await;
+    let llm = llm(&peer);
+    let chunks = open(&llm, policy(0, 10_000));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(peer.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(chunks.close(deadline(1_000)).await, Closed::Clean);
 }

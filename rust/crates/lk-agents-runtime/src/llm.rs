@@ -82,7 +82,8 @@ impl GatewayLlm {
         update(&mut self.opts.lock().unwrap_or_else(|p| p.into_inner()));
     }
 
-    /// Opens a completion; the first attempt starts at once, its response is read on demand.
+    /// Opens a completion. No I/O until the first pull, which accepts the request: its total
+    /// limit runs from there.
     /// `identification` is the caller's job identity, read where it called; else this view's.
     pub fn chat(
         &self,
@@ -98,11 +99,10 @@ impl GatewayLlm {
         let identification = identification.or(self.identity.as_ref());
         let request = build_request(&opts, identification, &images, chat_ctx, tools, args)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
-        let now = self.clock.now();
-        let (core, effects) = LlmRequest::start(id, self.resource, policy, models::think_tags(&opts.model), now);
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
-        let mut chunks = LlmChunks {
-            core,
+        Ok(LlmChunks {
+            start: Some(Start { id, llm: self.resource, policy, think_tags: models::think_tags(&opts.model) }),
+            core: None,
             rx,
             reporter: Reporter { tx, clock: self.clock.clone() },
             exchange: Arc::new(Exchange { http: self.http.clone(), request }),
@@ -112,11 +112,9 @@ impl GatewayLlm {
             outcome: None,
             ended: false,
             cleanup_incomplete: false,
-            now,
+            now: self.clock.now(),
             host: self.reporter.clone(),
-        };
-        chunks.apply(effects);
-        Ok(chunks)
+        })
     }
 }
 
@@ -179,9 +177,19 @@ struct Exchange {
     request: HttpRequest,
 }
 
+/// What accepts the request at its first pull.
+struct Start {
+    id: LlmRequestId,
+    llm: ResourceId,
+    policy: RequestPolicy,
+    think_tags: (&'static str, &'static str),
+}
+
 /// One request's chunks, in order, then its outcome.
 pub struct LlmChunks {
-    core: LlmRequest,
+    start: Option<Start>,
+    /// The accepted request; `None` until the first pull.
+    core: Option<LlmRequest>,
     rx: mpsc::Receiver<Stamped>,
     reporter: Reporter,
     exchange: Arc<Exchange>,
@@ -206,6 +214,13 @@ impl LlmChunks {
         if self.ended {
             return Ok(None);
         }
+        if let Some(start) = self.start.take() {
+            let now = self.reporter.clock.now().max(self.now);
+            let (core, effects) = LlmRequest::start(start.id, start.llm, start.policy, start.think_tags, now);
+            self.core = Some(core);
+            self.now = now;
+            self.apply(effects);
+        }
         let demand = Demand::start(self);
         demand.0.wait().await
     }
@@ -215,8 +230,8 @@ impl LlmChunks {
     pub async fn close(mut self, deadline: Ts) -> Closed {
         let now = self.reporter.clock.now();
         self.step(LlmRequestEvent::Cancel, now);
-        while !self.core.is_settled() {
-            let wake = self.core.wake_at().map_or(deadline, |at| at.min(deadline));
+        while self.core.as_ref().is_some_and(|core| !core.is_settled()) {
+            let wake = self.wake_at().map_or(deadline, |at| at.min(deadline));
             tokio::select! {
                 biased;
                 Some(observed) = self.rx.recv() => self.step(observed.event, observed.at),
@@ -241,7 +256,7 @@ impl LlmChunks {
                 self.ended = true;
                 return outcome.map(|()| None);
             }
-            let wake = self.core.wake_at();
+            let wake = self.wake_at();
             let clock = self.reporter.clock.clone();
             tokio::select! {
                 biased;
@@ -253,22 +268,29 @@ impl LlmChunks {
         }
     }
 
-    /// Applies `event` at `at`, after every deadline due by then.
+    fn wake_at(&self) -> Option<Ts> {
+        self.core.as_ref().and_then(LlmRequest::wake_at)
+    }
+
+    /// Applies `event` at `at`, after every deadline due by then. Before the first pull there is
+    /// no request to apply it to.
     fn step(&mut self, event: LlmRequestEvent, at: Ts) {
+        let Some(core) = self.core.as_mut() else { return };
         let at = at.max(self.now);
-        while let Some(due) = self.core.wake_at().filter(|due| *due <= at) {
+        let mut effects = Vec::new();
+        while let Some(due) = core.wake_at().filter(|due| *due <= at) {
             self.now = due.max(self.now);
-            let effects = self.core.handle(LlmRequestEvent::Wake, self.now);
-            if effects.is_empty() && self.core.wake_at() == Some(due) {
+            let woken = core.handle(LlmRequestEvent::Wake, self.now);
+            if woken.is_empty() && core.wake_at() == Some(due) {
                 break;
             }
-            self.apply(effects);
+            effects.extend(woken);
         }
         self.now = at;
         if let LlmRequestEvent::AttemptClosed { attempt } = &event {
             self.attempts.remove(attempt);
         }
-        let effects = self.core.handle(event, at);
+        effects.extend(core.handle(event, at));
         self.apply(effects);
     }
 
