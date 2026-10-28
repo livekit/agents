@@ -22,12 +22,10 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, replace
-from types import TracebackType
 from typing import Any, Literal
 
 import aiohttp
 
-from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -46,7 +44,6 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .connection import (
-    CandidateState,
     PluginEvent,
     TTSConnectionConfig,
     bridge_endpoint,
@@ -56,8 +53,6 @@ from .gateway_adapter import (
     build_external_tracking_headers,
     build_tts_init_payload,
     extract_error_status,
-    is_non_retryable_client_error,
-    is_payload_too_large,
     normalize_region_override,
     normalize_world_part_override,
 )
@@ -275,9 +270,6 @@ class TTS(tts.TTS):
         warm_standby_enabled: bool = False,
         text_chunking: Literal["auto", "word", "phrase"] = "auto",
         phrase_max_chars: int = 60,
-        first_audio_timeout_s: float | None = None,
-        fallback_recovery_cooldown_s: float = 60.0,
-        _candidate: bool = False,
         **model_options: Any,
     ) -> None:
         """
@@ -308,6 +300,10 @@ class TTS(tts.TTS):
             word_tokenizer: Optional tokenizer for processing text.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
         """
+        if {"first_audio_timeout_s", "fallback_recovery_cooldown_s"} & model_options.keys():
+            raise TypeError(
+                "Configure timeouts with APIConnectOptions and fallback with tts.FallbackAdapter"
+            )
         if model_endpoint is not None:
             raise ValueError(
                 "model_endpoint was removed in 2.0: the plugin always connects "
@@ -408,11 +404,8 @@ class TTS(tts.TTS):
             phrase_max_chars=phrase_max_chars,
         )
         self._session = http_session
-        self._first_audio_timeout_s = first_audio_timeout_s
-        self._candidate_state = CandidateState(len(raw_connections), fallback_recovery_cooldown_s)
-        self._active_candidate_index = 0
         self._candidate_tts: list[TTS] = [self]
-        self._is_candidate = _candidate
+        self._fallback: tts.FallbackAdapter | None = None
         # Set by the parent chain on the candidates it constructs: a
         # candidate's voice is only updated at runtime when it was inherited
         # from the chain-level default rather than set explicitly per
@@ -429,8 +422,9 @@ class TTS(tts.TTS):
         # garbage-collect them mid-run before the socket is actually closed.
         self._standby_close_tasks: set[asyncio.Task[None]] = set()
 
-        if not _candidate:
-            for fallback in raw_connections[1:]:
+        if len(raw_connections) > 1:
+            self._candidate_tts = []
+            for fallback in raw_connections:
                 config = (
                     fallback
                     if isinstance(fallback, TTSConnectionConfig)
@@ -462,9 +456,6 @@ class TTS(tts.TTS):
                     warm_standby_enabled=warm_standby_enabled,
                     text_chunking=text_chunking,
                     phrase_max_chars=phrase_max_chars,
-                    first_audio_timeout_s=first_audio_timeout_s,
-                    fallback_recovery_cooldown_s=fallback_recovery_cooldown_s,
-                    _candidate=True,
                     **model_options,
                 )
                 candidate._inherits_voice = config.voice is None
@@ -476,6 +467,7 @@ class TTS(tts.TTS):
                 self._candidate_tts.append(candidate)
                 candidate.on("metrics_collected", self._forward_metrics)
                 candidate.on("slng_event", self._forward_plugin_event)
+            self._fallback = tts.FallbackAdapter(self._candidate_tts, sample_rate=sample_rate)
 
     def _forward_metrics(self, metrics: Any) -> None:
         self.emit("metrics_collected", metrics)
@@ -496,7 +488,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return self._candidate_tts[self._active_candidate_index]._opts.model
+        return self._fallback.model if self._fallback is not None else self._opts.model
 
     @property
     def provider(self) -> str:
@@ -566,7 +558,7 @@ class TTS(tts.TTS):
 
         return ws
 
-    def _start_standby_replenish(self, *, timeout: float | None) -> bool:
+    def _start_standby_replenish(self, *, conn_options: APIConnectOptions) -> bool:
         if not self.warm_standby_enabled:
             return False
         if self._standby is not None and self._is_ws_usable(self._standby.ws):
@@ -582,7 +574,7 @@ class TTS(tts.TTS):
                 standby_started_at = time.perf_counter()
                 ws: aiohttp.ClientWebSocketResponse | None = None
                 try:
-                    ws = await self._connect_ws(timeout=timeout)
+                    ws = await self._connect_ws(conn_options)
                     if epoch != self._standby_epoch:
                         # Options changed while connecting; this socket carries
                         # the old init payload, so discard it rather than
@@ -702,8 +694,8 @@ class TTS(tts.TTS):
         # Keep fallback candidates consistent with the primary so a later
         # failover does not synthesize with construction-time settings. A
         # candidate with an explicit per-candidate voice keeps it.
-        if not self._is_candidate:
-            for candidate in self._candidate_tts[1:]:
+        if self._fallback is not None:
+            for candidate in self._candidate_tts:
                 candidate.update_options(
                     voice=voice if is_given(voice) and candidate._inherits_voice else NOT_GIVEN,
                     language=language,
@@ -715,75 +707,41 @@ class TTS(tts.TTS):
         text: str,
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> ChunkedStream:
-        if not self._is_candidate:
-            return _FallbackChunkedStream(
-                parent=self,
-                text=text,
-                conn_options=conn_options,
-            )  # type: ignore[return-value]
-        return self._synthesize_candidate(text, conn_options=conn_options)
-
-    def _synthesize_candidate(
-        self,
-        text: str,
-        *,
-        conn_options: APIConnectOptions,
-    ) -> ChunkedStream:
+    ) -> tts.ChunkedStream:
+        if self._fallback is not None:
+            return self._fallback.synthesize(text, conn_options=conn_options)
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
-        if not self._is_candidate:
-            return _FallbackSynthesizeStream(
-                parent=self,
-                conn_options=conn_options,
-            )  # type: ignore[return-value]
-        return self._stream_candidate(conn_options=conn_options)
-
-    def _stream_candidate(
-        self,
-        *,
-        conn_options: APIConnectOptions,
-    ) -> SynthesizeStream:
-        logger.debug("[TTS] TTS.stream() called, creating SynthesizeStream")
+    ) -> tts.SynthesizeStream:
+        if self._fallback is not None:
+            return self._fallback.stream(conn_options=conn_options)
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
-        logger.debug("[TTS] TTS.stream() returning stream")
         return stream
 
     def prewarm(self) -> None:
-        if len(self._candidate_tts) > 1 and not self._is_candidate:
-            active = self._candidate_tts[self._candidate_state.start()]
-            if active is not self:
-                active.prewarm()
-                return
-        if self.warm_standby_enabled:
-            self._start_standby_replenish(timeout=10.0)
-        # Without warm standby there is nothing to prewarm: every segment uses
-        # a dedicated connection because terminal protocols close the socket
-        # after the final audio.
+        if self._fallback is not None:
+            self._fallback.prewarm()
+        elif self.warm_standby_enabled:
+            self._start_standby_replenish(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
     async def aclose(self) -> None:
+        if self._fallback is not None:
+            await self._fallback.aclose()
+            for candidate in self._candidate_tts:
+                await candidate.aclose()
+
         for stream in list(self._streams):
             await stream.aclose()
-
         self._streams.clear()
-        # Let any in-flight standby cleanup finish: _close_standby detaches
-        # self._standby before awaiting the socket close, so interrupting it
-        # mid-close would strand that already-detached socket open. shield keeps
-        # the close running even if aclose() itself is cancelled (a bare
-        # `await close_task` would propagate that cancel into the close). The
-        # close is bounded by WS_CLOSE_TIMEOUT_S.
+        # A detached standby remains owned until its bounded close settles.
         for close_task in list(self._standby_close_tasks):
             with contextlib.suppress(Exception):
                 await asyncio.shield(close_task)
         self._standby_close_tasks.clear()
         await self._close_standby()
-        if not self._is_candidate:
-            for candidate in self._candidate_tts[1:]:
-                await candidate.aclose()
 
 
 def _check_stream_timeouts(conn_options: APIConnectOptions) -> None:
@@ -819,7 +777,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             # Chunked synthesis always uses a dedicated connection: terminal
             # protocols close the socket after the final audio.
-            ws = await self._tts._connect_ws(timeout=self._conn_options.connect_timeout)
+            ws = await self._tts._connect_ws(self._conn_options)
             if self._input_text:
                 await ws.send_str(json.dumps({"type": "text", "text": self._input_text}))
             await ws.send_str(SynthesizeStream._FLUSH_MSG)
@@ -969,7 +927,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(the_input, str):
                     text_count += 1
                     if text_count == 1:
-                        logger.debug(f"[TTS] First text received: '{the_input[:50]}...'")
+                        logger.debug("[TTS] First text received", extra={"lk.pii.text": the_input})
                     if word_stream is None:
                         word_stream = self._opts.word_tokenizer.stream()
                         self._segments_ch.send_nowait(word_stream)
@@ -1069,7 +1027,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return
             standby_replenish_requested = True
             standby_replenish_started = self._tts._start_standby_replenish(
-                timeout=self._conn_options.connect_timeout
+                conn_options=self._conn_options
             )
 
         def log_segment_timing() -> None:
@@ -1124,7 +1082,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for word in word_stream:
                 word_count += 1
                 if word_count == 1:
-                    logger.debug(f"[TTS] send_task: first word '{word.token}'")
+                    logger.debug("[TTS] send_task: first word", extra={"lk.pii.text": word.token})
                 piece = f"{word.token} "
                 if phrase_batching:
                     text_buffer += piece
@@ -1307,7 +1265,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ) = await self._tts._checkout_standby()
                 standby_used = ws is not None
             if ws is None:
-                ws = await self._tts._connect_ws(timeout=self._conn_options.connect_timeout)
+                ws = await self._tts._connect_ws(self._conn_options)
             capture_ws_timing(ws)
             tasks = [
                 asyncio.create_task(send_task(ws)),
@@ -1332,223 +1290,3 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         finally:
             log_segment_timing()
-
-
-class _FallbackStreamBase:
-    def __init__(self, *, parent: TTS, conn_options: APIConnectOptions) -> None:
-        self._parent = parent
-        self._conn_options = conn_options
-        self._index = parent._candidate_state.start()
-        self._parent._active_candidate_index = self._index
-        self._stream: Any = None
-        self._deadline: float | None = None
-        self._started = False
-        self._closed = False
-        self._attempts = 0
-
-    async def _start_stream(self) -> None:
-        raise NotImplementedError
-
-    def __aiter__(self) -> _FallbackStreamBase:
-        return self
-
-    async def __aenter__(self) -> _FallbackStreamBase:
-        if self._stream is None:
-            await self._start_stream()
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        await self.aclose()
-
-    async def __anext__(self) -> Any:
-        if self._closed:
-            raise StopAsyncIteration
-        if self._stream is None:
-            # Lazily start so plain `async for` (without `async with` or an
-            # explicit __aenter__) works exactly like the non-fallback streams.
-            await self._start_stream()
-        while True:
-            try:
-                if not self._started and self._deadline is not None:
-                    timeout = max(0.0, self._deadline - time.monotonic())
-                    item = await asyncio.wait_for(self._stream.__anext__(), timeout)
-                else:
-                    item = await self._stream.__anext__()
-            except StopAsyncIteration:
-                if self._started:
-                    raise
-                await self._handle_failure(APIConnectionError("TTS produced no audio"))
-                continue
-            except (TimeoutError, asyncio.TimeoutError) as exc:
-                if self._started or self._deadline is None:
-                    raise
-                await self._handle_failure(exc, allow_retry=False)
-                continue
-            except Exception as exc:
-                if self._started:
-                    raise
-                await self._handle_failure(exc)
-                continue
-            self._started = True
-            self._deadline = None
-            return item
-
-    async def aclose(self) -> None:
-        self._closed = True
-        stream, self._stream = self._stream, None
-        if stream is not None:
-            with contextlib.suppress(Exception):
-                await stream.aclose()
-
-    async def _handle_failure(self, exc: BaseException, *, allow_retry: bool = True) -> None:
-        candidate = self._parent._candidate_tts[self._index]
-        if is_payload_too_large(exc):
-            # Every candidate receives the same oversized request body, so
-            # walking the chain cannot help; surface immediately.
-            self._parent._emit_plugin_event(
-                "fallback.exhausted",
-                "error",
-                from_model=candidate._opts.model,
-                terminal_status=413,
-                error=str(exc),
-            )
-            raise exc
-        if (
-            allow_retry
-            and not is_non_retryable_client_error(exc)
-            and self._attempts < self._conn_options.max_retry
-        ):
-            self._attempts += 1
-            self._parent._emit_plugin_event(
-                "fallback.attempt_failed",
-                "warning",
-                from_model=candidate._opts.model,
-                to_model=candidate._opts.model,
-                same_model_retry=True,
-                error=str(exc),
-            )
-            await self._restart()
-            return
-
-        next_index = self._parent._candidate_state.advance(self._index)
-        if next_index is None:
-            self._parent._emit_plugin_event(
-                "fallback.exhausted",
-                "error",
-                from_model=candidate._opts.model,
-                error=str(exc),
-            )
-            raise exc
-
-        next_candidate = self._parent._candidate_tts[next_index]
-        self._parent._emit_plugin_event(
-            "fallback.attempt_failed",
-            "warning",
-            from_model=candidate._opts.model,
-            to_model=next_candidate._opts.model,
-            error=str(exc),
-        )
-        self._index = next_index
-        self._parent._active_candidate_index = next_index
-        self._attempts = 0
-        await self._restart()
-        self._parent._emit_plugin_event(
-            "fallback.switch_succeeded",
-            from_model=candidate._opts.model,
-            to_model=next_candidate._opts.model,
-        )
-
-    async def _restart(self) -> None:
-        stream, self._stream = self._stream, None
-        if stream is not None:
-            with contextlib.suppress(Exception):
-                await stream.aclose()
-        self._closed = False
-        self._started = False
-        await self._start_stream()
-
-
-class _FallbackSynthesizeStream(_FallbackStreamBase):
-    # Marker stored in the replay buffer so a segment flush is replayed at the
-    # right position when a fallback candidate restarts the stream.
-    _FLUSH_MARK = object()
-
-    def __init__(self, *, parent: TTS, conn_options: APIConnectOptions) -> None:
-        super().__init__(parent=parent, conn_options=conn_options)
-        self._texts: list[Any] = []
-        self._input_ended = False
-
-    def push_text(self, text: str) -> None:
-        self._texts.append(text)
-        if self._stream is not None:
-            self._arm_timeout()
-            self._stream.push_text(text)
-
-    def flush(self) -> None:
-        self._texts.append(self._FLUSH_MARK)
-        if self._stream is not None:
-            self._arm_timeout()
-            self._stream.flush()
-
-    def end_input(self) -> None:
-        self._input_ended = True
-        if self._stream is not None:
-            self._arm_timeout()
-            self._stream.end_input()
-
-    async def _start_stream(self) -> None:
-        candidate = self._parent._candidate_tts[self._index]
-        options = replace(self._conn_options, max_retry=0)
-        self._stream = await candidate._stream_candidate(conn_options=options).__aenter__()
-        for item in self._texts:
-            if item is self._FLUSH_MARK:
-                self._stream.flush()
-            else:
-                self._stream.push_text(item)
-        if self._input_ended:
-            self._stream.end_input()
-        if self._texts:
-            timeout = self._parent._first_audio_timeout_s
-            self._deadline = time.monotonic() + timeout if timeout is not None else None
-
-    def _arm_timeout(self) -> None:
-        timeout = self._parent._first_audio_timeout_s
-        if self._deadline is None and timeout is not None:
-            self._deadline = time.monotonic() + timeout
-
-
-class _FallbackChunkedStream(_FallbackStreamBase):
-    def __init__(
-        self,
-        *,
-        parent: TTS,
-        text: str,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(parent=parent, conn_options=conn_options)
-        self._text = text
-        timeout = parent._first_audio_timeout_s
-        self._deadline = time.monotonic() + timeout if timeout is not None else None
-
-    async def _start_stream(self) -> None:
-        candidate = self._parent._candidate_tts[self._index]
-        options = replace(self._conn_options, max_retry=0)
-        self._stream = await candidate._synthesize_candidate(
-            self._text,
-            conn_options=options,
-        ).__aenter__()
-        timeout = self._parent._first_audio_timeout_s
-        self._deadline = time.monotonic() + timeout if timeout is not None else None
-
-    async def collect(self) -> rtc.AudioFrame:
-        """Utility method to collect every frame in a single call"""
-        frames = []
-        async for ev in self:
-            frames.append(ev.frame)
-
-        return rtc.combine_audio_frames(frames)
