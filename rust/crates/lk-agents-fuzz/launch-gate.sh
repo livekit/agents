@@ -25,8 +25,11 @@ gate_seeds=${VOICE_GATE_SEEDS:-32768}
 survey_seeds=${VOICE_SURVEY_SEEDS:-1024}
 soak_seeds=${VOICE_SOAK_SEEDS:-8}
 storage_seeds=${STORAGE_SEEDS:-4096}
+inference_seeds=${INFERENCE_SEEDS:-4096}
+worker_seeds=${WORKER_SEEDS:-4096}
 for pair in "VOICE_GATE_SEEDS=$gate_seeds" "VOICE_SURVEY_SEEDS=$survey_seeds" \
-    "VOICE_SOAK_SEEDS=$soak_seeds" "STORAGE_SEEDS=$storage_seeds"; do
+    "VOICE_SOAK_SEEDS=$soak_seeds" "STORAGE_SEEDS=$storage_seeds" \
+    "INFERENCE_SEEDS=$inference_seeds" "WORKER_SEEDS=$worker_seeds"; do
     [[ ${pair#*=} =~ ^[1-9][0-9]*$ ]] || fail "$pair: a campaign needs a positive number of seeds"
 done
 
@@ -136,5 +139,9 @@ campaign "soak, $soak_seeds calls" soak nothing_grows_with_the_conversation \
     VOICE_SOAK_SEEDS="$soak_seeds"
 campaign "storage survey, $storage_seeds seeds" storage_survey survey \
     STORAGE_SEEDS="$storage_seeds"
+campaign "inference survey (LLM request, avatar session), $inference_seeds seeds" \
+    inference_survey survey INFERENCE_SEEDS="$inference_seeds"
+campaign "worker survey (process pool), $worker_seeds seeds" worker_survey survey \
+    WORKER_SEEDS="$worker_seeds"
 
 printf '\nlaunch gate passed\n'
