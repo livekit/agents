@@ -147,11 +147,10 @@ def make_app(worker: str, service_url: str) -> AgentServer:
             context=ServiceCall(worker=worker, thread=ctx.thread.id, operation=""),
         )
 
-    server.a2a_session(endpoint="desk", description="E2E scripted desk", public=False)(handler)
+    server.a2a_session(endpoint="desk", description="E2E scripted desk")(handler)
     server.a2a_session(
         endpoint="inbox",
         description="E2E inbox",
-        public=False,
         debounce=timedelta(seconds=DEBOUNCE_SECONDS),
     )(handler)
     return server

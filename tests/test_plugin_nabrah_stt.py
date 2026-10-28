@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def stream() -> SpeechStream:
+async def stream() -> SpeechStream:
     def _discard_task(
         coroutine: Coroutine[Any, Any, Any], *args: object, **kwargs: object
     ) -> MagicMock:
@@ -26,7 +26,7 @@ def stream() -> SpeechStream:
         return provider.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
 
 
-def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
+async def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
     stream: SpeechStream,
 ) -> None:
     stream._process_message(
@@ -48,7 +48,7 @@ def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
     assert stream._current_text() == "مرحبا مرحبا بكم"
 
 
-def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechStream) -> None:
+async def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechStream) -> None:
     stream._process_message(
         _Message.model_validate({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
     )
@@ -59,7 +59,7 @@ def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechSt
     assert stream._current_text() == "مرحبا بكن"
 
 
-def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> None:
+async def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> None:
     stream._opts.end_of_turn_confirm_delay_seconds = None
 
     stream._process_message(
@@ -99,7 +99,7 @@ def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> 
     assert stream._current_text() == "حالك"
 
 
-def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: SpeechStream) -> None:
+async def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: SpeechStream) -> None:
     stream._opts.end_of_turn_confirm_delay_seconds = None
     stream._process_message(
         _Message.model_validate(
@@ -126,7 +126,7 @@ def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: SpeechStr
     assert list(stream._utt_words) == ["كيف"]
 
 
-def test_provider_error_does_not_expose_provider_message(stream: SpeechStream) -> None:
+async def test_provider_error_does_not_expose_provider_message(stream: SpeechStream) -> None:
     transcript = "private customer transcript"
 
     with pytest.raises(APIStatusError) as exc_info:
@@ -158,7 +158,7 @@ async def test_malformed_message_does_not_expose_provider_content(
     assert transcript not in caplog.text
 
 
-def test_stream_failure_is_not_retried_after_audio_is_consumed(stream: SpeechStream) -> None:
+async def test_stream_failure_is_not_retried_after_audio_is_consumed(stream: SpeechStream) -> None:
     assert stream._stream_failure("failed").retryable is True
 
     stream._audio_position = 0.1
@@ -170,7 +170,7 @@ def test_stream_failure_is_not_retried_after_audio_is_consumed(stream: SpeechStr
     ("field", "value"),
     [("is_final", "false"), ("audio_processed", float("nan"))],
 )
-def test_invalid_transcript_fields_are_rejected(
+async def test_invalid_transcript_fields_are_rejected(
     stream: SpeechStream, field: str, value: object
 ) -> None:
     message: dict[str, object] = {"type": "transcript", "text": "مرحبا", field: value}
@@ -179,7 +179,7 @@ def test_invalid_transcript_fields_are_rejected(
         stream._process_message(_Message.model_validate(message))
 
 
-def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
+async def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
     emitted: list[stt.SpeechEvent] = []
     stream._audio_position = 1.25
 

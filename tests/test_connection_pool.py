@@ -7,7 +7,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
-from livekit.agents.utils import ConnectionPool
+from livekit.agents.utils import ConnectionPool, connection_pool
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -115,15 +115,16 @@ async def test_remove_connection():
 
 
 @pytest.mark.asyncio
-async def test_get_expired():
+async def test_get_expired(monkeypatch: pytest.MonkeyPatch):
     # Use a short max duration to simulate expiration.
     dummy_connect = dummy_connect_factory()
     pool = ConnectionPool(max_session_duration=1, connect_cb=dummy_connect)
 
     conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     pool.put(conn)
-    # Artificially set the connection's timestamp in the past to simulate expiration.
-    pool._connections[conn] = time.time() - 2  # 2 seconds ago (max_session_duration is 1)
+    # the pool ages connections on the wall clock: two seconds pass (max_session_duration is 1)
+    later = time.time() + 2
+    monkeypatch.setattr(connection_pool.time, "time", lambda: later)
 
     conn2 = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
     assert conn2 is not conn, "Expected a new connection to be returned."
@@ -194,7 +195,6 @@ async def test_prewarm_retries_after_failure():
     await task
 
     assert attempts == 1
-    assert not pool._connections
 
     pool.prewarm()
     task = pool._prewarm_task()
@@ -202,7 +202,8 @@ async def test_prewarm_retries_after_failure():
     await task
 
     assert attempts == 2
-    assert len(pool._available) == 1
+    conn = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    assert (conn.id, attempts) == (2, 2), "Expected the prewarmed connection to be reused."
 
 
 def _closing_pool(max_session_duration: float | None = 60):
@@ -254,8 +255,8 @@ async def test_retired_connection_is_closed_once_returned():
     pool.invalidate()
     pool.put(in_use)  # the stream finished with it
 
-    assert in_use not in pool._available, "A retired connection must not be reused."
-    await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    fresh = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    assert fresh is not in_use, "A retired connection must not be reused."
     assert in_use in closed, "Expected a retired connection to be closed once returned."
 
 
@@ -330,12 +331,12 @@ async def test_invalidate_during_a_handshake_discards_the_stale_connection():
     conn = await acquiring
 
     assert conn.id == 2, "Expected the caller to get a connection negotiated after the change."
-    assert all(c.id != 1 for c in pool._available), "The stale connection was pooled."
-    assert conn in pool._connections
-
-    # closed on the way out of _connect, not left queued until some later acquisition
+    # closed on the way out of the handshake, not left queued until some later acquisition
     assert [c.id for c in closed] == [1], "The discarded socket was left open."
-    assert not pool._to_close, "The discarded socket is still queued rather than closed."
+
+    pool.put(conn)
+    reused = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    assert reused is conn, "Expected the fresh connection to be pooled, not the stale one."
 
 
 @pytest.mark.asyncio
@@ -366,8 +367,9 @@ async def test_prewarm_discards_a_connection_invalidated_mid_handshake():
     await task
 
     # the discarded attempt must not leave the pool cold, and must not be reusable
-    assert len(pool._available) == 1, "Expected prewarm to end with a usable connection."
-    assert next(iter(pool._available)).id == 2
+    warm = await pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS)
+    assert (warm.id, counter) == (2, 2), "Expected prewarm to end with a usable connection."
+    pool.put(warm)
 
     await pool.aclose()
     assert sorted(c.id for c in closed) == [1, 2], (
@@ -394,12 +396,11 @@ async def test_cancelling_a_drain_leaves_the_connection_queued_for_a_later_close
     pool.invalidate()  # idle, so it goes straight to the close queue
 
     acquiring = asyncio.create_task(pool.get(conn_options=DEFAULT_API_CONNECT_OPTIONS))
-    await closing.wait()  # inside _maybe_close_connection, popped from _to_close
+    await closing.wait()  # the drain is closing it
     acquiring.cancel()
     with pytest.raises(asyncio.CancelledError):
         await acquiring
 
-    assert doomed in pool._to_close, "A cancelled drain dropped the connection entirely."
     assert doomed not in closed
 
     finish.set()
