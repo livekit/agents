@@ -431,6 +431,38 @@ class STT(stt.STT):
             use_realtime=False,
         )
 
+    @staticmethod
+    def with_urun(
+        *,
+        model: str = "nemotron-3.5-asr:fp16",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: str = "https://inference.urun.sh/v1",
+        client: openai.AsyncClient | None = None,
+        language: str | list[str] = "en",
+        detect_language: bool = False,
+        prompt: NotGivenOr[str] = NOT_GIVEN,
+    ) -> STT:
+        """
+        Create a new instance of uRun STT.
+
+        ``api_key`` must be set to your uRun API key, either using the argument or by setting
+        the ``URUN_API_KEY`` environment variable.
+        """
+        urun_api_key = api_key if is_given(api_key) else os.environ.get("URUN_API_KEY")
+        if not urun_api_key:
+            raise ValueError("uRun API key is required")
+
+        return STT(
+            model=model,
+            api_key=urun_api_key,
+            base_url=base_url,
+            client=client,
+            language=language,
+            detect_language=detect_language,
+            prompt=prompt,
+            use_realtime=False,
+        )
+
     def stream(
         self,
         *,
