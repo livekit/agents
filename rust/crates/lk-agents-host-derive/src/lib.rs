@@ -217,7 +217,7 @@ use lk_agents_bindgen::to_snake;
 /// What each item takes, for a head on the wrong item.
 const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native` on a trait, \
     `stream` on a type, `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
-    `file` on `const _`, or `group` on an inline mod";
+    `file` on `const _`, `constant` on a `pub const` (written into its file's Python module), or `group` on an inline mod";
 
 fn expand_host(
     attr: proc_macro2::TokenStream,
@@ -240,7 +240,7 @@ fn expand_host(
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
             | (I::Enum(_), Some("wire_enum" | "wire_strs"))
             | (I::Mod(_), Some("group"))
-            | (I::Const(_), Some("file"))
+            | (I::Const(_), Some("file" | "constant"))
     );
     if !fits {
         return syn::Error::new_spanned(attr, HEADS).to_compile_error();

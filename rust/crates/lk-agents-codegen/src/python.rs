@@ -11,7 +11,12 @@ pub struct Out {
 
 /// In the order the modules were first named. `bases`: the plugin base classes, written after
 /// their module's records.
-pub fn emit(decls: &[Decl], bases: &[crate::bases::Bases]) -> Result<Vec<Out>, String> {
+/// The `#[host(constant)]`s are written into their module after its classes.
+pub fn emit_with(
+    decls: &[Decl],
+    bases: &[crate::bases::Bases],
+    constants: &[Constant],
+) -> Result<Vec<Out>, String> {
     let mut modules: Vec<String> = Vec::new();
     for d in decls {
         if let Some(t) = d.target(Host::Python)
@@ -20,9 +25,17 @@ pub fn emit(decls: &[Decl], bases: &[crate::bases::Bases]) -> Result<Vec<Out>, S
             modules.push(t.module.clone());
         }
     }
+    for c in constants {
+        if !modules.contains(&c.module) {
+            modules.push(c.module.clone());
+        }
+    }
     let mut out: Vec<Out> = modules
         .iter()
-        .map(|m| module(decls, m, bases.iter().find(|b| &b.module == m)))
+        .map(|m| {
+            let mine: Vec<&Constant> = constants.iter().filter(|c| &c.module == m).collect();
+            module(decls, m, bases.iter().find(|b| &b.module == m), &mine)
+        })
         .collect::<Result<_, _>>()?;
     if let Some(b) = bases.iter().find(|b| !modules.contains(&b.module)) {
         return Err(format!("{}: a base class's module holds no record", b.module));
@@ -180,7 +193,12 @@ fn dispatch(decls: &[Decl], d: &Decl, module: &str) -> Result<Out, String> {
     Ok(Out { path: format!("{module}.py"), text: b })
 }
 
-fn module(decls: &[Decl], name: &str, bases: Option<&crate::bases::Bases>) -> Result<Out, String> {
+fn module(
+    decls: &[Decl],
+    name: &str,
+    bases: Option<&crate::bases::Bases>,
+    constants: &[&Constant],
+) -> Result<Out, String> {
     let mine: Vec<&Decl> = decls
         .iter()
         .filter(|d| {
@@ -193,17 +211,31 @@ fn module(decls: &[Decl], name: &str, bases: Option<&crate::bases::Bases>) -> Re
         decls.iter().filter(|d| d.target(Host::Python).is_some_and(|t| t.module == name)).collect();
 
     let mut b = String::new();
-    let extra: Vec<&str> =
+    let mut extra: Vec<&str> =
         bases.map(|x| x.sources.iter().map(String::as_str).collect()).unwrap_or_default();
+    for c in constants {
+        if !extra.contains(&c.source.as_str()) {
+            extra.push(&c.source);
+        }
+    }
     header(&mut b, &mine, &extra);
-    imports(&mut b, decls, &visible, bases.map_or(&[][..], |x| &x.imports))?;
+    let mut extra_imports: Vec<(String, String)> =
+        bases.map(|x| x.imports.clone()).unwrap_or_default();
+    if !constants.is_empty() {
+        extra_imports.push(("typing".to_owned(), "Final".to_owned()));
+    }
+    imports(&mut b, decls, &visible, &extra_imports)?;
 
     // Two blank lines between top-level statements (PEP 8), exactly two under the imports when
-    // a class follows; one when an alias (a `Literal` or a union) does, as isort wants it.
-    let alias_first = mine.first().is_some_and(|d| {
-        matches!(d.body, Body::Union(_))
-            || d.target(Host::Python).is_some_and(|t| t.kind == Kind::Literal)
-    });
+    // a class follows; one when an alias (a `Literal` or a union) or a constant does, as isort
+    // wants it.
+    let alias_first = match mine.first() {
+        Some(d) => {
+            matches!(d.body, Body::Union(_))
+                || d.target(Host::Python).is_some_and(|t| t.kind == Kind::Literal)
+        }
+        None => bases.is_none() && !constants.is_empty(),
+    };
     let under_imports = if alias_first { "\n\n" } else { "\n\n\n" };
     while !b.ends_with(under_imports) {
         b.push('\n');
@@ -231,8 +263,52 @@ fn module(decls: &[Decl], name: &str, bases: Option<&crate::bases::Bases>) -> Re
         b.push_str("\n\n");
         b.push_str(&x.body);
     }
+    if !constants.is_empty() {
+        if !blocks.is_empty() || bases.is_some() {
+            b.push_str("\n\n");
+        }
+        let mut items: Vec<String> = Vec::new();
+        for c in constants {
+            items.push(constant(decls, c)?);
+        }
+        b.push_str(&items.join("\n"));
+    }
     b.push_str(&modules(&visible, bases.map_or(&[][..], |x| &x.paths)));
     Ok(Out { path: format!("{name}.py"), text: b })
+}
+
+/// `NAME: Final = value` and its docstring. A record value names the record's Python class and
+/// fields, so the class must be in the same module (it is written above).
+fn constant(decls: &[Decl], c: &Constant) -> Result<String, String> {
+    let value = match &c.value {
+        ConstValue::Literal(v) => v.clone(),
+        ConstValue::Record(rust, fields) => {
+            let d = decls
+                .iter()
+                .find(|d| &d.rust_name == rust)
+                .ok_or_else(|| format!("{}: {}: `{rust}` is not a declared record", c.source, c.name))?;
+            let t = d.target(Host::Python).ok_or_else(|| {
+                format!("{}: {}: `{rust}` has no Python target", c.source, c.name)
+            })?;
+            if t.module != c.module {
+                return Err(format!(
+                    "{}: {}: `{rust}` is written in `{}`, not `{}`",
+                    c.source, c.name, t.module, c.module
+                ));
+            }
+            let mut args = Vec::new();
+            for (field, v) in fields {
+                let f = d.fields().iter().find(|f| &f.rust_name == field).ok_or_else(|| {
+                    format!("{}: {}: `{rust}` has no field `{field}`", c.source, c.name)
+                })?;
+                args.push(format!("{}={v}", f.name));
+            }
+            format!("{}({})", t.name, args.join(", "))
+        }
+    };
+    let mut b = format!("{}: Final = {value}\n", c.name);
+    docstring(&mut b, &c.doc, 0);
+    Ok(b)
 }
 
 /// The `__module__` fixups, after the definitions: in the class body pydantic would resolve

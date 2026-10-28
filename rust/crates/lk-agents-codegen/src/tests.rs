@@ -19,7 +19,7 @@ use crate::{ir, parse, python, stub};
 /// the state `Kind::TypedDict` was in.
 fn generate_python(src: &str) -> String {
     let decls = parse::file("test.rs", "lk_agents_abi", src).expect("the declaration parses");
-    python::emit(&decls, &[])
+    python::emit_with(&decls, &[], &[])
         .expect("the declaration generates")
         .into_iter()
         .map(|o| o.text)
@@ -33,7 +33,7 @@ fn refuse_python(src: &str) -> String {
         Ok(d) => d,
         Err(e) => return e,
     };
-    python::emit(&decls, &[])
+    python::emit_with(&decls, &[], &[])
         .err()
         .unwrap_or_else(|| panic!("expected a refusal, got a generated file"))
 }
@@ -564,7 +564,7 @@ fn a_string_slice_const_in_a_group_is_a_literal_and_a_union() {
 #[test]
 fn a_group_gives_its_structs_kind_module_path_and_total() {
     let decls = parse::file("test.rs", "lk_agents_abi", GROUP).expect("parses");
-    let py = python::emit(&decls, &[]).expect("generates");
+    let py = python::emit_with(&decls, &[], &[]).expect("generates");
     assert_eq!(py.len(), 1);
     assert_eq!(py[0].path, "inference_stt.py");
     let out = &py[0].text;
@@ -798,7 +798,7 @@ fn the_session_schema_renders_its_five_pydantic_row_models() {
     let src = include_str!("../../lk-agents-storage/src/schema.rs");
     let decls =
         parse::file("schema.rs", "lk_agents_storage::schema", src).expect("the schema parses");
-    let outs = python::emit(&decls, &[]).expect("the schema generates");
+    let outs = python::emit_with(&decls, &[], &[]).expect("the schema generates");
     let module = |name: &str| {
         let file = format!("{name}.py");
         let found = outs.iter().find(|o| o.path.rsplit('/').next() == Some(file.as_str()));
@@ -876,7 +876,7 @@ fn generate_provider(src: &str) -> Result<String, String> {
     let decls = parse::file("test.rs", "lk_agents_abi", src)?;
     let exposed = parse::exposed("test.rs", "lk_agents_abi", src)?;
     let bases = crate::bases::emit(&decls, &exposed)?;
-    Ok(python::emit(&decls, &bases)?.into_iter().map(|o| o.text).collect())
+    Ok(python::emit_with(&decls, &bases, &[])?.into_iter().map(|o| o.text).collect())
 }
 
 // Catches: a trait method the base class does not answer reaching a runtime `AttributeError` on
@@ -908,4 +908,29 @@ fn every_provider_method_gets_its_core_surface() {
     ] {
         assert!(flat.contains(want), "{want}: {out}");
     }
+}
+
+// Catches: a constant's string written unescaped (a quote closing the Python literal early), its
+// docstring dropped, or a module of constants alone missing its `Final` import.
+#[test]
+fn a_constant_is_a_final_with_its_doc() {
+    let src = r#"
+#[crate::host(file(module = "types", path = "livekit.agents.types"))]
+const _: () = ();
+
+/// The key.
+#[crate::host(constant)]
+pub const KEY: &str = "lk.\"key\"";
+
+#[crate::host(constant)]
+pub const LIMIT: i32 = 3;
+"#;
+    let consts = parse::constants("a.rs", src).expect("parses");
+    let out = python::emit_with(&[], &[], &consts).expect("generates");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].path, "types.py");
+    let text = &out[0].text;
+    assert!(text.contains("from typing import Final\n"), "{text}");
+    assert!(text.contains("KEY: Final = \"lk.\\\"key\\\"\"\n\"\"\"The key.\"\"\"\n"), "{text}");
+    assert!(text.contains("LIMIT: Final = 3\n"), "{text}");
 }

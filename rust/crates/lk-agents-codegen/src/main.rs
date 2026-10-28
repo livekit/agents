@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 /// Codegen inputs in output order, each with the path the napi binding reaches its records by.
 /// ABI records and the storage/A2A boundary records with Python targets.
 const SOURCES: &[(&str, &str)] = &[
+    ("rust/crates/lk-agents-abi/src/telemetry/attributes.rs", "lk_agents_abi::telemetry::attributes"),
     ("rust/crates/lk-agents-abi/src/voice/events.rs", "lk_agents_abi::voice::events"),
     ("rust/crates/lk-agents-abi/src/metrics/base.rs", "lk_agents_abi::metrics::base"),
     (
@@ -288,11 +289,13 @@ fn main() -> std::process::ExitCode {
 fn run(check: bool) -> Result<usize, String> {
     let (root, python_packages) = repo_root()?;
     let mut decls = Vec::new();
+    let mut constants = Vec::new();
     for (src, module) in SOURCES {
         let path = root.join(src);
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("{src}: {e} (the SOURCES list names a file that is not there)"))?;
         decls.extend(parse::file(src, module, &text)?);
+        constants.extend(parse::constants(src, &text)?);
     }
     parse::link(&mut decls)?;
     resolve(&decls)?;
@@ -323,13 +326,13 @@ fn run(check: bool) -> Result<usize, String> {
 
     let mut stale = 0;
     let bases = bases::emit(&decls, &exposed)?;
-    let with_bases = python::emit(&decls, &bases)?;
+    let with_bases = python::emit_with(&decls, &bases, &constants)?;
     let reference: Vec<ir::Decl> = decls
         .iter()
         .filter(|d| !d.target(ir::Host::Python).is_some_and(|t| t.with_bases))
         .cloned()
         .collect();
-    let records = python::emit(&reference, &[])?;
+    let records = python::emit_with(&reference, &[], &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
     for package in python_packages {
         let python_root = root.join(package).join(PYTHON_GENERATED);

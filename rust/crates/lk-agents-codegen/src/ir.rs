@@ -494,6 +494,25 @@ pub enum Receiver {
     Mut,
 }
 
+/// `#[host(constant)]` on a `pub const`: a module-level `Final` in its file's Python module
+/// (`#[host(file(module, path))]`), declared once in Rust and read by the core under its own name.
+#[derive(Debug, Clone)]
+pub struct Constant {
+    pub name: String,
+    pub module: String,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub value: ConstValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstValue {
+    /// A Python literal, written as is: a string, an integer, a float or a boolean.
+    Literal(String),
+    /// A declared record built from literals: its Rust name and `(rust field, literal)` pairs.
+    Record(String, Vec<(String, String)>),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Exposed {
     pub fns: Vec<ExportFn>,

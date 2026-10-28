@@ -37,6 +37,89 @@ pub fn file(label: &str, module: &str, text: &str) -> Res<Vec<Decl>> {
     Ok(out)
 }
 
+/// Every `#[crate::host(constant)]` (or `constant(name = "..")`) `pub const` of a file, in the
+/// file's Python module (`#[host(file(module = ..))]`): a literal, or a declared record of literals.
+pub fn constants(label: &str, text: &str) -> Res<Vec<Constant>> {
+    let parsed = syn::parse_file(text).map_err(|e| format!("{label}: {e}"))?;
+    let mut out = Vec::new();
+    for item in &parsed.items {
+        let syn::Item::Const(c) = item else { continue };
+        let Some(m) = host_attr_strict(label, &c.attrs)? else { continue };
+        if head_of(&m) != "constant" {
+            continue;
+        }
+        let rust = c.ident.to_string();
+        let at = format!("{label}: {rust}");
+        if let Some(k) = m.iter().find(|x| !["constant", "constant.name"].contains(&x.key.as_str()))
+        {
+            return Err(format!("{at}: #[host(constant(..))] takes name, not `{}`", k.key));
+        }
+        let module = file_defaults(label, &parsed.items)?
+            .map(|g| g.module)
+            .ok_or_else(|| format!("{at}: #[host(constant)] needs the file's #[host(file(module = ..))]"))?;
+        let value = match &*c.expr {
+            syn::Expr::Struct(s) => {
+                let record = s.path.segments.last().expect("a path").ident.to_string();
+                let mut fields = Vec::new();
+                for f in &s.fields {
+                    let syn::Member::Named(name) = &f.member else {
+                        return Err(format!("{at}: a record constant names its fields"));
+                    };
+                    fields.push((name.to_string(), py_literal(&at, &f.expr)?));
+                }
+                if s.rest.is_some() {
+                    return Err(format!("{at}: a record constant spells out every field"));
+                }
+                ConstValue::Record(record, fields)
+            }
+            e => ConstValue::Literal(py_literal(&at, e)?),
+        };
+        out.push(Constant {
+            name: meta_str(&m, "constant.name").unwrap_or(rust),
+            module,
+            source: label.to_owned(),
+            doc: doc(&c.attrs),
+            value,
+        });
+    }
+    Ok(out)
+}
+
+/// A Rust literal as Python source.
+fn py_literal(at: &str, e: &syn::Expr) -> Res<String> {
+    let bad = || format!("{at}: a #[host(constant)] is a string, integer, float or bool literal");
+    match e {
+        syn::Expr::Lit(l) => match &l.lit {
+            syn::Lit::Str(s) => {
+                let mut out = String::from("\"");
+                for ch in s.value().chars() {
+                    match ch {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\t' => out.push_str("\\t"),
+                        c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+                Ok(out)
+            }
+            syn::Lit::Int(i) => Ok(i.base10_digits().to_owned()),
+            syn::Lit::Float(f) => {
+                let d = f.base10_digits();
+                Ok(if d.contains(['.', 'e', 'E']) { d.to_owned() } else { format!("{d}.0") })
+            }
+            syn::Lit::Bool(b) => Ok(if b.value { "True" } else { "False" }.to_owned()),
+            _ => Err(bad()),
+        },
+        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
+            Ok(format!("-{}", py_literal(at, &u.expr)?))
+        }
+        _ => Err(bad()),
+    }
+}
+
 /// An inline `mod` with `#[crate::host(group(..))]` contributes its own, with the group's defaults;
 /// `file` ([`file_defaults`]) fills a record's `module`/`path` where no group does.
 fn items(

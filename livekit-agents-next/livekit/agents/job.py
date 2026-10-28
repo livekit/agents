@@ -58,7 +58,6 @@ from .types import (
     ATTRIBUTE_SIMULATION_RUN_ID,
     ATTRIBUTE_SIMULATOR_DISPATCH,
     NotGivenOr,
-    recording_enabled,
 )
 from .utils import http_context, is_given, wait_for_participant
 from .version import __version__
@@ -344,7 +343,8 @@ class JobContext:
 
         has_evals = bool(self._tagger.evaluations or self._tagger.outcome)
         obs_url = self._run.observability_url
-        if (recording_enabled(session._recording_options) or has_evals) and obs_url:
+        recording = _core.RecordingOptions(**session._recording_options).recording_enabled()
+        if (recording or has_evals) and obs_url:
             try:
                 await _upload_session_report(
                     agent_name=self._info.job.agent_name,

@@ -7,8 +7,7 @@ use std::sync::Arc;
 use crate::traits::{RemoteParticipant, RtcRoom, TrackPublication};
 use crate::{ConnectionState, ParticipantIdentity, ParticipantKind, Result, RoomEvent, RtcError};
 
-/// The participant attribute an agent names itself with (`types.ATTRIBUTE_AGENT_NAME`).
-const ATTRIBUTE_AGENT_NAME: &str = "lk.agent.name";
+use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 
 /// Python's `repr()` of a string, as the reference's messages quote identities.
 fn repr(s: &str) -> String {

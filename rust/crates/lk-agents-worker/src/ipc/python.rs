@@ -766,8 +766,7 @@ const SESSION_ACLOSE_TIMEOUT: f64 = 60.0;
 /// The entrypoint has this long to connect the room before a warning.
 const CONNECT_WARNING_DELAY: Duration = Duration::from_secs(10);
 
-/// The participant attribute a simulator joins with (`types.ATTRIBUTE_SIMULATOR`).
-const ATTRIBUTE_SIMULATOR: &str = "lk.simulator";
+use lk_agents_abi::ATTRIBUTE_SIMULATOR;
 
 #[derive(Default)]
 struct JobRunState {
