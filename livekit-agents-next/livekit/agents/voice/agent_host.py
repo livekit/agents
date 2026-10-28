@@ -145,6 +145,7 @@ class AgentHost:
         """Runs the body, sync or async, and classifies what it returned or raised."""
         with self._operation(invocation):
             prepared.ctx._function_call = _function_call(invocation)
+            prepared.ctx._operation = invocation.operation
             try:
                 output = prepared.tool(*prepared.args, **prepared.kwargs)
                 if inspect.isawaitable(output):

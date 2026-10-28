@@ -119,6 +119,8 @@ enum Body {
     UntilCancelled,
     /// Ignores cancellation: never settles.
     Stuck,
+    /// Reports progress (`ctx.update`) through the run's port, then returns.
+    Reports,
 }
 
 struct FakeHost {
@@ -129,6 +131,8 @@ struct FakeHost {
     seen: Mutex<Vec<(&'static str, Invocation)>>,
     cancelled: Mutex<Vec<u64>>,
     cancel: Notify,
+    /// The run's progress port, once started.
+    progress: Mutex<Option<Progress>>,
 }
 
 impl FakeHost {
@@ -140,6 +144,7 @@ impl FakeHost {
             seen: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
             cancel: Notify::new(),
+            progress: Mutex::new(None),
         })
     }
 
@@ -193,6 +198,10 @@ impl AgentHost for FakeHost {
                 return Ok(ToolOutcome::Cancelled.into());
             }
             Body::Stuck => std::future::pending::<()>().await,
+            Body::Reports => {
+                let progress = self.progress.lock().unwrap().clone().expect("the run started");
+                assert!(progress.report(invocation.operation, "halfway".into()));
+            }
         }
         Ok(ToolOutcome::Value {
             text: "9:00 is free".into(),
@@ -288,6 +297,7 @@ fn setup(
     };
     let (handle, updates) =
         start(&tokio::runtime::Handle::current(), agent, input, ports, 4).unwrap();
+    *host.progress.lock().unwrap() = Some(handle.progress());
     Setup { handle, updates, host, closed }
 }
 
@@ -305,6 +315,28 @@ fn finished(updates: &[RunUpdate]) -> Result<&RunSettled, &RunError> {
         Some(RunUpdate::Failed(error)) => Err(error),
         other => panic!("the last update is not the result: {other:?}"),
     }
+}
+
+// Catches: a tool body's `ctx.update` that never reaches the stream, or one attributed to the
+// wrong call or arriving after the call's result.
+#[tokio::test(start_paused = true)]
+async fn a_tool_bodys_progress_streams_before_its_result() {
+    let mut s = setup(
+        vec![Reply::Call("find_slot", json!({"day": "Monday"})), Reply::Text("Monday 9:00.")],
+        Body::Reports,
+        OutputSpec::Text { validated: false },
+        Arc::new(Registry::default()),
+    );
+    let updates = drain(&mut s.updates).await;
+    let progress = updates.iter().position(|u| {
+        matches!(u, RunUpdate::Stream(StreamEvent::Progress { call_id, message, .. })
+            if call_id == "call_find_slot" && message == "halfway")
+    });
+    let result = updates
+        .iter()
+        .position(|u| matches!(u, RunUpdate::Stream(StreamEvent::ToolResult { .. })));
+    assert!(progress.is_some() && progress < result, "{updates:?}");
+    assert!(finished(&updates).is_ok());
 }
 
 // Catches: a callback run without its call's invocation scope (or a scope leaking into another

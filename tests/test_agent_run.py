@@ -147,6 +147,31 @@ async def test_run_stream_events_are_ordered_and_text_excludes_tools() -> None:
     assert await stream.result() is result, "result() is idempotent after exit"
 
 
+async def test_a_tool_update_streams_as_progress_before_its_result() -> None:
+    llm = FakeLLM(
+        fake_responses=[
+            respond("book", "", call("reserve")),
+            respond("held", "Your table is held."),
+        ]
+    )
+    agent = Agent(instructions="book", llm=llm)
+
+    @agent.tool
+    async def reserve(ctx: RunContext) -> str:
+        """Reserve a table."""
+        await ctx.update("checking the floor plan")
+        return "held"
+
+    async with agent.run_stream("book") as stream:
+        events = [e async for e in stream.stream_events()]
+
+    types = [e.type for e in events]
+    assert types[:3] == ["tool_call", "progress", "tool_result"], types
+    progress = events[1]
+    assert progress.type == "progress" and progress.message == "checking the floor plan"
+    assert progress.call_id == "c1" and progress.tool_name == "reserve"
+
+
 async def test_run_stream_cancel_settles_the_tool_and_raises_cancellation() -> None:
     entered, cancelled = asyncio.Event(), asyncio.Event()
     llm = FakeLLM(fake_responses=[respond("wait", "", call("slow"))])

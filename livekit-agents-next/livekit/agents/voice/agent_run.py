@@ -124,6 +124,8 @@ class _TextRun(Generic[Context_T]):
         self.hooks = hooks
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
+        # the runner of this invocation, once started: where its tools report progress
+        self.runner: _core.AgentRunner | None = None
         self._history = history
 
     @property
@@ -183,6 +185,7 @@ async def start_run(
     captured = contextvars.copy_context()
     captured.run(_BindingContextVar.set, run)
     runner = _core.AgentRunner(agent._definition(run.tools), run.llm, agent._host)
+    run.runner = runner
     updates = runner.run(
         RunRequest(
             invocation_id=run.id,

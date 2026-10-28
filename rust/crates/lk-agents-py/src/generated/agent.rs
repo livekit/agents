@@ -38,6 +38,16 @@ impl AgentRunner {
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunUpdates(::lk_agents_runtime::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
+
+    /// `ctx.update(message)` from the tool body running as host `operation` of invocation
+    /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
+    /// end is dropped. Refused for an invocation this runner is not running.
+    #[pyo3(signature = (invocation_id, operation, message))]
+    fn progress(&self, invocation_id: ::std::string::String, operation: u64, message: ::std::string::String) -> PyResult<()> {
+        ::lk_agents_abi::python::check_pid()?;
+        <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(&self.0, &invocation_id, operation, message).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
 }
 
 /// One stream of `::lk_agents_abi::agent::run::RunUpdate` items: `recv()` resolves to the next, `None` at the end.

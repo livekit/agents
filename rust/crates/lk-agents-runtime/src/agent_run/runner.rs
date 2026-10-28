@@ -1,7 +1,7 @@
 //! [`AgentRunner`], the host's class: each `run` starts one invocation ([`start`]) on the process
 //! runtime and hands its updates out as a stream whose drop cancels it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunRequest, RunUpdate};
@@ -15,7 +15,7 @@ use lk_agents_core::RunInput;
 use lk_agents_core::tool_outcome::Mode;
 use tokio::sync::mpsc;
 
-use super::{AgentRunHandle, Ports, start};
+use super::{AgentRunHandle, Ports, Progress, start};
 
 /// How long cancelled work may take to settle before it is reported incomplete.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,6 +28,8 @@ pub struct Runner {
     llm: Arc<dyn Llm>,
     host: Arc<dyn AgentHost>,
     clock: Arc<dyn Clock>,
+    /// Each running invocation's progress port, by invocation id; ended ones are pruned.
+    running: Mutex<Vec<(String, Progress)>>,
 }
 
 impl AgentRunner for Runner {
@@ -39,7 +41,13 @@ impl AgentRunner for Runner {
         host: Arc<dyn AgentHost>,
     ) -> Result<Self, InvalidRun> {
         lk_agents_core::agent::validate(&definition).map_err(|e| InvalidRun(e.to_string()))?;
-        Ok(Runner { definition, llm, host, clock: Arc::new(RealClock::new()) })
+        Ok(Runner {
+            definition,
+            llm,
+            host,
+            clock: Arc::new(RealClock::new()),
+            running: Mutex::new(Vec::new()),
+        })
     }
 
     fn run(&self, request: RunRequest) -> Result<Updates, InvalidRun> {
@@ -72,10 +80,23 @@ impl AgentRunner for Runner {
                 host_context: Some(request.host_context),
             },
         };
+        let invocation_id = input.invocation_id.clone();
         let (handle, updates) =
             start(&runtime, self.definition.clone(), input, ports, UPDATE_QUEUE)
                 .map_err(|e| InvalidRun(e.to_string()))?;
+        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        running.retain(|(_, progress)| !progress.ended());
+        running.push((invocation_id, handle.progress()));
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
+    }
+
+    fn progress(&self, invocation_id: &str, operation: u64, message: String) -> Result<(), InvalidRun> {
+        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let progress = running.iter().find(|(id, _)| id == invocation_id).map(|(_, p)| p);
+        match progress {
+            Some(progress) if progress.report(operation, message) => Ok(()),
+            _ => Err(InvalidRun(format!("invocation {invocation_id} is not running"))),
+        }
     }
 }
 

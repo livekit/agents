@@ -20,6 +20,11 @@ class AgentRunner:
         """The runner of `definition` on `llm`, its callbacks run by `host`."""
     def run(self, request: RunRequest) -> AgentRunUpdates:
         """Starts one invocation; nothing runs until the first pull."""
+    def progress(self, invocation_id: str, operation: int, message: str) -> None:
+        """`ctx.update(message)` from the tool body running as host `operation` of invocation
+        `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
+        end is dropped. Refused for an invocation this runner is not running.
+        """
 
 class AgentRunUpdates:
     async def recv(self) -> RunUpdate | None: ...

@@ -96,6 +96,8 @@ class RunContext(Generic[Context_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
         self._run = run
+        # in agent.run(): the host operation running this tool body, which its updates name
+        self._operation: int | None = None
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
         # the synthesized progress-update pairs, read back by `execute_function_call`
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
@@ -276,7 +278,13 @@ class RunContext(Generic[Context_T]):
         )
 
         if self._first_update is None:
-            # agent.run(): the door that runs the turn forwards the text as progress
+            # agent.run(): the run streams it as progress; the door that runs the turn forwards it
+            if (
+                self._run is not None
+                and self._run.runner is not None
+                and self._operation is not None
+            ):
+                self._run.runner.progress(self._run.id, self._operation, raw)
             hooks = self._run.hooks if self._run is not None else None
             if hooks is not None and hooks.on_update is not None:
                 out = hooks.on_update(raw)

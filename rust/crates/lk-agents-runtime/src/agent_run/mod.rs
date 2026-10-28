@@ -38,9 +38,32 @@ pub struct Ports {
 /// The running invocation. Dropping it cancels the run; its work still settles.
 pub struct AgentRunHandle {
     cancel: Option<oneshot::Sender<()>>,
+    progress: Progress,
+}
+
+/// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
+/// and the message. Unbounded so the host's loop never waits on it; a report whose call settled
+/// first is dropped by the driver (the update raced the call's end).
+#[derive(Clone)]
+pub struct Progress(mpsc::UnboundedSender<(u64, String)>);
+
+impl Progress {
+    /// `false` once the run ended.
+    pub fn report(&self, operation: u64, message: String) -> bool {
+        self.0.send((operation, message)).is_ok()
+    }
+
+    pub fn ended(&self) -> bool {
+        self.0.is_closed()
+    }
 }
 
 impl AgentRunHandle {
+    /// Where the run's tool bodies report their progress.
+    pub fn progress(&self) -> Progress {
+        self.progress.clone()
+    }
+
     /// Requests cancellation; idempotent. The run settles once its work reported back.
     pub fn cancel(&mut self) {
         if let Some(cancel) = self.cancel.take() {
@@ -67,6 +90,7 @@ pub fn start(
     let (cancel, cancelled) = oneshot::channel();
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
+    let (progress_tx, progress) = mpsc::unbounded_channel();
     let driver = Driver {
         run,
         invoker: HostInvoker::new(ports.entry.clone()),
@@ -82,8 +106,8 @@ pub fn start(
         next_resource: 0,
         finished: false,
     };
-    runtime.spawn(driver.drive(events, cancelled));
-    Ok((AgentRunHandle { cancel: Some(cancel) }, update_rx))
+    runtime.spawn(driver.drive(events, progress, cancelled));
+    Ok((AgentRunHandle { cancel: Some(cancel), progress: Progress(progress_tx) }, update_rx))
 }
 
 /// What work in flight reports to the driver: a core event, with the host value it returned when
@@ -127,6 +151,7 @@ impl Driver {
     async fn drive(
         mut self,
         mut events: mpsc::Receiver<Report>,
+        mut progress: mpsc::UnboundedReceiver<(u64, String)>,
         mut cancelled: oneshot::Receiver<()>,
     ) {
         let mut cancel_seen = false;
@@ -147,6 +172,20 @@ impl Driver {
                 _ = &mut cancelled, if !cancel_seen => {
                     cancel_seen = true;
                     Event::Cancel
+                }
+                // Ahead of the reports: an update sent before its body returned precedes it.
+                Some((operation, message)) = progress.recv() => {
+                    let call = self.operations.iter().find_map(|(work, op)| match work {
+                        Work::Call(call) if *op == operation && self.invoker.live(*op).is_some() => {
+                            Some(*call)
+                        }
+                        _ => None,
+                    });
+                    match call {
+                        Some(call) => Event::ToolProgress { call, message },
+                        // The call settled before its update arrived.
+                        None => continue,
+                    }
                 }
                 Some(report) = events.recv() => self.adopt(report),
                 _ = self.invoker.settled() => continue,
