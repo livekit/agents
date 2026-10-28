@@ -231,7 +231,7 @@ pub fn format_log_record(style: ::std::string::String, record: ::lk_agents_abi::
 #[pyo3(signature = (cli_addr, agent_name, url, api_key, api_secret, server))]
 pub fn dev_channel<'py>(py: Python<'py>, cli_addr: ::std::string::String, agent_name: ::std::string::String, url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String, server: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     ::lk_agents_abi::python::check_pid()?;
-    let server = super::worker::DevServerProxy::from_host(&server)?;
+    let server = crate::generated::worker::DevServerProxy::from_host(&server)?;
     crate::host::future_into_py(py, async move {
         let out = <WorkerCliImpl as ::lk_agents_abi::worker::cli::WorkerCli>::dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

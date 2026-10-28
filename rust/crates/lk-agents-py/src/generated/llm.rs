@@ -114,7 +114,7 @@ fn _extract_fallback_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<::s
 
 /// `tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
 #[pyclass(frozen, name = "FallbackTts", module = "livekit.agents._core")]
-pub struct FallbackTts(::std::sync::Arc<FallbackTtsImpl>);
+pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
 
 #[pymethods]
 impl FallbackTts {
@@ -210,7 +210,7 @@ type TtsTokenLogImpl = <crate::Selected as super::Implementations>::TtsTokenLog;
 /// `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
 /// here is lossy or bounded.
 #[pyclass(frozen, name = "TtsTokenLog", module = "livekit.agents._core")]
-pub struct TtsTokenLog(::std::sync::Arc<TtsTokenLogImpl>);
+pub struct TtsTokenLog(pub(crate) ::std::sync::Arc<TtsTokenLogImpl>);
 
 #[pymethods]
 impl TtsTokenLog {

@@ -1043,7 +1043,11 @@ impl<H: ProcHost> Driver<H> {
                     None => { reader_open = false; Input::ReaderClosed(None) }
                 },
                 result = written.recv(), if writer_open => match result {
-                    Some((id, result)) => Input::Written { id, result },
+                    Some((id, result)) => {
+                        // A failed write is the writer's final correlated outcome.
+                        writer_open = result.is_ok();
+                        Input::Written { id, result }
+                    },
                     None => { writer_open = false; Input::ReaderClosed(Some(Arc::new(WireError::Unexpected("IPC writer closed".into())))) }
                 },
                 command = commands.recv(), if commands_open => match command {

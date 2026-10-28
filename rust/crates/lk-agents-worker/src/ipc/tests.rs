@@ -14,6 +14,8 @@ use super::supervisor::{
 use super::wire::{MAX_FRAME, decode, encode, read, write};
 use super::*;
 
+mod writer;
+
 // ---------------------------------------------------------------------------------------- wire
 
 fn job() -> StartJob {
