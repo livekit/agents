@@ -6,21 +6,23 @@ pub mod host;
 pub mod remote;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
-use lk_agents_core::a2a::client::{Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate};
-use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
-use crate::transport::HttpRequest;
+use lk_agents_core::a2a::client::{
+    Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
+};
+use lk_agents_core::a2a::rpc::TaskRef;
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 
+use crate::env::{Env, Standalone};
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
-use crate::env::{Env, Standalone};
 use crate::source::{NativeSource, PullError, Pulled};
 use crate::sse::SseDecoder;
 use crate::task::{OwnedTask, TaskOutcome};
@@ -101,7 +103,7 @@ impl<E: Env> AgentClient<E> {
         Ok(Self {
             inner: Arc::new(Inner {
                 core: Mutex::new(core),
-                http: GatewayHttp::shared().map_err(transport_error)?,
+                http: E::http().map_err(transport_error)?,
                 runtime,
                 clock,
                 endpoint: endpoint_url,

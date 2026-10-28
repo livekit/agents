@@ -3,7 +3,8 @@
 use std::time::SystemTime;
 
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
-use lk_agents_inference::evals::{JudgeEnv, prompts};
+use lk_agents_inference::evals::prompts;
+use lk_agents_net::env::Env;
 
 use lk_agents_runtime::process::Process;
 
@@ -22,7 +23,7 @@ fn judge_prompts_strip_only_assistant_markup_in_conversation_and_reference() {
     let prompt = prompts::built_in("conciseness").unwrap().prompt(
         &conversation,
         Some(&reference),
-        Process::strip_assistant_markup,
+        Process::services().strip_assistant_markup,
     );
     assert!(prompt.contains("Conversation:\nassistant: Hello.\nuser: <expr"));
     assert!(prompt.contains("Reference:\nassistant: Hello."));

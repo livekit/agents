@@ -10,6 +10,15 @@ use lk_agents_abi::{Clock, Spawner};
 use crate::session_report::ReportAdmission;
 
 pub trait Env: Send + Sync + 'static {
+    /// Subject-specific services supplied by the process, without an edge to their crate.
+    type Services: Send + Sync + 'static;
+    fn services() -> Self::Services;
+
+    /// The process's shared connection pool, supplied to each client constructor.
+    fn http() -> Result<Arc<crate::http::GatewayHttp>, String> {
+        crate::http::GatewayHttp::new().map(Arc::new)
+    }
+
     /// The runtime this crate's tasks and sockets run on.
     fn runtime() -> Result<tokio::runtime::Handle, String>;
     /// The runtime the caller is on, else [`Env::runtime`].
@@ -27,9 +36,15 @@ pub trait Env: Send + Sync + 'static {
 }
 
 /// A Rust caller with no host: the current Tokio runtime and the wall clock.
-pub struct Standalone;
+pub struct Standalone<S = ()>(std::marker::PhantomData<fn() -> S>);
 
-impl Env for Standalone {
+impl<S: Default + Send + Sync + 'static> Env for Standalone<S> {
+    type Services = S;
+
+    fn services() -> S {
+        S::default()
+    }
+
     fn runtime() -> Result<tokio::runtime::Handle, String> {
         tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
     }

@@ -13,9 +13,9 @@ use super::stream::TtsStream;
 use super::{NativeTts, TtsOptions};
 
 /// What a host-constructed synthesis runs on: the process's services and its speech text.
-pub trait TtsHost: TtsTextProcessorFactory + crate::env::Env {}
+pub trait TtsHost: TtsTextProcessorFactory + lk_agents_net::env::Env {}
 
-impl<E: TtsTextProcessorFactory + crate::env::Env> TtsHost for E {}
+impl<E: TtsTextProcessorFactory + lk_agents_net::env::Env> TtsHost for E {}
 
 impl<P: TtsHost> InferenceTts for NativeTts<P> {
     type Stream = TtsStream;

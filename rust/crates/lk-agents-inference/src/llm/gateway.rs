@@ -9,6 +9,12 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::headers::{Headers, identification_headers};
+use crate::llm::lifecycle::{
+    LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
+};
+use crate::llm::request::ChatArgs;
+use crate::llm::{LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
@@ -16,23 +22,17 @@ use lk_agents_abi::{
     LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
 };
 use lk_agents_core::llm::provider_format::PreResolved;
-use crate::headers::{Headers, identification_headers};
-use crate::llm::lifecycle::{
-    LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
-};
-use crate::llm::request::ChatArgs;
-use crate::llm::{LlmOptions, models};
 mod request;
 use lk_agents_net::transport::HttpRequest;
 use request::build_request;
 use tokio::sync::mpsc;
 
-use lk_agents_net::env::{Env, Standalone};
+use crate::llm::parse::WireChunk;
 use futures_util::StreamExt;
 use lk_agents_net::attempts::AttemptFailure;
+use lk_agents_net::env::{Env, Standalone};
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
 use lk_agents_net::sse::SseDecoder;
-use crate::llm::parse::WireChunk;
 use lk_agents_net::task::{OwnedTask, TaskOutcome};
 
 /// Transport observations an attempt may report ahead of the consumer before it stops reading.
@@ -160,7 +160,7 @@ impl<E: Env> lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm<E> {
     ) -> Result<Self, ApiError> {
         let unavailable = |e: String| ApiError::new(e).with_retryable(false);
         let runtime = E::runtime().map_err(unavailable)?;
-        let http = GatewayHttp::shared().map_err(unavailable)?;
+        let http = E::http().map_err(unavailable)?;
         let opts = LlmOptions {
             model,
             base_url,
@@ -420,7 +420,8 @@ impl LlmChunks {
                     let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
                     let closed = self.reporter.clone();
                     let work = async move {
-                        send_attempt(&exchange.http, exchange.request.clone(), attempt, reporter).await
+                        send_attempt(&exchange.http, exchange.request.clone(), attempt, reporter)
+                            .await
                     };
                     let task = OwnedTask::spawn(&self.runtime, work, move |outcome| async move {
                         if outcome == TaskOutcome::Panicked {

@@ -20,8 +20,6 @@ lk-agents-core = { path = "../lk-agents-core" }
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
 lk-agents-worker = { path = "../lk-agents-worker" }
 lk-agents-media = { path = "../lk-agents-media" }
-# Signs the gateway token (and later every framework credential): no private claims or signer.
-livekit-token.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 log.workspace = true
 thiserror.workspace = true
@@ -29,7 +27,6 @@ async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "fs", "net", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "json", "query"] }
 base64.workspace = true
-httparse = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 pyo3 = { workspace = true, optional = true }
 # Thread storage (all database interaction) and the A2A door's decisions.
@@ -39,12 +36,6 @@ pbjson-types.workspace = true
 prost.workspace = true
 a2a.workspace = true
 serde.workspace = true
-indexmap.workspace = true
-# Threads and databases through public-api-server, the one way to agentstore.
-# The AgentDB data plane: the same WebSocket and TLS set as `lk-agents-worker` and
-# `lk-agents-inference`, one crypto provider (`ring`).
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 url = "2"
 # `SQLiteStorage`: one file per thread, executed on its own connection thread.
 

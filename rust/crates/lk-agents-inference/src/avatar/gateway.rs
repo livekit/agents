@@ -11,19 +11,17 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::avatar::lifecycle::{
+    AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
+    CreateFailure, ProviderSession,
+};
+use crate::avatar::{AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request};
+use crate::headers::Headers;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::avatar_session::{AvatarError, InferenceAvatar};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Extra, Ts};
 use lk_agents_net::attempts::RequestPolicy;
-use crate::avatar::lifecycle::{
-    AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
-    CreateFailure, ProviderSession,
-};
-use crate::avatar::{
-    AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request,
-};
-use crate::headers::Headers;
 use lk_agents_net::transport::HttpRequest;
 use tokio::sync::{mpsc, oneshot};
 
@@ -179,16 +177,9 @@ impl<E: Env> InferenceAvatar for GatewayAvatar<E> {
             base_url,
         )?;
         let runtime = E::runtime().map_err(unavailable)?;
-        let http = GatewayHttp::shared().map_err(unavailable)?;
+        let http = E::http().map_err(unavailable)?;
         let policy = RequestPolicy::from_options(&conn_options);
-        Ok(GatewayAvatar::new(
-            opts,
-            (api_key, api_secret),
-            policy,
-            http,
-            &runtime,
-            E::clock(),
-        ))
+        Ok(GatewayAvatar::new(opts, (api_key, api_secret), policy, http, &runtime, E::clock()))
     }
 
     fn provider(&self) -> String {

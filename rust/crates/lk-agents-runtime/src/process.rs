@@ -25,6 +25,7 @@ struct Started {
     workers: MediaWorkers,
     worker_io: lk_agents_worker::io::WorkerIo,
     report_admission: lk_agents_net::session_report::ReportAdmission,
+    http: Arc<lk_agents_net::http::GatewayHttp>,
 }
 
 static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
@@ -68,7 +69,8 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
     let worker_io = lk_agents_worker::io::WorkerIo::new(runtime.handle().clone(), 4)
         .map_err(|error| ProcessError::Start(error.to_string()))?;
     let report_admission = Default::default();
-    let started = slot.insert(Started { pid, runtime, workers, worker_io, report_admission });
+    let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
+    let started = slot.insert(Started { pid, runtime, workers, worker_io, report_admission, http });
     Ok(read(started))
 }
 
@@ -99,6 +101,20 @@ pub fn host_clock() -> Arc<dyn Clock> {
 pub struct Process;
 
 impl lk_agents_net::env::Env for Process {
+    type Services = lk_agents_inference::env::Services;
+
+    fn services() -> Self::Services {
+        Self::Services {
+            workers: || workers().map_err(|error| error.to_string()),
+            images: images(),
+            strip_assistant_markup: lk_agents_voice::tts::markup::strip_expr_markup,
+        }
+    }
+
+    fn http() -> Result<Arc<lk_agents_net::http::GatewayHttp>, String> {
+        with_started(|started| started.http.clone()).map_err(|error| error.to_string())
+    }
+
     fn runtime() -> Result<tokio::runtime::Handle, String> {
         handle().map_err(|error| error.to_string())
     }
@@ -123,20 +139,14 @@ impl lk_agents_worker::env::Env for Process {
     }
 }
 
-impl lk_agents_inference::env::Env for Process {
-    fn workers() -> Result<MediaWorkers, String> {
-        workers().map_err(|error| error.to_string())
-    }
+#[cfg(feature = "media-images")]
+fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+    Arc::new(crate::images::NativeImages)
+}
 
-    #[cfg(feature = "media-images")]
-    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        Arc::new(crate::images::NativeImages)
-    }
-
-    #[cfg(not(feature = "media-images"))]
-    fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
-        <lk_agents_inference::env::Standalone as lk_agents_inference::env::Env>::images()
-    }
+#[cfg(not(feature = "media-images"))]
+fn images() -> Arc<dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync> {
+    lk_agents_inference::env::Services::default().images
 }
 
 /// The voice core's speech text in the native synthesis clients and the judges' transcripts.
@@ -152,12 +162,6 @@ impl lk_agents_abi::tts::text::TtsTextProcessorFactory for Process {
     }
     fn transcript(expressive: bool) -> Box<dyn lk_agents_abi::tts::text::TranscriptProcessor> {
         SpeechText::transcript(expressive)
-    }
-}
-
-impl lk_agents_inference::evals::JudgeEnv for Process {
-    fn strip_assistant_markup(text: &str) -> String {
-        lk_agents_voice::tts::markup::strip_expr_markup(text)
     }
 }
 

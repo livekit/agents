@@ -15,7 +15,8 @@ use machine::{VadOptions, VadOutput};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::env::{Env, Standalone};
+use crate::env::{Services, Standalone};
+use lk_agents_net::env::Env;
 
 /// The Silero model behind `livekit.local_inference`; `predict` also returns how long it took.
 pub trait VadModel: Send {
@@ -31,7 +32,7 @@ pub trait VadModelFactory: Send + Sync {
 
 /// `E` is the hosting process whose media workers run the model and whose runtime the stream
 /// tasks run on.
-pub struct NativeVad<E: Env = Standalone> {
+pub struct NativeVad<E: Env<Services = Services> = Standalone> {
     /// Watched by every running stream: `update_options` reaches them before their next frame.
     opts: tokio::sync::watch::Sender<VadOptions>,
     models: Arc<dyn VadModelFactory>,
@@ -39,7 +40,7 @@ pub struct NativeVad<E: Env = Standalone> {
     env: PhantomData<fn() -> E>,
 }
 
-impl<E: Env> NativeVad<E> {
+impl<E: Env<Services = Services>> NativeVad<E> {
     pub fn new(
         opts: VadOptions,
         models: Arc<dyn VadModelFactory>,
@@ -53,7 +54,7 @@ impl<E: Env> NativeVad<E> {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
-        let workers = E::workers().map_err(unavailable)?;
+        let workers = (E::services().workers)().map_err(unavailable)?;
         let runtime = E::caller_runtime().map_err(unavailable)?;
         let (sink, source) = stream::open(
             self.opts.subscribe(),
@@ -68,7 +69,7 @@ impl<E: Env> NativeVad<E> {
 
 /// `_core.InferenceVad`: the generated adapter calls this. `model_factory()` builds one host
 /// model per stream (each needs its own recurrent state); never called when the model is native.
-impl<E: Env> lk_agents_abi::vad::inference::InferenceVad for NativeVad<E> {
+impl<E: Env<Services = Services>> lk_agents_abi::vad::inference::InferenceVad for NativeVad<E> {
     type Audio = VadSinkHandle;
     type Events = VadEventSource;
 
@@ -161,7 +162,7 @@ impl VadModel for HostModel {
     }
 }
 
-impl<E: Env> Vad for NativeVad<E> {
+impl<E: Env<Services = Services>> Vad for NativeVad<E> {
     fn label(&self) -> String {
         "livekit.agents.inference.vad.VAD".into()
     }

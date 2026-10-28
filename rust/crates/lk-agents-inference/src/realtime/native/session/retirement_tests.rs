@@ -46,7 +46,7 @@ fn pump() -> (Pump, Arc<Shared>, super::super::queue::EventReceiver) {
         retirement_wake: Arc::new(tokio::sync::Notify::new()),
         context_ready: tokio::sync::Notify::new(),
         retirement_closing: std::sync::atomic::AtomicBool::new(false),
-        workers: <crate::env::Standalone as crate::env::Env>::workers,
+        workers: <crate::env::Standalone as lk_agents_net::env::Env>::services().workers,
     });
     let (events, receiver) = super::super::queue::events();
     let pump = Pump {

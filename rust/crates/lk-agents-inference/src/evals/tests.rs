@@ -14,13 +14,6 @@ use tokio::sync::Barrier;
 use super::*;
 use crate::env::Standalone;
 
-// These fixtures contain plain text; runtime tests compose the real expressive-markup projector.
-impl JudgeEnv for Standalone {
-    fn strip_assistant_markup(text: &str) -> String {
-        text.to_owned()
-    }
-}
-
 const T0: SystemTime = SystemTime::UNIX_EPOCH;
 
 fn msg(id: &str, role: Role, text: &str) -> ChatItem {
