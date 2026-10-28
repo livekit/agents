@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx2 as httpx
 import openai
@@ -205,7 +205,7 @@ def _to_responses_tool_choice(tool_choice: Any) -> response_create_params.ToolCh
     if isinstance(tool_choice, dict) and "function" in tool_choice:
         return {"type": "function", "name": tool_choice["function"]["name"]}
     if isinstance(tool_choice, dict) or tool_choice in ("auto", "required", "none"):
-        return tool_choice
+        return cast(response_create_params.ToolChoice, tool_choice)
     return None
 
 
