@@ -39,7 +39,6 @@ pub struct SttProtocol {
     finalized: bool,
     pending_transcript: bool,
     finished: bool,
-    produced_output: bool,
 }
 
 impl SttProtocol {
@@ -63,7 +62,6 @@ impl SttProtocol {
             finalized: false,
             pending_transcript: false,
             finished: false,
-            produced_output: false,
         }
     }
 
@@ -71,8 +69,10 @@ impl SttProtocol {
         self.transcript.is_speaking()
     }
 
+    /// A reconnect sends only new audio, so it repeats no delivered transcript; once the input
+    /// ended there is nothing left to send and the pending transcript would silently be lost.
     pub fn replay_safe(&self) -> bool {
-        !self.produced_output && !self.pending_transcript && !self.input_ended
+        !self.input_ended
     }
 
     pub fn wake_at(&self) -> Option<Ts> {
@@ -121,14 +121,6 @@ impl SttProtocol {
                     _ => {}
                 }
                 let processed = self.transcript.process(message);
-                self.produced_output |= processed.events.iter().any(|event| {
-                    matches!(
-                        event.kind,
-                        lk_agents_abi::SpeechEventType::InterimTranscript
-                            | lk_agents_abi::SpeechEventType::PreflightTranscript
-                            | lk_agents_abi::SpeechEventType::FinalTranscript
-                    )
-                });
                 let mut effects: Vec<_> =
                     processed.events.into_iter().map(SttEffect::Deliver).collect();
                 if processed.end_of_speech {
@@ -150,9 +142,7 @@ impl SttProtocol {
 
     fn fail(&mut self, message: &str) -> Vec<SttEffect> {
         self.finished = true;
-        vec![SttEffect::Finished(Err(
-            ApiError::connection(Some(message.into())).with_retryable(false)
-        ))]
+        vec![SttEffect::Finished(Err(ApiError::connection(Some(message.into()))))]
     }
 }
 

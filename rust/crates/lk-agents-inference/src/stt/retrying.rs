@@ -423,6 +423,7 @@ impl RetrySource {
             self.close_current().await;
             if self.options.attempt_connected(
                 self.clock.now().saturating_duration_since(self.began).as_secs_f64(),
+                &error.attempt_error(),
             ) {
                 self.attempts.reset_retries();
             }

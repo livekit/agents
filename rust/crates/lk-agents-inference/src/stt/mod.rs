@@ -796,7 +796,7 @@ impl Pump {
             if self
                 .opts
                 .conn_options
-                .attempt_connected(now.saturating_duration_since(started).as_secs_f64())
+                .attempt_connected(now.saturating_duration_since(started).as_secs_f64(), &error)
             {
                 attempts.reset_retries();
             }
@@ -1106,7 +1106,6 @@ impl Pump {
         // Only the first read (the `session.create` ack) is a response the session waits for;
         // later silence is the user's.
         let mut awaiting_first = true;
-        let mut produced_output = false;
         loop {
             let recv = receiver.recv();
             let received =
@@ -1116,10 +1115,7 @@ impl Pump {
                 Err(TransportError::Timeout) if awaiting_first => {
                     return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Read));
                 }
-                Err(err) => {
-                    let error = connect_error(WHAT, err);
-                    return Err(if produced_output { error.with_retryable(false) } else { error });
-                }
+                Err(err) => return Err(connect_error(WHAT, err)),
             };
             match msg {
                 WsMessage::Closed => {
@@ -1152,12 +1148,6 @@ impl Pump {
                     for effect in effects {
                         match effect {
                             SttEffect::Deliver(event) => {
-                                produced_output |= matches!(
-                                    event.kind,
-                                    lk_agents_abi::SpeechEventType::InterimTranscript
-                                        | lk_agents_abi::SpeechEventType::PreflightTranscript
-                                        | lk_agents_abi::SpeechEventType::FinalTranscript
-                                );
                                 if event_tx.send(Ok(shifted(event, offset))).await.is_err() {
                                     return Ok(());
                                 }
@@ -1174,15 +1164,7 @@ impl Pump {
                                     })?;
                                 }
                             }
-                            SttEffect::Finished(result) => {
-                                return result.map_err(|error| {
-                                    if produced_output {
-                                        error.with_retryable(false)
-                                    } else {
-                                        error
-                                    }
-                                });
-                            }
+                            SttEffect::Finished(result) => return result,
                             _ => {}
                         }
                     }

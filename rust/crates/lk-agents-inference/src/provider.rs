@@ -1,11 +1,11 @@
 //! Host provider observations projected onto the shared supplied-time attempt machine.
 
-use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
 use lk_agents_abi::types::provider::ProviderAttempts as Port;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
+use lk_agents_net::attempts::{AttemptStep, Attempts, RequestPolicy};
 
 #[derive(Debug)]
 pub struct ProviderAttempts {
@@ -79,14 +79,15 @@ impl Port for ProviderAttempts {
         if self.interrupted.take().is_some() {
             return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
+        let error = error.attempt_error();
         if self.kind == RequestKind::SttStream
             && self.options.attempt_connected(
                 now.saturating_duration_since(self.attempt_started).as_secs_f64(),
+                &error,
             )
         {
             self.attempts.reset_retries();
         }
-        let error = error.attempt_error();
         if matches!(self.kind, RequestKind::Llm | RequestKind::TtsBatch | RequestKind::TtsStream)
             && error.status_code == Some(499)
         {
@@ -222,8 +223,17 @@ impl ProviderAttempts {
                     self.attempt_started = now;
                     self.reading(now);
                 }
+                // The provider consumed the whole input and never answered: a reconnect has
+                // nothing left to send, so the transcript is lost rather than retried.
                 AttemptStep::Retry { error, .. }
-                    if stopped && error.kind == lk_agents_abi::errors::ApiErrorKind::Timeout =>
+                    if stopped && error.kind == ApiErrorKind::Timeout && self.input_ended =>
+                {
+                    self.permit = false;
+                    self.attempts.cancel(now, &mut Vec::new());
+                    self.error = Some(error.with_retryable(false));
+                }
+                AttemptStep::Retry { error, .. }
+                    if stopped && error.kind == ApiErrorKind::Timeout =>
                 {
                     self.interrupted = Some(error);
                 }
@@ -327,6 +337,38 @@ mod tests {
                 .unwrap(),
             RetryDecision::Exhausted("failed to recognize speech after 2 attempts".into())
         );
+    }
+
+    // Catches: a recognition whose provider consumed the end of input and never answered being
+    // reconnected: the new attempt has nothing to send, so the timeout must end it, unretryable.
+    #[test]
+    fn a_response_timeout_after_the_input_ended_is_not_retried() {
+        let options =
+            ApiConnectOptions { max_retry: 3, read_timeout: Some(1.0), ..Default::default() };
+        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        assert_eq!(operation.ready(0), Ok(true));
+        operation.input_ended(0);
+        let error = operation.ready(at(1)).unwrap_err();
+        assert_eq!((error.phase, error.retryable), (Some(TimeoutPhase::Read), false));
+        assert_eq!(operation.failure(error.clone().into(), false, at(1)), Err(error));
+        assert_eq!(operation.wake_at(), None, "no attempt follows");
+    }
+
+    // Catches: a handshake that times out after the connect limit counted as a connected attempt,
+    // restarting the retry budget so a peer that never completes it is retried forever.
+    #[test]
+    fn a_timed_out_attempt_never_restarts_the_retry_budget() {
+        let options =
+            ApiConnectOptions { max_retry: 1, connect_timeout: Some(0.5), ..Default::default() };
+        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let timeout = ApiError::timed_out(TimeoutPhase::Read);
+        assert_eq!(operation.ready(0), Ok(true));
+        assert_eq!(
+            operation.failure(timeout.clone().into(), false, at(1)).unwrap(),
+            RetryDecision::Retry(0.1)
+        );
+        assert_eq!(operation.ready(at(2)), Ok(true));
+        assert_eq!(operation.failure(timeout.into(), false, at(3)).unwrap(), RetryDecision::Raise);
     }
 
     #[test]

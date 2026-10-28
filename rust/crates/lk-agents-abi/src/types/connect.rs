@@ -7,6 +7,7 @@ use lk_agents_host_derive::Host;
 use thiserror::Error;
 
 use crate::Ts;
+use crate::errors::{ApiError, ApiErrorKind};
 
 /// A field outside its declared range, named by its path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -89,9 +90,10 @@ impl ApiConnectOptions {
     /// A failed stream attempt that lasted beyond the connect limit had connected, so its failure
     /// is not consecutive with the earlier ones and the retry budget restarts (#7275): a socket a
     /// provider closes every few idle minutes never exhausts it. Without a connect limit no
-    /// duration proves the attempt connected.
-    pub fn attempt_connected(&self, lasted_seconds: f64) -> bool {
-        self.connect_timeout.is_some_and(|limit| lasted_seconds > limit)
+    /// duration proves the attempt connected, nor does one that timed out: it never answered.
+    pub fn attempt_connected(&self, lasted_seconds: f64, failure: &ApiError) -> bool {
+        failure.kind != ApiErrorKind::Timeout
+            && self.connect_timeout.is_some_and(|limit| lasted_seconds > limit)
     }
 
     /// When a connection opened at `start` runs out of `connect_timeout`.

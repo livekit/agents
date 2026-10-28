@@ -698,3 +698,82 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
     assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Total));
     source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
 }
+
+/// Yield until `ready`, or fail; bounded so a bug fails rather than hangs.
+async fn until(what: &str, ready: impl Fn() -> bool) {
+    let reached =
+        lk_agents_abi::timeout(&lk_agents_abi::RealClock::new(), Duration::from_secs(2), async {
+            while !ready() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    assert!(reached.is_ok(), "never {what}");
+}
+
+// Catches: a live recognition that dies when the gateway drops it mid-session after it already
+// delivered transcripts and audio is in flight. A reconnect sends only new audio, so it repeats
+// nothing; only a dropped stream whose input already ended has nothing left to recognize.
+#[tokio::test]
+async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_transcripts() {
+    let dropped = [Ok(WsMessage::Closed), text(json!({"type": "session.closed"}))];
+    for drop in dropped {
+        let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
+        let stt = stt(ws.clone());
+        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
+        sink.push(frame(800)).unwrap();
+        ws.feed(text(json!({"type": "final_transcript", "transcript": "first"})));
+        drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;
+        sink.push(frame(800)).unwrap();
+        let audio = |ws: &FakeWs| {
+            ws.sent_json().iter().filter(|v| v["type"] == json!("input_audio")).count()
+        };
+        until("sent the second frame", || audio(&ws) == 2).await;
+        ws.feed(drop.clone());
+        until("reconnected", || ws.connect_count() == 2).await;
+
+        ws.feed(text(json!({"type": "session.created"})));
+        sink.push(frame(800)).unwrap();
+        sink.end_input();
+        until("finalized", || {
+            ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize"))
+        })
+        .await;
+        ws.feed(text(json!({"type": "final_transcript", "transcript": "second"})));
+        ws.feed(text(json!({"type": "session.finalized"})));
+        let events = drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;
+        assert_eq!(events.last().unwrap().alternatives[0].text, "second");
+        let end = lk_agents_abi::timeout(
+            &lk_agents_abi::RealClock::new(),
+            Duration::from_secs(2),
+            async {
+                loop {
+                    match source.next().await {
+                        Ok(Some(_)) => continue,
+                        other => return other,
+                    }
+                }
+            },
+        )
+        .await
+        .expect("the stream ends");
+        assert!(matches!(end, Ok(None)), "{drop:?}: {end:?}");
+        source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+    }
+}
+
+// Catches: a recognition that failed after its input ended reconnecting: the new session has no
+// audio to send, finalizes empty and reports clean success with the transcript lost.
+#[tokio::test]
+async fn a_session_failing_after_its_input_ended_is_not_retried() {
+    let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
+    let (sink, mut source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap();
+    sink.push(frame(800)).unwrap();
+    sink.end_input();
+    until("finalized", || ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize")))
+        .await;
+    ws.feed(text(json!({"type": "error", "code": 2006})));
+    let error = source.next().await.expect_err("the session failed");
+    assert!(!error.retryable());
+    assert_eq!(ws.connect_count(), 1);
+}
