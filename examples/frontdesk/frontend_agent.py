@@ -2,8 +2,7 @@ import os
 from collections.abc import AsyncIterator
 
 from livekit.agents import Agent, AgentHandler, JobContext, VoiceSession
-from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.delegation import A2ADelegate
+from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.plugins import openai
 
 # the back office on the project's own host, which the worker connects to
@@ -21,19 +20,19 @@ PERSONA = (
 )
 
 # the back office as the front desk's one tool, described from its card
-back_office = A2ADelegate(BACKEND)
+back_office = RemoteAgent(BACKEND)
 
 chat = Agent(
     instructions=PERSONA + " By text: one or two plain sentences, no lists.",
     llm="google/gemma-4-31b-it",
-    tools=[back_office],
+    tools=[back_office.as_tool()],
 )
 
 voice = Agent(
     instructions=PERSONA + " On the phone: one short sentence at a time, one question per "
     "turn, plain speech. Say times the way a person does, Monday at two, no AM or PM. While "
     "the back office works, keep the patient company in one line.",
-    tools=[back_office],
+    tools=[back_office.as_tool()],
 )
 
 

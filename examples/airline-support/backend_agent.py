@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal, TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, Field
 from skyline import (
@@ -17,18 +17,14 @@ from skyline import (
 
 from livekit.agents import (
     Agent,
-    AgentServer,
+    AgentHandler,
     InputRequired,
-    JobContext,
     RunContext,
     RunResult,
     ToolError,
-    VoiceSession,
-    cli,
     persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.storage import AgentDBStorage
 
 AUTO_PAY_LIMIT_EUR = 400  # above it a person signs the payment off
 MAX_ROUNDS = 2  # drafts the reviewer sees before a person takes over
@@ -84,9 +80,9 @@ class Ticket:
     pir_ref: str | None = None
     asked: int = 0
     amount_eur: int = 0
-    facts: list[str] = field(default_factory=list)
+    facts: list[str] = field(default_factory=list[str])
     draft: str | None = None
-    review_notes: list[str] = field(default_factory=list)
+    review_notes: list[str] = field(default_factory=list[str])
     rounds: int = 0
 
     def end(
@@ -120,10 +116,11 @@ class Ticket:
 
 
 LLM = "google/gemma-4-31b-it"
+Ctx = TypeVar("Ctx")
 T = TypeVar("T")
 
 
-async def call(agent: Agent[Any, T], prompt: str) -> T:
+async def call(agent: Agent[Ctx, T], prompt: str) -> T:
     """An agent called as a function: a fresh conversation, a typed output."""
     result = await agent.run(prompt)
     if result.status == "input_required":
@@ -248,48 +245,49 @@ def calculate_due(ticket: Ticket, booking: Booking) -> InputRequired | None:
         bag = skyline.bags.get((ticket.pir_ref or "").strip().upper())
         if bag is None or bag.booking_ref != booking.ref:
             return InputRequired("What is the baggage report reference, such as AMSSK10422?")
-        b = bag
-        if b.status == "lost":
-            due = min(b.declared_value_eur, LOST_BAG_CAP_EUR)
-            ticket.facts.append(f"bag {b.pir} is lost, declared value EUR {b.declared_value_eur}")
-        else:
-            due = min(b.receipts_eur, b.days_late * BAG_DAILY_ALLOWANCE_EUR)
+        if bag.status == "lost":
+            due = min(bag.declared_value_eur, LOST_BAG_CAP_EUR)
             ticket.facts.append(
-                f"bag {b.pir} is {b.status.replace('_', ' ')} after {b.days_late} days, receipts EUR {b.receipts_eur}"
+                f"bag {bag.pir} is lost, declared value EUR {bag.declared_value_eur}"
+            )
+        else:
+            due = min(bag.receipts_eur, bag.days_late * BAG_DAILY_ALLOWANCE_EUR)
+            status = bag.status.replace("_", " ")
+            ticket.facts.append(
+                f"bag {bag.pir} is {status} after {bag.days_late} days, "
+                f"receipts EUR {bag.receipts_eur}"
             )
         ticket.amount_eur = owed(ticket, booking, due)
+    elif ticket.kind == "refund":
+        refundable = "" if booking.refundable else "not "
+        ticket.facts.append(f"the {booking.fare_class} fare is {refundable}refundable")
+        ticket.amount_eur = owed(ticket, booking, booking.price_eur if booking.refundable else 0)
     else:
-        b = booking
-        if ticket.kind == "refund":
-            ticket.facts.append(
-                f"the {b.fare_class} fare is {('' if b.refundable else 'not ')}refundable"
-            )
-            ticket.amount_eur = owed(ticket, b, b.price_eur if b.refundable else 0)
-        else:
-            ticket.facts.append(
-                f"changing a {b.fare_class} fare costs EUR {CHANGE_FEE_EUR[b.fare_class]} plus any fare difference; the customer changes it in Manage booking"
-            )
+        fee = CHANGE_FEE_EUR[booking.fare_class]
+        ticket.facts.append(
+            f"changing a {booking.fare_class} fare costs EUR {fee} plus any fare difference; "
+            "the customer changes it in Manage booking"
+        )
     return None
 
 
-support = Agent[SupportContext](
+backend = Agent[SupportContext](
     instructions=(
-        "You are Skyline Air's customer care, by text: one or two plain sentences. A late or "
-        "cancelled flight, a bag, a refund or a change goes to triage with what the customer "
-        "wrote, word for word, and the address they write from; ask for that address first if "
-        "they have not given it. When triage answers resolved, send its reply_draft as it is. "
-        "On to_human the draft is a colleague's to send, never yours: say a colleague will "
-        "answer by email, and to any question about money, that the colleague will confirm "
-        "it. On close, say you can only help with Skyline Air trips. A question about an "
-        "answer already given is answered from it; only a new request goes to triage again. "
-        "Use continue_request with newly supplied booking or baggage references after a question. "
-        "Never decide, compute or promise anything yourself."
+        "You are Skyline Air's back office. The front desk relays a customer's request with "
+        "what they wrote, word for word, and the address they write from; ask for that address "
+        "when it is missing. A late or cancelled flight, a bag, a refund or a change goes to "
+        "triage; after a question, continue_request takes the booking or baggage references "
+        "the customer supplied. Answer with what triage returned: on resolved, its reply_draft "
+        "as it is; on to_human, that a colleague will answer by email and confirm any money; "
+        "on close, that only Skyline Air trips are handled here. A question about an answer "
+        "already given is answered from it; only a new request goes to triage again. Never "
+        "decide, compute or promise anything yourself."
     ),
     llm=LLM,
 )
 
 
-@support.tool
+@backend.tool
 async def triage(ctx: RunContext[SupportContext], email: Email) -> TriageResult | InputRequired:
     """Start investigating a new customer request, with the original email and sender."""
     ticket = Ticket(
@@ -305,7 +303,7 @@ async def triage(ctx: RunContext[SupportContext], email: Email) -> TriageResult 
     return outcome
 
 
-@support.tool
+@backend.tool
 async def continue_request(
     ctx: RunContext[SupportContext],
     booking_ref: str | None = None,
@@ -324,26 +322,17 @@ async def continue_request(
     return outcome
 
 
-server = AgentServer(storage=AgentDBStorage(), agent_name="skyline-support")
+back_office = AgentHandler(lane="backend")
 
 
-@server.a2a_session(endpoint="triage", description="Skyline Air customer care.")
+@back_office.a2a_session(
+    endpoint="backend",
+    description="Skyline Air's back office: bookings, claims, baggage, refunds and payments.",
+    inbox="queue",
+)
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = SupportContext()
     await ctx.store.load_context(app)
-    result = await support.run(ctx.message, message_history=ctx.message_history, context=app)
+    result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
     await ctx.store.save_context(app)
     return result
-
-
-@server.rtc_session()
-async def chat(ctx: JobContext) -> None:
-    session = VoiceSession(llm=LLM, context=SupportContext(), thread=ctx.thread)
-    await session.start(agent=support, room=ctx.room)
-    await session.store.load_context(session.context)
-    if not session.history.items:
-        await session.generate_reply(instructions="Greet the customer in one sentence.")
-
-
-if __name__ == "__main__":
-    cli.run_app(server)

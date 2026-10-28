@@ -56,7 +56,7 @@ class Calendar(Protocol):
 @dataclass
 class FakeCalendar:
     slots: list[Slot]
-    appointments: list[Appointment] = field(default_factory=list)
+    appointments: list[Appointment] = field(default_factory=list[Appointment])
 
     @classmethod
     def seeded(cls) -> FakeCalendar:

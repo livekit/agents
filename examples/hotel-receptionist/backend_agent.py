@@ -287,7 +287,7 @@ async def abandon_booking(ctx: RunContext[HotelContext], reason: str) -> Failed:
 
 @backend.instructions
 def known(ctx: RunContext[HotelContext]) -> str:
-    parts = []
+    parts: list[str] = []
     if ctx.context.caller.verified_code:
         parts.append(f"The guest is verified on booking {ctx.context.caller.verified_code}.")
     if ctx.context.caller.last_booking_code:

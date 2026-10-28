@@ -78,7 +78,7 @@ class Skyline:
     bookings: dict[str, Booking]
     flights: dict[str, Flight]
     bags: dict[str, BaggageFile]
-    payments: list[Payment] = field(default_factory=list)
+    payments: list[Payment] = field(default_factory=list[Payment])
 
     @classmethod
     def seeded(cls) -> Skyline:

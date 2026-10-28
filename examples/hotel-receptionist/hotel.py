@@ -53,7 +53,7 @@ class Unavailable(Exception):
 @dataclass
 class Hotel:
     rooms: list[Room]
-    bookings: list[Booking] = field(default_factory=list)
+    bookings: list[Booking] = field(default_factory=list[Booking])
 
     @classmethod
     def seeded(cls) -> Hotel:

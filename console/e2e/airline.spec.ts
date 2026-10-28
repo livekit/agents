@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * The airline (examples/airline-support) through the console, with the console API's
- * selection on it: `CONSOLE_AGENT=skyline-support` and its `triage` endpoint. Real models,
+ * selection on it: `CONSOLE_AGENT=skyline-support` and its `frontend` endpoint. Real models,
  * so the checks read states and the amount the graph computed, never the wording.
  */
 

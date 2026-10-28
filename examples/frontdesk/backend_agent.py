@@ -71,7 +71,7 @@ async def list_available_slots(
     )
     await ctx.update("Checking the calendar.")
     slots = await ctx.context.services.available(start, end)
-    lines = []
+    lines: list[str] = []
     for slot in slots:
         days = (slot.start.date() - now.date()).days
         soon = (

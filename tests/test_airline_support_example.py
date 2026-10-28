@@ -32,7 +32,7 @@ _PLACEHOLDER = {
     "LIVEKIT_URL": "ws://localhost:9000",
 }
 with mock.patch.dict(os.environ, {k: os.environ.get(k, v) for k, v in _PLACEHOLDER.items()}):
-    import support_agent as sa  # noqa: E402
+    import backend_agent as sa  # noqa: E402
     from skyline import Skyline  # noqa: E402
 
 APPROVED = sa.Verdict(approved=True)
