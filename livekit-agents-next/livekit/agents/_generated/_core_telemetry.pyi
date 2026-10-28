@@ -8,7 +8,7 @@ from __future__ import annotations
 from livekit.agents._core import RecordingOptions
 
 from .._core import ChatItem
-from .telemetry import LogRecordWire, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
+from .telemetry import LogRecordWire, ProjectedReportEvent, SessionReportSnapshot, TelemetryExportAction, TelemetryRecordKind, TelemetryValueKind, TelemetryWorkObservation
 
 class _core_TelemetryPolicy:
     """The host supplies SDK fields and lengths; shared policy decides what may be retained/exported."""
@@ -94,13 +94,15 @@ class _core_SessionReportProjection:
     def transcript(self) -> bool: ...
     @property
     def audio(self) -> bool: ...
-    def check_events(self, items: int, retained_bytes: int, event_bytes: int) -> None:
+    def event_limit(self, items: int) -> int:
+        """Optional observations beyond this prefix are omitted without failing the transcript."""
+    def accepts_event(self, retained_bytes: int, event_bytes: int) -> bool:
         """Admission precedes host SDK serialization and native JSON extraction."""
     def project(self, report: SessionReportSnapshot) -> SessionReportSnapshot: ...
-    def project_event(self, event: object) -> object | None: ...
+    def project_event(self, event: object, retained_bytes: int) -> ProjectedReportEvent | None: ...
     def event_record(
         self,
-        event: object,
+        event: ProjectedReportEvent,
         identity: tuple[str, str, str],
         timestamp: float,
         disabled: bool,
@@ -200,7 +202,7 @@ class _core_PreparedTranscript:
         """
     def append(self, item: ChatItem) -> None: ...
     def finish(self) -> str: ...
-    def append_event(self, event: object) -> None:
+    def append_event(self, event: object) -> bool:
         """Append one already projected event to the same bounded recording preparation."""
     async def finish_report(self, report: SessionReportSnapshot, path: str) -> None:
         """Serialize and write a console report without converting its history back into host objects."""

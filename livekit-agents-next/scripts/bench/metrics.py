@@ -106,8 +106,9 @@ class LagObservations:
     def __init__(self) -> None:
         self._values = array("Q")
 
-    def append(self, sample: tuple[int, int]) -> None:
-        self._values.extend(sample)
+    def append(self, observed_ns: int, lag_ns: int) -> None:
+        self._values.append(observed_ns)
+        self._values.append(lag_ns)
 
     def clear(self) -> None:
         del self._values[:]
@@ -140,7 +141,7 @@ class LoopLag:
             now = loop.time()
             lag = max(0, int((now - deadline) * 1e9))
             self.samples.append(lag)
-            self.observations.append((time.monotonic_ns(), lag))
+            self.observations.append(time.monotonic_ns(), lag)
             # One observation per wake. Missed periods are represented by the lag itself.
             deadline += (max(0, int((now - deadline) / self.period)) + 1) * self.period
 

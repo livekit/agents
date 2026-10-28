@@ -4,6 +4,33 @@ use tokio::net::TcpListener;
 
 static UPLOAD_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[test]
+fn transcript_preparation_reserves_event_bytes_only_when_events_are_retained() {
+    use lk_agents_abi::telemetry::work::TelemetryWorker as _;
+
+    let _serial = UPLOAD_TESTS.blocking_lock();
+    let worker = super::super::work::SdkWorker::new();
+    let retained =
+        || worker.diagnostics().into_iter().find(|(name, _)| name == "retained_bytes").unwrap().1;
+    let before = retained();
+    let builder = TranscriptBuilder::new().unwrap();
+    let transcript_bytes = retained() - before;
+    assert!(
+        transcript_bytes <= TRANSCRIPT_BYTES as u64 + 128,
+        "a transcript without events must leave the event budget available"
+    );
+    builder
+        .append_event(serde_json::json!({
+            "type": "agent_state_changed", "old_state": "listening", "new_state": "thinking",
+            "created_at": 1.0
+        }))
+        .unwrap();
+    assert_eq!(
+        retained() - before - transcript_bytes,
+        lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES as u64
+    );
+}
+
 struct Request {
     headers: String,
     body: Vec<u8>,

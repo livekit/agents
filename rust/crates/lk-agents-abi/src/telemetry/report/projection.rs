@@ -1,9 +1,10 @@
 //! One native privacy projection for retained report events, console snapshots and Cloud records.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::RecordingOptions;
+use crate::metrics::usage::ModelUsage;
 use crate::voice::events::{
     AgentStateChanged, SessionUsageUpdated, UserStateChanged, UserTranscriptionTimeout,
 };
@@ -24,8 +25,17 @@ pub struct SessionReportSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_history: Option<Value>,
     pub timestamp: f64,
-    pub usage: Option<Value>,
+    pub usage: Option<Vec<ModelUsage>>,
     pub sdk_version: String,
+}
+
+/// Captured once at the destination boundary; emission does not decode or project it again.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct ProjectedReportEvent {
+    pub value: Value,
+    pub content: bool,
+    pub retained_bytes: usize,
 }
 
 #[derive(Deserialize)]
@@ -102,25 +112,24 @@ pub trait SessionReportProjection: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn audio(&self) -> bool;
 
+    /// Optional observations beyond this prefix are omitted without failing the transcript.
+    #[host(call)]
+    fn event_limit(&self, items: usize) -> usize;
+
     /// Admission precedes host SDK serialization and native JSON extraction.
     #[host(call)]
-    fn check_events(
-        &self,
-        items: usize,
-        retained_bytes: usize,
-        event_bytes: usize,
-    ) -> Result<(), super::super::upload::UploadError>;
+    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> bool;
 
     #[host(call)]
     fn project(&self, report: SessionReportSnapshot) -> SessionReportSnapshot;
 
     #[host(call)]
-    fn project_event(&self, event: Value) -> Option<Value>;
+    fn project_event(&self, event: Value, retained_bytes: usize) -> Option<ProjectedReportEvent>;
 
     #[host(call)]
     fn event_record(
         &self,
-        event: Value,
+        event: ProjectedReportEvent,
         identity: (String, String, String),
         timestamp: f64,
         disabled: bool,
@@ -144,42 +153,24 @@ impl SessionReportProjection for ReportProjection {
     fn content(&self) -> bool {
         self.content
     }
-
     fn transcript(&self) -> bool {
         self.transcript
     }
-
     fn audio(&self) -> bool {
         self.audio
     }
 
-    fn check_events(
-        &self,
-        items: usize,
-        retained_bytes: usize,
-        event_bytes: usize,
-    ) -> Result<(), super::super::upload::UploadError> {
+    fn event_limit(&self, items: usize) -> usize {
+        items.min(super::super::policy::REPORT_EVENT_ITEMS)
+    }
+
+    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> bool {
         use super::super::policy;
-        if items > policy::REPORT_EVENT_ITEMS
-            || retained_bytes > policy::REPORT_EVENT_BYTES
-            || event_bytes > policy::REPORT_EVENT_RECORD_BYTES
-        {
-            return Err(super::super::upload::UploadError(
-                "session report events exceed the native input budget".into(),
-            ));
-        }
-        Ok(())
+        event_bytes <= policy::REPORT_EVENT_RECORD_BYTES
+            && event_bytes <= policy::REPORT_EVENT_BYTES.saturating_sub(retained_bytes)
     }
 
     fn project(&self, mut report: SessionReportSnapshot) -> SessionReportSnapshot {
-        let before = report.events.len();
-        report.events = self.events(report.events);
-        report.omitted_events = report.omitted_events.saturating_add(before - report.events.len());
-        report.usage = report.usage.and_then(|usage| {
-            serde_json::from_value::<Vec<crate::metrics::usage::ModelUsage>>(usage)
-                .ok()
-                .map(|usage| Value::Array(usage.iter().map(super::usage_attributes).collect()))
-        });
         if !self.content {
             report.options = None;
         }
@@ -192,32 +183,46 @@ impl SessionReportProjection for ReportProjection {
         }
         report
     }
-    fn project_event(&self, event: Value) -> Option<Value> {
+
+    fn project_event(&self, event: Value, retained_bytes: usize) -> Option<ProjectedReportEvent> {
         if !super::report_value_fits(&event) {
             return None;
         }
-        let header: EventHeader = serde_json::from_value(event.clone()).ok()?;
-        let event = match EventPrivacy::for_kind(&header.kind) {
-            EventPrivacy::Safe => serde_json::from_value::<SafeEvent>(event)
-                .ok()
-                .and_then(|event| serde_json::to_value(event).ok()),
-            EventPrivacy::Content if self.content => Some(event),
-            _ => None,
-        }?;
-        super::report_value_fits(&event).then_some(event)
+        let header = EventHeader::deserialize(&event).ok()?;
+        let (value, content) = match EventPrivacy::for_kind(&header.kind) {
+            EventPrivacy::Safe => {
+                let safe = serde_json::from_value::<SafeEvent>(event).ok()?;
+                (serde_json::to_value(safe).ok()?, false)
+            }
+            EventPrivacy::Content if self.content => (event, true),
+            _ => return None,
+        };
+        // Include a separator, and never charge less than either the SDK's retained graph or
+        // the native wire representation. Both destinations consequently share the same bound.
+        let bytes = super::report_value_bytes(&value)?.saturating_add(1).max(retained_bytes);
+        Some(ProjectedReportEvent { value, content, retained_bytes: bytes })
     }
 
     fn event_record(
         &self,
-        event: Value,
+        event: ProjectedReportEvent,
         identity: (String, String, String),
         timestamp: f64,
         disabled: bool,
     ) -> Option<super::LogRecordWire> {
-        if disabled || !self.recording {
+        if disabled || !self.recording || (event.content && !self.content) {
             return None;
         }
-        let mut record = super::session_event_record(self, event, timestamp)?;
+        let key = if event.content { "lk.pii.session_event" } else { "session.event" };
+        let value = serde_json::to_string(&event.value).ok()?;
+        let attributes = Value::Object(Map::from_iter([(key.to_owned(), Value::String(value))]));
+        let mut record = super::record(
+            super::LoggerName::ChatHistory,
+            "session event",
+            super::hr_seconds(timestamp),
+            attributes,
+            false,
+        );
         super::attribute_report_record(
             &mut record,
             &identity.0,
@@ -229,83 +234,32 @@ impl SessionReportProjection for ReportProjection {
     }
 }
 
-impl ReportProjection {
-    pub fn events(&self, events: Vec<Value>) -> Vec<Value> {
-        let mut bytes = 0usize;
-        events
-            .into_iter()
-            .take(super::super::policy::REPORT_EVENT_ITEMS)
-            .filter_map(|event| {
-                let event = self.project_event(event)?;
-                let charge = super::report_value_bytes(&event)?;
-                if charge > super::super::policy::REPORT_EVENT_BYTES.saturating_sub(bytes) {
-                    return None;
-                }
-                bytes += charge;
-                Some(event)
-            })
-            .collect()
-    }
-
-    pub fn event_attribute(event: &Value) -> Option<&'static str> {
-        let header: EventHeader = serde_json::from_value(event.clone()).ok()?;
-        match EventPrivacy::for_kind(&header.kind) {
-            EventPrivacy::Safe => Some("session.event"),
-            EventPrivacy::Content => Some("lk.pii.session_event"),
-            EventPrivacy::Refused => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn destination_projection_preserves_safe_events_and_withholds_only_denied_formats() {
-        for (capture, redaction) in [(false, false), (true, false), (true, true)] {
-            let options = RecordingOptions { transcript: true, audio: true, ..Default::default() };
-            let projection = ReportProjection::new(capture, &options, redaction);
-            let report = projection.project(SessionReportSnapshot {
-                job_id: "job".into(),
-                room_id: "room".into(),
-                room: "call".into(),
-                timestamp: 12.0,
-                sdk_version: "test".into(),
-                options: Some(json!({ "instructions": "private prompt" })),
-                chat_history: Some(json!({ "items": [{ "content": "private history" }] })),
-                audio_recording_path: Some("audio.ogg".into()),
-                audio_recording_started_at: Some(10.0),
-                usage: None,
-                omitted_events: 0,
-                events: vec![
-                    json!({
-                        "type": "agent_state_changed", "old_state": "listening",
-                        "new_state": "thinking", "created_at": 11.0, "private": "extra content"
-                    }),
-                    json!({
-                        "type": "session_usage_updated", "created_at": 11.5,
-                        "usage": { "model_usage": [{
-                            "type": "llm_usage", "provider": "provider", "model": "model",
-                            "input_tokens": 7, "private": "extra usage content"
-                        }] }
-                    }),
-                    json!({ "type": "user_input_transcribed", "transcript": "private event" }),
-                    json!({ "type": "unknown", "payload": "private unknown content" }),
-                ],
-            });
-            assert_eq!(report.events[0]["new_state"], "thinking");
-            assert!(report.events[0].get("private").is_none());
-            assert_eq!(report.events[1]["usage"]["model_usage"][0]["input_tokens"], 7);
-            assert!(report.events[1]["usage"]["model_usage"][0].get("private").is_none());
-            assert_eq!(report.events.len(), if capture && !redaction { 3 } else { 2 });
-            assert_eq!(report.omitted_events, if capture && !redaction { 1 } else { 2 });
-            assert_eq!(report.options.is_some(), capture && !redaction);
-            if !capture || redaction {
-                assert_eq!(report.chat_history, Some(json!({ "items": [] })));
-            }
-            assert_eq!(report.audio_recording_path.is_some(), !redaction);
-            assert_eq!(report.audio_recording_started_at.is_some(), !redaction);
+    fn all_safe_event_schemas_survive_without_content_capture() {
+        let projection = ReportProjection::new(false, &RecordingOptions::default(), true);
+        let samples = [
+            json!({"type":"user_state_changed","old_state":"listening","new_state":"speaking","created_at":1.0}),
+            json!({"type":"agent_state_changed","old_state":"listening","new_state":"thinking","created_at":2.0}),
+            json!({"type":"user_transcription_timeout","speech_duration":0.5,"vad_speech_started_at":2.0,"created_at":3.0}),
+            json!({"type":"session_usage_updated","usage":{"model_usage":[{"type":"llm_usage","provider":"provider","model":"model","input_tokens":7}]},"created_at":4.0}),
+        ];
+        for sample in samples {
+            let mut with_extra = sample.clone();
+            with_extra.as_object_mut().unwrap().insert("private".into(), json!("not a safe field"));
+            let projected = projection.project_event(with_extra, 1024).unwrap();
+            assert!(!projected.content);
+            assert!(projected.value.get("private").is_none());
+            assert_eq!(projected.value["type"], sample["type"]);
+            assert_eq!(projected.value["created_at"], sample["created_at"]);
         }
+        assert!(
+            projection
+                .project_event(json!({"type":"user_input_transcribed","transcript":"private"}), 128)
+                .is_none()
+        );
     }
 }

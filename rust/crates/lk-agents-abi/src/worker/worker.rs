@@ -269,7 +269,6 @@ pub struct SessionReportInput {
     /// `None` when the session used nothing.
     pub model_usage: Vec<ModelUsage>,
     pub chat_history: Vec<ChatItem>,
-    pub events: Vec<serde_json::Value>,
     pub omitted_events: usize,
 }
 
@@ -315,18 +314,6 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for SessionReportInput {
                 _ => Vec::new(),
             },
             omitted_events: lenient(d.get_item("omitted_events")?),
-            events: match d.get_item("events")? {
-                Some(v) if !v.is_none() => match crate::python::value_from_py(&v, "report.events")?
-                {
-                    serde_json::Value::Array(events) => events,
-                    _ => {
-                        return Err(pyo3::exceptions::PyTypeError::new_err(
-                            "report.events must be an array",
-                        ));
-                    }
-                },
-                _ => Vec::new(),
-            },
         })
     }
 }

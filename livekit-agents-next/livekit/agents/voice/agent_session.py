@@ -1147,16 +1147,19 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             )
         return super().on(event, callback)
 
-    @property
-    def _recorded_events(self) -> list[AgentEvent]:
+    def _report_event_snapshots(self) -> list[AgentEvent]:
         expired = self._event_retention.expire(time.monotonic_ns())
         for _ in range(expired):
             self._event_snapshots.popleft()
         return [
-            event.model_copy(deep=True)
+            event
             for event in self._event_snapshots
             if self._event_retention.accepts(event.type, self._recording_options["redaction"])
         ]
+
+    @property
+    def _recorded_events(self) -> list[AgentEvent]:
+        return [event.model_copy(deep=True) for event in self._report_event_snapshots()]
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):

@@ -72,3 +72,7 @@ media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images"]
 # The async host bridge for the generated pyo3 adapters; only `lk-agents-py` enables it.
 python = ["media-images", "dep:pyo3", "lk-agents-abi/python", "lk-agents-inference/python", "lk-agents-a2a/python"]
+
+[build-dependencies]
+serde.workspace = true
+serde_json.workspace = true

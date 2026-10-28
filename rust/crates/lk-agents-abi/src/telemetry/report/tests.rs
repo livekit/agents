@@ -24,7 +24,6 @@ fn view(usage: &[ModelUsage], items: &[ChatItem], opts: RecordingOptions) -> Ses
         recording_options: opts,
         model_usage: usage.to_vec(),
         chat_history: items.to_vec(),
-        events: Vec::new(),
         omitted_events: 0,
     }
 }

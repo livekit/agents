@@ -10,7 +10,11 @@ const _: () = ();
 
 // `_BaseModelUsage`. Python-only: a zero-eliding `__repr__`, and the base the gate records.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Host)]
-#[python(pydantic, name = "_BaseModelUsage", repr = "model_usage_repr")]
+#[python(
+    pydantic,
+    name = "_BaseModelUsage",
+    repr = "model_usage_repr"
+)]
 pub struct BaseModelUsage {}
 
 // `usage.py:27`. LLM and realtime-model usage both fold in here.
@@ -217,7 +221,10 @@ impl ModelUsage {
 
 // `usage.py:129`. A `@dataclass` in the reference, not a pydantic model: it has no `model_dump`.
 #[derive(Debug, Clone, Default, PartialEq, Host, Serialize, Deserialize)]
-#[python(dataclass, name = "AgentSessionUsage")]
+#[python(
+    dataclass,
+    name = "AgentSessionUsage"
+)]
 #[serde(default)]
 pub struct AgentSessionUsage {
     pub model_usage: Vec<ModelUsage>,
@@ -233,10 +240,29 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for AgentSessionUsage {
         if obj.is_none() {
             return Ok(AgentSessionUsage::default());
         }
-        let model_usage = obj
-            .try_iter()?
-            .map(|item| item?.extract::<ModelUsage>())
-            .collect::<pyo3::PyResult<_>>()?;
+        let model_usage = obj.try_iter()?.map(|item| item?.extract::<ModelUsage>()).collect::<pyo3::PyResult<_>>()?;
         Ok(AgentSessionUsage { model_usage })
+    }
+}
+
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+
+    #[test]
+    fn serialized_usage_tags_match_the_existing_billing_schema() {
+        let usages = [
+            ModelUsage::Llm(LlmModelUsage::default()),
+            ModelUsage::Tts(TtsModelUsage::default()),
+            ModelUsage::Stt(SttModelUsage::default()),
+            ModelUsage::Interruption(InterruptionModelUsage::default()),
+            ModelUsage::Eot(EotModelUsage::default()),
+        ];
+        for usage in usages {
+            let encoded = serde_json::to_value(&usage).unwrap();
+            assert_eq!(encoded["type"], usage.type_literal());
+            assert_eq!(serde_json::from_value::<ModelUsage>(encoded).unwrap(), usage);
+        }
     }
 }

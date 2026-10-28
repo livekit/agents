@@ -1962,7 +1962,7 @@ pub mod telemetry {
                 options: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "options", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.options")).map(Some) })?,
                 chat_history: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "chat_history", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.chat_history")).map(Some) })?,
                 timestamp: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "timestamp", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "SessionReportSnapshot.timestamp"))?,
-                usage: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "usage", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::value_from_py(v, "SessionReportSnapshot.usage")).map(Some) })?,
+                usage: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "usage", |v| if v.is_none() { Ok(None) } else { (v.cast::<::pyo3::types::PyList>()?.iter().map(|item| { let item = &item; item.extract::<::lk_agents_abi::metrics::ModelUsage>().map_err(::std::convert::Into::<PyErr>::into) }).collect::<PyResult<Vec<_>>>()).map(Some) })?,
                 sdk_version: ::lk_agents_abi::python::attr_with(obj, "SessionReportSnapshot", "sdk_version", |v| v.extract::<::std::string::String>())?,
             })
     }
@@ -1980,9 +1980,34 @@ pub mod telemetry {
             kwargs.set_item("options", match options { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
             kwargs.set_item("chat_history", match chat_history { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
             kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
-            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)? })?;
+            kwargs.set_item("usage", match usage { None => py.None().into_bound(py), Some(x) => ::pyo3::types::PyList::new(py, x.into_iter().map(|x| PyResult::Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)).collect::<PyResult<Vec<_>>>()?)?.into_any() })?;
             kwargs.set_item("sdk_version", ::pyo3::IntoPyObjectExt::into_bound_py_any(sdk_version, py)?)?;
             SESSION_REPORT_SNAPSHOT.import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?.call((), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
+    static PROJECTED_REPORT_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn projected_report_event_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent> {
+        let py = obj.py();
+            if !obj.is_instance(PROJECTED_REPORT_EVENT.import(py, "livekit.agents._generated.telemetry", "ProjectedReportEvent")?)? {
+                return Err(super::not_a(obj, "ProjectedReportEvent"));
+            }
+            Ok(::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent {
+                value: ::lk_agents_abi::python::attr_with(obj, "ProjectedReportEvent", "value", |v| ::lk_agents_abi::python::value_from_py(v, "ProjectedReportEvent.value"))?,
+                content: ::lk_agents_abi::python::attr_with(obj, "ProjectedReportEvent", "content", |v| v.extract::<bool>())?,
+                retained_bytes: ::lk_agents_abi::python::attr_with(obj, "ProjectedReportEvent", "retained_bytes", |v| ::lk_agents_abi::python::number_from_py::<usize>(v, "ProjectedReportEvent.retained_bytes"))?,
+            })
+    }
+
+    pub fn projected_report_event_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent { value, content, retained_bytes } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("value", ::lk_agents_abi::python::value_to_py(py, &value)?)?;
+            kwargs.set_item("content", ::pyo3::IntoPyObjectExt::into_bound_py_any(content, py)?)?;
+            kwargs.set_item("retained_bytes", ::pyo3::IntoPyObjectExt::into_bound_py_any(retained_bytes, py)?)?;
+            PROJECTED_REPORT_EVENT.import(py, "livekit.agents._generated.telemetry", "ProjectedReportEvent")?.call((), Some(&kwargs))
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/records.rs.

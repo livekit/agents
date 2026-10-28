@@ -258,7 +258,11 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
     from livekit.agents.telemetry import traces
     from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
-    from livekit.agents.voice.events import SessionUsageUpdatedEvent
+    from livekit.agents.voice.events import (
+        SessionUsageUpdatedEvent,
+        UserStateChangedEvent,
+        UserTranscriptionTimeoutEvent,
+    )
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
 
@@ -277,6 +281,14 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
                 model_usage=[LLMModelUsage(provider="provider", model="model", input_tokens=7)]
             )
         ),
+    )
+    session.emit(
+        "user_state_changed",
+        UserStateChangedEvent(old_state="listening", new_state="speaking"),
+    )
+    session.emit(
+        "user_transcription_timeout",
+        UserTranscriptionTimeoutEvent(speech_duration=0.5, vad_speech_started_at=1.0),
     )
     session._recording_options["logs"] = True
     session._recording_options["transcript"] = requested_formats
@@ -311,6 +323,10 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
         assert snapshot["audio_recording_started_at"] is None
     assert snapshot["events"][1]["type"] == "session_usage_updated"
     assert snapshot["events"][1]["usage"]["model_usage"][0]["input_tokens"] == 7
+    assert [event["type"] for event in snapshot["events"][2:]] == [
+        "user_state_changed",
+        "user_transcription_timeout",
+    ]
     assert session.history.items[0].text_content == "private console conversation"
 
     records: list[ReadableLogRecord] = []
@@ -420,3 +436,133 @@ async def test_explicit_report_options_do_not_implicitly_enable_recording() -> N
         await prepare(report)
     assert capture.uploads == {}
     assert capture.items == {}
+    report.chat_history.add_message(role="user", content="enabled after construction")
+    report.options["recording_options"] = {"transcript": True}
+    with capture_reports() as capture:
+        await prepare(report)
+    assert capture.items["report-job"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overflow", ["items", "bytes"])
+@pytest.mark.parametrize("destination", ["cloud", "console"])
+async def test_event_overflow_preserves_the_complete_transcript(
+    overflow: str, destination: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
+
+    from livekit.agents import _core, llm
+    from livekit.agents.job import JobContext
+    from livekit.agents.voice.remote_session import ConsoleCall
+    from livekit.protocol import agent as job_protocol
+
+    previous = capture_content_enabled()
+    set_capture_content(True)
+    try:
+        items = [llm.ChatMessage(role="user", content=["hello"], id=str(i)) for i in range(1000)]
+        report = make_report(items)
+        if overflow == "items":
+            report.events = [
+                AgentStateChangedEvent(old_state="listening", new_state="thinking")
+                for _ in range(1100)
+            ]
+        else:
+            report.events = [
+                UserInputTranscribedEvent(transcript="x" * 3000, is_final=True) for _ in range(120)
+            ]
+        if destination == "cloud":
+            exported_events = 0
+            exported_bytes = 2
+            omitted = 0
+            original = _CountingExporter.export
+
+            def collect(exporter, batch):
+                nonlocal exported_events, exported_bytes, omitted
+                for record in batch:
+                    if record.log_record.body == "session event":
+                        exported_events += 1
+                        attributes = record.log_record.attributes
+                        payload = (
+                            attributes.get("session.event") or attributes["lk.pii.session_event"]
+                        )
+                        exported_bytes += len(payload.encode("utf-8")) + 1
+                    if record.log_record.body == "session report":
+                        omitted += int(
+                            record.log_record.attributes.get(
+                                "lk.telemetry.omitted_report_entries", 0
+                            )
+                        )
+                return original(exporter, batch)
+
+            with capture_reports() as capture, monkeypatch.context() as patches:
+                patches.setattr(_CountingExporter, "export", collect)
+                await prepare(report)
+            assert capture.items["report-job"] == len(items)
+            assert len(json.loads(capture.uploads["report-job"])["items"]) == len(items)
+            assert omitted > 0
+            assert 0 < exported_events <= 1024
+            assert exported_events + omitted == len(report.events)
+            assert exported_bytes <= 1024 * 1024
+        else:
+            session = VoiceSession(turn_handling={"turn_detection": None})
+            owner = object.__new__(JobContext)
+            owner._info = SimpleNamespace(job=job_protocol.Job(id="report-job"))
+            owner._run = SimpleNamespace(
+                primary_session=session, observability_url=None, redaction=False
+            )
+            owner._tagger = _core.Tagger()
+            monkeypatch.setattr(JobContext, "_build_session_report", lambda *args: report)
+            monkeypatch.setattr(ConsoleCall, "record", True)
+            monkeypatch.chdir(tmp_path)
+            await owner._on_session_end()
+            [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
+            output = json.loads(artifact.read_text())
+            assert len(output["chat_history"]["items"]) == len(items)
+            assert output["omitted_events"] > 0
+            assert 0 < len(output["events"]) <= 1024
+            assert len(output["events"]) + output["omitted_events"] == len(report.events)
+            assert (
+                len(
+                    json.dumps(output["events"], ensure_ascii=False, separators=(",", ":")).encode(
+                        "utf-8"
+                    )
+                )
+                <= 1024 * 1024
+            )
+    finally:
+        set_capture_content(previous)
+
+
+async def test_report_usage_reaches_the_sdk_without_a_display_shape_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
+
+    from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
+
+    report = make_report([])
+    report.model_usage = [
+        LLMModelUsage(provider="provider", model="llm", input_tokens=7),
+        TTSModelUsage(provider="provider", model="tts", characters_count=11),
+        # JSON escaping exceeds the wire bound while the admitted host representation fits.
+        LLMModelUsage(provider="\0" * 12_000, model="oversize", input_tokens=99),
+    ]
+    summaries = []
+    original = _CountingExporter.export
+
+    def collect(exporter, batch):
+        for record in batch:
+            if record.log_record.body == "session report":
+                summaries.append(record.log_record.attributes["usage"])
+        return original(exporter, batch)
+
+    with capture_reports(), monkeypatch.context() as patches:
+        patches.setattr(_CountingExporter, "export", collect)
+        await prepare(report)
+    [usage] = summaries
+    assert len(usage) == 2
+    assert usage[0]["type"] == "llm_usage" and usage[0]["input_tokens"] == 7
+    assert usage[1]["type"] == "tts_usage" and usage[1]["characters_count"] == 11

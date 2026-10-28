@@ -227,12 +227,20 @@ impl _core_SessionReportProjection {
         Ok(out)
     }
 
-    /// Admission precedes host SDK serialization and native JSON extraction.
-    #[pyo3(signature = (items, retained_bytes, event_bytes))]
-    fn check_events(&self, items: usize, retained_bytes: usize, event_bytes: usize) -> PyResult<()> {
+    /// Optional observations beyond this prefix are omitted without failing the transcript.
+    #[pyo3(signature = (items))]
+    fn event_limit(&self, items: usize) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
-        <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::check_events(&self.0, items, retained_bytes, event_bytes).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
+        let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_limit(&self.0, items);
+        Ok(out)
+    }
+
+    /// Admission precedes host SDK serialization and native JSON extraction.
+    #[pyo3(signature = (retained_bytes, event_bytes))]
+    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> PyResult<bool> {
+        ::lk_agents_abi::python::check_pid()?;
+        let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::accepts_event(&self.0, retained_bytes, event_bytes);
+        Ok(out)
     }
 
     #[pyo3(signature = (report))]
@@ -243,18 +251,18 @@ impl _core_SessionReportProjection {
         Ok(crate::generated::records::telemetry::session_report_snapshot_to_py(py, out)?)
     }
 
-    #[pyo3(signature = (event))]
-    fn project_event<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+    #[pyo3(signature = (event, retained_bytes))]
+    fn project_event<'py>(&self, py: Python<'py>, event: Bound<'_, PyAny>, retained_bytes: usize) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         ::lk_agents_abi::python::check_pid()?;
         let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
-        let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event);
-        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::value_to_py(py, &value)?)).transpose()?)
+        let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event, retained_bytes);
+        Ok(out.map(|value| Ok::<_, ::pyo3::PyErr>(crate::generated::records::telemetry::projected_report_event_to_py(py, value)?)).transpose()?)
     }
 
     #[pyo3(signature = (event, identity, timestamp, disabled))]
     fn event_record(&self, event: Bound<'_, PyAny>, identity: (::std::string::String, ::std::string::String, ::std::string::String), timestamp: f64, disabled: bool) -> PyResult<::std::option::Option<::lk_agents_abi::LogRecordWire>> {
         ::lk_agents_abi::python::check_pid()?;
-        let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
+        let event = crate::generated::records::telemetry::projected_report_event_from_py(&event)?;
         let out = <_core_SessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::event_record(&self.0, event, identity, timestamp, disabled);
         Ok(out)
     }
@@ -492,11 +500,11 @@ impl _core_PreparedTranscript {
 
     /// Append one already projected event to the same bounded recording preparation.
     #[pyo3(signature = (event))]
-    fn append_event(&self, event: Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_event(&self, event: Bound<'_, PyAny>) -> PyResult<bool> {
         ::lk_agents_abi::python::check_pid()?;
         let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
-        <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(())
+        let out = <_core_PreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(out)
     }
 
     /// Serialize and write a console report without converting its history back into host objects.

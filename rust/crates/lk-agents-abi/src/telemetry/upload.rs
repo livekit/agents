@@ -86,7 +86,7 @@ pub trait PreparedTranscript: Send + Sync + Sized + 'static {
 
     /// Append one already projected event to the same bounded recording preparation.
     #[host(call)]
-    fn append_event(&self, event: serde_json::Value) -> Result<(), UploadError>;
+    fn append_event(&self, event: serde_json::Value) -> Result<bool, UploadError>;
 
     /// Serialize and write a console report without converting its history back into host objects.
     #[host(await)]

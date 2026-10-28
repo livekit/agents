@@ -317,10 +317,8 @@ struct TranscriptState {
 
 impl PreparedTranscript for TranscriptBuilder {
     fn new() -> Result<Self, UploadError> {
-        let permit = super::work::try_admit_upload(
-            TRANSCRIPT_BYTES + lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES,
-        )
-        .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
+        let permit = super::work::try_admit_upload(TRANSCRIPT_BYTES)
+            .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
         let mut bytes = Vec::with_capacity(TRANSCRIPT_BYTES);
         bytes.extend_from_slice(b"{\"items\":[");
         Ok(Self {
@@ -393,7 +391,7 @@ impl PreparedTranscript for TranscriptBuilder {
         String::from_utf8(state.bytes.clone()).map_err(upload_error)
     }
 
-    fn append_event(&self, event: serde_json::Value) -> Result<(), UploadError> {
+    fn append_event(&self, event: serde_json::Value) -> Result<bool, UploadError> {
         use lk_agents_abi::telemetry::policy;
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(failure) = &state.failure {
@@ -404,20 +402,20 @@ impl PreparedTranscript for TranscriptBuilder {
         }
         let mut encoded =
             BoundedWriter { bytes: Vec::new(), limit: policy::REPORT_EVENT_RECORD_BYTES };
-        if let Err(error) = serde_json::to_writer(&mut encoded, &event) {
-            state.failure = Some(error.to_string());
-            return Err(upload_error(error));
+        if serde_json::to_writer(&mut encoded, &event).is_err() {
+            return Ok(false);
         }
         if state.events.len() >= policy::REPORT_EVENT_ITEMS
             || encoded.bytes.len() > policy::REPORT_EVENT_BYTES.saturating_sub(state.event_bytes)
         {
-            let failure = "session report events exceed the native input budget";
-            state.failure = Some(failure.into());
-            return Err(UploadError(failure.into()));
+            return Ok(false);
+        }
+        if state.events.is_empty() && !self._permit.try_add_bytes(policy::REPORT_EVENT_BYTES) {
+            return Ok(false);
         }
         state.event_bytes += encoded.bytes.len();
         state.events.push(event);
-        Ok(())
+        Ok(true)
     }
 
     async fn finish_report(
@@ -463,7 +461,10 @@ impl PreparedTranscript for TranscriptBuilder {
                     report: lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
                     chat_history: &'a serde_json::value::RawValue,
                 }
-                let mut encoded = BoundedWriter { bytes: Vec::new(), limit: 4 * 1024 * 1024 };
+                let mut encoded = BoundedWriter {
+                    bytes: Vec::new(),
+                    limit: lk_agents_abi::telemetry::policy::REPORT_RETAINED_BYTES,
+                };
                 serde_json::to_writer(
                     &mut encoded,
                     &ConsoleReport { report, chat_history: &history },

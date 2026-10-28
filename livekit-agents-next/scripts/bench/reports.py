@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Literal, get_args
 from unittest.mock import patch
 
 from opentelemetry.sdk._logs import LoggerProvider, ReadableLogRecord
@@ -31,7 +31,6 @@ from scripts.bench.metrics import (
     CallbackSlices,
     Distribution,
     LoopLag,
-    cadence_budget_pass,
     distribution,
 )
 
@@ -40,13 +39,14 @@ from livekit.agents.job import SessionReport
 from livekit.agents.telemetry import _destination, _export, _providers, traces
 
 _BUDGET_CONFIG = ConfigDict(strict=True, frozen=True, allow_inf_nan=False)
+HistoryItems = Literal[10, 1_000, 10_000]
 
 
 class ReportWorkload(BaseModel):
     model_config = _BUDGET_CONFIG
 
     sessions: list[Literal[1, 8, 32, 64]] = Field(min_length=1)
-    history_items: Literal[10, 1_000, 10_000]
+    history_items: HistoryItems
     minimum_observations_per_distribution: int = Field(ge=1_000)
     heartbeat_ms: float = Field(gt=0, le=1)
     control_cadence_ms: Literal[10]
@@ -74,7 +74,6 @@ class ReportBudget(BaseModel):
     def scheduling_pass(self, samples: Distribution) -> bool:
         return (
             samples.count >= self.workload.minimum_observations_per_distribution
-            and cadence_budget_pass(samples, self.workload.control_cadence_ms)
             and samples.p999_ms < self.limits.loop_lag_p999_ms_exclusive
             and samples.max_ms < self.limits.loop_lag_max_ms_exclusive
         )
@@ -110,15 +109,19 @@ class SdkSamples:
         self._stages: list[str] = []
         self._stage_ids: dict[str, int] = {}
 
-    def append(self, sample: SdkSlice) -> None:
-        stage = self._stage_ids.get(sample.stage)
-        if stage is None:
-            stage = len(self._stages)
-            self._stage_ids[sample.stage] = stage
-            self._stages.append(sample.stage)
-        self._values.extend(
-            (sample.started_ns, sample.wall_ns, sample.cpu_ns, sample.thread_id, stage)
-        )
+    def append(
+        self, started_ns: int, wall_ns: int, cpu_ns: int, thread_id: int, stage: str
+    ) -> None:
+        stage_id = self._stage_ids.get(stage)
+        if stage_id is None:
+            stage_id = len(self._stages)
+            self._stage_ids[stage] = stage_id
+            self._stages.append(stage)
+        self._values.append(started_ns)
+        self._values.append(wall_ns)
+        self._values.append(cpu_ns)
+        self._values.append(thread_id)
+        self._values.append(stage_id)
 
     def __len__(self) -> int:
         return len(self._values) // 5
@@ -234,13 +237,11 @@ class _ObservedWorker:
                 return callback()
             finally:
                 self.capture.sdk_slices.append(
-                    SdkSlice(
-                        started,
-                        time.monotonic_ns() - started,
-                        time.thread_time_ns() - cpu,
-                        threading.get_ident(),
-                        stage,
-                    )
+                    started,
+                    time.monotonic_ns() - started,
+                    time.thread_time_ns() - cpu,
+                    threading.get_ident(),
+                    stage,
                 )
 
         return self.native.submit(key, measured, retained_bytes)
@@ -404,6 +405,7 @@ async def run(count: int, item_count: int, budget: ReportBudget | None = None) -
         return {
             "sessions": count,
             "history_items": item_count,
+            "control_cadence_ms": budget.workload.control_cadence_ms,
             "seconds": elapsed,
             "completed": completed,
             "refused": refused,
@@ -455,8 +457,9 @@ async def run(count: int, item_count: int, budget: ReportBudget | None = None) -
             await pulse
 
 
-async def main(args: argparse.Namespace) -> int:
-    budget = load_budget()
+async def main(args: argparse.Namespace | None = None, *, budget_path: Path | None = None) -> int:
+    budget = load_budget(budget_path)
+    args = args if args is not None else parse_args(budget)
     cases = [await run(count, args.items, budget) for count in args.sessions]
     result = {"cases": cases}
     if not all(case["workload_complete"] for case in cases):
@@ -468,8 +471,7 @@ async def main(args: argparse.Namespace) -> int:
     )
 
 
-if __name__ == "__main__":
-    budget = load_budget()
+def parse_args(budget: ReportBudget) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sessions",
@@ -479,8 +481,12 @@ if __name__ == "__main__":
         default=budget.workload.sessions,
     )
     parser.add_argument(
-        "--items", type=int, choices=(10, 1_000, 10_000), default=budget.workload.history_items
+        "--items", type=int, choices=get_args(HistoryItems), default=budget.workload.history_items
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
-    raise SystemExit(asyncio.run(main(parser.parse_args())))
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

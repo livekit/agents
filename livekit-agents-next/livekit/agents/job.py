@@ -67,6 +67,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
+    from ._generated.telemetry import ProjectedReportEvent
     from .llm import ChatContext
     from .metrics import ModelUsage
     from .simulation import SimulationContext
@@ -308,15 +309,10 @@ class JobContext:
         def prepare_report() -> SessionReport:
             from .llm import ChatContext
 
-            expired = session._event_retention.expire(time.monotonic_ns())
-            for _ in range(expired):
-                session._event_snapshots.popleft()
-            # The framework only reads admitted immutable snapshots. Native projection detaches
-            # each event on its bounded callback; application report reads keep deep-copy semantics.
             return self._build_session_report(
                 session,
                 ChatContext(items=list(session.history.items)),
-                list(session._event_snapshots),
+                session._report_event_snapshots(),
             )
 
         try:
@@ -355,7 +351,6 @@ class JobContext:
                 projection = _core._core_SessionReportProjection(
                     report._capture_content, report._recording_options, self._redaction_enabled
                 )
-                deadline = preparation_deadline
                 builder = await call_bounded(key, _core._core_PreparedTranscript, 0, remaining())
                 if projection.transcript:
                     from .telemetry.traces import _append_transcript_item
@@ -374,9 +369,9 @@ class JobContext:
                             remaining(),
                         )
                         await asyncio.sleep(0)
-                snapshot = await report._snapshot(
+                snapshot, _ = await report._snapshot(
                     projection,
-                    deadline=deadline,
+                    deadline=preparation_deadline,
                     event_sink=builder.append_event,
                 )
                 path = Path(
@@ -384,7 +379,7 @@ class JobContext:
                     f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
                     "session_report.json",
                 )
-                async with asyncio.timeout_at(deadline):
+                async with asyncio.timeout_at(preparation_deadline):
                     await builder.finish_report(snapshot, str(path))
             except Exception:
                 logger.exception("failed to save session report")
@@ -1058,11 +1053,10 @@ class SessionReport:
         default_factory=capture_content_enabled, repr=False, kw_only=True
     )
 
-    _recording_options: _core.RecordingOptions = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        # This legacy report input is decoded once; destinations use typed recording options.
-        self._recording_options = (
+    @property
+    def _recording_options(self) -> _core.RecordingOptions:
+        # Decode the mutable legacy input once per destination into its typed native view.
+        return (
             _core.RecordingOptions(**self.options.get("recording_options", {}))
             if self.options is not None
             else _core.RecordingOptions()
@@ -1073,8 +1067,8 @@ class SessionReport:
         projection: _core._core_SessionReportProjection,
         *,
         deadline: float | None = None,
-        event_sink: Callable[[object], None] | None = None,
-    ) -> SessionReportSnapshot:
+        event_sink: Callable[[object], bool] | None = None,
+    ) -> tuple[SessionReportSnapshot, list[ProjectedReportEvent]]:
         loop = asyncio.get_running_loop()
         deadline = (
             deadline if deadline is not None else loop.time() + policy().upload_timeout_seconds
@@ -1087,7 +1081,7 @@ class SessionReport:
                 raise TimeoutError("session report preparation deadline exceeded")
             return duration
 
-        projection.check_events(len(self.events), 0, 0)
+        event_limit = projection.event_limit(len(self.events))
         key = f"report-snapshot/{id(self):x}"
 
         def metadata() -> SessionReportSnapshot:
@@ -1125,24 +1119,31 @@ class SessionReport:
             )
 
         snapshot = await call_bounded(key, metadata, policy().max_record_bytes, remaining())
-        events: list[object] = []
-        omitted = 0
-        retained_bytes = 0
+        events: list[ProjectedReportEvent] = []
+        omitted = len(self.events) - event_limit
+        retained_bytes = 2
 
         def append_event(event: AgentEvent) -> None:
             nonlocal retained_bytes, omitted
             charge = attribute_bytes(event)
-            retained_bytes += charge
-            projection.check_events(len(self.events), retained_bytes, charge)
-            projected = projection.project_event(event.model_dump(mode="json"))
-            if projected is None:
+            if not projection.accepts_event(retained_bytes, charge):
                 omitted += 1
-            elif event_sink is not None:
-                event_sink(projected)
+                return
+            projected = projection.project_event(event.model_dump(mode="json"), charge)
+            if projected is None or not projection.accepts_event(
+                retained_bytes, projected.retained_bytes
+            ):
+                omitted += 1
+                return
+            if event_sink is not None:
+                if not event_sink(projected.value):
+                    omitted += 1
+                    return
             else:
                 events.append(projected)
+            retained_bytes += projected.retained_bytes
 
-        for event in self.events:
+        for event in self.events[:event_limit]:
             await call_bounded(
                 key,
                 functools.partial(append_event, event),
@@ -1150,7 +1151,7 @@ class SessionReport:
                 remaining(),
             )
             await asyncio.sleep(0)
-        return replace(snapshot, events=events, omitted_events=omitted)
+        return replace(snapshot, omitted_events=omitted), events
 
     def to_dict(self) -> dict:
         events_dict = [event.model_dump() for event in self.events]

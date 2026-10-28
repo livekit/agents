@@ -36,8 +36,17 @@ class SessionReportSnapshot:
     options: object | None
     chat_history: object | None
     timestamp: float
-    usage: object | None
+    usage: list[dict[str, object]] | None
     sdk_version: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ProjectedReportEvent:
+    """Captured once at the destination boundary; emission does not decode or project it again."""
+
+    value: object
+    content: bool
+    retained_bytes: int
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

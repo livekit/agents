@@ -26,6 +26,7 @@ from . import trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from .._core import Tagger
+    from .._generated.telemetry import ProjectedReportEvent
     from ..job import SessionReport
     from ..llm import ChatItem
 
@@ -266,7 +267,6 @@ async def _upload_session_report(
                 "started_at": report.started_at,
                 "timestamp": snapshot.timestamp,
                 "options": snapshot.options,
-                "events": [],
                 "omitted_events": snapshot.omitted_events,
                 "recording_options": recording_options,
                 "model_usage": snapshot.usage or [],
@@ -279,7 +279,7 @@ async def _upload_session_report(
         for record in records:
             emit(record)
 
-    def emit_event(event: object) -> None:
+    def emit_event(event: ProjectedReportEvent) -> None:
         record = projection.event_record(
             event,
             (snapshot.job_id, snapshot.room_id, snapshot.room),
@@ -325,9 +325,9 @@ async def _upload_session_report(
         )
 
     try:
-        snapshot = await report._snapshot(projection, deadline=deadline)
+        snapshot, events = await report._snapshot(projection, deadline=deadline)
         await run_preparation(start)
-        for event in snapshot.events:
+        for event in events:
             await run_preparation(partial(emit_event, event))
             await asyncio.sleep(0)
         if transcript_allowed:

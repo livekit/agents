@@ -233,18 +233,6 @@ pub fn session_chat_record(
     report_value_fits(&record.attributes).then(|| record.into())
 }
 
-fn session_event_record(
-    projection: &projection::ReportProjection,
-    event: Value,
-    timestamp: f64,
-) -> Option<LogRecord> {
-    let event = projection.project_event(event)?;
-    let key = projection::ReportProjection::event_attribute(&event)?;
-    let event = serde_json::to_string(&event).ok()?;
-    let attributes = Value::Object(Map::from_iter([(key.to_owned(), Value::String(event))]));
-    Some(record(LoggerName::ChatHistory, "session event", hr_seconds(timestamp), attributes, false))
-}
-
 fn chat_item_record(item: &ChatItem, projected: Value) -> LogRecord {
     record(
         LoggerName::ChatHistory,
@@ -333,19 +321,6 @@ pub fn session_records(
             summary,
             false,
         ));
-    }
-
-    let event_limit = if opts.recording_enabled() {
-        super::policy::SDK_PENDING_RECORDS.saturating_sub(out.len() + 1)
-    } else {
-        0
-    };
-    omitted += report.events.len().saturating_sub(event_limit);
-    for event in report.events.iter().take(event_limit) {
-        match session_event_record(&projection, event.clone(), report.timestamp) {
-            Some(event) => out.push(event),
-            None => omitted += 1,
-        }
     }
 
     if projection.transcript() {

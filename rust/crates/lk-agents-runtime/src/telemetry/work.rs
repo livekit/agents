@@ -15,8 +15,7 @@ const WORKERS: usize = 4;
 const JOBS: usize = 64;
 const BYTES: usize = 8 * 1024 * 1024;
 const MONITORS: usize = 32;
-const PROCESS_EVENT_ITEMS: usize = 64 * 1024;
-const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
+include!(concat!(env!("OUT_DIR"), "/telemetry_event_limits.rs"));
 
 static PROCESS_WORK: OnceLock<Arc<Work>> = OnceLock::new();
 
@@ -63,6 +62,20 @@ pub struct WorkPermit {
     work: Arc<Work>,
     key: String,
     shared_class: Option<crate::media_workers::MediaWorkerPermit>,
+}
+
+impl WorkPermit {
+    pub(super) fn try_add_bytes(&self, bytes: usize) -> bool {
+        let mut state = self.work.state.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(total) = state.bytes.checked_add(bytes).filter(|total| *total <= BYTES) else {
+            state.dropped += 1;
+            return false;
+        };
+        state.pending.get_mut(&self.key).expect("a live permit owns its pending work").bytes +=
+            bytes;
+        state.bytes = total;
+        true
+    }
 }
 
 impl Drop for WorkPermit {
