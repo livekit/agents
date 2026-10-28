@@ -249,6 +249,23 @@ fn run(check: bool) -> Result<usize, String> {
     if check {
         placement::check(&root)?;
     }
+    sync(&root, &generate(&root, &python_packages)?, check)
+}
+
+/// Everything codegen writes, by path under the repo root.
+struct Outputs {
+    files: Vec<(PathBuf, String)>,
+    /// Directories holding nothing but generated files: any other file there is obsolete.
+    dirs: Vec<PathBuf>,
+}
+
+impl Outputs {
+    fn add(&mut self, path: PathBuf, text: &str) {
+        self.files.push((path, text.to_owned()));
+    }
+}
+
+fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut decls = Vec::new();
     let mut constants = Vec::new();
     for src in SOURCES {
@@ -285,11 +302,17 @@ fn run(check: bool) -> Result<usize, String> {
         exposed.extend(x);
     }
 
-    let mut stale = 0;
-    let abi = decl::tree::Crate::read(&root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
+    let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
+    let abi = decl::tree::Crate::read(root, "rust/crates/lk-agents-abi", "lk_agents_abi")?;
     let declared = decl::resolve::declarations(&abi)?;
-    stale += put_dir(&root.join(adapter::DIR), &adapter::emit(&declared)?, check)?;
-    stale += put_dir(&root.join(records::DIR), &records::rust(&declared)?, check)?;
+    for (dir, outs) in
+        [(adapter::DIR, adapter::emit(&declared)?), (records::DIR, records::rust(&declared)?)]
+    {
+        o.dirs.push(PathBuf::from(dir));
+        for out in &outs {
+            o.add(Path::new(dir).join(&out.path), &out.text);
+        }
+    }
     let class_stubs = class_stub::emit(&declared)?;
     let models = records::python(&declared)?;
     let bases = bases::emit(&decls, &exposed)?;
@@ -302,27 +325,54 @@ fn run(check: bool) -> Result<usize, String> {
     let records = python::emit_with(&reference, &[], &constants)?;
     let stub = stub::emit(&decls, &exposed)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter().chain(&stub))?;
-    stale += put(&root.join(CORE_NAMES), &core_names.text, check)?;
+    o.add(PathBuf::from(CORE_NAMES), &core_names.text);
     let forward = forward::emit(&decls, &exposed)?;
     for package in python_packages {
-        let python_root = root.join(package).join(PYTHON_GENERATED);
-        // The reference keeps its hand-written base classes.
-        let python = if package == REFERENCE_PACKAGE { &records } else { &with_bases };
-        for out in python.iter().chain(stub.iter().map(|s| &s.out)) {
-            stale += put(&python_root.join(&out.path), &out.text, check)?;
+        let python_root = Path::new(package).join(PYTHON_GENERATED);
+        // The reference's own code still imports modules nothing generates any more.
+        if *package != REFERENCE_PACKAGE {
+            o.dirs.push(python_root.clone());
         }
-        // Every package: the records name these modules (`.language`), the reference's included.
-        for out in &forward {
-            stale += put(&python_root.join(&out.path), &out.text, check)?;
+        // The reference keeps its hand-written base classes. Every package gets the forwarding
+        // modules: the records name them (`.language`), the reference's included.
+        let python = if *package == REFERENCE_PACKAGE { &records } else { &with_bases };
+        for out in python.iter().chain(stub.iter().map(|s| &s.out)).chain(&forward) {
+            o.add(python_root.join(&out.path), &out.text);
         }
         // The declared classes are the successor's: the reference keeps its own `_core`.
-        if package != REFERENCE_PACKAGE {
+        if *package != REFERENCE_PACKAGE {
             for out in class_stubs.iter().map(|s| &s.out).chain(&models) {
-                stale += put(&python_root.join(&out.path), &out.text, check)?;
+                o.add(python_root.join(&out.path), &out.text);
             }
-            stale += put(&root.join(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text, check)?;
+            o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);
         }
-        stale += put(&python_root.join("__init__.py"), INIT, check)?;
+        o.add(python_root.join("__init__.py"), INIT);
+    }
+    Ok(o)
+}
+
+/// Writes the outputs under `root` (`--write`, which also deletes obsolete files), or counts the
+/// files that differ, are missing or are obsolete without writing a byte (`--check`).
+fn sync(root: &Path, outputs: &Outputs, check: bool) -> Result<usize, String> {
+    let mut stale = 0;
+    for (path, text) in &outputs.files {
+        stale += put(&root.join(path), text, check)?;
+    }
+    for dir in &outputs.dirs {
+        for entry in std::fs::read_dir(root.join(dir)).into_iter().flatten() {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            // Interpreter caches live beside the generated modules.
+            if path.is_dir() || outputs.files.iter().any(|(p, _)| root.join(p) == path) {
+                continue;
+            }
+            if check {
+                eprintln!("OBSOLETE  {}", path.display());
+                stale += 1;
+            } else {
+                std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                println!("removed  {}", path.display());
+            }
+        }
     }
     Ok(stale)
 }
@@ -348,30 +398,6 @@ fn put(path: &Path, text: &str, check: bool) -> Result<usize, String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote  {}", path.display());
     Ok(0)
-}
-
-/// `outs` are the whole of `dir`: any other file there is obsolete, reported by `--check` and
-/// deleted by `--write`.
-fn put_dir(dir: &Path, outs: &[python::Out], check: bool) -> Result<usize, String> {
-    let mut stale = 0;
-    for out in outs {
-        stale += put(&dir.join(&out.path), &out.text, check)?;
-    }
-    for entry in std::fs::read_dir(dir).into_iter().flatten() {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        let known = outs.iter().any(|o| dir.join(&o.path) == path);
-        if known {
-            continue;
-        }
-        if check {
-            eprintln!("OBSOLETE  {}", path.display());
-            stale += 1;
-        } else {
-            std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            println!("removed  {}", path.display());
-        }
-    }
-    Ok(stale)
 }
 
 /// Every `Ty::Declared` names a type in the set. Checked after all files (forward references are
@@ -440,5 +466,76 @@ fn repo_root() -> Result<(PathBuf, Vec<&'static str>), String> {
                 "could not find the repo root (no directory with rust/Cargo.toml and one of {PYTHON_PACKAGES:?} above the manifest)"
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod drift {
+    use super::*;
+
+    fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut todo = vec![dir.to_owned()];
+        while let Some(d) = todo.pop() {
+            for entry in std::fs::read_dir(&d).expect("readable") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    todo.push(path);
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).expect("readable")));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    // `--check` fails on a changed, missing or obsolete file of every output family and writes
+    // nothing while doing so.
+    #[test]
+    fn generated_surface_drift() {
+        let (root, packages) = repo_root().expect("repo root");
+        let outputs = generate(&root, &packages).expect("generates");
+        let tmp = std::env::temp_dir().join(format!("codegen-drift-{}", uuid::Uuid::new_v4()));
+        for dir in &outputs.dirs {
+            std::fs::create_dir_all(tmp.join(dir)).expect("dir");
+        }
+        sync(&tmp, &outputs, false).expect("writes");
+        assert_eq!(sync(&tmp, &outputs, true), Ok(0));
+
+        let families = [
+            "rust/crates/lk-agents-py/src/generated/mod.rs",
+            "rust/crates/lk-agents-abi/src/python/generated/mod.rs",
+            "livekit-agents-next/livekit/agents/_generated/storage_class.py",
+            "livekit-agents-next/livekit/agents/_generated/stt.py",
+            "livekit-agents-next/livekit/agents/_generated/language.py",
+            "livekit-agents-next/livekit/agents/_generated/__init__.py",
+            "livekit-agents-next/livekit/agents/_generated/_core_classes.pyi",
+            "livekit-agents-next/livekit/agents/_generated/_core_llm.pyi",
+            "livekit-agents-next/livekit/agents/_core.pyi",
+            CORE_NAMES,
+        ];
+        for family in families {
+            let path = tmp.join(family);
+            let text = std::fs::read(&path).unwrap_or_else(|_| panic!("{family} is generated"));
+            let mut changed = text.clone();
+            changed.extend_from_slice(b"\n# drift\n");
+            std::fs::write(&path, &changed).expect("mutates");
+            let before = snapshot(&tmp);
+            assert_eq!(sync(&tmp, &outputs, true), Ok(1), "{family} changed");
+            assert_eq!(snapshot(&tmp), before, "--check wrote while {family} was changed");
+            std::fs::remove_file(&path).expect("removes");
+            assert_eq!(sync(&tmp, &outputs, true), Ok(1), "{family} missing");
+            assert!(!path.exists(), "--check recreated {family}");
+            std::fs::write(&path, &text).expect("restores");
+        }
+        for dir in &outputs.dirs {
+            let stray = tmp.join(dir).join("obsolete_output.py");
+            std::fs::write(&stray, "# GENERATED FILE -- DO NOT EDIT.\n").expect("adds");
+            assert_eq!(sync(&tmp, &outputs, true), Ok(1), "{} obsolete", dir.display());
+            assert!(stray.exists(), "--check deleted an obsolete file");
+            std::fs::remove_file(&stray).expect("removes");
+        }
+        std::fs::remove_dir_all(&tmp).expect("cleans up");
     }
 }

@@ -170,11 +170,8 @@ mod tests {
             ),
             "{pyi}"
         );
-        let listed: Vec<&str> = json
-            .text
-            .lines()
-            .filter_map(|l| l.strip_prefix("    \"")?.split('"').next())
-            .collect();
+        let listed: Vec<&str> =
+            json.text.lines().filter_map(|l| l.strip_prefix("    \"")?.split('"').next()).collect();
         assert_eq!(listed, ["Abc", "END", "Llm", "Role", "_core_chat", "init"]);
     }
 
