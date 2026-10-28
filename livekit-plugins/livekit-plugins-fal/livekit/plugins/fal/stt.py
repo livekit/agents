@@ -4,9 +4,18 @@ import os
 from dataclasses import dataclass
 
 import fal_client
+import httpx
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    LanguageCode,
+    stt,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -41,7 +50,7 @@ class WizperSTT(stt.STT):
         self._opts = _STTOptions(
             language=LanguageCode(language) if is_given(language) else LanguageCode("en")
         )
-        self._fal_client = fal_client.AsyncClient(key=self._api_key)
+        self._client = httpx.AsyncClient(headers={"Authorization": f"Key {self._api_key}"})
 
     @property
     def model(self) -> str:
@@ -62,26 +71,46 @@ class WizperSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        if conn_options.total_timeout is not None:
+            raise APIError(
+                "Fal HTTP adapter cannot enforce total_timeout across framework attempts",
+                retryable=False,
+            )
         try:
             if is_given(language):
                 self._opts.language = LanguageCode(language)
             data_uri = fal_client.encode(
                 rtc.combine_audio_frames(buffer).to_wav_bytes(), "audio/x-wav"
             )
-            response = await self._fal_client.run(
-                "fal-ai/wizper",
-                arguments={
+            response = await self._client.post(
+                "https://fal.run/fal-ai/wizper",
+                json={
                     "audio_url": data_uri,
                     "task": self._opts.task,
                     "language": self._opts.language.language,
                     "chunk_level": self._opts.chunk_level,
                     "version": self._opts.version,
                 },
-                timeout=conn_options.timeout,
+                timeout=httpx.Timeout(
+                    connect=conn_options.connect_timeout,
+                    pool=conn_options.pool_timeout,
+                    write=conn_options.write_timeout,
+                    read=conn_options.read_timeout,
+                ),
             )
-            text = response.get("text", "")
+            response.raise_for_status()
+            text = response.json().get("text", "")
             return self._transcription_to_speech_event(text=text)
-        except fal_client.client.FalClientError as e:
+        except httpx.TimeoutException as e:
+            raise APITimeoutError() from e
+        except httpx.HTTPStatusError as e:
+            raise APIStatusError(
+                str(e),
+                status_code=e.response.status_code,
+                body=e.response.text,
+                request_id=e.response.headers.get("x-fal-request-id"),
+            ) from e
+        except httpx.RequestError as e:
             raise APIConnectionError() from e
 
     def _transcription_to_speech_event(self, text: str) -> stt.SpeechEvent:
@@ -91,4 +120,4 @@ class WizperSTT(stt.STT):
         )
 
     async def aclose(self) -> None:
-        await (await self._fal_client._client).aclose()
+        await self._client.aclose()
