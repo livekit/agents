@@ -103,7 +103,7 @@ class SessionPort:
         from ..simulation import SimulationVerdict
 
         job_ctx = get_job_context(required=False)
-        sim_ctx = job_ctx.simulation_context() if job_ctx is not None else None
+        sim_ctx = job_ctx.simulation_context if job_ctx is not None else None
         if job_ctx is None or sim_ctx is None:
             return None, None
         try:

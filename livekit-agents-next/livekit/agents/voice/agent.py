@@ -121,10 +121,19 @@ class _LiveHook:
     def __set_name__(self, owner: type[Agent], name: str) -> None:
         self._name = name
 
-    def __get__(self, agent: Agent | None, owner: type[Agent]) -> Any:
+    @overload
+    def __get__(self, agent: None, owner: type[Agent]) -> _LiveHook: ...
+
+    @overload
+    def __get__(self, agent: Agent, owner: type[Agent]) -> _BoundLiveHook: ...
+
+    def __get__(self, agent: Agent | None, owner: type[Agent]) -> _LiveHook | _BoundLiveHook:
         if agent is None:
             return self
         return _BoundLiveHook(agent, self._name)
+
+
+_HookFnT = TypeVar("_HookFnT", bound=_HookFn)
 
 
 class _BoundLiveHook:
@@ -132,9 +141,16 @@ class _BoundLiveHook:
         self._agent = agent
         self._name = name
 
-    def __call__(self, f: _HookFn | None = None, /) -> Any:
-        if f is not None:
-            return self._agent._register_hook(self._name, f)
+    @overload
+    def __call__(self, f: _HookFnT, /) -> _HookFnT: ...
+
+    @overload
+    def __call__(self) -> Awaitable[Any]: ...
+
+    def __call__(self, *f: _HookFn) -> Any:
+        if f:
+            self._agent._register_hook(self._name, f[0])
+            return f[0]
         return self._agent._run_hook(self._name)
 
 
@@ -536,7 +552,7 @@ class Agent(Generic[Context_T, Output_T]):
         fn = self._hook_fns.get(name)
         if fn is None:
             return None
-        result = fn(self.session)
+        result = fn(self._get_session_or_raise())
         if inspect.isawaitable(result):
             result = await result
         return result
@@ -577,7 +593,7 @@ class Agent(Generic[Context_T, Output_T]):
         Override to customize (e.g., use session.say() with a canned message,
         or skip the interruption entirely).
         """
-        await self.session.generate_reply(
+        await self._get_session_or_raise().generate_reply(
             user_input=ev.transcript,
             instructions=(
                 "The user has been speaking too long without giving a chance to reply. "
@@ -603,7 +619,7 @@ class Agent(Generic[Context_T, Output_T]):
         ``agent.run()`` and on a call. Override it to change how the model is called; a
         ``FlushSentinel`` ends the spoken segment there.
         """
-        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+        return Agent._default.llm_node(self, chat_ctx, tools, model_settings)
 
     def stt_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
@@ -617,7 +633,7 @@ class Agent(Generic[Context_T, Output_T]):
         Override it to pre-process the audio or filter the events. A non-streaming STT is
         wrapped with the VAD.
         """
-        return Agent.default.stt_node(self, audio, model_settings)
+        return Agent._default.stt_node(self, audio, model_settings)
 
     def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
@@ -628,7 +644,7 @@ class Agent(Generic[Context_T, Output_T]):
         Override it to change the text, the voice or the audio. A non-streaming TTS is fed
         sentence by sentence.
         """
-        return Agent.default.tts_node(self, text, model_settings)
+        return Agent._default.tts_node(self, text, model_settings)
 
     def transcription_node(
         self, text: AsyncIterable[str | TimedString], model_settings: ModelSettings
@@ -641,7 +657,7 @@ class Agent(Generic[Context_T, Output_T]):
 
         Override it to clean up formatting, fix punctuation or rewrite the text the user reads.
         """
-        return Agent.default.transcription_node(self, text, model_settings)
+        return Agent._default.transcription_node(self, text, model_settings)
 
     def realtime_audio_output_node(
         self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
@@ -651,9 +667,9 @@ class Agent(Generic[Context_T, Output_T]):
         | Coroutine[Any, Any, None]
     ):
         """One generation's audio from the realtime model, before it is played out."""
-        return Agent.default.realtime_audio_output_node(self, audio, model_settings)
+        return Agent._default.realtime_audio_output_node(self, audio, model_settings)
 
-    class default:
+    class _default:
         @staticmethod
         def stt_node(
             agent: Agent, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
@@ -761,16 +777,6 @@ class Agent(Generic[Context_T, Output_T]):
             NotGivenOr[llm.LLM | llm.RealtimeModel | None]: The language model for text generation.
         """  # noqa: E501
         return self._llm
-
-    @property
-    def session(self) -> VoiceSession:
-        """
-        Retrieve the VoiceAgent associated with the current agent.
-
-        Raises:
-            RuntimeError: If the agent is not running
-        """
-        return self._get_session_or_raise()
 
 
 def _output_type_of(output: Any) -> type[Any]:

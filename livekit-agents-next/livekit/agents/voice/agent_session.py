@@ -81,7 +81,7 @@ from .events import (
 )
 from .remote_session import ConsoleCall, SessionPort
 from .room_io import AudioInputOptions, RoomOptions, TextInputCallback, TextInputEvent
-from .run_result import RunOutputOptions, VoiceRunResult
+from .run_result import _OUTPUT_RETRY_PROMPT, VoiceRunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
 
@@ -112,6 +112,9 @@ Run_T = TypeVar("Run_T")
 
 # the hook running in this context, for `generate_reply(on_enter=)`
 _hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
+
+# a run whose reply ends without its `output_type` is asked again this many times
+_OUTPUT_RETRIES = 2
 
 # on_exit and the other callbacks are awaited by the core this long before it moves on;
 # on_user_turn_completed is awaited until it returns
@@ -628,20 +631,18 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         user_input: str,
         output_type: type[Run_T] | None = None,
-        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
     ) -> VoiceRunResult[Run_T]:
         """Reply to ``user_input`` and record what the reply did, for assertions."""
         result = VoiceRunResult[Run_T](
             user_input=user_input,
             output_type=output_type,
-            output_options=output_options,
             session=self,
         )
         self._running.run(
             user_input=user_input,
             expects_output=output_type is not None,
-            max_retries=result._output_retries,
-            retry_instructions=result._output_retry_instructions,
+            max_retries=_OUTPUT_RETRIES,
+            retry_instructions=_OUTPUT_RETRY_PROMPT,
             origin=_origin(),
             host=result,
         )

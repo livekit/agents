@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import inspect
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -45,10 +44,8 @@ from .chat_context import ChatContext, ImageContent
 from .tool_context import FunctionTool, RawFunctionTool, ToolError, is_raw_function_tool
 
 if TYPE_CHECKING:
-    from .._generated.llm import FunctionToolCall
     from ..voice.events import RunContext
-    from .chat_context import FunctionCall, FunctionCallOutput
-    from .tool_context import ToolContext
+    from .chat_context import FunctionCall
 
 THINK_TAG_START = "<think>"
 THINK_TAG_END = "</think>"
@@ -476,17 +473,6 @@ def _is_valid_function_output(value: Any) -> bool:
     return False
 
 
-@dataclass
-class FunctionCallResult:
-    fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput
-    raw_output: Any
-    raw_exception: BaseException | None
-    fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
-    """Synthesized pairs from any ``ctx.update()`` calls during this standalone
-    execution. Empty unless the tool actually called ``ctx.update()``."""
-
-
 def _value_text(value: Any) -> str | None:
     """What the model reads of a value: the value itself, a model or dataclass as its JSON;
     ``None`` when the model cannot be told about it."""
@@ -557,96 +543,3 @@ def tool_report(output: Any, exception: BaseException | None = None) -> ToolRepo
     if text is None:
         return ToolReport(outcome=ToolOutcomeInvalid())
     return ToolReport(outcome=ToolOutcomeValue(text=text))
-
-
-def make_function_call_output(
-    *,
-    fnc_call: FunctionCall,
-    output: Any,
-    exception: BaseException | None,
-) -> FunctionCallResult:
-    """Create a FunctionCallResult, handling ToolError, StopResponse, and validation. The
-    output each outcome gives the model is the core's (``_core.tool_call_output``)."""
-    if isinstance(output, BaseException):
-        exception, output = output, None
-    outcome = tool_report(output, exception).outcome
-    if isinstance(outcome, ToolOutcomeInvalid):
-        logger.error(
-            f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
-        )
-    text, is_error, reply_required = _core.tool_call_output(outcome)
-    from .chat_context import FunctionCallOutput
-
-    return FunctionCallResult(
-        fnc_call=fnc_call,
-        fnc_call_out=FunctionCallOutput(
-            name=fnc_call.name,
-            call_id=fnc_call.call_id,
-            output=text,
-            is_error=is_error,
-            reply_required=reply_required,
-        ),
-        raw_output=output,
-        raw_exception=exception,
-    )
-
-
-async def execute_function_call(
-    tool_call: FunctionToolCall,
-    tool_ctx: ToolContext,
-    *,
-    call_ctx: RunContext[Any] | None = None,
-) -> FunctionCallResult:
-    """Execute a function tool call and return the result."""
-    from .chat_context import FunctionCall, FunctionCallOutput
-
-    fnc_call = FunctionCall(
-        call_id=tool_call.call_id,
-        name=tool_call.name,
-        arguments=tool_call.arguments or "{}",
-        extra=tool_call.extra or {},
-    )
-
-    function_tool = tool_ctx.function_tools.get(tool_call.name)
-    if function_tool is None:
-        logger.warning(f"unknown AI function `{tool_call.name}`")
-        msg = _core.unknown_tool_message(tool_call.name, list(tool_ctx.function_tools))
-        return FunctionCallResult(
-            fnc_call=fnc_call,
-            fnc_call_out=FunctionCallOutput(
-                name=tool_call.name,
-                call_id=tool_call.call_id,
-                output=msg,
-                is_error=True,
-            ),
-            raw_output=None,
-            raw_exception=ValueError(msg),
-        )
-
-    try:
-        raw_args = tool_call.arguments or "{}"
-        fnc_args, fnc_kwargs = prepare_function_arguments(
-            fnc=function_tool,
-            json_arguments=raw_args,
-            call_ctx=call_ctx,
-            fnc_call=fnc_call,
-        )
-        result = function_tool(*fnc_args, **fnc_kwargs)
-        if asyncio.iscoroutine(result):
-            result = await result
-
-        out = make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
-
-    except Exception as e:
-        if not isinstance(e, ToolError):
-            logger.exception(
-                f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
-            )
-        out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
-
-    # surface any ctx.update() calls so callers can inspect them
-    if call_ctx is not None and call_ctx._updates:
-        out.fnc_call_updates = list(call_ctx._updates)
-    return out

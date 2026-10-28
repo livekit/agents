@@ -22,7 +22,7 @@ from typing import (
 )
 
 from opentelemetry import trace
-from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault
+from typing_extensions import TypeAliasType, TypeVar as TypeVarDefault
 
 from .. import _core, llm
 from .._core_view import to_core_item
@@ -48,27 +48,6 @@ _OUTPUT_RETRY_PROMPT = (
     "You have not provided the final output yet. Call the appropriate function "
     "to do so; a plain text response alone is not enough."
 )
-
-
-class RunOutputOptions(TypedDict, total=False):
-    """Structured-output behavior for :meth:`VoiceSession.run`.
-
-    Can be passed as a plain dict::
-
-        sess.run(
-            user_input=...,
-            output_type=MyOutput,
-            output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
-        )
-
-    Pass ``output_options=None`` to disable the retry behavior.
-    """
-
-    max_retries: int
-    """Re-prompts when a run ends without its ``output_type``, before raising
-    UnexpectedModelBehavior. Defaults to ``2``."""
-    retry_instructions: str
-    """Override the built-in retry prompt."""
 
 
 Run_T = TypeVar("Run_T")
@@ -208,21 +187,11 @@ class VoiceRunResult(Generic[Run_T]):
         *,
         user_input: str | None = None,
         output_type: type[Run_T] | None,
-        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
         session: VoiceSession | None = None,
     ) -> None:
-        if not is_given(output_options):
-            output_options = RunOutputOptions()
-        elif output_options is None:
-            output_options = RunOutputOptions(max_retries=0)
-
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
-        self._output_retries = output_options.get("max_retries", 2)
-        self._output_retry_instructions = output_options.get(
-            "retry_instructions", _OUTPUT_RETRY_PROMPT
-        )
         self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None

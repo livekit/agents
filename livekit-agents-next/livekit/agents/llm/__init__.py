@@ -56,6 +56,7 @@ from .realtime_fallback_adapter import (
     RealtimeModelFallbackAdapter,
 )
 from .tool_context import (
+    AsyncToolset,
     Completed,
     DuplicateScope,
     Failed,
@@ -79,14 +80,11 @@ from .tool_context import (
     is_function_tool,
     is_raw_function_tool,
 )
-from .utils import FunctionCallResult, execute_function_call
 
 __all__ = [
     "LLM",
     "LLMStream",
     "CollectedResponse",
-    "execute_function_call",
-    "FunctionCallResult",
     "ChatContext",
     "ChatRole",
     "ChatMessage",
@@ -109,6 +107,7 @@ __all__ = [
     "ToolChoice",
     "Tool",
     "Toolset",
+    "AsyncToolset",
     "is_function_tool",
     "function_tool",
     "find_function_tools",

@@ -1,5 +1,5 @@
 from . import io, room_io, run_result
-from .agent import Agent, ModelSettings
+from .agent import Agent
 from .agent_session import (
     ExpressiveOptions,
     KeytermDetectionOptions,
@@ -34,7 +34,6 @@ from .events import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
 )
-from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 
 __all__ = [
@@ -44,10 +43,8 @@ __all__ = [
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",
-    "RunOutputOptions",
     "VoiceActivityVideoSampler",
     "Agent",
-    "ModelSettings",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",

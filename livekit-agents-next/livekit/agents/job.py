@@ -102,14 +102,14 @@ def current_simulation() -> SimulationContext | None:
 
     ``None`` covers everything that is not a simulation: a production job, and code
     running outside a job context at all (console mode, tests). Unlike
-    :meth:`JobContext.simulation_context` this does not need the job context in hand,
+    :attr:`JobContext.simulation_context` this does not need the job context in hand,
     so it can be called from deep inside the stack.
     """
     ctx = get_job_context(required=False)
     if ctx is None:
         return None
 
-    return ctx.simulation_context()
+    return ctx.simulation_context
 
 
 @unique
@@ -552,21 +552,14 @@ class JobContext:
             raise RuntimeError("No VoiceSession was started for this job")
         return self._primary_agent_session
 
-    def simulation_context(self) -> SimulationContext | None:
-        """Return the :class:`SimulationContext` when this job is running under a
-        simulation, or ``None`` for a normal/production session.
-
-        Resolved once and cached. The framework hands it to ``on_simulation_end``
-        automatically, so you never need to call this to "prime" anything. Call it only
-        when you want the scenario in your entrypoint (e.g. to seed scenario-specific
-        mocks). Resolves synchronously from the job's ``lk.simulator.dispatch``
-        attribute (a protojson ``SimulationDispatch``), available as soon as the
-        entrypoint runs; a production job has none and returns ``None``.
-        """
-        return self._simulation
-
     @functools.cached_property
-    def _simulation(self) -> SimulationContext | None:
+    def simulation_context(self) -> SimulationContext | None:
+        """The :class:`SimulationContext` when this job runs under a simulation, ``None`` for
+        an ordinary job.
+
+        Read from the job's ``lk.simulator.dispatch`` attribute (a protojson
+        ``SimulationDispatch``), so it is final as soon as the entrypoint runs.
+        """
         # The simulation attributes ride the agent dispatch and land on the job
         # itself, so this is final before the room even connects.
         metadata = self._info.job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH, "")
@@ -610,7 +603,7 @@ class JobContext:
         # gateway capacity, and it must not be able to ask for priority either. Audio
         # simulations are excluded: they run in real time against the audio pipeline,
         # so their latency has to stay representative of production.
-        sim = self.simulation_context()
+        sim = self.simulation_context
         if sim is not None and sim.simulation_mode == SimulationMode.SIMULATION_MODE_TEXT:
             headers[HEADER_INFERENCE_PRIORITY] = "low"
 
@@ -903,7 +896,7 @@ class JobContext:
         self, options: RecordingOptions | None = None, *, redaction_enabled: bool = False
     ) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
-        if (sim := self.simulation_context()) is not None:
+        if (sim := self.simulation_context) is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
             # The run/job ids ride every span and log so a run can be aggregated as a
             # whole. Omitted when blank rather than sent empty: an absent attribute

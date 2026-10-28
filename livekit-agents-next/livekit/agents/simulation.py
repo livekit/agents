@@ -9,27 +9,12 @@ from livekit.protocol import agent_simulation as proto
 if TYPE_CHECKING:
     from .job import JobContext
 
-# Re-export the generated proto messages as the canonical scenario types.
-Scenario = proto.Scenario
-ScenarioGroup = proto.ScenarioGroup
-SimulationRun = proto.SimulationRun
-SimulationDispatch = proto.SimulationDispatch
 SimulationMode = proto.SimulationMode
 
-# Decoded form of a Scenario's `userdata` (arbitrary JSON). On the wire it is a
-# JSON-encoded string; in a scenarios.yaml it is written as a nested mapping.
 ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
+"""A scenario's ``userdata``, decoded from its JSON string."""
 
-__all__ = [
-    "Scenario",
-    "ScenarioGroup",
-    "SimulationRun",
-    "SimulationDispatch",
-    "SimulationMode",
-    "ScenarioUserdata",
-    "SimulationVerdict",
-    "SimulationContext",
-]
+__all__ = ["SimulationContext", "SimulationMode", "SimulationVerdict"]
 
 
 @dataclass

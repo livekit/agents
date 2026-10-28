@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import JsonValue
 
-from livekit.agents import ProviderTool
+from livekit.agents.llm import ProviderTool
 from openai.types import responses
 from openai.types.responses.tool import CodeInterpreterContainerCodeInterpreterToolAuto
 

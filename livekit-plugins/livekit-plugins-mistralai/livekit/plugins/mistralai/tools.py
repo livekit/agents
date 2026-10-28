@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
-from livekit.agents import ProviderTool
+from livekit.agents.llm import ProviderTool
 
 
 class MistralTool(ProviderTool):

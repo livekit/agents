@@ -170,7 +170,7 @@ livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 ├── ipc/                # Job-process bootstrap and the ASGI app endpoint streams are served into
 ├── cli.py              # dev / start subcommands invoked by `lk agent`
 ├── text_session.py     # Backend conversations and explicitly supplied routing state
-├── testing.py, evals.py # Run event assertions and conversation judges
+├── evals.py            # Conversation judges
 ├── simulation.py       # Simulation context and application verdicts
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 ├── _generated/         # Generated implementations and forwarding modules (never edited)

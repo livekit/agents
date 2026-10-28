@@ -33,7 +33,7 @@ from .._generated.events import (
     UserTurnExceededEvent,
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
-from ..llm import FunctionCall, FunctionCallOutput
+from ..llm import FunctionCall
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -98,8 +98,6 @@ class RunContext(Generic[Context_T]):
         # in agent.run(): the host operation running this tool body, which its updates name
         self._operation: int | None = None
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
-        # the synthesized progress-update pairs, read back by `execute_function_call`
-        self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
         # on a call: resolved by the first `update()`, which releases the step to the core
         self._first_update: asyncio.Future[tuple[str, str]] | None = (
             asyncio.get_running_loop().create_future() if session is not None else None
@@ -266,24 +264,6 @@ class RunContext(Generic[Context_T]):
             },
         )
         fnc_call = self.function_call
-        suffix = f"_update_{len(self._updates)}" if self._updates else ""
-        self._updates.append(
-            (
-                FunctionCall(
-                    call_id=f"{fnc_call.call_id}{suffix}",
-                    name=fnc_call.name,
-                    arguments=fnc_call.arguments,
-                    extra=dict(fnc_call.extra),
-                ),
-                FunctionCallOutput(
-                    name=fnc_call.name,
-                    call_id=f"{fnc_call.call_id}{suffix}",
-                    output=rendered,
-                    is_error=False,
-                ),
-            )
-        )
-
         if self._first_update is None:
             # agent.run(): the run streams it as progress; the door that runs the turn forwards it
             if (
