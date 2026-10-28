@@ -1,9 +1,10 @@
 import logging
 import os
+from json import JSONDecodeError
 from typing import TypeVar
 
 import aiohttp
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import NOT_GIVEN, APIConnectionError, NotGivenOr
 
@@ -16,11 +17,11 @@ class AvatarTalkException(Exception):
     """Exception for AvatarTalkAPI errors"""
 
 
-class SessionResponse(BaseModel):
+class _SessionResponse(BaseModel):
     task_id: str | None
 
 
-class StopResponse(BaseModel):
+class _StopResponse(BaseModel):
     pass
 
 
@@ -59,7 +60,7 @@ class AvatarTalkAPI:
                 if response.ok:
                     try:
                         return response_type.model_validate(await response.json())
-                    except (ValueError, aiohttp.ContentTypeError) as exc:
+                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "AvatarTalk returned an invalid response", retryable=False
                         ) from exc
@@ -76,11 +77,11 @@ class AvatarTalkAPI:
         livekit_listener_token: str,
         livekit_room_token: str,
         agent_identity: str,
-    ) -> SessionResponse:
+    ) -> _SessionResponse:
         return await self._request(
             "POST",
             "/livekit/create-session",
-            response_type=SessionResponse,
+            response_type=_SessionResponse,
             json={
                 "livekit_url": livekit_url,
                 "avatar": avatar,
@@ -92,7 +93,7 @@ class AvatarTalkAPI:
             },
         )
 
-    async def stop_session(self, task_id: str) -> StopResponse:
+    async def stop_session(self, task_id: str) -> _StopResponse:
         return await self._request(
-            "DELETE", f"/livekit/delete-session/{task_id}", response_type=StopResponse
+            "DELETE", f"/livekit/delete-session/{task_id}", response_type=_StopResponse
         )

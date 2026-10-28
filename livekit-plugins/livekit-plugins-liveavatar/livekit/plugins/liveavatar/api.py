@@ -4,9 +4,10 @@ import asyncio
 import logging
 import os
 from collections.abc import Mapping
+from json import JSONDecodeError
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 if TYPE_CHECKING:
     from .avatar import VideoQuality
@@ -167,7 +168,7 @@ class LiveAvatarAPI:
                             body=text,
                         )
                     return response_type.model_validate(await response.json())
-            except (ValueError, aiohttp.ContentTypeError) as exc:
+            except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                 raise APIConnectionError(
                     "LiveAvatar returned an invalid response", retryable=False
                 ) from exc

@@ -1,8 +1,9 @@
 import asyncio
 import os
+from json import JSONDecodeError
 
 import aiohttp
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -21,7 +22,7 @@ from .log import logger
 DEFAULT_API_URL = "https://api.d-id.com"
 
 
-class JoinSessionResponse(BaseModel):
+class _JoinSessionResponse(BaseModel):
     id: str
 
 
@@ -61,7 +62,7 @@ class DIDAPI:
         response_data = await self._post(f"v2/agents/{agent_id}/sessions/join", payload)
         return response_data.id
 
-    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> JoinSessionResponse:
+    async def _post(self, endpoint: str, payload: dict[str, JsonValue]) -> _JoinSessionResponse:
         url = f"{self._api_url}/{endpoint}"
         num_attempts = self._conn_options.max_retry + 1
         for attempt in range(num_attempts):
@@ -84,8 +85,8 @@ class DIDAPI:
                             status_code=response.status,
                             body=text,
                         )
-                    return JoinSessionResponse.model_validate(await response.json())
-            except (ValueError, aiohttp.ContentTypeError) as exc:
+                    return _JoinSessionResponse.model_validate(await response.json())
+            except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                 raise APIConnectionError(
                     "Did returned an invalid response", retryable=False
                 ) from exc

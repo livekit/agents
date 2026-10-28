@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from json import JSONDecodeError
 from types import TracebackType
 
 import aiohttp
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -20,7 +21,7 @@ from .types import PersonaConfig, SessionOptions
 DEFAULT_API_URL = "https://api.anam.ai"
 
 
-class SessionResponse(BaseModel):
+class _SessionResponse(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId")
 
 
@@ -75,7 +76,7 @@ class AnamAPI:
         livekit_url: str,
         livekit_token: str,
         session_options: SessionOptions | None = None,
-    ) -> SessionResponse:
+    ) -> _SessionResponse:
         """
         Starts an engine session.
 
@@ -147,7 +148,7 @@ class AnamAPI:
 
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], headers: dict[str, str]
-    ) -> SessionResponse:
+    ) -> _SessionResponse:
         """
         Internal method to make a POST request with retry logic.
         """
@@ -172,8 +173,8 @@ class AnamAPI:
                                     status_code=response.status,
                                     body=text,
                                 )
-                            return SessionResponse.model_validate(await response.json())
-                    except (ValueError, aiohttp.ContentTypeError) as exc:
+                            return _SessionResponse.model_validate(await response.json())
+                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Anam returned an invalid response", retryable=False
                         ) from exc

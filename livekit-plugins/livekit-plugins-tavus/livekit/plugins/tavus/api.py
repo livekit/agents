@@ -1,9 +1,10 @@
 import asyncio
 import os
+from json import JSONDecodeError
 from typing import TypeVar
 
 import aiohttp
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -51,15 +52,15 @@ def _deprecated_env(deprecated_name: str, new_name: str) -> str | None:
     return value
 
 
-class ConversationResponse(BaseModel):
+class _ConversationResponse(BaseModel):
     conversation_id: str
 
 
-class PalResponse(BaseModel):
+class _PalResponse(BaseModel):
     pal_id: str
 
 
-class PersonaResponse(BaseModel):
+class _PersonaResponse(BaseModel):
     persona_id: str
 
 
@@ -136,7 +137,7 @@ class TavusAPI:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
 
         response_data = await self._post(
-            "conversations", payload, response_type=ConversationResponse
+            "conversations", payload, response_type=_ConversationResponse
         )
         return response_data.conversation_id
 
@@ -161,7 +162,7 @@ class TavusAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
-        response_data = await self._post("pals", payload, response_type=PalResponse)
+        response_data = await self._post("pals", payload, response_type=_PalResponse)
         return response_data.pal_id
 
     async def create_persona(
@@ -185,7 +186,7 @@ class TavusAPI:
         if utils.is_given(extra_payload):
             payload.update(extra_payload)
 
-        response_data = await self._post("personas", payload, response_type=PersonaResponse)
+        response_data = await self._post("personas", payload, response_type=_PersonaResponse)
         return response_data.persona_id
 
     async def _post(
@@ -227,7 +228,7 @@ class TavusAPI:
                             )
                         try:
                             return response_type.model_validate(await response.json())
-                        except (ValueError, aiohttp.ContentTypeError) as e:
+                        except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as e:
                             # Tavus already accepted the POST; retrying could create a duplicate.
                             raise APIConnectionError(
                                 "Tavus returned an invalid response", retryable=False

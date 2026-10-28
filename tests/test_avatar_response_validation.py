@@ -73,3 +73,16 @@ async def test_invalid_success_response_does_not_repeat_creation(provider, monke
             await call
         assert error.value.retryable is False
     assert len(requests) == 1
+
+
+async def test_invalid_liveavatar_url_is_not_classified_as_invalid_provider_response():
+    async with aiohttp.ClientSession() as http:
+        api = LiveAvatarAPI(
+            api_key="key",
+            api_url="http://[",
+            session=http,
+            conn_options=APIConnectOptions(max_retry=0),
+        )
+        with pytest.raises(APIConnectionError) as error:
+            await api.start_streaming_session("session", "token")
+        assert "returned an invalid response" not in str(error.value)

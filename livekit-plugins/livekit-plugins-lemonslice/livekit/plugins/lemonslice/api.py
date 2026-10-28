@@ -4,12 +4,13 @@ import asyncio
 import io
 import json
 import os
+from json import JSONDecodeError
 from types import TracebackType
 from typing import TypeVar
 
 import aiohttp
 from PIL import Image
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -33,16 +34,16 @@ class LemonSliceException(Exception):
 DEFAULT_API_URL = "https://lemonslice.com/api/liveai/sessions"
 
 
-class AgentSessionResponse(BaseModel):
+class _AgentSessionResponse(BaseModel):
     session_id: str
 
 
-class JoinMeetingResponse(BaseModel):
+class _JoinMeetingResponse(BaseModel):
     websocket_url: str
     meeting_bot_id: str
 
 
-class LeaveMeetingResponse(BaseModel):
+class _LeaveMeetingResponse(BaseModel):
     pass
 
 
@@ -162,7 +163,7 @@ class LemonSliceAPI:
             image_bytes = _encode_image(agent_image)
 
         response_data = await self._post(
-            payload, response_type=AgentSessionResponse, image_bytes=image_bytes
+            payload, response_type=_AgentSessionResponse, image_bytes=image_bytes
         )
         session_id = response_data.session_id
         logger.debug(f"LemonSlice Session ID = {session_id}")
@@ -201,7 +202,7 @@ class LemonSliceAPI:
             payload["bot_name"] = bot_name
 
         url = f"{self._api_url.rstrip('/')}/{session_id}/join-meeting"
-        data = await self._post(payload, response_type=JoinMeetingResponse, url=url)
+        data = await self._post(payload, response_type=_JoinMeetingResponse, url=url)
         return JoinMeetingResult(
             websocket_url=data.websocket_url,
             meeting_bot_id=data.meeting_bot_id,
@@ -222,7 +223,7 @@ class LemonSliceAPI:
         url = f"{self._api_url.rstrip('/')}/{session_id}/leave-meeting"
         await self._post(
             {"meeting_bot_id": meeting_bot_id},
-            response_type=LeaveMeetingResponse,
+            response_type=_LeaveMeetingResponse,
             url=url,
         )
 
@@ -287,7 +288,7 @@ class LemonSliceAPI:
                                     body=text,
                                 )
                             return response_type.model_validate(await response.json())
-                    except (ValueError, aiohttp.ContentTypeError) as exc:
+                    except (ValidationError, JSONDecodeError, aiohttp.ContentTypeError) as exc:
                         raise APIConnectionError(
                             "Lemonslice returned an invalid response", retryable=False
                         ) from exc
