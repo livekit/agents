@@ -16,6 +16,7 @@ use crate::vad::events::VadEventType;
 use crate::vad::vad::{Vad, VadSource};
 use crate::{ApiConnectOptions, AudioFrame};
 
+#[derive(Clone)]
 pub struct SttStreamAdapter {
     stt: Arc<dyn Stt>,
     vad: Arc<dyn Vad>,
@@ -24,6 +25,13 @@ pub struct SttStreamAdapter {
 }
 
 impl SttStreamAdapter {
+    fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
+        let stt = conn_options
+            .and_then(|conn| self.stt.with_conn_options(&conn))
+            .unwrap_or_else(|| self.stt.clone());
+        Self { stt, ..self.clone() }
+    }
+
     pub fn new(stt: Arc<dyn Stt>, vad: Arc<dyn Vad>, clock: Arc<dyn Clock>) -> Self {
         SttStreamAdapter { stt, vad, clock }
     }
@@ -47,14 +55,13 @@ impl SttStreamAdapter {
 /// `stt.StreamAdapter`'s engine, as the host builds it; the public class stays Python.
 #[crate::host(object(name = "SttStreamAdapter", cell = "arc", as_dyn(Stt = as_stt)))]
 impl SttStreamAdapter {
-    /// The wrapped STT's recognitions run under the default `conn_options`, as the reference's.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy.
     #[host(new)]
     pub fn for_host(
         stt: Arc<dyn Stt>,
         vad: Arc<dyn Vad>,
         #[host(ambient)] clock: Arc<dyn Clock>,
     ) -> Self {
-        let stt = stt.with_conn_options(&ApiConnectOptions::default()).unwrap_or(stt);
         SttStreamAdapter::new(stt, vad, clock)
     }
 
@@ -69,8 +76,9 @@ impl SttStreamAdapter {
         &self,
         frames: Vec<AudioFrame>,
         language: Option<LanguageCode>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError> {
-        self.stt.recognize(&frames, language.as_ref()).await
+        self.configured(conn_options).stt.recognize(&frames, language.as_ref()).await
     }
 
     /// The duplex path: audio into the VAD, its utterances recognized.
@@ -79,8 +87,9 @@ impl SttStreamAdapter {
         &self,
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<(SttSink, SttSource), ProviderError> {
-        Stt::stream(self, language.as_ref(), start_time_offset)
+        Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
             .await
             .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
     }
@@ -128,8 +137,7 @@ impl Stt for SttStreamAdapter {
 
     /// The options go to the wrapped STT's recognitions; the adapter's stream does not retry.
     fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
-        let stt = self.stt.with_conn_options(conn).unwrap_or_else(|| Arc::clone(&self.stt));
-        Some(Arc::new(SttStreamAdapter::new(stt, Arc::clone(&self.vad), Arc::clone(&self.clock))))
+        Some(Arc::new(self.configured(Some(*conn))))
     }
 
     async fn recognize(
@@ -194,8 +202,9 @@ impl StreamSource<SpeechEvent> for AdapterSource {
                         - event.silence_duration
                         - event.inference_duration;
                     self.speech_end = Some(ended);
-                    self.utterance =
-                        Some(event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default());
+                    self.utterance = Some(
+                        event.frames.map(|f| f.audio_frames()).transpose()?.unwrap_or_default(),
+                    );
                     let mut end = SpeechEvent::new(SpeechEventType::EndOfSpeech);
                     end.speech_end_time = Some(ended);
                     return Ok(Some(end));
@@ -316,7 +325,11 @@ mod tests {
             StartOfSpeech,
             EndOfSpeech,
         ]));
-        let adapter = SttStreamAdapter::adapted(stt, Some(vad), Arc::new(crate::utils::clock::SimClock::new()));
+        let adapter = SttStreamAdapter::adapted(
+            stt,
+            Some(vad),
+            Arc::new(crate::utils::clock::SimClock::new()),
+        );
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
         let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap();

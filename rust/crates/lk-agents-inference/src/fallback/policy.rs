@@ -1,33 +1,14 @@
 //! The chain's calculators: pure functions that differ per modality.
 
-use std::sync::Arc;
-
 use lk_agents_abi::ApiConnectOptions;
-
-/// Views built up front by the host (only while its loop runs), so the chain can bound a wrapped
-/// provider's own retry loop; attempts and probes run concurrently with different budgets.
-/// `None` (a native provider) serves the provider itself.
-pub fn bound_views<T: ?Sized>(
-    provider: &Arc<T>,
-    policy: &ChainPolicy,
-    bind: impl Fn(&ApiConnectOptions) -> Option<Arc<T>>,
-) -> (Arc<T>, Arc<T>) {
-    let caller = caller_default();
-    let view = |conn: ApiConnectOptions| bind(&conn).unwrap_or_else(|| Arc::clone(provider));
-    (
-        view(conn_options_for_attempt(&caller, policy)),
-        view(conn_options_for_recovery(&caller, policy)),
-    )
-}
 
 /// The `conn_options` fields the chain rewrites before handing a request to a child.
 /// Visible output always forbids replay. `max_retry` defaults per modality (LLM 0, STT 1, TTS 2); the hard 0s
-/// are [`caller_default`] and [`conn_options_for_recovery`].
+/// are [`caller_default`] and [`conn_options_for_attempt`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChainPolicy {
     pub max_retry_per_backend: u32,
-    /// Bounds each attempt as its `total_timeout` (within the caller's); `None` keeps the
-    /// caller's, as TTS does (`tts/fallback_adapter.py:193`).
+    /// Caps each phase of an attempt; `None` keeps the caller's limits, as TTS does (`tts/fallback_adapter.py:193`).
     pub attempt_timeout: Option<f64>,
     /// Replaces `conn_options.retry_interval`; `None` keeps the caller's.
     pub retry_interval: Option<f64>,
@@ -100,15 +81,6 @@ pub fn conn_options_for_attempt(
     }
 }
 
-/// What a child sees on a background recovery probe: the same limits, `max_retry` a hard 0
-/// (`stt:445-449`, `tts:524-529`).
-pub fn conn_options_for_recovery(
-    caller: &ApiConnectOptions,
-    policy: &ChainPolicy,
-) -> ApiConnectOptions {
-    conn_options_for_attempt(caller, policy)
-}
-
 /// `tts/fallback_adapter.py:86-87,109-118`: the adapter's output rate (`requested`, else the
 /// maximum of the entries) and, per entry, whether it needs resampling.
 pub fn resampling_plan(entry_rates: &[u32], requested: Option<u32>) -> (u32, Vec<bool>) {
@@ -134,6 +106,9 @@ mod tests {
     // Catches: `caller_default` carrying the workspace `max_retry=3`.
     #[test]
     fn the_adapters_own_default_conn_options_do_not_retry() {
-        assert_eq!(caller_default(), ApiConnectOptions { max_retry: 0, ..ApiConnectOptions::default() });
+        assert_eq!(
+            caller_default(),
+            ApiConnectOptions { max_retry: 0, ..ApiConnectOptions::default() }
+        );
     }
 }

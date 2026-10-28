@@ -20,14 +20,8 @@ pub use chain::{
     IgnoreEvents, NoBackends, Recovery, RecoverySlot,
 };
 pub use llm::{FallbackLlm, LlmBackend};
-pub use policy::{
-    ChainPolicy, bound_views, caller_default, conn_options_for_attempt, conn_options_for_recovery,
-    resampling_plan,
-};
-pub use realtime::{
-    CapabilityMismatch,
-    merge_capabilities_of,
-};
+pub use policy::{ChainPolicy, caller_default, conn_options_for_attempt, resampling_plan};
+pub use realtime::{CapabilityMismatch, merge_capabilities_of};
 pub use realtime_policy::{AvailabilityChange, ErrorPlan, RealtimePolicy};
 pub use stt::{
     FallbackStt, InputTee, SttBackend, SttChainError, SttReq, SttSession,

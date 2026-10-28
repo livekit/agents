@@ -13,7 +13,7 @@ use lk_agents_abi::{ChatRequest, Extra, HostRef, Llm, LlmStream, ToolChoice, Too
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
-    Attempt, Backend, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
+    Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
@@ -53,7 +53,8 @@ impl Backend for LlmBackend {
         // `dataclasses.replace(self._conn_options, ...)`, on a clone of the request.
         let mut attempt = req.clone();
         attempt.conn_options = *conn;
-        self.inner.chat(&attempt).await
+        let llm = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
+        llm.chat(&attempt).await
     }
 
     async fn recover(
@@ -124,9 +125,6 @@ impl FallbackLlm {
         #[host(ambient)] clock: Arc<dyn Clock>,
         #[host(ambient)] spawner: Arc<dyn Spawner>,
     ) -> Result<Self, NoBackends> {
-        let seam = lk_agents_abi::ApiConnectOptions { max_retry: 0, ..Default::default() };
-        let llms =
-            llms.into_iter().map(|llm| llm.with_conn_options(&seam).unwrap_or(llm)).collect();
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
             attempt_timeout: Some(attempt_timeout),
@@ -177,12 +175,13 @@ impl FallbackLlm {
         parallel_tool_calls: Option<bool>,
         tool_choice: Option<serde_json::Value>,
         extra_kwargs: Option<Extra>,
+        conn_options: Option<lk_agents_abi::ApiConnectOptions>,
     ) -> Result<LlmStream, ProviderError> {
         let req = ChatRequest {
             chat_ctx_host: Some(chat_ctx_host),
             tools,
             tools_host,
-            conn_options: crate::fallback::caller_default(),
+            conn_options: conn_options.unwrap_or_else(crate::fallback::caller_default),
             parallel_tool_calls,
             tool_choice: tool_choice.as_ref().and_then(ToolChoice::from_host_json),
             extra: extra_kwargs,
@@ -222,7 +221,11 @@ impl Llm for FallbackLlm {
         let chain = Arc::clone(&self.chain);
         let drain_chain = Arc::clone(&self.chain);
         let req = req.clone();
-        let caller_conn = req.conn_options;
+        let call = ChainCall {
+            conn_options: req.conn_options,
+            accepted_at: self.chain.clock().now(),
+            slot: RecoverySlot::OneShot,
+        };
 
         let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
         let handle = self.spawner.spawn_unboxed(async move {
@@ -230,8 +233,7 @@ impl Llm for FallbackLlm {
             let result = chain
                 .run_cancellable(
                     &req,
-                    &caller_conn,
-                    RecoverySlot::OneShot,
+                    call,
                     &mut tx,
                     stop_rx,
                     move |index, _backend, mut stream, tx, mut stop| {

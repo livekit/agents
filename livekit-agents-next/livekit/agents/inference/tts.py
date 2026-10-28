@@ -187,14 +187,20 @@ class TTS(tts.TTS):
         )
 
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> tts.ChunkedStream:
-        return self._synthesize_with_stream(text, conn_options=conn_options)
+        resolved = _core._core_resolve_api_connect_options(
+            self._conn, conn_options if is_given(conn_options) else None
+        )
+        return self._synthesize_with_stream(text, conn_options=resolved)
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        resolved = _core._core_resolve_api_connect_options(
+            self._conn, conn_options if is_given(conn_options) else None
+        )
+        return SynthesizeStream(tts=self, conn_options=resolved)
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -206,7 +212,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._tts: TTS = tts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        native = await self._tts._core_native().stream()
+        native = await self._tts._core_native().stream(conn_options=self._conn_options)
         output_emitter.initialize(
             request_id=shortuuid("tts_"),
             sample_rate=self._tts.sample_rate,

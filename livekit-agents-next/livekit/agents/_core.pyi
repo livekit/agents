@@ -176,6 +176,7 @@ from ._generated._core_classes import (
     WarmTransfer as WarmTransfer,
     _core_a2a_message_data as _core_a2a_message_data,
     _core_a2a_message_text as _core_a2a_message_text,
+    _core_resolve_api_connect_options as _core_resolve_api_connect_options,
     _core_session_chat_record as _core_session_chat_record,
     amd_auto_select_models as amd_auto_select_models,
     amd_category_is_human as amd_category_is_human,

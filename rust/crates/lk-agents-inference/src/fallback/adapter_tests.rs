@@ -1221,3 +1221,5 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
 mod capabilities;
 
 mod tts;
+
+mod options;

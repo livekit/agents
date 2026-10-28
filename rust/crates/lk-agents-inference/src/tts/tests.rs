@@ -389,3 +389,22 @@ async fn identified_views_keep_their_expressive_configuration() {
         while source.next().await.unwrap().is_some() {}
     }
 }
+
+#[tokio::test]
+async fn a_call_policy_replaces_native_tts_defaults_before_connecting() {
+    let ws = Arc::new(FakeWs::hanging());
+    let client: Arc<dyn Tts> = Arc::new(tts(ws.clone()));
+    let conn = ApiConnectOptions { connect_timeout: Some(0.0), max_retry: 0, ..Default::default() };
+    let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
+    let mut source = call.synthesize("hello").await.unwrap();
+    let failure = lk_agents_abi::timeout(
+        &lk_agents_abi::RealClock::new(),
+        Duration::from_millis(250),
+        source.next(),
+    )
+    .await
+    .expect("the explicit zero connect budget must take effect")
+    .unwrap_err();
+    assert_eq!(failure.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
+    source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+}

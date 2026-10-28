@@ -82,9 +82,11 @@ impl Default for SttOptions {
 
 /// One gateway STT client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job).
+#[derive(Clone)]
 pub struct NativeStt {
     shared: Arc<SttShared>,
-    identity: BoundIdentity,
+    identity: Arc<BoundIdentity>,
+    conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Stt>>,
 }
@@ -135,6 +137,10 @@ pub struct SttShared {
     stub = "def identified(self, headers: list[tuple[str, str]], reporter: Any | None = None) -> InferenceStt: ..."
 ))]
 impl NativeStt {
+    fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
+        Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
+    }
+
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: SttOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let capabilities =
@@ -150,7 +156,12 @@ impl NativeStt {
             vad: Mutex::new(None),
             live: Mutex::new(Vec::new()),
         };
-        NativeStt { shared: Arc::new(shared), identity: BoundIdentity::default(), reporter: None }
+        NativeStt {
+            shared: Arc::new(shared),
+            identity: Arc::default(),
+            conn_options: None,
+            reporter: None,
+        }
     }
 
     /// The same client as a session serving another job holds it: its connections carry that
@@ -163,7 +174,8 @@ impl NativeStt {
     ) -> NativeStt {
         let view = NativeStt {
             shared: Arc::clone(&self.shared),
-            identity: BoundIdentity::default(),
+            identity: Arc::default(),
+            conn_options: self.conn_options,
             reporter,
         };
         view.identity.bind(headers);
@@ -331,6 +343,9 @@ impl NativeStt {
     /// mutate a stream that is already running.
     fn sanitize(&self, language: Option<&str>) -> SttOptions {
         let mut opts = self.opts.lock().unwrap().clone();
+        if let Some(conn) = self.conn_options {
+            opts.conn_options = conn;
+        }
         if let Some(language) = language {
             opts.language = Some(
                 lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned(),
@@ -346,8 +361,9 @@ impl NativeStt {
         &self,
         language: Option<&str>,
         start_time_offset: Option<f64>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<(SttSinkHandle, SttSourceHandle), ProviderError> {
-        self.stream_native(language, start_time_offset.unwrap_or(0.0))
+        self.configured(conn_options).stream_native(language, start_time_offset.unwrap_or(0.0))
     }
 
     /// The unboxed pair, for callers that need the live stream's `update_options`.
@@ -394,6 +410,7 @@ impl NativeStt {
             deferred: control.deferred.clone(),
             update_tx,
             event_tx,
+            failure: control.failure.clone(),
             stop: stop_rx,
             ended: ended_rx,
             accepted: self.clock.now(),
@@ -419,6 +436,10 @@ impl NativeStt {
 
 #[async_trait]
 impl Stt for NativeStt {
+    fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
+        Some(Arc::new(self.configured(Some(*conn))))
+    }
+
     /// The provider's `error` event, on the host provider this view serves.
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {
@@ -577,15 +598,24 @@ impl StreamSink<AudioFrame> for SttSinkHandle {
 }
 
 impl SttSinkHandle {
+    fn closed_error(&self) -> ProviderError {
+        self.control
+            .failure
+            .borrow()
+            .clone()
+            .map(ProviderError::from)
+            .unwrap_or_else(|| stream_closed(WHAT))
+    }
+
     fn send(&self, cmd: SinkCmd) -> Result<(), ProviderError> {
         if *self.control.ended.borrow() || *self.control.stop.borrow() {
-            return Err(stream_closed(WHAT));
+            return Err(self.closed_error());
         }
         self.audio.try_send(cmd).map_err(|error| {
             if matches!(error, mpsc::error::TrySendError::Full(_)) {
                 self.control.fail_overflow();
             }
-            stream_closed(WHAT)
+            self.closed_error()
         })
     }
 }
@@ -667,12 +697,18 @@ struct Pump {
     deferred: Arc<DeferredExtra>,
     update_tx: mpsc::Sender<serde_json::Value>,
     event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
+    failure: tokio::sync::watch::Sender<Option<ApiError>>,
     stop: tokio::sync::watch::Receiver<bool>,
     ended: tokio::sync::watch::Receiver<bool>,
     accepted: lk_agents_abi::Ts,
 }
 
 impl Pump {
+    async fn failed(&self, error: ApiError) {
+        self.failure.send_replace(Some(error.clone()));
+        let _ = self.event_tx.send(Err(error)).await;
+    }
+
     /// `RecognizeStream._main_task`: each failed attempt reconnects, under `conn_options`, with the
     /// audio pushed meanwhile still queued. An attempt that outlived the connect limit had
     /// connected, so the budget restarts.
@@ -712,11 +748,11 @@ impl Pump {
                     retries += 1;
                 }
                 RetryDecision::Exhausted(message) => {
-                    let _ = self.event_tx.send(Err(ApiError::connection(Some(message)))).await;
+                    self.failed(ApiError::connection(Some(message))).await;
                     return;
                 }
                 RetryDecision::Stop | RetryDecision::Raise => {
-                    let _ = self.event_tx.send(Err(err)).await;
+                    self.failed(err).await;
                     return;
                 }
             }
@@ -1005,7 +1041,8 @@ impl Pump {
         let mut produced_output = false;
         loop {
             let recv = receiver.recv();
-            let received = if awaiting_first { within(&*clock, ack_deadline, recv).await } else { recv.await };
+            let received =
+                if awaiting_first { within(&*clock, ack_deadline, recv).await } else { recv.await };
             let msg = match received {
                 Ok(msg) => msg,
                 Err(TransportError::Timeout) if awaiting_first => {

@@ -21,7 +21,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use tokio::sync::{oneshot, watch};
 
-use crate::fallback::policy::{ChainPolicy, conn_options_for_attempt, conn_options_for_recovery};
+use crate::fallback::policy::{ChainPolicy, conn_options_for_attempt};
 
 #[async_trait]
 pub trait Backend: Send + Sync + 'static {
@@ -64,6 +64,13 @@ pub enum Recovery {
 pub enum RecoverySlot {
     OneShot = 0,
     Streaming = 1,
+}
+
+/// Policy and acceptance time of one operation, shared by its serving and recovery work.
+pub(crate) struct ChainCall {
+    pub conn_options: ApiConnectOptions,
+    pub accepted_at: Ts,
+    pub slot: RecoverySlot,
 }
 
 pub enum Attempt<T> {
@@ -277,8 +284,7 @@ impl<B: Backend> FallbackChain<B> {
     {
         self.run_cancellable(
             req,
-            caller_conn,
-            slot,
+            ChainCall { conn_options: *caller_conn, accepted_at: self.clock.now(), slot },
             state,
             self.stop.subscribe(),
             move |index, backend, session, state, _stop| attempt(index, backend, session, state),
@@ -287,11 +293,10 @@ impl<B: Backend> FallbackChain<B> {
     }
 
     /// The consumer's cancellation belongs to this request, while chain close stops all requests.
-    pub async fn run_cancellable<S, T, F>(
+    pub(crate) async fn run_cancellable<S, T, F>(
         &self,
         req: &B::Req,
-        caller_conn: &ApiConnectOptions,
-        slot: RecoverySlot,
+        call: ChainCall,
         state: &mut S,
         mut cancel: watch::Receiver<bool>,
         attempt: F,
@@ -311,7 +316,8 @@ impl<B: Backend> FallbackChain<B> {
             + Sync
             + 'static,
     {
-        let started = self.clock.now();
+        let ChainCall { conn_options, accepted_at: started, slot } = call;
+        let caller_conn = &conn_options;
         let deadline = caller_conn
             .total_timeout
             .map(|seconds| started.saturating_add(Duration::from_secs_f64(seconds)));
@@ -352,10 +358,10 @@ impl<B: Backend> FallbackChain<B> {
             &self.status.lock().expect("chain status").health,
         );
         let mut effects = request.handle(ChainEvent::Wake, started);
-        let recover_conn = conn_options_for_recovery(caller_conn, &self.policy);
+        let recover_conn = conn_options_for_attempt(caller_conn, &self.policy);
         for index in self.order() {
             if !self.is_available(index) {
-                self.try_recovery(index, slot, req, &recover_conn);
+                self.try_recovery(index, slot, req, &recover_conn, deadline);
             }
         }
         loop {
@@ -404,9 +410,7 @@ impl<B: Backend> FallbackChain<B> {
                     let (stop_tx, stop_rx) = watch::channel(false);
                     let mut closed = self.stop.subscribe();
                     let clock = self.clock.clone();
-                    let attempt_deadline = conn.total_timeout.map(|seconds| {
-                        clock.now().saturating_add(Duration::from_secs_f64(seconds))
-                    });
+                    let attempt_deadline = deadline;
                     let (result_tx, result_rx) = oneshot::channel();
                     let (done_tx, done) = oneshot::channel();
                     let handle = self.spawner.spawn_unboxed(async move {
@@ -479,7 +483,7 @@ impl<B: Backend> FallbackChain<B> {
                                 && !self.closed.load(Ordering::SeqCst)
                                 && !*cancel.borrow()
                             {
-                                self.try_recovery(index, slot, req, &recover_conn);
+                                self.try_recovery(index, slot, req, &recover_conn, deadline);
                             }
                         }
                     }
@@ -496,8 +500,9 @@ impl<B: Backend> FallbackChain<B> {
         slot: RecoverySlot,
         req: &B::Req,
         conn: &ApiConnectOptions,
+        deadline: Option<Ts>,
     ) {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) || deadline.is_some_and(|at| self.clock.now() >= at) {
             // `tts:218-220,499-502`. Nothing would cancel a probe started from here.
             return;
         }
@@ -517,16 +522,51 @@ impl<B: Backend> FallbackChain<B> {
         let backend = Arc::clone(&self.entries[index]);
         let label = self.labels[index].clone();
         let req = req.clone();
-        let conn = *conn;
+        let mut conn = *conn;
         let observer = Arc::clone(&self.observer);
         let status_for_task = Arc::clone(&self.status);
-        let stop = self.stop.subscribe();
+        let mut closed = self.stop.subscribe();
+        let clock = self.clock.clone();
         let (done_tx, done) = oneshot::channel::<()>();
 
         let handle = self.spawner.spawn_unboxed(async move {
             // Dropped with the task, however it ends.
             let _done = done_tx;
-            match backend.recover(&req, &conn, slot, stop).await {
+            if *closed.borrow() || deadline.is_some_and(|at| clock.now() >= at) {
+                return;
+            }
+            conn.total_timeout = deadline.map(|at| {
+                at.saturating_duration_since(clock.now()).as_secs_f64()
+            });
+            let (stop, stopped) = watch::channel(false);
+            let recovery = backend.recover(&req, &conn, slot, stopped);
+            let limit = async {
+                match deadline {
+                    Some(at) => clock.wait_until(at).await,
+                    None => std::future::pending().await,
+                }
+            };
+            use futures_util::future::{Either, select};
+            let interruption = select(Box::pin(limit), Box::pin(closed.changed()));
+            let outcome = match select(Box::pin(recovery), Box::pin(interruption)).await {
+                Either::Left((outcome, _)) => outcome,
+                Either::Right((_, mut recovery)) => {
+                    let _ = stop.send(true);
+                    let cleanup = lk_agents_abi::Closed::bounded(
+                        clock.as_ref(), super::channel::teardown_deadline(clock.as_ref()),
+                        async { let _ = (&mut recovery).await; },
+                    ).await;
+                    if cleanup == lk_agents_abi::Closed::TimedOut {
+                        log::error!("fallback probe cleanup incomplete; task retains ownership until settlement");
+                        let _ = recovery.await;
+                    }
+                    return;
+                }
+            };
+            if *closed.borrow() || deadline.is_some_and(|at| clock.now() >= at) {
+                return;
+            }
+            match outcome {
                 Ok(Recovery::Recovered) => {
                     let changed = {
                         let mut s = status_for_task.lock().expect("chain status");

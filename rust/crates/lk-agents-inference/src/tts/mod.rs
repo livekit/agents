@@ -81,9 +81,11 @@ impl Default for TtsOptions {
 
 /// One gateway TTS client as one session holds it: the shared client, and the identity of the
 /// job that session serves (two sessions sharing an instance bill each its own job).
+#[derive(Clone)]
 pub struct NativeTts {
     shared: Arc<TtsShared>,
-    identity: BoundIdentity,
+    identity: Arc<BoundIdentity>,
+    conn_options: Option<ApiConnectOptions>,
     /// The host provider this view serves: its `error` event is each failure the core reports.
     reporter: Option<Arc<dyn lk_agents_abi::Tts>>,
 }
@@ -192,6 +194,10 @@ pub struct TtsClientConfig {
 }
 
 impl NativeTts {
+    fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
+        Self { conn_options: conn_options.or(self.conn_options), ..self.clone() }
+    }
+
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(opts: TtsOptions, ws: Arc<dyn WsTransport>, spawner: Arc<dyn Spawner>) -> Self {
         let shared = TtsShared {
@@ -202,7 +208,12 @@ impl NativeTts {
             clock: lk_agents_abi::BoundClock::new(),
             connections: Arc::default(),
         };
-        NativeTts { shared: Arc::new(shared), identity: BoundIdentity::default(), reporter: None }
+        NativeTts {
+            shared: Arc::new(shared),
+            identity: Arc::default(),
+            conn_options: None,
+            reporter: None,
+        }
     }
 
     /// The same client as a session serving another job holds it: its syntheses carry that job's
@@ -223,6 +234,7 @@ impl NativeTts {
         shared.connections = self.connections.clone();
         shared.clock = self.clock.clone();
         view.set_expressive(self.expressive.load(Ordering::SeqCst));
+        view.conn_options = self.conn_options;
         view.reporter = reporter;
         view.identity.bind(headers);
         view
@@ -245,8 +257,15 @@ impl NativeTts {
         let headers = headers.into_vec();
         let configuration = connection_configuration(&create_frame, &headers);
         self.spawner.spawn_unboxed(async move {
-            let opened =
-                open_ws(ws.as_ref(), &url, headers, &*clock, &opts.conn_options, WHAT, &create_frame);
+            let opened = open_ws(
+                ws.as_ref(),
+                &url,
+                headers,
+                &*clock,
+                &opts.conn_options,
+                WHAT,
+                &create_frame,
+            );
             if let Ok((sender, receiver)) = opened.await {
                 let mut connections = connections.lock().unwrap();
                 let id = connections.opened(pool_secs(&*clock));
@@ -350,9 +369,11 @@ impl NativeTts {
     pub async fn stream_for_host(
         &self,
         headers: Option<Vec<(String, String)>>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<(TtsSink, TtsSource), ProviderError> {
-        let (sink, source) =
-            self.stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
+        let (sink, source) = self
+            .configured(conn_options)
+            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()))?;
         Ok((Box::new(sink), Box::new(source)))
     }
 
@@ -362,7 +383,10 @@ impl NativeTts {
         &self,
         identification: Option<&Headers>,
     ) -> Result<(TtsSinkHandle, TtsSourceHandle), ProviderError> {
-        let opts = self.opts.lock().unwrap().clone();
+        let mut opts = self.opts.lock().unwrap().clone();
+        if let Some(conn) = self.conn_options {
+            opts.conn_options = conn;
+        }
         let provider = opts.model.split('/').next().unwrap_or("").to_owned();
         let expressive = self.expressive.load(Ordering::SeqCst);
         let identification = match identification {
@@ -436,6 +460,10 @@ impl NativeTts {
 
 #[async_trait]
 impl Tts for NativeTts {
+    fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Tts>> {
+        Some(Arc::new(self.configured(Some(*conn))))
+    }
+
     /// The provider's `error` event, on the host provider this view serves.
     fn failed(&self, error: ProviderError, recoverable: bool) {
         if let Some(reporter) = &self.reporter {

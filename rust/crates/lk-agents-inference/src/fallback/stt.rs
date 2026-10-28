@@ -1,8 +1,7 @@
 //! `stt/fallback_adapter.py`. Streaming recovery is a live tee, not a replayed request: the probe
 //! hears a copy of the live audio (`stt:341-361`) and recovers on a non-empty `FINAL_TRANSCRIPT`
 //! (`stt:456-466`), so [`Backend::Req`] carries an [`InputTee`]. One availability flag serves two
-//! recovery slots, hence one [`FallbackChain`] with a [`RecoverySlot`] argument. Each entry runs
-//! through the two views [`bound_views`] builds.
+//! recovery slots, hence one [`FallbackChain`] with a [`RecoverySlot`] argument. Each attempt binds the resolved policy immediately before opening its provider.
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,11 +20,11 @@ use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use tokio::sync::mpsc;
 
 use crate::fallback::chain::{
-    Attempt, Backend, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
+    Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoverySlot,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next, teardown_deadline};
-use crate::fallback::policy::{ChainPolicy, bound_views};
+use crate::fallback::policy::ChainPolicy;
 
 // ---------------------------------------------------------------------------------------------
 // The live input tee
@@ -215,7 +214,6 @@ pub enum SttSession {
 
 pub struct SttBackend {
     inner: Arc<dyn Stt>,
-    probe: Arc<dyn Stt>,
     clock: Arc<dyn Clock>,
 }
 
@@ -224,9 +222,8 @@ impl SttBackend {
         &self.inner
     }
 
-    pub fn new(stt: &Arc<dyn Stt>, policy: &ChainPolicy, clock: Arc<dyn Clock>) -> Arc<Self> {
-        let (inner, probe) = bound_views(stt, policy, |conn| stt.with_conn_options(conn));
-        Arc::new(SttBackend { inner, probe, clock })
+    pub fn new(stt: &Arc<dyn Stt>, clock: Arc<dyn Clock>) -> Arc<Self> {
+        Arc::new(SttBackend { inner: stt.clone(), clock })
     }
 }
 
@@ -250,9 +247,9 @@ impl Backend for SttBackend {
     async fn open(
         &self,
         req: &Self::Req,
-        _conn: &ApiConnectOptions,
+        conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError> {
-        let stt = &self.inner;
+        let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match req {
             SttReq::Batch { frames, language } => {
                 Ok(SttSession::Batch(stt.recognize(frames, language.as_ref()).await?))
@@ -272,11 +269,11 @@ impl Backend for SttBackend {
     async fn recover(
         &self,
         req: &Self::Req,
-        _conn: &ApiConnectOptions,
+        conn: &ApiConnectOptions,
         slot: RecoverySlot,
         mut stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
-        let stt = &self.probe;
+        let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match (req, slot) {
             (SttReq::Batch { frames, language }, _) => {
                 // `_try_recognize(recovering=True)`: one call, output discarded.
@@ -364,6 +361,7 @@ pub fn merge_capabilities(entries: &[SttCapabilities]) -> SttCapabilities {
     }
 }
 
+#[derive(Clone)]
 pub struct FallbackStt {
     chain: Arc<FallbackChain<SttBackend>>,
     spawner: Arc<dyn Spawner>,
@@ -372,6 +370,10 @@ pub struct FallbackStt {
 }
 
 impl FallbackStt {
+    fn configured(&self, conn_options: Option<ApiConnectOptions>) -> Self {
+        Self { caller_conn: conn_options.unwrap_or(self.caller_conn), ..self.clone() }
+    }
+
     pub fn new(
         stts: Vec<Arc<dyn Stt>>,
         policy: ChainPolicy,
@@ -380,7 +382,7 @@ impl FallbackStt {
         observer: Arc<dyn ChainObserver>,
     ) -> Result<Self, SttChainError> {
         let entries: Vec<Arc<SttBackend>> =
-            stts.iter().map(|s| SttBackend::new(s, &policy, Arc::clone(&clock))).collect();
+            stts.iter().map(|s| SttBackend::new(s, Arc::clone(&clock))).collect();
         let not_streaming: Vec<String> = entries
             .iter()
             .filter(|b| !b.inner.capabilities().streaming)
@@ -415,8 +417,6 @@ impl FallbackStt {
 impl FallbackStt {
     /// `stts` in order, each already streaming (the host wraps a recognize-only entry in its
     /// `StreamAdapter`, which composes a host VAD); the keywords are `FallbackAdapter.__init__`'s.
-    /// Each entry gets the two views the chain binds it to ([`bound_views`]), built here, while
-    /// the host loop is live: the chain runs on a tokio worker with no loop.
     #[host(new(
         kw_only = "attempt_timeout",
         defaults(attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0)
@@ -474,8 +474,9 @@ impl FallbackStt {
         &self,
         frames: Vec<AudioFrame>,
         language: Option<LanguageCode>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError> {
-        Stt::recognize(self, &frames, language.as_ref()).await
+        Stt::recognize(&self.configured(conn_options), &frames, language.as_ref()).await
     }
 
     /// The duplex path: audio in (tee'd to the serving stream and every recovery probe), events out.
@@ -484,8 +485,9 @@ impl FallbackStt {
         &self,
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
+        conn_options: Option<ApiConnectOptions>,
     ) -> Result<(SttSink, SttSource), ProviderError> {
-        Stt::stream(self, language.as_ref(), start_time_offset)
+        Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
             .await
             .map(|opened| opened.expect("the chain's `stream` is always duplex"))
     }
@@ -493,6 +495,10 @@ impl FallbackStt {
 
 #[async_trait]
 impl Stt for FallbackStt {
+    fn with_conn_options(&self, conn: &ApiConnectOptions) -> Option<Arc<dyn Stt>> {
+        Some(Arc::new(self.configured(Some(*conn))))
+    }
+
     fn label(&self) -> String {
         "stt.FallbackAdapter".into()
     }
@@ -570,7 +576,11 @@ impl Stt for FallbackStt {
         let chain = Arc::clone(&self.chain);
         let drain_chain = Arc::clone(&self.chain);
         let req = SttReq::Stream { language: language.cloned(), tee: Arc::clone(&tee), offset };
-        let caller_conn = self.caller_conn;
+        let call = ChainCall {
+            conn_options: self.caller_conn,
+            accepted_at: opened,
+            slot: RecoverySlot::Streaming,
+        };
         let tee_for_task = Arc::clone(&tee);
 
         let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
@@ -579,8 +589,7 @@ impl Stt for FallbackStt {
             let result = chain
                 .run_cancellable(
                     &req,
-                    &caller_conn,
-                    RecoverySlot::Streaming,
+                    call,
                     &mut tx,
                     stop_rx,
                     move |index, _b, session, tx, mut stop| {

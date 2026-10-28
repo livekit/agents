@@ -64,7 +64,10 @@ impl ApiConnectOptions {
             if value.is_finite() && value >= 0.0 && value <= MAX_SECONDS {
                 Ok(())
             } else {
-                Err(ApiConnectOptionsError { field, requirement: "must be a finite number of seconds >= 0" })
+                Err(ApiConnectOptionsError {
+                    field,
+                    requirement: "must be a finite number of seconds >= 0",
+                })
             }
         };
         seconds("retry_interval", self.retry_interval)?;
@@ -136,8 +139,10 @@ pub fn api_connect_options_check(
     read_timeout: Option<f64>,
     total_timeout: Option<f64>,
 ) -> Result<(), ApiConnectOptionsError> {
-    let max_retry = u32::try_from(max_retry)
-        .map_err(|_| ApiConnectOptionsError { field: "max_retry", requirement: "must be an integer >= 0" })?;
+    let max_retry = u32::try_from(max_retry).map_err(|_| ApiConnectOptionsError {
+        field: "max_retry",
+        requirement: "must be an integer >= 0",
+    })?;
     ApiConnectOptions {
         max_retry,
         retry_interval,
@@ -155,14 +160,16 @@ pub const FIRST_RETRY_INTERVAL: f64 = 0.1;
 /// [`ApiConnectOptions::attempt_connected`] for the host's stream retry loop.
 #[crate::host(export(pid = false))]
 pub fn api_attempt_connected(connect_timeout: Option<f64>, lasted_seconds: f64) -> bool {
-    ApiConnectOptions { connect_timeout, ..DEFAULT_API_CONNECT_OPTIONS }.attempt_connected(lasted_seconds)
+    ApiConnectOptions { connect_timeout, ..DEFAULT_API_CONNECT_OPTIONS }
+        .attempt_connected(lasted_seconds)
 }
 
 /// `APIConnectOptions._interval_for_retry` (`types.py:138`) for the host's retry loops; only
 /// `retry_interval` affects the answer.
 #[crate::host(export(pid = false))]
 pub fn api_retry_interval(retry_interval: f64, num_retries: u32) -> f64 {
-    ApiConnectOptions { max_retry: 0, retry_interval, ..DEFAULT_API_CONNECT_OPTIONS }.interval_for_retry(num_retries)
+    ApiConnectOptions { max_retry: 0, retry_interval, ..DEFAULT_API_CONNECT_OPTIONS }
+        .interval_for_retry(num_retries)
 }
 
 #[cfg(test)]
@@ -182,23 +189,39 @@ mod tests {
         assert_eq!(opts.interval_for_retry(1), 0.0);
     }
 
-
     // Catches: a negative, NaN or infinite duration accepted (NaN slipped past `< 0` checks and
     // infinity panicked in `Duration::from_secs_f64`), zero refused, or an error that does not
     // name its field.
     #[test]
     fn invalid_durations_fail_with_their_field_and_zero_or_none_is_valid() {
-        let zero = ApiConnectOptions { max_retry: 0, retry_interval: 0.0, ..ApiConnectOptions::default() };
+        let zero =
+            ApiConnectOptions { max_retry: 0, retry_interval: 0.0, ..ApiConnectOptions::default() };
         assert_eq!(zero.validate(), Ok(()));
-        let ok = ApiConnectOptions { read_timeout: None, total_timeout: Some(0.0), ..DEFAULT_API_CONNECT_OPTIONS };
+        let ok = ApiConnectOptions {
+            read_timeout: None,
+            total_timeout: Some(0.0),
+            ..DEFAULT_API_CONNECT_OPTIONS
+        };
         assert_eq!(ok.validate(), Ok(()));
         for bad in [-1.0, f64::NAN, f64::INFINITY, 1e300] {
-            let err = ApiConnectOptions { read_timeout: Some(bad), ..DEFAULT_API_CONNECT_OPTIONS }.validate();
+            let err = ApiConnectOptions { read_timeout: Some(bad), ..DEFAULT_API_CONNECT_OPTIONS }
+                .validate();
             assert_eq!(err.unwrap_err().field, "read_timeout", "{bad}");
-            let err = ApiConnectOptions { retry_interval: bad, ..DEFAULT_API_CONNECT_OPTIONS }.validate();
+            let err =
+                ApiConnectOptions { retry_interval: bad, ..DEFAULT_API_CONNECT_OPTIONS }.validate();
             assert_eq!(err.unwrap_err().field, "retry_interval", "{bad}");
         }
         let err = api_connect_options_check(-1, 2.0, None, None, None, None, None).unwrap_err();
         assert_eq!(err.to_string(), "conn_options.max_retry must be an integer >= 0");
     }
+}
+
+/// Select the immutable host policy without reconstructing it. The constructor and native
+/// operation boundary validate its typed fields.
+#[crate::host(export(name = "_core_resolve_api_connect_options", pid = false))]
+pub fn resolve_api_connect_options(
+    provider: crate::HostRef,
+    call: Option<crate::HostRef>,
+) -> crate::HostRef {
+    call.unwrap_or(provider)
 }

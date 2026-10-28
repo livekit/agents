@@ -141,7 +141,11 @@ class FallbackLLMStream(LLMStream):
         from .._core_view import tool_specs
 
         native = await self._llm._native.chat(
-            self._chat_ctx, tools=tool_specs(self._tools), tools_host=self._tools, **self._request
+            self._chat_ctx,
+            tools=tool_specs(self._tools),
+            tools_host=self._tools,
+            conn_options=self._conn_options,
+            **self._request,
         )
         try:
             while (chunk := await native.recv()) is not None:

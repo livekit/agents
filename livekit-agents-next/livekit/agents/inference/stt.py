@@ -188,12 +188,15 @@ class STT(stt.STT):
         self,
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> SpeechStream:
+        resolved = _core._core_resolve_api_connect_options(
+            self._conn, conn_options if is_given(conn_options) else None
+        )
         return SpeechStream(
             stt=self,
             language=str(LanguageCode(language)) if is_given(language) else None,
-            conn_options=conn_options,
+            conn_options=resolved,
         )
 
     def update_options(
@@ -235,6 +238,7 @@ class SpeechStream(stt.SpeechStream):
     def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
         # the client retries, so this stream does not retry on top of it
         super().__init__(stt=stt, conn_options=dataclasses.replace(conn_options, max_retry=0))
+        self._request_conn_options = conn_options
         self._stt: STT = stt
         self._language = language
         self._native: _core.InferenceSttStream | None = None
@@ -257,7 +261,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         native = self._native = self._stt._core_native().stream(
-            language=self._language, start_time_offset=self.start_time_offset
+            language=self._language,
+            start_time_offset=self.start_time_offset,
+            conn_options=self._request_conn_options,
         )
         try:
             await _bindings.pump(

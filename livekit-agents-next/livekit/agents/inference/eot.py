@@ -147,9 +147,10 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     async def supports_language(self, language: LanguageCode | None) -> bool:
         return self._thresholds.supports(language)  # type: ignore[no-any-return]
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> _core.EotStream:
+    def stream(self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN) -> _core.EotStream:
+        resolved = _core._core_resolve_api_connect_options(
+            self._conn_options, conn_options if is_given(conn_options) else None
+        )
         return _core.EotStream(
             self.model,
             self._thresholds,
@@ -159,7 +160,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             api_secret=self._api_secret,
             headers=lambda: list(get_inference_headers().items()),
             sample_rate=self._sample_rate,
-            conn_options=conn_options,
+            conn_options=resolved,
             on_metrics=self._emit_metrics,
         )
 

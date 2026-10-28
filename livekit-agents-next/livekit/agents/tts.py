@@ -225,7 +225,9 @@ class FallbackChunkedStream(ChunkedStream):
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         _initialize(output_emitter, self._tts, stream=False)
-        native = await self._tts._native.synthesize(self._input_text)
+        native = await self._tts._native.synthesize(
+            self._input_text, conn_options=self._conn_options
+        )
         try:
             await _drain_native(native, output_emitter, stream=False)
         finally:
@@ -237,7 +239,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         _initialize(output_emitter, self._tts, stream=True)
-        native = await self._tts._native.stream()
+        native = await self._tts._native.stream(conn_options=self._conn_options)
         await _duplex(self, native, output_emitter, self.input, lambda text: text)
 
 

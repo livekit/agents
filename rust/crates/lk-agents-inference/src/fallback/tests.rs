@@ -302,7 +302,8 @@ async fn the_rewritten_conn_options_reach_the_provider_on_both_paths() {
     let _ = run_once(&rig, RecoverySlot::Streaming).await;
     let opened = primary.opened.lock().expect("opened").clone();
     assert_eq!(opened.len(), 1);
-    let limits = ApiConnectOptions { max_retry: 0, retry_interval: opened[0].retry_interval, ..caller() };
+    let limits =
+        ApiConnectOptions { max_retry: 0, retry_interval: opened[0].retry_interval, ..caller() };
     assert_eq!(opened[0], limits, "the chain owns every retry; TTS keeps the caller's limits");
 
     until("the probe to run", || primary.probe_count(RecoverySlot::Streaming) == 1).await;
@@ -551,11 +552,9 @@ async fn cancellation_is_not_a_backend_health_penalty() {
 
 #[tokio::test]
 async fn every_modality_fails_after_partial_output_without_replay() {
-    for policy in [
-        ChainPolicy::llm_defaults(),
-        ChainPolicy::tts_defaults(),
-        ChainPolicy::stt_defaults(),
-    ] {
+    for policy in
+        [ChainPolicy::llm_defaults(), ChainPolicy::tts_defaults(), ChainPolicy::stt_defaults()]
+    {
         let backup = Fake::new("backup", &[Step::Serve]);
         let rig = rig(vec![Fake::new("primary", &[Step::FailHot]), backup.clone()], policy);
         let (out, drained) = run_once(&rig, RecoverySlot::Streaming).await;
@@ -563,4 +562,66 @@ async fn every_modality_fails_after_partial_output_without_replay() {
         assert_eq!(drained, vec![0]);
         assert!(backup.opened.lock().expect("opened").is_empty());
     }
+}
+
+#[tokio::test]
+async fn recovery_probes_inherit_the_remaining_operation_deadline() {
+    let primary = Fake::new("primary", &[Step::FailCold]);
+    let backup = Fake::new("backup", &[Step::Serve]);
+    let rig = rig(vec![primary.clone(), backup.clone()], ChainPolicy::tts_defaults());
+    let clock = rig.clock.clone();
+    let caller = ApiConnectOptions { total_timeout: Some(9.0), ..caller() };
+    let out = rig
+        .chain
+        .run(
+            &"request".to_owned(),
+            &caller,
+            RecoverySlot::OneShot,
+            &mut (),
+            move |index, _, _, _| {
+                let clock = clock.clone();
+                Box::pin(async move {
+                    if index == 0 {
+                        clock.advance(Duration::from_secs(6));
+                        Attempt::Failed { error: boom(), produced_output: false }
+                    } else {
+                        Attempt::Served(())
+                    }
+                }) as BoxFuture<'_, Attempt<()>>
+            },
+        )
+        .await;
+    assert!(out.is_ok());
+    until("the probe to open", || primary.probes_entered.load(Ordering::SeqCst) > 0).await;
+    assert_eq!(backup.opened.lock().unwrap()[0].total_timeout, Some(3.0));
+    assert_eq!(primary.probes.lock().unwrap()[0].1.total_timeout, Some(3.0));
+    rig.chain.close().await;
+}
+
+#[tokio::test]
+async fn a_recovery_result_after_its_request_deadline_cannot_restore_health() {
+    let primary = Fake::new("primary", &[Step::FailCold])
+        .recovers(&[Recovery::Recovered])
+        .shut(RecoverySlot::OneShot);
+    let backup = Fake::new("backup", &[Step::Serve]);
+    let rig = rig(vec![primary.clone(), backup], ChainPolicy::tts_defaults());
+    let caller = ApiConnectOptions { total_timeout: Some(1.0), ..caller() };
+    rig.chain
+        .run(&"request".to_owned(), &caller, RecoverySlot::OneShot, &mut (), |index, _, _, _| {
+            Box::pin(async move {
+                if index == 0 {
+                    Attempt::Failed { error: boom(), produced_output: false }
+                } else {
+                    Attempt::Served(())
+                }
+            }) as BoxFuture<'_, Attempt<()>>
+        })
+        .await
+        .unwrap();
+    until("the probe to wait", || primary.probes_entered.load(Ordering::SeqCst) > 0).await;
+    rig.clock.advance(Duration::from_secs(2));
+    primary.gate[0].add_permits(1);
+    until("the late probe to finish", || primary.probes_done.load(Ordering::SeqCst) > 0).await;
+    assert!(!rig.chain.is_available(0), "an expired operation cannot change provider health");
+    rig.chain.close().await;
 }

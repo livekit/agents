@@ -38,11 +38,8 @@ fn stt_once(ws: Arc<FakeWs>) -> NativeStt {
 async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
     let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
     let mut opts = opts();
-    opts.conn_options = ApiConnectOptions {
-        max_retry: 2,
-        retry_interval: 0.0,
-        ..Default::default()
-    };
+    opts.conn_options =
+        ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..Default::default() };
     let spawner = Arc::new(TokioSpawner::new(tokio::runtime::Handle::current()));
     let stt = NativeStt::new(opts, ws.clone(), spawner);
     let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap();
@@ -656,4 +653,39 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_call_policy_replaces_native_stt_defaults_without_mutating_the_client() {
+    let ws = Arc::new(FakeWs::failing(TransportError::Connect("refused".into())));
+    let client: Arc<dyn Stt> = Arc::new(stt(ws.clone()));
+    let conn = ApiConnectOptions { max_retry: 0, ..Default::default() };
+    let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
+    let (_, mut source) = call.stream(None, None).await.unwrap().unwrap();
+    let failure = lk_agents_abi::timeout(
+        &lk_agents_abi::RealClock::new(),
+        Duration::from_millis(250),
+        source.next(),
+    )
+    .await
+    .expect("the call must finish after its one allowed attempt");
+    assert!(failure.is_err());
+    assert_eq!(ws.connect_count(), 1);
+    source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
+}
+
+#[tokio::test]
+async fn input_after_a_terminal_timeout_preserves_its_phase() {
+    let ws = Arc::new(FakeWs::hanging());
+    let mut options = opts();
+    options.conn_options =
+        ApiConnectOptions { max_retry: 0, total_timeout: Some(0.0), ..Default::default() };
+    let client = NativeStt::new(options, ws, Arc::new(TokioSpawner::current()));
+    let (sink, mut source) = client.stream(None, None).await.unwrap().unwrap();
+    let error = source.next().await.expect_err("the operation expired before launch");
+    assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
+    let error = sink.flush().expect_err("input cannot revive a failed operation");
+    let ProviderError::Local(error) = error else { panic!("a native failure") };
+    assert_eq!(error.phase, Some(lk_agents_abi::errors::TimeoutPhase::Total));
+    source.close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
 }

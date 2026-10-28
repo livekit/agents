@@ -171,6 +171,7 @@
     "_core_loop_monitor_thresholds_from_env",
     "_core_persist_text_session_state",
     "_core_remote_token",
+    "_core_resolve_api_connect_options",
     "_core_restore_text_session_state",
     "_core_session_chat_record",
     "amd_auto_select_models",

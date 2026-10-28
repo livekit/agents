@@ -3,7 +3,7 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from . import _bindings, _core, utils
@@ -172,7 +172,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         conn_options: APIConnectOptions,
     ) -> SpeechEvent:
         frames = buffer if isinstance(buffer, list) else [buffer]
-        event = await self._native.recognize(frames, language if language else None)
+        event = await self._native.recognize(
+            frames, language if language else None, conn_options=conn_options
+        )
         return _speech_event_from_core(event)
 
     def stream(
@@ -181,7 +183,9 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return StreamAdapterWrapper(stt=self, native=self._native, language=language)
+        return StreamAdapterWrapper(
+            stt=self, native=self._native, language=language, conn_options=conn_options
+        )
 
     def prewarm(self) -> None:
         self._stt_instances[0].prewarm()
@@ -196,15 +200,23 @@ class StreamAdapterWrapper(RecognizeStream):
     ``StreamAdapter``'s VAD and recognitions."""
 
     def __init__(
-        self, *, stt: STT, native: _core.FallbackStt | _core.SttStreamAdapter, language: Any
+        self,
+        *,
+        stt: STT,
+        native: _core.FallbackStt | _core.SttStreamAdapter,
+        language: Any,
+        conn_options: APIConnectOptions,
     ) -> None:
         # the core's chain reconnects: the stream does not retry on top of it
-        super().__init__(stt=stt, conn_options=APIConnectOptions(max_retry=0))
+        super().__init__(stt=stt, conn_options=replace(conn_options, max_retry=0))
+        self._request_conn_options = conn_options
         self._native = native
         self._language = language if language else None
 
     async def _run(self) -> None:
-        native = await self._native.stream(self._language, self.start_time_offset)
+        native = await self._native.stream(
+            self._language, self.start_time_offset, conn_options=self._request_conn_options
+        )
         await _bindings.pump(
             native,
             self.input,
@@ -282,7 +294,9 @@ class StreamAdapter(STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
-        return StreamAdapterWrapper(stt=self, native=self._native, language=language)
+        return StreamAdapterWrapper(
+            stt=self, native=self._native, language=language, conn_options=conn_options
+        )
 
     def prewarm(self) -> None:
         self._stt.prewarm()
