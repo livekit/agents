@@ -110,8 +110,9 @@ result.usage                             # requests, input/output/total_tokens, 
 
 `RunResult[Output]` separates framework status from the application's output.
 It is a discriminated union: `status == "completed"` exposes `output: Output`,
-and `status == "input_required"` exposes `question: str`. Both branches expose
-history and usage. A tool's `InputRequired(...)` sets the framework outcome;
+and `status == "input_required"` exposes `question: str`. The branches are
+`RunCompleted[Output]` and `RunInputRequired`, exported with `RunResult` from
+`livekit.agents`. Both branches expose history and usage. A tool's `InputRequired(...)` sets the framework outcome;
 `output_type` contains only the application's final-result contract. See the
 [result and A2A mapping](#running-a-turn).
 
@@ -125,6 +126,11 @@ history and usage. A tool's `InputRequired(...)` sets the framework outcome;
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
 | `all_messages()` | Supplied history plus this invocation; suitable for the next direct run |
 | `usage` | Usage accumulated by this invocation |
+
+`RunUsage` records `requests`, `input_tokens`, `output_tokens` and `tool_calls`;
+`total_tokens` is `input_tokens + output_tokens`. Pass a shared `RunUsage` as
+`usage=` to accumulate usage across delegated runs. Each result still reports
+that invocation's usage.
 
 These methods return this agent invocation's model history, including tool
 calls and results. `new_messages()` includes the incoming message recorded for
@@ -165,7 +171,7 @@ Every tool, instruction function and output function receives
 | `ctx.store` | the managed store for explicit `load_context` and `save_context` calls |
 | `ctx.thread` | the durable thread this run belongs to, the same object an `a2a_session` handler gets; see [threads.md](threads.md) |
 | `ctx.live_session` | the `VoiceSession` of the call, `None` outside a call |
-| `ctx.task_id` | the A2A task ID of the turn; external operations need an operation-specific idempotency key |
+| `ctx.task_id` | the A2A task ID of the turn, or `None` outside A2A; external operations need an operation-specific idempotency key |
 | `ctx.usage` | token usage so far; pass it to a delegated `run(usage=ctx.usage)` |
 | `ctx.function_call` | the call being executed, inside a tool |
 | `await ctx.update(text)` | a progress message while the tool runs: a `working` frame on the text door, speech on a call |
@@ -231,8 +237,8 @@ the reason:
 ```python
 @fnol.output_validator
 async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim:
-    if not await ctx.context.jobs.exists(output.job_id):
-        raise ModelRetry(f"There is no job {output.job_id}; use one the customer named.")
+    if not await ctx.context.claims.exists(output.claim_number):
+        raise ModelRetry(f"There is no claim {output.claim_number}; use one the customer named.")
     return output
 ```
 

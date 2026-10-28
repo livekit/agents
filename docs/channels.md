@@ -12,9 +12,9 @@ WhatsApp, and email into endpoint requests and delivers their replies.
 | phone call                   | a SIP rule dispatches a job; the call runs on a `VoiceSession`       | the thread the dispatch names, else a new one                      | speech                                  |
 
 Every A2A message may carry `livekit/channel` with the channel's name, and
-the handler reads it per message as `ctx.messages[i].channel`: the
-`livekit/channel` value, `delegation` for a message whose `livekit/kind` is
-`delegation`, `a2a` otherwise. The channel picks the endpoint's policy and
+the handler reads the resolved value as `ctx.messages[i].channel`.
+`livekit/kind: delegation` selects `delegation` even with an explicit channel;
+otherwise it uses `livekit/channel`, or `a2a` when absent. The channel picks the endpoint's policy and
 debounce for a message that arrives while a turn runs; see
 [server.md](server.md). Delegations default to `queue`, web
 chat and API clients to `interrupt`.

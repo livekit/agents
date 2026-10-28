@@ -110,6 +110,14 @@ language adapters handle invocation, backpressure, errors and cleanup. An
 `AudioOutput` reports playback progress and completion separately from frame
 acceptance.
 
+Native VAD streams run their recurrent model on an admitted worker. A process
+admits up to 32 VAD streams within its shared native-worker ceiling. Each stream
+accepts at most 256 pending input frames and 2 MiB of queued PCM, with a
+192,000-byte limit per frame (one second of 48 kHz stereo). A synchronous push
+raises an API error when either input limit is full or a frame is oversized;
+it retains no refused audio. Output buffers hold 64 events and backpressure
+the worker. Close remains available at capacity and observes native settlement.
+
 The session owns input/output routing, transcript synchronization and recording.
 Replacing its playback destination changes that destination only. Recording
 continues on the same session timeline without requiring the application to
@@ -120,7 +128,17 @@ Frames and playback reports carry attachment/segment identity. Reports from a
 replaced output remain attributable to its old media and cannot advance the
 new output. The session retains accounting for already delivered audio while
 releasing obsolete endpoints. Recording failure and cleanup failure are
-observable outcomes, not silent loss of recording.
+observable outcomes, not silent loss of recording. Recording overflow fails the
+recording with a typed event, releases buffered audio and completes cleanup
+within its deadline. The conversation continues.
+
+Pre-connect audio is normalized to the session's format before entering the
+same processing chain as live input. A processor that needs the source format
+must declare that capability.
+
+Playback completion waits are bounded by the delivered audio duration and a
+transport allowance. A missing completion report cannot hold the speech or
+session open indefinitely, and a timeout does not count unreported audio as heard.
 
 See the [I/O composition contract](internals/rust-core.md#session-io-composition)
 for ownership and the [shared primitives](internals/rust-core.md#common-runtime-primitives)
@@ -152,7 +170,9 @@ entrypoint runs: the `thread_id` key of the dispatch's JSON metadata, as
 the web console sends it, else a new thread. It is `ctx.thread` on the
 `JobContext`, `None` on a server without storage, and
 `VoiceSession(thread=ctx.thread)` is how the call gets it. A `VoiceSession`
-without `thread=` keeps its history in memory, not saved.
+without `thread=` keeps its history in memory, not saved. If a supplied dispatch
+thread id is unknown or deleted, the call continues with an in-memory thread
+and logs the refusal; it does not create a replacement durable thread.
 For phone-number routing and conversation continuity, see
 [channel routing](channels.md#channel-routing).
 

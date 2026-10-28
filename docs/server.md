@@ -93,6 +93,11 @@ state, passes it to `session.run()`, and saves the returned state.
 | `storage`                           | this endpoint's storage when it is not the server's                                                                                      |
 | `version`                           | the card's version                                                                                                                       |
 
+`AgentServer(preload_modules=[...], setup_fnc=...)` imports preload modules
+in the supplied order before job readiness. `setup_fnc` initializes
+process-local resources after preloading. Import failures stop initialization
+and identify the module; see [Python preloading](internals/rust-core.md#python-preloading).
+
 The agent is named once, `AgentServer(agent_name=)`: the lane every door of
 the server writes, and the first segment of every door's address,
 `/agents/{agent_name}/{deployment}/{endpoint}`. `LIVEKIT_AGENT_NAME` is the
@@ -154,9 +159,9 @@ When returned as handler transitions, these map to A2A task states `completed`, 
 ## A message while a turn is running
 
 Two texts seconds apart, a person who keeps typing, two agents calling at
-once: each endpoint says what happens, per channel. The channel is the
-message's `livekit/channel`, or `delegation` when its `livekit/kind` is
-`delegation`, or `a2a` when it carries neither.
+once: each endpoint says what happens, per channel. A message with
+`livekit/kind: delegation` selects `delegation`, even when `livekit/channel`
+is set. Otherwise the channel is `livekit/channel`, or `a2a` when absent.
 
 | Policy       | Behaviour                                                                                                                                                                                                                                                                      | Default for                      |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |

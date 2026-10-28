@@ -52,7 +52,7 @@ By its id, and nothing else.
 | ------------------------------------- | ---------------------------------------------------------------------------------- |
 | the id, as the A2A `contextId`        | that thread; an id the platform does not know fails the task `thread-not-found`     |
 | no `contextId`                        | a new thread; a retried first message (same `messageId`) gets the same thread and task |
-| a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs |
+| a job dispatch for a call             | the `thread_id` in the dispatch's JSON metadata, else a new thread, as `ctx.thread` before the entrypoint runs; an unknown or deleted id logs a refusal and continues in memory |
 
 A backend that wants to find a conversation again stores the thread id in
 its own tables, against its user, lead or order, and passes it on as

@@ -27,7 +27,7 @@ make check            # Run all checks (format-check, lint, type-check)
 ### Testing
 ```bash
 uv run pytest --unit                    # Run all unit tests
-uv run pytest tests/test_tools.py       # Run a single test file
+uv run pytest tests/test_tools.py --unit # Run a single unit test file
 make unit-tests                         # Run unit tests that don't require cloud accounts
 ```
 
@@ -35,16 +35,18 @@ make unit-tests                         # Run unit tests that don't require clou
 
 Every test module declares exactly one category via a module-level marker, and
 each category has a matching `--<category>` selection flag. Selection happens
-*before* import, so a category run never imports (or fails on) modules outside
-it.
+*before* test-module import, so unselected test modules are not imported.
+Shared `conftest.py` fixtures and their dependencies still load. Categories are
+registered in `pyproject.toml`; `tests/conftest.py` reads their literal markers.
+Put test paths before category flags, whose optional argument is a provider name.
 
 | Marker | Flag | Meaning |
 |--------|------|---------|
 | `pytest.mark.unit` | `--unit` | fast, hermetic, no external providers/credentials/network |
 | `pytest.mark.audio_eot` | `--audio_eot` | hermetic audio end-of-turn / turn-detection suite |
 | `pytest.mark.plugin("name")` | `--plugin [name]` | provider integration test (needs that provider's deps/keys) |
-| `pytest.mark.stt` | `--stt` | cross-provider speech-to-text suite (`tests/test_stt.py`) |
-| `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite (`tests/test_tts.py`) |
+| `pytest.mark.stt` | `--stt` | cross-provider speech-to-text suite; requires provider dependencies and credentials |
+| `pytest.mark.tts` | `--tts` | cross-provider text-to-speech suite; requires provider dependencies and credentials |
 | `pytest.mark.realtime("name")` | `--realtime [name]` | realtime-model test |
 | `pytest.mark.evals` | `--evals` | behavioral evals against the LiveKit inference gateway |
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
@@ -151,15 +153,16 @@ specification; implementation cleanup must follow the agreed contracts.
 livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 ├── voice/              # Agent, VoiceSession, VoiceTask, the livekit.rtc room adapter
 ├── a2a/                # The text door: A2A endpoint API, AgentClient, RemoteAgent, tokens
-├── delegation/         # Host side of remote agent tools
 ├── storage/            # AgentDBStorage, SQLiteStorage, thread handles, the context store
 ├── llm/                # Chat context, tools and toolsets, MCP, LLM and realtime APIs
-├── beta/workflows/     # Domain result types, validation helpers and transfer operations
-├── stt/, tts/          # Speech-to-text and text-to-speech provider bases
+├── beta/workflows.py   # Domain result types, validation helpers and transfer operations
+├── stt.py, tts.py      # Speech-to-text and text-to-speech provider bases
 ├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
 ├── ipc/                # Job-process bootstrap and the ASGI app endpoint streams are served into
-├── cli/                # dev / start subcommands invoked by `lk agent`
-├── simulation.py       # Scenarios for `lk agent simulate`
+├── cli.py              # dev / start subcommands invoked by `lk agent`
+├── text_session.py     # Backend conversations and explicitly supplied routing state
+├── testing.py, evals.py # Run event assertions and conversation judges
+├── simulation.py       # Simulation context and application verdicts
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
@@ -211,7 +214,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 
 ## Code Style
 - Line length: 100 characters
-- Python 3.11+ compatibility required
+- Python 3.11+ compatibility required; package support is >=3.11,<3.15 with cp311-abi3 wheels
 - Google-style docstrings
 - Strict mypy type checking enabled
 - Use `make check` and `make fix` before committing

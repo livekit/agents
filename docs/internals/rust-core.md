@@ -369,7 +369,7 @@ assembly is a separate responsibility: waiting for an earlier sibling's result
 cannot prevent recognizing another call's detach, update or completion.
 
 Tests cover nested/direct invocations, multi-turn input, approval changes,
-invalid output, model-step exhaustion, cancellation, duplicate/late completion
+invalid output, accepted completion, cancellation, duplicate/late completion
 and context isolation.
 Run the same argument/default/type/approval, recovery and outcome vectors through
 both real text and voice entrypoints. Also verify streaming before model EOF,
@@ -528,9 +528,9 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | Component | Owns | Contract |
 | --- | --- | --- |
 | Room coordination | Linked participant, track/publication generations and attachment lifecycle | Runtime subscribes/publishes through host RTC proxies; late operations clean up obsolete resources |
-| Pre-connect audio | Buffered input ownership until attachment | Transfer frames once to the selected input; apply the agreed conversion/processing chain |
+| Pre-connect audio | Buffered input ownership until attachment | Transfer frames once; normalize to the session format before the live processing chain; source-format processors declare that capability |
 | User I/O and nodes | Validated capabilities and attachment identities | Runtime invokes host nodes; core chooses policy from supplied capabilities and outcomes |
-| Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; playback reports settle the original segment |
+| Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; byte-stream id plus output generation identifies the original segment, without a new protocol field |
 | Avatar runner | Publication, generator/receiver progress, clear-buffer and close state | Frames remain opaque; runtime owns generator/receiver/synchronizer calls |
 | Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing in media; runtime reads files and publishes audio |
 | Recording | Timeline/accounting and flush/finish lifecycle | Runtime captures, encodes and writes; finalization waits for accepted data and occurs once |
@@ -1161,8 +1161,10 @@ Test interrupted reads, writes and queue sends as well as final cleanup.
 Waiting for settlement includes required asynchronous cleanup. Deadlines bound
 that wait; expiry reports incomplete cleanup and retains responsibility for
 late resources. Neither task-table removal nor scheduling a host cancel callback
-proves cleanup finished. An operation cannot report successful close while it
-still owes required release work.
+proves cleanup finished. `aclose()` returns normally when its bounded wait ends.
+If cleanup misses its deadline, the runtime logs an error, emits a typed
+incomplete-cleanup observation and continues owning the resource. Tests treat
+that observation as a failure; a normal return does not certify cleanup success.
 
 Cancellation cannot forcibly stop arbitrary synchronous code or undo external
 effects. Escalation that terminates a process is a process-supervision decision,
@@ -1366,9 +1368,10 @@ must state the playback information they can actually provide. A recorder cannot
 infer precise remote playback where no such observation exists.
 
 Endpoint replacement and recorder finalization have independent lifecycles.
-Recorder queues have bounded capacity and explicit failure behavior; a failed
-or detached recording must be reported rather than silently stop. Close waits
-for required recorder cleanup under its deadline.
+Recorder queues have bounded capacity. Overflow fails the recording with a
+typed event, releases buffered PCM and cleans up within its deadline while the
+conversation continues. Other recording failures are reported explicitly.
+Close waits for required recorder cleanup under its deadline.
 
 The frontend contract is documented in [VoiceSession](../voice-session.md).
 Tests replace native and host-language outputs during generation, buffering,
@@ -1567,7 +1570,9 @@ a Cloud reader. Register framework-owned exporters/readers during provider
 setup and report configuration conflicts explicitly. Close only resources the
 framework owns. Metrics use bounded-cardinality attributes; thread IDs, user
 content and arbitrary exception messages are not metric labels. Conversation
-content requires explicit capture and redaction policy.
+content requires explicit capture and redaction policy. Each export destination
+filters an independent snapshot; one destination's policy cannot mutate data
+sent to another. See [telemetry integration](../telemetry.md).
 
 Conformance tests create spans through the standard host API inside tools and
 nodes and assert their actual parent and trace IDs. Also test concurrent jobs,
@@ -1773,7 +1778,7 @@ contain conversation text.
   `dtmf`. Do not rename an existing concept merely because it moves to Rust.
 - Introduce a new concept or name only for a distinct responsibility. Reuse
   the domain's vocabulary rather than adding generic framework terminology.
-- Keep each `.rs` file under `rust/crates` within 1,250 lines; skip marked
+- Keep every git-tracked handwritten `.rs` file within 1,250 lines; skip marked
   generated output. Enforce the limit in architecture checks.
 - Organize modules by subject and developer-visible behavior. Keep helpers
   beside their users and use module documentation to explain file structure.

@@ -201,8 +201,8 @@ The database holds one lane per configured handler that took part (see
 
 Unmarked context values, including runtime clients, are not saved. Python
 stack frames and local variables are not restored between turns. Media bytes
-are stored separately from thread records. Documents and blobs are a
-later addition.
+are stored separately from thread records. Attachment references belong to
+the application, which resolves and authorizes access to their content.
 
 Payloads are JSON and queryable in place. Schema changes require compatibility
 validation and explicit migrations where needed; adding a key is not sufficient
@@ -378,12 +378,15 @@ fall back to Cloud when local storage cannot be opened.
 ```text
 .livekit/storage/
 ├─ registry.sqlite
+├─ streams.sqlite
 └─ threads/
    ├─ AT_abc.sqlite
    └─ AT_def.sqlite
 ```
 
 The registry holds thread metadata for lookup, listing and lifecycle operations.
+`streams.sqlite` holds durable response events referenced by tasks, separately
+from their thread databases. Task ids and stream ids are independent.
 Each thread has one database file named `<thread_id>.sqlite`, containing all
 its lanes, history, saved application fields, tasks, inbox and journal. SQLite
 may create its own WAL and shared-memory sidecar files alongside these files.

@@ -107,6 +107,8 @@ await session.start(agent=front_desk, room=ctx.room)
 ```
 
 The remote card supplies the tool's name, description, and supported input.
+`RemoteAgent(url, token=None, conn_options=None)` accepts the same
+[connection policy](models.md#connection-options) as `AgentClient`.
 The remote service owns its history, application data, approval behavior,
 and completion contract. The local tool takes its configuration from that
 endpoint. Local agent-tool options such as `chat_history`,
@@ -172,7 +174,7 @@ parent conversation while returning only its accepted result.
 
 | Return or raise | What happens |
 |---|---|
-| a value | the model reads it and continues |
+| a value | the model reads it and continues; `None` follows the mode-specific rule below |
 | `ToolResult(output, reply_required=False)` | the output is recorded; the call asks for no reply |
 | `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human input](#human-input) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
@@ -182,6 +184,11 @@ parent conversation while returning only its accepted result.
 | `InputRequired(question)` | the turn waits for the person; see [human input](#human-input) |
 | `Failed(error)`, `Rejected(reason)` | the model reads the text as an error output and replies |
 | `Completed(value)` | An ordinary agent tool returns its call output; a VoiceTask tool completes its live interaction with the validated typed value. See [custom voice tasks](voice-tasks.md#authoring-a-custom-voicetask). |
+
+In direct runs and `TextSession`, `None` is a tool value and the model
+continues. On a call, an ordinary tool returning `None` records its output
+without requesting a follow-up reply. Use `ToolResult` to choose reply
+behavior explicitly.
 
 ## Human input
 
@@ -319,8 +326,10 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | `MCPToolset(id=, mcp_server=, tool_options=)` | the tools of an MCP server, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
 
 A toolset connects per run of the agent: `setup()` when the agent's
-activity starts, a call or a run, and `aclose()` when it ends. An
-`MCPToolset` connects to its server and lists its tools in `setup()`.
+activity starts, a call or a run, and `aclose()` when its last using activity
+ends. Concurrent runs sharing a toolset share its connection; one run finishing
+does not close it beneath another. An `MCPToolset` connects to its server and
+lists its tools in `setup()`.
 Toolsets passed to `VoiceSession(tools=)` live for the whole call.
 
 Runtime clients in application context are supplied per run; see

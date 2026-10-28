@@ -154,7 +154,8 @@ await client.cancel(task_id, thread_id=thread_id, reason="the user closed the ch
 await client.aclose()
 ```
 
-`AgentClient(endpoint_url, token=None)` has four calls: `connect`, `send`,
+`AgentClient(endpoint_url, token=None, conn_options=None)` accepts the shared
+[connection policy](models.md#connection-options) and has four calls: `connect`, `send`,
 `cancel` and `aclose`. It runs on the framework's Rust A2A client, the one
 the server side uses: `connect()`, which `send` and `cancel` call for you,
 reads the card once and speaks JSON-RPC over HTTP with server-sent events.
@@ -168,12 +169,38 @@ when the token it verifies covers that thread ([tokens](protocol/a2a.md#tokens))
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
 extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
 `TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
-`livekit/` keys short; a `working` update with text is progress, and the
-terminal update carries the whole answer. `offers_extension` is whether the
+full URI keys; `livekit/<name>` in these docs is shorthand only. A `working`
+update with text is progress, and the terminal update carries the whole answer.
+`artifacts` contains typed `Artifact` records (`artifact_id`, `name`,
+`description`, `parts`, `metadata`). `offers_extension` is whether the
 card lists the LiveKit extension, a capability hint that grants nothing.
 
+Construct message parts with `TextPart(text=...)`, `DataPart(data=...)` or
+`FilePart(url=..., filename=..., media_type=...)` from `livekit.agents.a2a`.
+A file part can carry inline `data` instead of a URL when its endpoint accepts
+uploads. LiveKit endpoints require an application reference in a URL part;
+the application resolves and authorizes that reference. `MessageMetadata` holds
+typed LiveKit fields such as `kind`, `channel` and `verbatim`, plus an
+`application` map. Application keys are preserved; short `livekit/...` keys in
+that map have no framework meaning.
+
+```python
+from livekit.agents.a2a import Message, MessageMetadata, TextPart
+
+reply = await client.send(Message(
+    parts=[TextPart(text="Where is my order?")],
+    message_id="order-question-1",
+    metadata=MessageMetadata(application={"order_id": order_id}),
+))
+```
+
+The returned `Reply` is an async iterator. `await reply.aclose()` releases its
+response stream when stopping consumption early. Concurrent pulls raise
+`StreamStateError` without disturbing the accepted pull.
+
 A resume is a `send` with the thread id, its `contextId`: there is no
-separate get or resume call.
+separate get or resume call. Retrying a first message with the same
+`message_id` returns the same thread and task, including on another worker.
 
 Nothing here is required: `tasks/get`, `tasks/list` and
 `tasks/resubscribe` are served to any A2A client.

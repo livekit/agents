@@ -22,6 +22,8 @@ To expose and call your application, read [server entrypoints](server.md) and
 | --- | --- |
 | [agents.md](agents.md) | Agent configuration, RunContext, execution, output contracts, history, lifecycle hooks, and streaming |
 | [tools.md](tools.md) | Tools, toolsets/MCP, approvals, human input, errors, and local/remote agents as tools |
+| [models.md](models.md) | Model connection options, timeout phases, errors, retries, and provider streams |
+| [telemetry.md](telemetry.md) | Application tracer providers, capture consent, export destinations, and diagnostics |
 | [context.md](context.md) | Runtime dependencies, persisted fields, explicit load/save, scope, concurrency, and schema evolution |
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
@@ -77,11 +79,11 @@ and storage mechanics have separate references below.
   frontend. A chat with a front desk, a call over the voice door, and the
   thread's database beside it, read through the admin-only
   [admin API](clients.md#admin-reads).
-- `tests/test_v0_checks.py` runs the end-to-end checks against that stack
-  (`V0_STACK=1`): a thread across two workers, resubscribe, interrupt, an
+- [`tests/e2e/`](../tests/e2e/README.md) contains pytest journeys selected with
+  `uv run pytest tests/e2e --e2e`: a thread across two workers, resubscribe, interrupt, an
   inbox burst, a worker killed mid-turn, input-required and approvals
   answered on the other worker, a stateless agent serving two threads,
-  the threads service's create and delete, and the console's spoken call.
+  and the threads service's create and delete.
 
 ## Vocabulary
 

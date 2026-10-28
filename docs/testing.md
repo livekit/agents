@@ -36,7 +36,8 @@ async with VoiceSession(llm=test_model) as session:
     result.expect.no_more_events()
 ```
 
-Here `agent` and `test_model` are test fixtures that produce the expected
+`VoiceSession.run()` returns a `VoiceRunResult` with the event assertions used
+here. `agent` and `test_model` are test fixtures that produce the expected
 exchange. Argument assertions check the supplied keys; assert exact business
 state separately when extra fields or effects matter. `next_event` advances
 through the observed sequence. `contains_function_call` and
@@ -71,6 +72,14 @@ await result.expect.contains_message(role="assistant").judge(
 ordinary event assertions do not. A test using a live agent model or judge
 requires its provider even though no simulation is running. Use controlled
 models and service fixtures for hermetic tests.
+
+`mock_tools(agent, {"tool_name": replacement})` from `livekit.agents` scopes
+replacements to invocations started inside its synchronous context manager.
+It takes the constructed agent, and a run retains its selected mocks until it
+settles. Concurrent runs outside the block keep their own tool implementations.
+`mock_tools(agent, mocks, session=session)` instead installs replacements for
+that call's lifetime; an empty map removes them. Context-scoped mocks take
+precedence over session mocks.
 
 ## Conversation evals
 

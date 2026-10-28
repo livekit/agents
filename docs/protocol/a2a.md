@@ -76,6 +76,11 @@ A resubscribe resumes after an offset, the SSE `Last-Event-ID` header or
 delivery stream; the task records durable references to its streams, so a
 resubscribe resolves the task's full ordered history.
 
+Replay retention is configurable. The deployment documents its minimum replay
+window; an expired cursor or stream returns an explicit expired outcome rather
+than an empty successful replay. Deleting the thread also removes its delivery
+history.
+
 A stream is, in order:
 
 1. the `Task` in state `submitted`, sent once the task's row is durable, so a
@@ -107,8 +112,11 @@ accepted `result.output` delivered as an artifact. The application's
 [run results](../agents.md#running-a-turn).
 
 A turn whose tool returned `InputRequired(question)` ends `input-required`.
-The question is the turn's reply, as the status message; no model call
-writes it. The pending call stays in the history with a placeholder output,
+The question is the turn's reply, as the status message. A model-driven agent
+facing the person may phrase it once under the
+[wording contract](../tools.md#wording-and-verbatim); the endpoint sends that final text without another model call. A handler
+without a model sends the question as written. The pending call stays in the
+history with a placeholder output,
 `waiting for the person's answer to: <question>`.
 
 The next message in the thread answers it: its text replaces the
