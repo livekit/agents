@@ -25,8 +25,8 @@ for validation and review.
 | --- | --- | --- |
 | Decision cores | Agent execution, tool/approval/output policy, session lifecycle, scheduling, MCP and A2A task decisions | Synchronous events in, effects out; no I/O, executor, or host objects |
 | Data-plane core | Media transformations, buffering, gates, fan-out and playout accounting | Frames and control data in, transformed data and effects out; no device or network access |
-| Async I/O crates | The shared transport and the delegation A2A client (`lk-agents-net`); provider clients with retry, fallback and reconnect execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
-| `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker, the process runtime and the host stream adapter | Executes core effects, returns correlated events and wires the async I/O crates |
+| Async I/O crates | The shared transport, the host stream adapter and the delegation A2A client (`lk-agents-net`); provider clients with retry, fallback and reconnect execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
+| `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker and the process runtime | Executes core effects, returns correlated events and wires the async I/O crates |
 | `lk-agents-py` | Python module registration, generated conversions and adapters, and HostInvoker's Python entry | The only crate containing pyo3; no framework policy or I/O implementation |
 | Python package | Public API, user callbacks, provider implementations, host SDK objects and process launch/bootstrap | Calls `_core`; host objects are reached through generated proxies and HostInvoker |
 | Build tools | Binding generation and architecture checks | Read export declarations from ABI; no product execution responsibility |
@@ -43,17 +43,19 @@ tools and host RTC objects.
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
 | `lk-agents-core` | Shared AgentRun, request planning, tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination and close decisions; chat formatting, tool-argument processing, JSON repair and deterministic run/event assertions; no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; speech tokenization, markup and pacing decisions; composes agent execution from `lk-agents-core` |
-| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error (`Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound`, `VersionConflict`) |
+| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, image conversion, resampling, media filters and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime, and a plain bounded thread pool only where a measured need exists |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the delegation A2A client for remote agent calls |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, CLI and endpoint serving |
-| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker, the process runtime with its fork guard and the host stream adapter; wires the async I/O crates and re-exports the implementations generated bindings select |
+| `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
 | `lk-agents-bindgen` | Binding declaration parser and the resolved declaration IR |
 | `lk-agents-host-derive` | Inert `Host`, `host` and `Vocabulary` marker attributes read by codegen |
 | `lk-agents-codegen` | Python models, stubs, provider bases, forwarders and architecture checks |
 | `lk-agents-fuzz` | Deterministic simulation of the sans-I/O crates and behavioral contracts |
+| `lk-agents-test-support` | Simulated RTC peers and performers on a supplied clock, shared by the DST and the crates' own tests |
+| `lk-agents-bench-steps` | Direct step measurements of the voice data plane; compiled in the launch gate, measured explicitly on qualified hardware |
 
 ```text
 lk-agents-py -> lk-agents-runtime, lk-agents-abi
@@ -62,9 +64,11 @@ lk-agents-voice -> lk-agents-core -> lk-agents-abi
 lk-agents-voice -> lk-agents-media
 lk-agents-inference -> lk-agents-media
 lk-agents-inference -> lk-agents-core   (pending owner approval)
+lk-agents-net -> lk-agents-core         (pending owner approval)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
-lk-agents-fuzz -> sans-I/O crates + lk-agents-abi
+fuzz, test-support, bench-steps -> sans-I/O crates + lk-agents-abi
+lk-agents-fuzz -> lk-agents-test-support; every crate's tests -> lk-agents-test-support
 ```
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
@@ -79,7 +83,9 @@ ABI, and the runtime's A2A door executes them by calling storage.
 `lk-agents-net` is the one shared async transport and hosts the delegation A2A
 client: inference, the worker and the AgentDB backend use its HTTP client with
 declared phase deadlines, SSE decoding, WebSocket connect, owned task handles
-and gateway token signing rather than building their own.
+and gateway token signing rather than building their own. The delegation
+client executes the client decisions of `lk_agents_core::a2a` (that edge is
+pending owner approval).
 
 The runtime depends on the async I/O crates to wire voice and text sessions:
 providers, storage, the worker server, judges and the delegation client in
@@ -632,9 +638,12 @@ HTTP routes. A hosted read API is not part of backend storage parity.
 
 `lk-agents-storage` is a plain async crate. It owns all database interaction:
 both backends, retries, fencing, lease renewal and resolution of lost
-acknowledgments. Every failure reaches the caller as a precise typed error:
-`Uncertain` (the outcome is unknown), `Rejected { running_task_id }`,
-`LeaseLost`, `Unavailable`, `NotFound` or `VersionConflict`. The A2A task
+acknowledgments. Every failure reaches the caller as a precise typed error.
+A database failure is `Uncertain` (the outcome is unknown), `Rejected { running_task_id }`,
+`LeaseLost`, `Unavailable` (the one retryable error), `NotFound` or
+`VersionConflict`; a request the caller made wrongly is `Invalid`,
+`NotSerializable`, `TooLarge` or `Unauthorized`; a turn the host cancelled is
+`Cancelled`. The A2A task
 decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
 error types declared in ABI; core has no dependency on storage. The runtime's
 thin A2A door executes core's storage effects by calling storage and feeds the
@@ -953,8 +962,10 @@ closures must contain no runtime, executor, async transport or host SDK: no
 tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 `livekit-ffi`. `livekit-protocol` records remain allowed. The dependency direction
 is `py -> runtime -> sans-I/O and async I/O crates -> abi`, with the composition
-edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` (pending owner approval), `py -> abi`,
-async I/O crates `-> net` and `fuzz -> sans-I/O crates + abi` described above;
+edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
+`net -> core` (each pending owner approval), `py -> abi`, async I/O crates `-> net`,
+`fuzz`, `test-support` and `bench-steps -> sans-I/O crates + abi`, and `-> test-support`
+from fuzz and every crate's tests described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
 support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.

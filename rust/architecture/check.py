@@ -13,7 +13,7 @@ from pathlib import Path
 
 import tomllib
 
-CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media", "rtc")}
+CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
 UNRESTRICTED = (
@@ -23,6 +23,28 @@ UNRESTRICTED = (
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
 ASYNC = {"lk-agents-inference", "lk-agents-worker", "lk-agents-net", "lk-agents-storage"}
+TEST_SUPPORT = "lk-agents-test-support"
+# The documented crate graph (rust-core.md "Crates and dependencies"): each checked crate's allowed
+# workspace dependencies. Every crate's tests may also use test support. Build tools are unchecked.
+GRAPH = {
+    "lk-agents-abi": set(),
+    "lk-agents-core": {"lk-agents-abi"},
+    "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
+    "lk-agents-media": {"lk-agents-abi"},
+    # inference -> core (chat formatting, schemas, JSON repair) is pending owner approval.
+    "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"}
+    | {"lk-agents-core"},
+    # net -> core (the A2A client executes core::a2a decisions) is pending owner approval.
+    "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
+    "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
+    "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
+    # The realtime and duplex fakes still run inference's realtime machine (decision 70).
+    "lk-agents-fuzz": PURE | {TEST_SUPPORT} | {"lk-agents-inference", "lk-agents-net"},
+    TEST_SUPPORT: PURE,
+    "lk-agents-bench-steps": PURE,
+    "lk-agents-runtime": PURE | ASYNC,
+    "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
+}
 BANNED = {
     "async-trait",
     "async-std",
@@ -90,34 +112,14 @@ def dependency_violations(metadata: dict) -> set[str]:
                     violations.add(f"dependency:{owner}:{packages[dep]}")
                 pending.extend((child, owner) for child in nodes[dep])
         # Workspace edges also enforce layering independently of external dependencies.
-        if name not in PURE | ASYNC | {"lk-agents-fuzz", "lk-agents-runtime", "lk-agents-py"}:
+        if name not in GRAPH:
             continue
-        allowed = {
-            "lk-agents-abi": set(),
-            "lk-agents-core": {"lk-agents-abi"},
-            "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
-            # inference -> core (chat formatting, schemas, JSON repair) is pending owner approval.
-            "lk-agents-inference": {"lk-agents-abi", "lk-agents-media", "lk-agents-net"}
-            | {"lk-agents-core"},
-            # net -> core (the A2A client executes core::a2a decisions) is pending owner approval.
-            "lk-agents-net": {"lk-agents-abi"} | {"lk-agents-core"},
-            "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
-            "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
-            # The realtime and duplex fakes still run inference's realtime machine (decision 70).
-            "lk-agents-fuzz": PURE - {"lk-agents-rtc"} | {"lk-agents-inference", "lk-agents-net"},
-            "lk-agents-runtime": PURE - {"lk-agents-rtc"} | ASYNC,
-            "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
-        }.get(name, {"lk-agents-abi"})
+        allowed = GRAPH[name]
         for edge in resolved[root]:
             dep = edge["pkg"]
             target = packages[dep]
-            if target == "lk-agents-test-support" and (
-                name == "lk-agents-fuzz"
-                or (
-                    edge.get("dep_kinds")
-                    and all(kind.get("kind") == "dev" for kind in edge["dep_kinds"])
-                )
-            ):
+            dev = edge.get("dep_kinds") and all(k.get("kind") == "dev" for k in edge["dep_kinds"])
+            if target == TEST_SUPPORT and dev:
                 continue
             if target.startswith("lk-agents-") and target != name and target not in allowed:
                 # Proc macros/build tooling do not define a product dependency direction.
@@ -252,12 +254,10 @@ def check_history(root: Path, path: str, current) -> list[str]:
 
 DEPENDENCY_BASELINES = {
     "legacy": "rust/architecture/dependencies-baseline.json",
-    "rtc": "rust/architecture/dependencies-rtc-baseline.json",
     "sqlite": "rust/architecture/dependencies-sqlite-baseline.json",
 }
 CLIPPY_BASELINES = {
     "legacy": "rust/architecture/clippy-baseline.json",
-    "rtc": "rust/architecture/clippy-rtc-baseline.json",
 }
 
 
@@ -265,12 +265,6 @@ def baseline_family(identity: str) -> str:
     """Newly enforced families cannot receive exemptions from an older ratchet."""
     if identity.startswith("dependency:") and identity.endswith(":rusqlite"):
         return "sqlite"
-    if identity.startswith(
-        ("dependency:lk-agents-rtc:", "direction:lk-agents-rtc:")
-    ) or identity.startswith(
-        ("allow:rust/crates/lk-agents-rtc/", "site:rust/crates/lk-agents-rtc/")
-    ):
-        return "rtc"
     return "legacy"
 
 

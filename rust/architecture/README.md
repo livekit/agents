@@ -7,10 +7,10 @@ Checks never rewrite sources or baselines. Cargo honors `CARGO_TARGET_DIR` and
 the workspace Rust flags.
 
 - `check.py` validates all-feature Cargo dependency closures, including normal,
-  build and dev edges, and workspace layering for subject cores and ABI.
+  build and dev edges, and workspace layering against the documented crate graph
+  (`GRAPH`, rust-core.md "Crates and dependencies").
   Forbidden executor, transport, host and SDK families include Tokio, futures,
   PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
-  RTC follows core policy until its records, proxies and fakes move to their owners.
   The async I/O crates (inference, worker, net, storage) are outside the purity bans
   and the Clippy policy; their workspace edges are checked.
 - A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's

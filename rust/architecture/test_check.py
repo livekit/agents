@@ -116,12 +116,16 @@ class DependencyContracts(unittest.TestCase):
             "direction:lk-agents-fuzz:lk-agents-test-support", dependency_violations(graph)
         )
 
-    def test_rtc_obeys_core_closure_and_layering_until_it_is_dissolved(self):
-        actual = dependency_violations(
-            metadata({"lk-agents-rtc": ["adapter", "lk-agents-voice"], "adapter": ["tokio"]})
-        )
-        self.assertIn("dependency:lk-agents-rtc:tokio", actual)
-        self.assertIn("direction:lk-agents-rtc:lk-agents-voice", actual)
+    def test_direction_allows_only_the_documented_graph(self):
+        for crate, target in (
+            ("lk-agents-net", "lk-agents-media"),
+            ("lk-agents-test-support", "lk-agents-runtime"),
+            ("lk-agents-bench-steps", "lk-agents-inference"),
+            ("lk-agents-media", "lk-agents-core"),
+        ):
+            with self.subTest(edge=f"{crate} -> {target}"):
+                actual = dependency_violations(metadata({crate: [target], "lk-agents-abi": []}))
+                self.assertIn(f"direction:{crate}:{target}", actual)
 
     def test_shared_abi_debt_keeps_its_owning_manifest_identity(self):
         actual = dependency_violations(
@@ -249,26 +253,23 @@ class BaselineContracts(unittest.TestCase):
         self.assertFalse(ratchet(set(), {"old"}))
 
     @patch("check.check_history", return_value=[])
-    def test_first_rtc_and_sqlite_baselines_cannot_receive_retired_core_exemptions(self, history):
+    def test_first_sqlite_baseline_cannot_receive_retired_core_exemptions(self, history):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            paths = {"legacy": "legacy.json", "rtc": "rtc.json", "sqlite": "sqlite.json"}
+            paths = {"legacy": "legacy.json", "sqlite": "sqlite.json"}
             legacy = "dependency:lk-agents-voice:tokio"
-            rtc = "dependency:lk-agents-rtc:tokio"
             sqlite = "dependency:lk-agents-storage:rusqlite"
-            for family, identity in (("legacy", legacy), ("rtc", rtc), ("sqlite", sqlite)):
+            for family, identity in (("legacy", legacy), ("sqlite", sqlite)):
                 (root / paths[family]).write_text(json.dumps([identity]))
             baseline, errors = read_baselines(root, paths)
             self.assertFalse(errors)
-            self.assertEqual(baseline, {legacy, rtc, sqlite})
-            self.assertEqual(history.call_count, 3)
+            self.assertEqual(baseline, {legacy, sqlite})
+            self.assertEqual(history.call_count, 2)
             # Removing an older exemption cannot transfer it into a new family's first baseline.
             (root / paths["legacy"]).write_text("[]")
-            for family in ("rtc", "sqlite"):
-                with self.subTest(family=family):
-                    (root / paths[family]).write_text(json.dumps([legacy]))
-                    _, errors = read_baselines(root, paths)
-                    self.assertTrue(any(legacy in error for error in errors))
+            (root / paths["sqlite"]).write_text(json.dumps([legacy]))
+            _, errors = read_baselines(root, paths)
+            self.assertTrue(any(legacy in error for error in errors))
 
     @patch.dict(os.environ, _GIT_FREE_ENV, clear=True)
     def test_committed_baseline_cannot_be_expanded_or_reintroduced(self):

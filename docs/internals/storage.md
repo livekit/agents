@@ -55,9 +55,11 @@ The engine has three layers:
 `lk-agents-storage` is a plain async crate that owns all database interaction:
 both backends, retries, fencing, lease renewal, resolution of lost
 acknowledgments, pools and resources, reaching the network through
-`lk-agents-net`. Every failure is a precise typed error: `Uncertain`,
-`Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` or
-`VersionConflict`. The A2A task decisions (deduplication, arrival order, inbox
+`lk-agents-net`. Every failure is a precise typed error: a database failure is
+`Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`,
+`NotFound` or `VersionConflict`; a request the caller made wrongly is `Invalid`,
+`NotSerializable`, `TooLarge` or `Unauthorized`; a cancelled turn is
+`Cancelled`. The A2A task decisions (deduplication, arrival order, inbox
 policy, task transitions) live in `lk_agents_core::a2a` over request/result
 records and error types declared in ABI; core does not depend on storage. The
 runtime's A2A door executes core's storage effects by calling storage and feeds
