@@ -26,16 +26,14 @@ async def request_photo(ctx: RunContext[None, Loss]) -> InputRequired:
     return InputRequired("Could you send a photo of the damage? A wide shot and a close-up.")
 ```
 
-Use it only for an input the tool needs to go on: an email, a yes or no on
-a read-back, a card number. A conversational question, such as "would you
-like one of these slots?", is a plain reply: the task completes, and the
-next message is a new task. The questions of one step's calls are one
-question, each once and in order, exact only when every part is.
+Use it only for an input the tool needs to go on (an email, a yes or no, a
+card number); a conversational question is a plain reply. The questions of
+one step's calls are asked as one, each once, in order.
 
-The turn waits. What is stored: the function call, its output,
-`waiting for the person's answer to: <question>`, and the question as an
-assistant message. The question is the turn's reply. Nothing stays in
-memory.
+The turn waits. What is stored: the function call, its output standing in
+for the wait, `waiting for the person's answer to: <question>`, and the
+question as an assistant message. The question is the turn's reply. Nothing
+stays in memory.
 
 ## Who words it
 
@@ -54,22 +52,15 @@ exact, which the door flags and the delegate gives as written.
 A read-back from `requires_approval` is verbatim.
 
 The person's next message, whenever it comes and on whatever worker, is the
-answer: one user message, and the call keeps its question as its output.
-The model runs on the history: it sees the call, the question and the
-answer, and continues, calling the next tool, or explaining and asking
-again when the message did not answer. The tool that asked never runs
+answer, and the call keeps its question as its output. The model runs on
+the history: it sees the question, the call and the answer, and continues,
+calling the next tool or asking again. The tool that asked never runs
 again. It has no continuation, which is why a conversation tool can ask and
 cannot act on the answer; the model acts on it.
 
 On a call the question is spoken and the next user turn is the answer. In
-text, the turn's task ends `input-required` with the question:
-
-| The next message | What happens |
-|---|---|
-| carries the waiting task's id | that task continues: the same task, no row of its own, the message added to its history; a resend of it runs nothing |
-| carries no task id, from the person | the door sends it to the question in front of them, the oldest open one of the lane, which it continues |
-| carries no task id, tagged `livekit/kind: delegation` | a new task: another agent names the task it continues |
-| carries the id of a running task | a new task |
+text, the turn's task ends `input-required` with the question, and the
+answer continues that task ([a2a.md](a2a.md) says which message does).
 
 What `run()` returns then: `result.input_required` is the pending question
 and `result.output` is `None`. The framework ends the task `input-required`

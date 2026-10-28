@@ -166,15 +166,11 @@ call: `flags=ToolFlag.CANCELLABLE`, and `on_duplicate=` with
 (`"allow"`, `"reject"`, `"replace"`, or `"confirm"`, which asks the model to
 call again to confirm). See [voice.md](voice.md).
 
-A tool that needs an input to go on, an email, a yes or no on a read-back,
-a card number, returns `InputRequired(question)`: the agent facing the
-person asks it in its own words, or exactly as written with
-`verbatim=True`, and the person's next message is the answer, which the
-task's model reads and acts on. The questions of one step's calls are asked
-as one. A conversational question, such as offering slots, is a plain
-reply, and the next message is a new request. Only the delegate's tool takes
-the answer itself, as the person said it, with no model turn in between, to
-continue the expert's task ([multi-agent.md](multi-agent.md)).
+A tool whose result is a question for the person returns
+`InputRequired(question)`: the agent facing the person asks it in its own
+words, or exactly as written with `verbatim=True`, and the person's next
+message is the answer, which the model reads
+([human-in-the-loop.md](human-in-the-loop.md)).
 
 ## Idempotency
 

@@ -89,18 +89,14 @@ context, with `referenceTaskIds` if it builds on an earlier one.
 
 A turn whose tool returned `InputRequired(question)` ends `input-required`.
 The question is the turn's reply, as the status message; no model call
-writes it. The call stays in the history with its output,
-`waiting for the person's answer to: <question>`, and the task's answer
-stream stays open.
+writes it. The pending call stays in the history with a placeholder output,
+`waiting for the person's answer to: <question>`.
 
-A message with the waiting task's `taskId` continues that task, on whatever
-worker takes it: the same task id and stream, no row of its own, the
-message added to the task's history, and the model continues from the
-history with the answer as the person's message. A resend of that message
-runs nothing. The person's message with no `taskId` continues the question
-in front of them, the oldest open one of the lane; a delegation with no
-`taskId` is a new task. A `taskId` of a running task is a new task, and one
-of another lane is a `TaskNotFoundError`.
+The answer continues the waiting task, on whatever worker takes it: the
+same task and stream, with the message added to its history. A message with
+the task's `taskId` continues it, and so does the person's message with none
+(the oldest open question of the lane); a delegation with none, or with the
+`taskId` of a running task, is a new task.
 
 ```json
 {
