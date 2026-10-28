@@ -180,6 +180,7 @@ impl Tts for StreamAdapter {
             tts: self.tts.clone(),
             budget: self.budget,
             sentence: None,
+            sentence_audio: false,
             report: None,
             clock: Arc::clone(&self.clock),
             rx,
@@ -260,6 +261,8 @@ struct AdapterSource {
     budget: crate::ApiConnectOptions,
     /// The sentence being synthesized and its failed attempts: what a retry synthesizes again.
     sentence: Option<(String, u32)>,
+    /// The current sentence delivered audio, so a failure can no longer be retried (F-10).
+    sentence_audio: bool,
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<crate::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
@@ -394,6 +397,7 @@ impl AdapterSource {
             if let Some(cur) = self.current.as_mut() {
                 match cur.next().await {
                     Ok(Some(a)) => {
+                        self.sentence_audio = true;
                         let clock = Arc::clone(&self.clock);
                         if let Some(call) = self.ledger().call.as_mut() {
                             let start = call.start;
@@ -439,6 +443,7 @@ impl AdapterSource {
                 continue;
             }
             self.sentence = Some((text, 0));
+            self.sentence_audio = false;
             self.open_sentence().await?;
         }
     }
@@ -473,7 +478,7 @@ impl AdapterSource {
                 *retries,
                 error.retryable(),
                 error.status_code(),
-                false,
+                self.sentence_audio,
             ),
         };
         let RetryDecision::Retry(delay) = decision else { return Err(error.into_final()) };
@@ -1058,22 +1063,46 @@ mod tests {
         assert_eq!(err.status_code(), Some(429));
     }
 
-    // Catches: a failed sentence not synthesized again within the budget (the reference's
-    // per-sentence `ChunkedStream` retries), or retried past it.
-    #[tokio::test(start_paused = true)]
-    async fn a_failed_sentence_is_synthesized_again_within_its_budget() {
-        let mut tts = FakeTts::new(3);
-        Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
-        let budget = crate::ApiConnectOptions { max_retry: 2, retry_interval: 0.0, ..crate::ApiConnectOptions::default() };
+    fn retrying_adapter(tts: Arc<FakeTts>) -> StreamAdapter {
+        let budget = crate::ApiConnectOptions {
+            max_retry: 2,
+            retry_interval: 0.0,
+            ..crate::ApiConnectOptions::default()
+        };
         let clock = Arc::new(crate::utils::clock::SimClock::new());
         let splitter: SplitterFactory = Arc::new(|_| Box::new(DotSplitter::default()));
-        let adapter = StreamAdapter::new(tts.clone(), splitter, clock).with_budget(budget);
-        let (sink, source) = adapter.stream().await.unwrap();
+        StreamAdapter::new(tts, splitter, clock).with_budget(budget)
+    }
+
+    // Catches: a sentence whose synthesis failed before any audio not synthesized again within
+    // the budget, or retried past it.
+    #[tokio::test(start_paused = true)]
+    async fn a_sentence_failing_before_audio_is_synthesized_again_within_its_budget() {
+        let mut tts = FakeTts::new(3);
+        Arc::get_mut(&mut tts).unwrap().fail_after = Some(0);
+        let (sink, source) = retrying_adapter(tts.clone()).stream().await.unwrap();
         sink.push("first. second.".into()).unwrap();
         sink.end_input();
         let err = drain(source).await.expect_err("every attempt fails");
         assert!(!err.retryable());
         assert_eq!(tts.texts(), vec!["first.", "first.", "first."]);
+    }
+
+    // Catches: resynthesizing a sentence whose audio was already delivered (F-10): the listener
+    // would hear its beginning twice. The delivered frame stays delivered and the stream fails.
+    #[tokio::test(start_paused = true)]
+    async fn sentence_adapter_partial_failure_never_resynthesizes_delivered_audio() {
+        let mut tts = FakeTts::new(3);
+        Arc::get_mut(&mut tts).unwrap().fail_after = Some(1);
+        let (sink, mut source) = retrying_adapter(tts.clone()).stream().await.unwrap();
+        sink.push("first. second.".into()).unwrap();
+        sink.end_input();
+        let delivered = bounded("first frame", source.next()).await.unwrap();
+        assert!(delivered.is_some(), "the first frame of the sentence reaches the listener");
+        let err = bounded("failure", source.next()).await.expect_err("partial output fails");
+        assert!(!err.retryable());
+        assert_eq!(err.status_code(), Some(429));
+        assert_eq!(tts.texts(), vec!["first."], "delivered audio is never synthesized again");
     }
 
     // Catches: dropping the inner `TtsSource` instead of closing it (leaks a host task per sentence).

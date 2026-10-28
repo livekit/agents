@@ -82,8 +82,9 @@ pub fn decide(
     if matches!(kind, Llm | TtsBatch | TtsStream) && status == Some(499) {
         return RetryDecision::Stop;
     }
-    if options.max_retry == 0 || !retryable || (matches!(kind, TtsStream) && produced_output)
-    {
+    // Visible output forbids a retry (F-10): a second attempt would repeat it. A streaming
+    // recognition reconnect sends only new audio, so it never repeats a delivered transcript.
+    if options.max_retry == 0 || !retryable || (produced_output && !matches!(kind, SttStream)) {
         return RetryDecision::Raise;
     }
     if attempt >= options.max_retry {
@@ -158,8 +159,11 @@ mod tests {
             decide(RequestKind::TtsStream, &opts, 0, true, None, true),
             RetryDecision::Raise
         );
+        for kind in [RequestKind::Llm, RequestKind::TtsBatch, RequestKind::Avatar] {
+            assert_eq!(decide(kind, &opts, 0, true, None, true), RetryDecision::Raise);
+        }
         assert_eq!(
-            decide(RequestKind::TtsBatch, &opts, 0, true, None, true),
+            decide(RequestKind::TtsBatch, &opts, 0, true, None, false),
             RetryDecision::Retry(0.1)
         );
         // `STT.recognize` raises a non-retryable `APIError` at once, as every other kind does.
