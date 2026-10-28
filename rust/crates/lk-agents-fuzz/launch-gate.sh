@@ -32,7 +32,7 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-abi lk-agents-fuzz lk-agents-inference lk-agents-voice)
+executed=(lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-voice)
 compiled=(
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
     "lk-agents-host-derive: proc macros; exercised by every crate that derives"
@@ -73,6 +73,9 @@ python3 crates/lk-agents-fuzz/corpus/derive.py --check
 
 step "build"
 cargo check -q --workspace --all-targets
+
+step "agent core tests"
+cargo test -q -p lk-agents-core
 
 step "voice core unit tests"
 cargo test -q -p lk-agents-voice
