@@ -537,32 +537,50 @@ impl Playing<'_> {
         }
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// The sink's finish for what was pushed; `None` when interrupted. A finish lost on its way
     /// would hold the speech until the close: once the sink reported all it owes played, the finish
     /// gets [`LOST_FINISH_MARGIN`], then it is reported for the sink. Before that nothing bounds it:
-    /// a pause, or a sink slower than the clock, holds audio for as long as it likes.
+    /// a pause, or a sink slower than the clock, holds audio for as long as it likes. The margin
+    /// starts at the report that completes what is owed, not at a later look.
     async fn played_out_report(&mut self) -> Option<PlaybackFinished> {
         let out = self.out;
         let mut wait = std::pin::pin!(out.wait_for_playout());
         let time = self.shared.time.clone();
+        let mut due = None;
+        let mut listening = true;
         loop {
-            // Not all played yet: looked at again a margin later. Audio pushed before the sink
-            // last dropped what it held is owed no more.
-            let owed = self.pushed_len.saturating_sub(self.dropped.pushed);
-            let played_all = self.played.saturating_sub(self.dropped.played) >= owed;
-            if played_all {
+            if due.is_none() && self.played_all() {
                 let at = time.now().saturating_add(LOST_FINISH_MARGIN);
                 self.trace(PlayoutStep::FinishDue { speech: self.handle.id(), at });
+                due = Some(at);
             }
-            match self.watched(time.timeout(LOST_FINISH_MARGIN, wait.as_mut())).await? {
-                Ok(ev) => return Some(ev),
-                Err(_) if played_all => break,
-                Err(_) => {}
+            let left =
+                due.map_or(LOST_FINISH_MARGIN, |at| at.saturating_duration_since(time.now()));
+            tokio::select! {
+                biased;
+                () = self.handle.wait_for_interrupted() => return None,
+                report = self.events.recv(), if listening => match report {
+                    Some(report) => self.on_event(report),
+                    None => listening = false,
+                },
+                finished = time.timeout(left, wait.as_mut()) => match finished {
+                    Ok(ev) => return Some(ev),
+                    Err(_) if due.is_some() => break,
+                    Err(_) => {}
+                },
             }
         }
         let lost = self.report_lost_finish();
         // The chain settles on the report at once; a count it no longer owes takes it as is.
         Some(time.timeout(Duration::ZERO, wait).await.unwrap_or(lost))
+    }
+
+    /// The sink reported all it owes played. Audio pushed before it last dropped what it held is
+    /// owed no more.
+    fn played_all(&self) -> bool {
+        let owed = self.pushed_len.saturating_sub(self.dropped.pushed);
+        self.played.saturating_sub(self.dropped.played) >= owed
     }
 
     /// The finish the sink lost, reported where the sink would have: at the end of the chain, so
@@ -656,6 +674,11 @@ impl Playing<'_> {
         if report.is_none() && !*self.shared.closing.borrow() {
             report =
                 self.shared.time.timeout(CUT_REPORT_WAIT, self.out.wait_for_playout()).await.ok();
+        }
+        // A sink that had played all of it answers the clear with no finish: the finish was lost,
+        // and is reported for it, or the output's count stays a finish ahead of every later wait.
+        if report.is_none() && self.played_all() {
+            report = Some(self.report_lost_finish());
         }
         let Some(ev) = report else {
             let position = self.out.tracker().position();

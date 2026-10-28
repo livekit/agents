@@ -64,3 +64,77 @@ fn a_lost_finish_after_a_reset_releases_the_speech() {
     let [speech] = &speeches[..] else { panic!("one speech, got {}", speeches.len()) };
     assert!(speech.is_done(), "the speech still waits on a finish the output lost");
 }
+
+// Catches: a speech cut after its output played all of its audio and lost the finish left that
+// segment outstanding on the output's count, so every later playout waited for one finish more
+// than it was owed: the next speech's real finish settled the old segment and the speech waited
+// out the lost-finish margin (DST seeds 7836, 6883 with finishes lost after a reset).
+#[test]
+fn a_cut_after_a_lost_finish_keeps_the_next_playout_in_step() {
+    let say = |text: &str| Input::Say {
+        text: AgentText(text.into()),
+        input: SayInput::Words,
+        allow: None,
+        to_ctx: true,
+    };
+    let inputs = [
+        say("Hello there."),
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutStarted { segment: Ref::new(0) },
+        Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(10_000) },
+        Input::PlayoutFinishLost { segment: Ref::new(0) },
+        Input::Advance { ms: Millis(200) },
+        Input::Interrupt { force: true, wait: false },
+        Input::Advance { ms: Millis(3_000) },
+        say("Goodbye."),
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutStarted { segment: Ref::new(1) },
+        Input::PlayoutProgressed { segment: Ref::new(1), ms: Millis(10_000) },
+        Input::PlayoutFinished { segment: Ref::new(1) },
+        Input::Advance { ms: Millis(200) },
+    ];
+    let run = simulate(async {
+        let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+        for input in &inputs {
+            run.apply(input).await;
+        }
+        run
+    });
+    let host = run.record.host_view();
+    let speeches = host.speeches();
+    let [_, next] = &speeches[..] else { panic!("two speeches, got {}", speeches.len()) };
+    assert!(next.is_done(), "the next speech waits for a finish its output already reported");
+}
+
+// Catches: the lost-finish margin started at the playout's next periodic look, up to a margin after
+// the report that completed what the output owed, so a lost finish held the speech for twice the
+// margin and the DST's release phase, waiting only on a journalled due time, never saw it go quiet
+// (DST seed 6883 with finishes lost after a reset).
+#[test]
+fn a_lost_finish_is_due_a_margin_after_the_last_report() {
+    let inputs = [
+        Input::Say {
+            text: AgentText("Hello there.".into()),
+            input: SayInput::Words,
+            allow: None,
+            to_ctx: true,
+        },
+        Input::Advance { ms: Millis(100) },
+        Input::PlayoutStarted { segment: Ref::new(0) },
+        Input::Advance { ms: Millis(1_500) },
+        Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(10_000) },
+        Input::PlayoutFinishLost { segment: Ref::new(0) },
+        Input::Advance { ms: Millis(2_100) },
+    ];
+    let run = simulate(async {
+        let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+        for input in &inputs {
+            run.apply(input).await;
+        }
+        run
+    });
+    let host = run.record.host_view();
+    let speeches = host.speeches();
+    let [speech] = &speeches[..] else { panic!("one speech, got {}", speeches.len()) };
+    assert!(speech.is_done(), "the lost finish was not due a margin after the last report");
+}
