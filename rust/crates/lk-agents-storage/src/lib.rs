@@ -21,7 +21,7 @@ pub mod lease;
 pub mod run;
 pub mod schema;
 pub mod sql;
-#[cfg(feature = "sqlite")]
+#[cfg(any(feature = "sqlite", test))]
 pub mod sqlite;
 pub mod streams;
 
