@@ -117,7 +117,6 @@ pub fn drop_unsupported_params(
 }
 
 /// The lowest reasoning effort the model supports, or `None` if it has no such control.
-#[lk_agents_abi::host(export(pid = false))]
 pub fn min_reasoning_effort(model: &str) -> Option<&'static str> {
     let name = bare_model_name(model);
     MIN_REASONING_EFFORT.iter().find(|(m, _)| *m == name).map(|(_, effort)| *effort)

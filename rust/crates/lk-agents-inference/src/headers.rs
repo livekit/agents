@@ -63,7 +63,6 @@ pub const HEADER_INFERENCE_PRIORITY: &str = "X-LiveKit-Inference-Priority";
 pub use lk_agents_net::http::{QUOTA_HEADER_FIELDS, extract_quota_usage};
 
 /// [`extract_quota_usage`] over a response's header pairs, names matched case-insensitively.
-#[lk_agents_abi::host(export(name = "inference_quota_usage", pid = false))]
 pub fn quota_usage(headers: Vec<(String, String)>) -> Vec<(&'static str, String)> {
     extract_quota_usage(|name| {
         headers.iter().find(|(k, v)| k.eq_ignore_ascii_case(name) && !v.is_empty()).map(|(_, v)| v.as_str())
@@ -88,7 +87,6 @@ pub fn default_inference_url(inference_url: Option<&str>, livekit_url: Option<&s
 }
 
 #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
-#[lk_agents_abi::host(export(name = "inference_default_url", pid = false))]
 pub fn default_inference_url_from_env() -> String {
     default_inference_url(
         std::env::var("LIVEKIT_INFERENCE_URL").ok().as_deref(),

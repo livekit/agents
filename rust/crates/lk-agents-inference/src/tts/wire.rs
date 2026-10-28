@@ -11,7 +11,6 @@ pub const DEFAULT_SAMPLE_RATE: u32 = 24_000;
 pub use lk_agents_abi::inference::fallback::TtsFallbackModel as FallbackModel;
 
 /// `"provider/model:voice"` -> `("provider/model", Some("voice"))`.
-#[lk_agents_abi::host(export(name = "tts_parse_model_string"))]
 pub fn parse_model_string(model: &str) -> (&str, Option<&str>) {
     crate::stt::options::parse_model_string(model)
 }
@@ -30,7 +29,6 @@ pub fn normalize_fallback_str(model: &str) -> lk_agents_abi::inference::fallback
 
 /// `_has_aligned_transcript`: whether this model and these options produce timings (recomputed
 /// on `update_options`).
-#[lk_agents_abi::host(export(name = "tts_has_aligned_transcript"))]
 pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) -> bool {
     let provider = model.split('/').next().unwrap_or("");
     match provider {
@@ -49,7 +47,6 @@ fn truthy(value: Option<&Value>) -> bool {
 }
 
 /// `TTS.Markup._provider_key()`: the markup dialect; "" means the model has no markup.
-#[lk_agents_abi::host(export(name = "tts_markup_provider_key"))]
 pub fn markup_provider_key(model: &str) -> &str {
     let provider = model.split('/').next().unwrap_or("");
     if provider == "inworld" {

@@ -32,6 +32,139 @@ pub fn inference_resolve_api_secret(explicit: ::std::option::Option<::std::strin
     Ok(out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
+type InferenceModelsImpl = <crate::Selected as super::Implementations>::InferenceModels;
+
+fn _extract_inference_models_interruption_min_frames_min_interruption_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
+    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_interruption_duration")
+}
+
+fn _extract_inference_models_interruption_estimate_probability_probabilities(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<f64>> {
+    obj.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<f64>(&item, "probabilities") }).collect::<PyResult<Vec<_>>>())
+}
+
+/// The gateway's quota dimensions among a response's header pairs (names case-insensitive);
+/// an empty value is not reported.
+#[pyfunction]
+#[pyo3(signature = (headers))]
+pub fn inference_quota_usage(headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>) -> PyResult<::std::vec::Vec<(::std::string::String, ::std::string::String)>> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::inference_quota_usage(headers);
+    Ok(out)
+}
+
+/// `LIVEKIT_INFERENCE_URL`, then staging if `LIVEKIT_URL` names the staging cloud, then
+/// production.
+#[pyfunction]
+pub fn inference_default_url() -> PyResult<::std::string::String> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::inference_default_url();
+    Ok(out)
+}
+
+/// Whether the build links a native provider of the local models.
+#[pyfunction]
+pub fn local_models_native() -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::local_models_native();
+    Ok(out)
+}
+
+/// Loads the native models' weights; `false` when no provider is linked.
+#[pyfunction]
+#[pyo3(signature = (vad, eot))]
+pub fn local_models_init(vad: bool, eot: bool) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::local_models_init(vad, eot);
+    Ok(out)
+}
+
+/// The frames an interruption must span: `min_interruption_duration` at the detector's rate.
+#[pyfunction]
+#[pyo3(signature = (min_interruption_duration))]
+pub fn interruption_min_frames(#[pyo3(from_py_with = _extract_inference_models_interruption_min_frames_min_interruption_duration)] min_interruption_duration: f64) -> PyResult<u32> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::interruption_min_frames(min_interruption_duration);
+    Ok(out)
+}
+
+/// The interruption probability a window of frame probabilities reports.
+#[pyfunction]
+#[pyo3(signature = (probabilities))]
+pub fn interruption_estimate_probability(#[pyo3(from_py_with = _extract_inference_models_interruption_estimate_probability_probabilities)] probabilities: ::std::vec::Vec<f64>) -> PyResult<f64> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::interruption_estimate_probability(probabilities);
+    Ok(out)
+}
+
+/// `"provider/model:voice"` split into the model and its voice.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn tts_parse_model_string(model: ::std::string::String) -> PyResult<(::std::string::String, ::std::option::Option<::std::string::String>)> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_parse_model_string(model);
+    Ok(out)
+}
+
+/// Whether the model streams word timings for its audio under these options.
+#[pyfunction]
+#[pyo3(signature = (model, extra_kwargs))]
+pub fn tts_has_aligned_transcript(model: ::std::string::String, extra_kwargs: Bound<'_, PyAny>) -> PyResult<bool> {
+    let extra_kwargs = match ::lk_agents_abi::python::value_from_py(&extra_kwargs, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }?;
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_has_aligned_transcript(model, extra_kwargs);
+    Ok(out)
+}
+
+/// The speech-markup dialect the model's provider reads.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn tts_markup_provider_key(model: ::std::string::String) -> PyResult<::std::string::String> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::tts_markup_provider_key(model);
+    Ok(out)
+}
+
+/// `"provider/model:language"` split into the model and its language.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn stt_parse_model_string(model: ::std::string::String) -> PyResult<(::std::string::String, ::std::option::Option<::std::string::String>)> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_parse_model_string(model);
+    Ok(out)
+}
+
+/// Whether these options ask the provider for speaker diarization.
+#[pyfunction]
+#[pyo3(signature = (extra_kwargs = None))]
+pub fn stt_diarization_enabled(extra_kwargs: Option<Bound<'_, PyAny>>) -> PyResult<bool> {
+    let extra_kwargs = extra_kwargs.map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("extra_kwargs", ": expected a dict"))) }).transpose()?;
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_diarization_enabled(extra_kwargs);
+    Ok(out)
+}
+
+/// Whether the model carries the agent's context across recognitions.
+#[pyfunction]
+#[pyo3(signature = (model = None))]
+pub fn stt_supports_agent_context_carryover(model: ::std::option::Option<::std::string::String>) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_supports_agent_context_carryover(model);
+    Ok(out)
+}
+
+/// Whether the model reports word timings by default.
+#[pyfunction]
+#[pyo3(signature = (model = None))]
+pub fn stt_aligned_transcript_for_model(model: ::std::option::Option<::std::string::String>) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_aligned_transcript_for_model(model);
+    Ok(out)
+}
+
+/// The lowest reasoning effort the model supports, or `None` if it has no such control.
+#[pyfunction]
+#[pyo3(signature = (model))]
+pub fn min_reasoning_effort(model: ::std::string::String) -> PyResult<::std::option::Option<::std::string::String>> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::min_reasoning_effort(model);
+    Ok(out)
+}
+
+/// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
+#[pyfunction]
+#[pyo3(signature = (livekit_url, api_key, api_secret))]
+pub fn amd_auto_select_models(livekit_url: ::std::string::String, api_key: ::std::string::String, api_secret: ::std::string::String) -> PyResult<bool> {
+    let out = <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_auto_select_models(livekit_url, api_key, api_secret);
+    Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/inference/avatar_session.rs.
 type InferenceAvatarImpl = <crate::Selected as super::Implementations>::InferenceAvatar;
 

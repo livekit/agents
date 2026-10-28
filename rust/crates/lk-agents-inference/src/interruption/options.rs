@@ -25,7 +25,6 @@ pub const REMOTE_INFERENCE_TIMEOUT: f64 = 0.7;
 pub const FRAMES_PER_SECOND: f64 = 40.0;
 
 /// `math.ceil(min_interruption_duration * _FRAMES_PER_SECOND)`, saturating (never a silent 0).
-#[lk_agents_abi::host(export(name = "interruption_min_frames"))]
 pub fn min_frames_for(min_interruption_duration: f64) -> u32 {
     let frames = (min_interruption_duration * FRAMES_PER_SECOND).ceil();
     if frames.is_nan() { 0 } else { frames.clamp(0.0, u32::MAX as f64) as u32 }

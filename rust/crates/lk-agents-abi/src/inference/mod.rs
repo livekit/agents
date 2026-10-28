@@ -463,4 +463,76 @@ pub trait InferenceCredentials {
     #[host(function)]
     fn inference_resolve_api_secret(#[host(default = None)] explicit: Option<String>) -> String;
 }
+/// The gateway's model tables, request headers and local model registry the host reads: pure
+/// lookups, safe in a forked child.
+#[crate::host(functions(pid = false))]
+pub trait InferenceModels {
+    /// The gateway's quota dimensions among a response's header pairs (names case-insensitive);
+    /// an empty value is not reported.
+    #[host(function)]
+    fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)>;
+
+    /// `LIVEKIT_INFERENCE_URL`, then staging if `LIVEKIT_URL` names the staging cloud, then
+    /// production.
+    #[host(function)]
+    fn inference_default_url() -> String;
+
+    /// Whether the build links a native provider of the local models.
+    #[host(function)]
+    fn local_models_native() -> bool;
+
+    /// Loads the native models' weights; `false` when no provider is linked.
+    #[host(function)]
+    fn local_models_init(vad: bool, eot: bool) -> bool;
+
+    /// The frames an interruption must span: `min_interruption_duration` at the detector's rate.
+    #[host(function)]
+    fn interruption_min_frames(min_interruption_duration: f64) -> u32;
+
+    /// The interruption probability a window of frame probabilities reports.
+    #[host(function)]
+    fn interruption_estimate_probability(probabilities: Vec<f64>) -> f64;
+
+    /// `"provider/model:voice"` split into the model and its voice.
+    #[host(function)]
+    fn tts_parse_model_string(model: String) -> (String, Option<String>);
+
+    /// Whether the model streams word timings for its audio under these options.
+    #[host(function)]
+    fn tts_has_aligned_transcript(
+        model: String,
+        extra_kwargs: serde_json::Map<String, Value>,
+    ) -> bool;
+
+    /// The speech-markup dialect the model's provider reads.
+    #[host(function)]
+    fn tts_markup_provider_key(model: String) -> String;
+
+    /// `"provider/model:language"` split into the model and its language.
+    #[host(function)]
+    fn stt_parse_model_string(model: String) -> (String, Option<String>);
+
+    /// Whether these options ask the provider for speaker diarization.
+    #[host(function)]
+    fn stt_diarization_enabled(
+        #[host(default = None)] extra_kwargs: Option<serde_json::Map<String, Value>>,
+    ) -> bool;
+
+    /// Whether the model carries the agent's context across recognitions.
+    #[host(function)]
+    fn stt_supports_agent_context_carryover(#[host(default = None)] model: Option<String>) -> bool;
+
+    /// Whether the model reports word timings by default.
+    #[host(function)]
+    fn stt_aligned_transcript_for_model(#[host(default = None)] model: Option<String>) -> bool;
+
+    /// The lowest reasoning effort the model supports, or `None` if it has no such control.
+    #[host(function)]
+    fn min_reasoning_effort(model: String) -> Option<String>;
+
+    /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
+    #[host(function)]
+    fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: String) -> bool;
+}
+
 pub mod tts_client;

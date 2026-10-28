@@ -31,6 +31,8 @@ pub mod amd;
 pub mod avatar;
 
 pub mod llm;
+// `_core`'s inference lookups, declared in ABI.
+pub mod models;
 pub mod local_models;
 pub mod stt;
 #[cfg(any(test, feature = "testkit"))]

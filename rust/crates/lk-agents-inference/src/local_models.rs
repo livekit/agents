@@ -51,13 +51,11 @@ pub fn vad_factory_or(host: Arc<dyn VadModelFactory>) -> Arc<dyn VadModelFactory
 }
 
 /// Whether the build links a native provider of the local models.
-#[lk_agents_abi::host(export(name = "local_models_native", pid = false))]
 pub fn is_native() -> bool {
     native().is_some()
 }
 
 /// Loads the native models' weights; `false` when no provider is linked.
-#[lk_agents_abi::host(export(name = "local_models_init", pid = false))]
 pub fn init(vad: bool, eot: bool) -> bool {
     native().map(|p| (p.init)(vad, eot)).is_some()
 }

@@ -23,6 +23,55 @@ def inference_resolve_api_key(explicit: str | None = None) -> str:
 def inference_resolve_api_secret(explicit: str | None = None) -> str:
     """The same ladder for the secret."""
 
+def inference_quota_usage(headers: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The gateway's quota dimensions among a response's header pairs (names case-insensitive);
+    an empty value is not reported.
+    """
+
+def inference_default_url() -> str:
+    """`LIVEKIT_INFERENCE_URL`, then staging if `LIVEKIT_URL` names the staging cloud, then
+    production.
+    """
+
+def local_models_native() -> bool:
+    """Whether the build links a native provider of the local models."""
+
+def local_models_init(vad: bool, eot: bool) -> bool:
+    """Loads the native models' weights; `false` when no provider is linked."""
+
+def interruption_min_frames(min_interruption_duration: float) -> int:
+    """The frames an interruption must span: `min_interruption_duration` at the detector's rate."""
+
+def interruption_estimate_probability(probabilities: Sequence[float]) -> float:
+    """The interruption probability a window of frame probabilities reports."""
+
+def tts_parse_model_string(model: str) -> tuple[str, str | None]:
+    """`"provider/model:voice"` split into the model and its voice."""
+
+def tts_has_aligned_transcript(model: str, extra_kwargs: dict[str, object]) -> bool:
+    """Whether the model streams word timings for its audio under these options."""
+
+def tts_markup_provider_key(model: str) -> str:
+    """The speech-markup dialect the model's provider reads."""
+
+def stt_parse_model_string(model: str) -> tuple[str, str | None]:
+    """`"provider/model:language"` split into the model and its language."""
+
+def stt_diarization_enabled(extra_kwargs: dict[str, object] | None = None) -> bool:
+    """Whether these options ask the provider for speaker diarization."""
+
+def stt_supports_agent_context_carryover(model: str | None = None) -> bool:
+    """Whether the model carries the agent's context across recognitions."""
+
+def stt_aligned_transcript_for_model(model: str | None = None) -> bool:
+    """Whether the model reports word timings by default."""
+
+def min_reasoning_effort(model: str) -> str | None:
+    """The lowest reasoning effort the model supports, or `None` if it has no such control."""
+
+def amd_auto_select_models(livekit_url: str, api_key: str, api_secret: str) -> bool:
+    """Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`)."""
+
 class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,
     created under one operation identity, held until `aclose()` terminates it.

@@ -94,6 +94,7 @@ impl generated::Implementations for Selected {
     type ServerEnvironment = lk_agents_runtime::worker::server::Environment;
     type JobTrace = lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type InferenceCredentials = lk_agents_runtime::cores::InferenceCredentials;
+    type InferenceModels = lk_agents_runtime::inference::models::Models;
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::telemetry::policy::DestinationPolicy;

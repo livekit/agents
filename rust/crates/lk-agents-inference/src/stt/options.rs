@@ -43,7 +43,6 @@ pub const DEFAULT_ENCODING: &str = "pcm_s16le";
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 
 /// `"provider/model:language"` -> `("provider/model", Some("language"))`, split at the last colon.
-#[lk_agents_abi::host(export(name = "stt_parse_model_string"))]
 pub fn parse_model_string(model: &str) -> (&str, Option<&str>) {
     match model.rfind(':') {
         Some(idx) => (&model[..idx], Some(&model[idx + 1..])),
@@ -52,7 +51,6 @@ pub fn parse_model_string(model: &str) -> (&str, Option<&str>) {
 }
 
 /// True if any known provider diarization flag is truthy.
-#[lk_agents_abi::host(export(name = "stt_diarization_enabled"))]
 pub fn diarization_enabled(extra_kwargs: Option<&Map<String, Value>>) -> bool {
     let Some(extra) = extra_kwargs else { return false };
     for key in DIARIZATION_EXTRA_KEYS {
@@ -145,13 +143,11 @@ pub fn keyterms_extra_for_model(
 }
 
 /// True if the model natively carries `agent_context`.
-#[lk_agents_abi::host(export(name = "stt_supports_agent_context_carryover"))]
 pub fn supports_agent_context_carryover(model: Option<&str>) -> bool {
     model.is_some_and(|m| ASSEMBLYAI_CARRYOVER_MODELS.contains(&m))
 }
 
 /// Word-level alignment for the model; `false` for `"auto"`, since claiming alignment is the costlier error.
-#[lk_agents_abi::host(export(name = "stt_aligned_transcript_for_model"))]
 pub fn aligned_transcript_for_model(model: Option<&str>) -> bool {
     model.is_some_and(|m| WORD_ALIGNED_MODELS.contains(&m))
 }

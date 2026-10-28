@@ -7,7 +7,6 @@ use crate::interruption::options::MIN_INTERRUPTION_DURATION;
 const FRAME_DURATION: f64 = 0.025;
 
 /// The 2nd-largest per-frame probability (the reference's body, not its docstring); 0.0 for fewer than two frames.
-#[lk_agents_abi::host(export(name = "interruption_estimate_probability"))]
 pub fn estimate_probability(probabilities: &[f32]) -> f64 {
     let n_th = (MIN_INTERRUPTION_DURATION / FRAME_DURATION).ceil() as usize;
     if probabilities.len() < n_th {
