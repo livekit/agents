@@ -43,7 +43,12 @@ _WS_SEND_MAX_ATTEMPTS = 6
 
 class ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
+        self,
+        api_key: str | None,
+        timeout: float | None,
+        model: str,
+        base_url: str | None = None,
+        max_session_duration: float = 3600,
     ) -> None:
         self._api_key = api_key
         self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -62,7 +67,7 @@ class ResponsesWebsocket:
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,
+            max_session_duration=max_session_duration,
             connect_timeout=self._timeout,
         )
 
