@@ -34,6 +34,7 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -362,7 +363,7 @@ class STT(stt.STT):
             session_url = session_response["url"]
 
             # Connect to the WebSocket
-            receive_timeout = conn_options.timeout * 5
+            receive_timeout = conn_options.read_timeout
             async with self._ensure_session().ws_connect(
                 session_url,
                 timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),
@@ -468,6 +469,7 @@ class STT(stt.STT):
 
     async def _init_live_session(self, config: dict, conn_options: APIConnectOptions) -> dict:
         """Initialize a live transcription session with Gladia."""
+        http_timeout = utils.http_context.client_timeout(conn_options)
         try:
             url = f"{self._base_url}?{urlencode({'region': config['region']})}"
             config = {k: v for k, v in config.items() if k != "region"}
@@ -475,10 +477,7 @@ class STT(stt.STT):
                 url=url,
                 json=config,
                 headers={"X-Gladia-Key": self._api_key},
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 # Gladia returns 201 Created when successfully creating a session
                 if res.status not in (200, 201):
@@ -723,6 +722,18 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         base_url: str,
     ) -> None:
+        if (
+            conn_options.pool_timeout is not None
+            or conn_options.connect_timeout is not None
+            or conn_options.write_timeout is not None
+            or conn_options.read_timeout is not None
+            or conn_options.total_timeout is not None
+        ):
+            raise APIError(
+                "gladia streaming requires pool_timeout=None, connect_timeout=None, write_timeout=None, read_timeout=None, total_timeout=None; "
+                "these timeout phases are not observable by this adapter",
+                retryable=False,
+            )
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._opts = opts
@@ -915,6 +926,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _init_live_session(self) -> dict:
         """Initialize a live session with Gladia."""
+        http_timeout = utils.http_context.client_timeout(self._conn_options)
         streaming_config = _build_streaming_config(self._opts)
         try:
             from urllib.parse import urlencode
@@ -925,10 +937,7 @@ class SpeechStream(stt.SpeechStream):
                 url=url,
                 json=streaming_config,
                 headers={"X-Gladia-Key": self._api_key},
-                timeout=aiohttp.ClientTimeout(
-                    total=30,
-                    sock_connect=self._conn_options.timeout,
-                ),
+                timeout=http_timeout,
             ) as res:
                 res.raise_for_status()
                 return await res.json()  # type: ignore
