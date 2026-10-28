@@ -745,16 +745,22 @@ pub struct ListTasksDecode {
     page: usize,
     count: usize,
     page_size: i64,
+    filters: String,
 }
 
-/// One page of the thread's tasks, last updated first, as A2A `tasks/list` answers it.
+/// One page of the thread's tasks, last updated first (ties by task id), as A2A `tasks/list`
+/// answers it. A page token made under other filters is refused.
 pub fn list_tasks(q: &TaskQuery) -> Result<Plan<ListTasksDecode>, StorageError> {
+    let filters = task_filters(q);
     let (before_at, before_id) = match q.page_token.as_deref().filter(|t| !t.is_empty()) {
-        None => (i64::MAX, ""),
+        None => (i64::MAX, String::new()),
         Some(token) => token
-            .split_once(':')
-            .and_then(|(at, id)| Some((at.parse().ok()?, id)))
-            .ok_or_else(|| StorageError::Invalid(format!("page token {token:?}")))?,
+            .strip_prefix(&filters)
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(at, id)| Some((at.parse().ok()?, id.to_owned())))
+            .ok_or_else(|| {
+                StorageError::Invalid(format!("page token {token:?} for this listing"))
+            })?,
     };
     let (status, updated_after) = (q.status.map(TaskState::as_str), q.updated_after);
     let page_size = q.page_size.clamp(1, MAX_TASK_PAGE);
@@ -763,11 +769,16 @@ pub fn list_tasks(q: &TaskQuery) -> Result<Plan<ListTasksDecode>, StorageError> 
         status,
         updated_after,
         before_at,
-        before_id,
+        before_id: &before_id,
         limit: page_size + 1,
     });
     let count = b.add(CountThreadTasks { status, updated_after });
-    Ok(b.plan(ListTasksDecode { page, count, page_size }))
+    Ok(b.plan(ListTasksDecode { page, count, page_size, filters }))
+}
+
+/// The filters a task page token is bound to, as its prefix.
+fn task_filters(q: &TaskQuery) -> String {
+    format!("{}:{}:", q.status.map_or("*", TaskState::as_str), q.updated_after)
 }
 
 impl Decode for ListTasksDecode {
@@ -778,7 +789,7 @@ impl Decode for ListTasksDecode {
         let more = tasks.len() as i64 > self.page_size;
         tasks.truncate(self.page_size as usize);
         let next_page_token = match tasks.last() {
-            Some(last) if more => format!("{}:{}", last.updated_at, last.task_id),
+            Some(last) if more => format!("{}{}:{}", self.filters, last.updated_at, last.task_id),
             _ => String::new(),
         };
         let total_size = out.at(self.count)?.first_int().unwrap_or(0);

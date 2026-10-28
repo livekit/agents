@@ -518,7 +518,51 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
+/// I-22/I-24: A2A ListTasks pages by last update (ties by task id) without skipping or
+/// repeating, filters by status, and refuses a page token made under other filters.
+async fn tasks_page_by_last_update_with_a_filter_bound_token(backend: Backend) {
+    let fx = backend.fixture(None).await;
+    let s = fx.thread("w1").await;
+    let lane = s.lane(LANE);
+    for id in ["AST_1", "AST_2", "AST_3", "AST_4", "AST_5"] {
+        assert!(lane.db().submit(&submitted(id)).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    lane.cancel_task("AST_2", Default::default()).await.unwrap();
+    let query = |status, page_token| lk_agents_storage::db::TaskQuery {
+        status,
+        updated_after: 0,
+        page_size: 2,
+        page_token,
+    };
+    let (mut seen, mut token) = (Vec::new(), None);
+    loop {
+        let page = s.list_tasks(&query(None, token)).await.unwrap();
+        assert_eq!(page.total_size, 5);
+        seen.extend(page.tasks.iter().map(|t| (t.updated_at, t.task_id.clone())));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = Some(page.next_page_token);
+    }
+    let mut ordered = seen.clone();
+    ordered.sort_by(|a, b| b.cmp(a));
+    ordered.dedup();
+    assert_eq!(seen, ordered, "last update first, ties by id, nothing repeated");
+    assert_eq!(seen.len(), 5);
+    assert_eq!(seen[0].1, "AST_2", "the canceled task was updated last");
+
+    let canceled = s.list_tasks(&query(Some(TaskState::Canceled), None)).await.unwrap();
+    assert_eq!(canceled.tasks.iter().map(|t| t.task_id.as_str()).collect::<Vec<_>>(), ["AST_2"]);
+    let submitted = s.list_tasks(&query(Some(TaskState::Submitted), None)).await.unwrap();
+    assert_eq!(submitted.total_size, 4);
+    let crossed = s.list_tasks(&query(None, Some(submitted.next_page_token))).await;
+    assert!(matches!(crossed, Err(StorageError::Invalid(_))), "a token of another filter");
+    fx.cleanup(&[&s]).await;
+}
+
 contract!(
+    tasks_page_by_last_update_with_a_filter_bound_token,
     items_page_by_position_with_a_filter_bound_cursor,
     a_run_loads_its_whole_history_in_its_acquire,
     a_concurrent_run_refuses_to_edit_or_delete_loaded_history,
