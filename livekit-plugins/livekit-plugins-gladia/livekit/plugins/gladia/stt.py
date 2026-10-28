@@ -353,6 +353,12 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         """Implement synchronous speech recognition for Gladia using the live endpoint."""
+        if conn_options.total_timeout is not None:
+            raise APIError(
+                "Gladia cannot preserve total_timeout across session creation and transcription; "
+                "set total_timeout=None",
+                retryable=False,
+            )
         config = self._sanitize_options(languages=[language] if is_given(language) else None)
         streaming_config = _build_streaming_config(config)
 
