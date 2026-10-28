@@ -1154,6 +1154,26 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   model's and the voice's, and the worker's process boundary are still exercised only by
   `latency.py` and real calls.
 
+## 15. The other subjects
+
+One scheduler serves every simulation (`src/sched.rs`): queued items keep their source's order,
+ready processes compete with them, and BasicPOS or the arrival order picks; the voice queue adds
+its due wake, frame batches and dispatch trail on top. Each subject below is a synchronous core
+stepped on simulated time against fakes that answer as real peers do; its rules are functions of
+the run's trace, each with counterexamples written by hand beside it; its campaign runs 4096 seeds
+under both orders in the launch gate and prints its boundary (`boundary.rs`).
+
+| Subject | Core | Fakes | Rules | Campaign |
+|---|---|---|---|---|
+| storage (`src/storage`) | `lk-agents-storage` plans, run commit, renewal, resolution | SQLite in memory on the simulated clock; lost acks, outages, paused and lost workers, cancels | stale owner never commits, acknowledged submissions durable, one terminal per task, uncertain commits resolve to their run, history neither lost nor duplicated | `storage_survey` |
+| LLM request (`src/inference/llm.rs`) | `LlmRequest` over `Attempts` | gateway with the recorded gpt-4.1-mini chunk timing, refusals, rejections, drops, stalls, malformed and unterminated bodies, late or lost releases; a consumer with backpressure and cancels | one outcome, no replay after output, bounded backed-off retries, deadlines as the policy sets them, only the current attempt delivers, every attempt released | `inference_survey` |
+| avatar session (`src/inference/avatar.rs`) | `AvatarSessionLifecycle` | idempotent gateway that applies what it received (one session per operation), answers replays from its record, loses answers, drops silent connections after 1-2 min; callers that race, leave, refuse, close | no leaked session, one session per instance, one outcome per caller, retirements with their cause, every attempt released, retirement bounded | `inference_survey` |
+| process pool (`src/worker.rs`) | `PoolState` | job processes that fail to spawn, crash or hang in init, die before a launch, exit after their job, close late, with failing exit watches and reaps; duplicate dispatches, cancels, drains, the close | every admitted request settles, one disposition per assignment, retired processes stay retired, every process released and the close completes once | `worker_survey` |
+
+Still to come: the A2A door (K-4: task transitions, cancel against completion, lost acks per
+decision 39, ListTasks cursors) and the worker's registration and assignment state (the rest of
+K-2); TextSession once its core lands.
+
 ## Appendix: operation x phase, exact seeds
 
 Of 1,024 seeds. `Advance`, `AwaitAnswer`, `AwaitExit`, `AwaitSpeech` and `Settle` are the
