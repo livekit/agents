@@ -1,6 +1,8 @@
+import asyncio
 import enum
 import json
 from typing import Annotated, Any, Literal
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
@@ -24,6 +26,8 @@ from livekit.agents.llm.utils import (
     function_arguments_to_pydantic_model,
     prepare_function_arguments,
 )
+
+from .fake_realtime import run_realtime_tool_turn
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -335,6 +339,49 @@ def test_end_call_tool_ignore_on_enter_flag():
 
     (tool,) = EndCallTool(ignore_on_enter=True).tools
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+
+
+@pytest.mark.parametrize(
+    "end_instructions, output",
+    [
+        (None, None),
+        ("say goodbye to the user", "say goodbye to the user"),
+        ("say goodbye to the user", None),  # cleared by on_tool_completed
+    ],
+)
+async def test_end_call_tool_waits_for_a_reply_only_if_it_asks_for_one(
+    monkeypatch, end_instructions, output
+):
+    # a None result asks for no reply; GPT-Live answers it anyway, and when the answer
+    # was silent the call stayed open for the 5 s tool reply timeout
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call
+
+    monkeypatch.setattr(end_call, "get_job_context", MagicMock)
+    called = asyncio.Event()
+
+    async def on_tool_called(_: Toolset.ToolCalledEvent) -> None:
+        called.set()
+
+    async def on_tool_completed(ev: Toolset.ToolCompletedEvent) -> None:
+        ev.output = output
+
+    tool = EndCallTool(
+        end_instructions=end_instructions,
+        on_tool_called=on_tool_called,
+        on_tool_completed=on_tool_completed,
+    )
+    agent = Agent(instructions="test", tools=tool.tools)
+    events: list[str] = []
+
+    def on_session(session: Any) -> None:
+        shutdown = session.shutdown
+        session.shutdown = lambda **kw: (events.append("shutdown"), shutdown(**kw))
+        session.on("close", lambda _: events.append("close"))
+
+    await run_realtime_tool_turn(agent, tool_executed=called, on_session=on_session)
+    # a tool that asked for a reply is still waiting for it when the session closes
+    assert events[0] == ("shutdown" if output is None else "close")
 
 
 class TestToolExecution:
@@ -817,7 +864,26 @@ class _NonNullableEnumModel(BaseModel):
     status: Literal["active", "inactive"] = Field(...)
 
 
+class _Color(str, enum.Enum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _SharedEnumModel(BaseModel):
+    required: _Color
+    first: Annotated[_Color, Field(description="first")] | None
+    second: Annotated[_Color, Field(description="second")] | None
+
+
 class TestStrictJsonSchema:
+    def test_nullable_enum_does_not_add_null_to_the_shared_definition(self):
+        # each nullable use expands the same `$defs` entry; the null it adds must not
+        # reach that entry, the required field that refs it, or the other nullable use
+        schema = to_strict_json_schema(_SharedEnumModel)
+        assert schema["$defs"]["_Color"]["enum"] == ["red", "green"]
+        assert schema["properties"]["first"]["enum"] == ["red", "green", None]
+        assert schema["properties"]["second"]["enum"] == ["red", "green", None]
+
     def test_nullable_enum_includes_null_in_enum(self):
         schema = to_strict_json_schema(_NullableEnumModel)
         status = schema["properties"]["status"]
@@ -1108,10 +1174,13 @@ class TestExecuteFunctionCallToolResult:
         assert result.raw_output is tool_result
         assert result.raw_exception is None
 
-    async def test_invalid_wrapped_output_still_reports_an_error(self) -> None:
+    @pytest.mark.parametrize("reply_required", [True, False])
+    async def test_invalid_wrapped_output_preserves_reply_required(
+        self, reply_required: bool
+    ) -> None:
         from livekit.agents.llm import FunctionToolCall, execute_function_call
 
-        tool_result = ToolResult(object(), reply_required=False)
+        tool_result = ToolResult(object(), reply_required=reply_required)
 
         @function_tool
         async def invalid_output() -> ToolResult:
@@ -1125,7 +1194,9 @@ class TestExecuteFunctionCallToolResult:
 
         assert result.fnc_call_out.is_error
         assert result.fnc_call_out.output == "the tool returned an invalid output"
+        assert result.fnc_call_out.reply_required is reply_required
         assert result.raw_output is tool_result
+        assert result.raw_exception is None
 
 
 class TestExecuteFunctionCallValidationErrors:
@@ -2172,6 +2243,7 @@ def _make_reply_session(speech: Any) -> Any:
     session._global_run_state = None
     activity = MagicMock()
     activity.agent = agent
+    activity.scheduling_paused = False
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
     return session
@@ -2191,6 +2263,39 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
         speech_handle=speech_handle,
         function_call=FunctionCall(call_id=call_id, name=name, arguments="{}"),
     )
+
+
+class TestReplyToolChoice:
+    """One reply step answering several tool outputs honours a single shared request."""
+
+    def test_a_shared_request_is_honoured(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", "none"]) == "none"
+
+    def test_a_result_leaves_the_model_on_its_default(self):
+        """A real return carries no request: it is something to act on."""
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice([None]) is None
+
+    def test_one_result_among_reports_is_enough(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", None]) is None
+
+    def test_requests_that_disagree_constrain_nothing(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", "auto"]) is None
+
+    def test_a_named_tool_is_a_request_like_any_other(self):
+        """A ToolChoice naming a function is a dict, which does not go into a set."""
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        named = {"type": "function", "function": {"name": "look_up"}}
+        assert _reply_tool_choice([named, dict(named)]) == named
+        assert _reply_tool_choice([named, "none"]) is None
 
 
 class TestToolCallEvents:
@@ -2391,8 +2496,12 @@ class TestToolCallEvents:
         assert completed.update_ids == ["c5_update_1", "c5_final"]
 
     @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("Sent", "Sent"), (object(), "the tool returned an invalid output")],
+    )
     async def test_deferred_tool_results_honor_reply_required(
-        self, reply_flags: tuple[bool, ...]
+        self, reply_flags: tuple[bool, ...], output: Any, expected_output: str
     ) -> None:
         import asyncio
 
@@ -2404,7 +2513,7 @@ class TestToolCallEvents:
         async def send_dtmf(ctx: RunContext, reply_required: bool) -> ToolResult:
             """Send DTMF events."""
             await ctx.update("Sending digits")
-            return ToolResult("Sent", reply_required=reply_required)
+            return ToolResult(output, reply_required=reply_required)
 
         session = _make_reply_session(_make_fake_speech())
         agent = Agent(instructions="test", tools=[send_dtmf])
@@ -2442,7 +2551,8 @@ class TestToolCallEvents:
                     if item.type == "function_call_output"
                 }
                 assert outputs == {
-                    f"{index}_final": ("Sent", flag) for index, flag in enumerate(reply_flags)
+                    f"{index}_final": (expected_output, flag)
+                    for index, flag in enumerate(reply_flags)
                 }
 
             replies = [
@@ -2460,6 +2570,172 @@ class TestToolCallEvents:
                 assert not replies
         finally:
             await executor.aclose()
+
+    @pytest.mark.asyncio
+    async def test_silent_update_is_recorded_but_never_replied_to(self):
+        from livekit.agents.voice.events import (
+            RunContext,
+            ToolCallEnded,
+            ToolCallUpdated,
+            ToolReplyUpdated,
+        )
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            await ctx.update("step two", silent=True)
+            return "all done"
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c6", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        items = _emitted_items(session)
+        assert items[1] == ToolCallUpdated(id="c6", call_id="c6", message="step one")
+        # the silent update is still reported, flagged, and recorded on the agent
+        assert items[2] == ToolCallUpdated(
+            id="c6_update_1", call_id="c6", message="step two", silent=True
+        )
+        recorded = [
+            item.call_id
+            for call in session.current_agent.update_chat_ctx.await_args_list
+            for item in call.args[0].items
+        ]
+        assert recorded == ["c6_update_1", "c6_update_1", "c6_final", "c6_final"]
+        # realtime providers read reply_required to decide whether the output starts a turn
+        silent_out = next(
+            item
+            for call in session.current_agent.update_chat_ctx.await_args_list
+            for item in call.args[0].items
+            if item.type == "function_call_output" and item.call_id == "c6_update_1"
+        )
+        assert silent_out.reply_required is False
+        assert items[3] == ToolCallEnded(
+            id="c6_final", call_id="c6", message="all done", status="done"
+        )
+        # only the final return is voiced; the silent update carries no reply of its own
+        reply = items[4]
+        assert isinstance(reply, ToolReplyUpdated)
+        assert reply.update_ids == ["c6_final"]
+
+    @pytest.mark.asyncio
+    async def test_silent_first_update_suppresses_the_tool_reply(self):
+        from livekit.agents.voice.events import RunContext, ToolCallUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("on it", silent=True)
+            return "done"
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c7", name="progress_tool")
+
+        first = await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        assert "on it" in first
+        # the release happened, and generation reads this to drop the output's reply
+        assert run_ctx._suppress_reply is True
+
+        items = _emitted_items(session)
+        assert items[1] == ToolCallUpdated(id="c7", call_id="c7", message="on it", silent=True)
+
+        await _drain_executor(executor)
+
+    @pytest.mark.asyncio
+    async def test_a_reply_covering_only_reports_may_not_call(self):
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> None:
+            """p"""
+            await ctx.update("on it")
+            await ctx.update("still on it")
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c20", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        # a None return files no result, so everything buffered asked for "none"
+        assert session.generate_reply.call_args.kwargs["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_a_result_reply_uses_the_default_tool_choice(self):
+        """The final return is a result to act on, so its reply may call tools."""
+        from livekit.agents.types import NOT_GIVEN
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("on it")
+            return "three matches"
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c22", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        assert session.generate_reply.call_args.kwargs["tool_choice"] is NOT_GIVEN
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):

@@ -12,6 +12,9 @@ __all__ = [
     "SentenceTokenizer",
 ]
 
+# a danda, plus any closing quotes/brackets it ends, followed by whitespace
+_DANDA_BOUNDARY_RE = re.compile(r"[।॥][\"'”’»)]*(?=\s)")
+
 
 def _split_sentences(
     text: str, min_sentence_len: int, *, retain_format: bool = False
@@ -21,10 +24,16 @@ def _split_sentences(
 
     _, offsets = blingfire.text_to_sentences_with_offsets(text)
 
+    # blingfire doesn't treat the danda ("।", "॥") used by Hindi, Bengali, etc. as a
+    # sentence terminator, so also end a sentence after a danda followed by whitespace
+    ends = sorted(
+        {end for _, end in offsets} | {m.end() for m in _DANDA_BOUNDARY_RE.finditer(text)}
+    )
+
     sentences: list[tuple[str, int, int]] = []
     start = 0
 
-    for _, end in offsets:
+    for end in ends:
         raw_sentence = text[start:end]
         sentence = re.sub(r"\s*\n+\s*", " ", raw_sentence).strip()
         if not sentence or len(sentence) < min_sentence_len:
