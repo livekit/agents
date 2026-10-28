@@ -20,7 +20,7 @@ import json
 import os
 import time
 import weakref
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
@@ -312,15 +312,12 @@ class TTS(tts.TTS):
 
 @dataclass
 class _ActiveStream:
-    """One Soniox stream carrying a batch of sentences; kept for replay on failure."""
+    """One provider stream carrying a batch of sentences."""
 
     connection: _Connection
     stream_id: str
     waiter: asyncio.Future[None]
     opened_at: float
-    baseline: float  # emitter duration at open; audio beyond it belongs to this stream
-    attempt: int = 0
-    texts: list[str] = field(default_factory=list)
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -408,7 +405,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 )
 
                 if active is not None and active.waiter.done():
-                    active = await self._settle_stream(active, output_emitter, request_id)
+                    active = await self._settle_stream(active)
                     continue
 
                 if not next_task.done():
@@ -438,7 +435,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if active is None:
                     active = await self._open_stream(output_emitter, request_id)
 
-                active.texts.append(ev.token)
                 active.connection.send_text(active.stream_id, ev.token, text_end=False)
 
             if active is not None and not self._cancelled.is_set():
@@ -454,7 +450,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             await sent_stream.aclose()
 
     async def _open_stream(
-        self, output_emitter: tts.AudioEmitter, request_id: str, *, attempt: int = 0
+        self, output_emitter: tts.AudioEmitter, request_id: str
     ) -> _ActiveStream:
         try:
             connection = await self._tts._current_connection(conn_options=self._conn_options)
@@ -479,81 +475,22 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream_id=stream_id,
             waiter=waiter,
             opened_at=time.monotonic(),
-            baseline=output_emitter.pushed_duration(),
-            attempt=attempt,
         )
 
     async def _finalize_stream(
         self, active: _ActiveStream, output_emitter: tts.AudioEmitter, request_id: str
     ) -> None:
-        """Send text_end and wait for termination, replaying the batch if it fails."""
-        current: _ActiveStream | None = active
-        while current is not None:
-            current.connection.send_text(current.stream_id, "", text_end=True)
-            current = await self._settle_stream(current, output_emitter, request_id)
+        """End the provider stream and wait for its terminal event."""
+        active.connection.send_text(active.stream_id, "", text_end=True)
+        await self._settle_stream(active)
 
-    async def _settle_stream(
-        self, active: _ActiveStream, output_emitter: tts.AudioEmitter, request_id: str
-    ) -> _ActiveStream | None:
-        """Wait for the stream's terminal event and interpret it.
-
-        Returns None when the stream ended cleanly (everything sent was
-        spoken), or a fresh stream with the batch replayed when it failed
-        transiently.
-        """
-        failure: APIError | None = None
+    async def _settle_stream(self, active: _ActiveStream) -> None:
+        # The generated stream owns retries for the complete synthesis. Retrying just a
+        # provider batch would bypass its delivered-audio and total-deadline decisions.
         try:
             await active.waiter
-        except APIError as e:
-            failure = e
-        except Exception as e:
-            raise APIConnectionError() from e
         finally:
-            # release before any replay so only one stream is ever registered
             active.connection.unregister_stream(active.stream_id)
-
-        if failure is None:
-            return None
-        return await self._retry_stream(active, output_emitter, request_id, failure)
-
-    async def _retry_stream(
-        self,
-        active: _ActiveStream,
-        output_emitter: tts.AudioEmitter,
-        request_id: str,
-        exc: APIError,
-    ) -> _ActiveStream:
-        """Replay the failed stream's sentences on a fresh stream_id.
-
-        The framework never retries once any audio reached the user, so a
-        transient failure would otherwise mute the rest of the reply. Replaying
-        is safe only while the failed stream itself produced no audio.
-        """
-        can_retry = (
-            exc.retryable
-            and output_emitter.pushed_duration() == active.baseline
-            and active.attempt < self._conn_options.max_retry
-            and not self._cancelled.is_set()
-        )
-        if not can_retry:
-            raise exc
-
-        retry_interval = self._conn_options._interval_for_retry(active.attempt)
-        logger.warning(
-            "Soniox TTS stream failed: %s, retrying in %ss",
-            exc,
-            retry_interval,
-            extra={"stream_id": active.stream_id, "attempt": active.attempt + 1},
-        )
-        await asyncio.sleep(retry_interval)
-
-        replacement = await self._open_stream(
-            output_emitter, request_id, attempt=active.attempt + 1
-        )
-        for text in active.texts:
-            replacement.texts.append(text)
-            replacement.connection.send_text(replacement.stream_id, text, text_end=False)
-        return replacement
 
 
 @dataclass
