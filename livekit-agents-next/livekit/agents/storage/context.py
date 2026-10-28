@@ -18,9 +18,10 @@ from pydantic import JsonValue
 from .._generated.storage_run import RunUsage, TaskRow
 from .._generated.storage_turn import HandlerOutput, HostEvent, Message, PendingCall, TurnContext
 from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
+from ..llm.tool_context import WAITING_PREFIX
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
-from ..voice.run_result import RunResult
+from ..voice.run_result import RunCompleted, RunInputRequired, RunResult
 from .context_store import ContextStore
 from .protocol import (
     StorageError,
@@ -181,40 +182,50 @@ class TurnHost:
             reset_run_hooks(token)
             context.store.close()
 
-        return self._output(context, output, results)
+        return self._output(context, output, results, interrupted=hooks.interrupted)
 
     def _output(
-        self, ctx: A2ASessionContext, output: object, results: list[RunResult[object]]
+        self,
+        ctx: A2ASessionContext,
+        output: object,
+        results: list[RunResult[object]],
+        *,
+        interrupted: bool,
     ) -> HandlerOutput:
         """The answer, new history, explicitly saved fields and any pending question."""
-        if isinstance(output, RunResult):
-            # a run returned as is answers with its question while it waits, else its output
+        # a run returned as is answers with its question while it waits, else its output
+        if isinstance(output, RunInputRequired):
+            output = InputRequired(output.question)
+        elif isinstance(output, RunCompleted):
             output = output.output
         from ..a2a.extension import VERBATIM
 
-        asked = next((r for r in reversed(results) if isinstance(r.output, InputRequired)), None)
+        asked = next((r for r in reversed(results) if isinstance(r, RunInputRequired)), None)
         metadata = dict(ctx.metadata)
         last = results[-1] if results else None
         if last is not None and last.verbatim is not None:
             # what must reach the person as written: the delegate relays it unchanged
             metadata.setdefault(VERBATIM, last.verbatim)
         pending = None
-        if asked is not None and (call := asked.pending_call) is not None:
+        if asked is not None and (call := _waiting_call(asked)) is not None:
             pending = PendingCall(
                 name=call.name, call_id=call.call_id, answer_tool=asked._answer_tool
             )
+        question = (
+            asked.question
+            if asked is not None
+            else output.question
+            if isinstance(output, InputRequired)
+            else None
+        )
         return HandlerOutput(
             output=output.question if isinstance(output, InputRequired) else output,
             new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
             state=ctx.store._pending_state,
             usage=_usage(results),
-            input_required=asked.output.question
-            if asked is not None and isinstance(asked.output, InputRequired)
-            else output.question
-            if isinstance(output, InputRequired)
-            else None,
+            input_required=question,
             pending_call=pending,
-            interrupted=ctx.interrupted or any(r.interrupted for r in results),
+            interrupted=ctx.interrupted or interrupted,
             metadata=metadata,
             events=[*_tool_events(results), *ctx.events],
         )
@@ -273,6 +284,19 @@ class TurnStream:
             return
         self._events.put_nowait({"kind": "output", "output": output.model_dump(mode="json")})
         self._events.put_nowait(None)
+
+
+def _waiting_call(result: RunInputRequired) -> FunctionCall | None:
+    """The call whose output waits on the person's answer, when a tool asked."""
+    waiting = {
+        item.call_id
+        for item in result.new_messages()
+        if isinstance(item, FunctionCallOutput) and item.output.startswith(WAITING_PREFIX)
+    }
+    return next(
+        (i for i in result.new_messages() if isinstance(i, FunctionCall) and i.call_id in waiting),
+        None,
+    )
 
 
 def _tool_events(results: list[RunResult[object]]) -> list[HostEvent]:

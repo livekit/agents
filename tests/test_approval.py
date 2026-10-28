@@ -1,150 +1,116 @@
-"""Approval held by the framework: which calls of a ``needs_approval`` tool may run."""
+"""Approval through ``agent.run()`` on the core (tools.md "Approval", decision 15): a
+``needs_approval`` call asks its read-back, only a repeat of the same validated call after the
+person's answer runs the body, and each answer is consumed once."""
 
 from __future__ import annotations
 
 import pytest
 
-from livekit.agents import InputRequired, function_tool
-from livekit.agents.llm import FunctionCall, FunctionCallOutput
-from livekit.agents.llm.tool_context import (
-    APPROVAL_ANSWERED,
-    APPROVAL_KEY,
-    WAITING_PREFIX,
-    approval_granted,
-    approval_scope,
-    as_model_reads,
-)
-from livekit.agents.llm.utils import build_legacy_openai_schema
+from livekit.agents import Agent, InputRequired, RunContext
+from livekit.agents.llm import FunctionToolCall
+from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
+
+from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = pytest.mark.unit
 
-
-def call(
-    call_id: str, args: str = '{"date": "monday"}', name: str = "cancel", mark: str | None = None
-) -> FunctionCall:
-    extra = {APPROVAL_KEY: mark} if mark else {}
-    return FunctionCall(call_id=call_id, name=name, arguments=args, extra=extra)
+APPROVAL_KEY = "lk.approval"
 
 
-def asked(call_id: str, args: str = '{"date": "monday"}') -> FunctionCall:
-    return call(call_id, args, mark="asked")
+def respond(input: str, content: str = "", *calls: FunctionToolCall) -> FakeLLMResponse:
+    return FakeLLMResponse(input=input, content=content, ttft=0, duration=0, tool_calls=list(calls))
 
 
-def ran(call_id: str, args: str = '{"date": "monday"}') -> FunctionCall:
-    return call(call_id, args, mark="granted")
+def cancel_call(call_id: str, arguments: str = '{"date": "monday"}') -> FunctionToolCall:
+    return FunctionToolCall(name="cancel", arguments=arguments, call_id=call_id)
 
 
-def out(call_id: str, output: str, *, is_error: bool = False) -> FunctionCallOutput:
-    return FunctionCallOutput(call_id=call_id, name="cancel", output=output, is_error=is_error)
-
-
-def test_first_call_asks() -> None:
-    assert not approval_granted([call("c1")], call("c1"))
-
-
-def test_repeat_after_the_answer_runs() -> None:
-    assert approval_granted([asked("c1"), out("c1", "yes"), call("c2")], call("c2"))
-
-
-def test_arguments_are_compared_as_json() -> None:
-    history = [asked("c1", '{"a": 1, "b": 2}'), out("c1", "yes")]
-    assert approval_granted(history, call("c2", '{"b":2,"a":1}'))
-
-
-def test_repeat_before_the_answer_asks() -> None:
-    history = [asked("c1"), out("c1", f"{WAITING_PREFIX}Cancel monday?"), call("c2")]
-    assert not approval_granted(history, call("c2"))
-
-
-def test_changed_arguments_ask_again() -> None:
-    history = [asked("c1"), out("c1", "no, tuesday")]
-    assert not approval_granted(history, call("c2", '{"date": "tuesday"}'))
-
-
-def test_an_answer_runs_one_repeat() -> None:
-    history = [asked("c1"), out("c1", "yes"), ran("c2"), out("c2", "canceled")]
-    assert not approval_granted(history, call("c3"))
-
-
-def test_a_newer_ask_replaces_the_older() -> None:
-    history = [
-        asked("c1"),
-        out("c1", "yes"),
-        asked("c2", '{"date": "tuesday"}'),
-        out("c2", "yes"),
-    ]
-    assert not approval_granted(history, call("c3"))
-
-
-def test_a_missing_detail_answered_is_not_an_approval() -> None:
-    # the call asked for an email, not for approval: its answer approves nothing
-    history = [call("c1"), out("c1", "jo@example.com")]
-    assert not approval_granted(history, call("c2"))
-
-
-def test_other_tools_do_not_count() -> None:
-    history = [asked("x1"), out("x1", "yes")]
-    assert not approval_granted(history, call("c1", name="other"))
-
-
-async def test_the_wrapper_runs_only_when_granted() -> None:
+async def test_a_call_runs_only_on_the_repeat_after_the_answer_and_once() -> None:
     ran: list[str] = []
+    llm = FakeLLM(
+        fake_responses=[
+            respond("cancel monday", "", cancel_call("c1")),
+            # the repeat omits the default: the validated identity is the same call
+            respond("yes", "", cancel_call("c2", '{"date": "monday", "notify": true}')),
+            respond("canceled", "Done, it is canceled."),
+            respond("cancel monday again", "", cancel_call("c3")),
+        ]
+    )
+    desk = Agent(instructions="desk", llm=llm)
 
-    @function_tool(needs_approval=True)
-    async def cancel(date: str) -> str:
-        """Cancel the appointment on a date."""
+    @desk.tool(needs_approval=True)
+    async def cancel(ctx: RunContext, date: str, notify: bool = True) -> str:
+        """Cancel the appointment on a date.
+
+        Args:
+            date: the day
+            notify: tell the clinic
+        """
         ran.append(date)
         return "canceled"
 
-    assert "approved" not in str(build_legacy_openai_schema(cancel))
-    asked = await cancel(date="monday")
-    assert isinstance(asked, InputRequired) and asked.verbatim
-    assert (
-        asked.question
-        == "Please confirm: Cancel the appointment on a date (date='monday'). Yes or no?"
-    )
-    with approval_scope(FunctionCall(call_id="a", name="cancel", arguments="{}"), False):
-        assert isinstance(await cancel(date="monday"), InputRequired)
-    with approval_scope(FunctionCall(call_id="b", name="cancel", arguments="{}"), True):
-        assert await cancel(date="monday") == "canceled"
+    asked = await desk.run("cancel monday")
+    assert asked.status == "input_required"
+    assert asked.question.startswith("Please confirm: Cancel the appointment on a date")
+    assert asked.verbatim == asked.question
+    assert ran == []
+    first = next(i for i in asked.new_messages() if i.type == "function_call")
+    assert first.extra[APPROVAL_KEY] == "asked"
+
+    granted = await desk.run("yes", message_history=asked.all_messages())
+    assert granted.status == "completed" and granted.output == "Done, it is canceled."
+    assert ran == ["monday"]
+    repeat = next(i for i in granted.new_messages() if i.type == "function_call")
+    assert repeat.extra[APPROVAL_KEY] == "granted"
+    # the history keeps the person's words as the read-back's answer
+    answered = [
+        i for i in granted.all_messages() if i.type == "function_call_output" and i.call_id == "c1"
+    ]
+    assert answered[0].output == "yes"
+
+    again = await desk.run("cancel monday again", message_history=granted.all_messages())
+    assert again.status == "input_required", "an identical later call asks again"
     assert ran == ["monday"]
 
 
-async def test_a_read_back_takes_the_tools_own_parameters() -> None:
-    @function_tool(needs_approval=lambda date, nights: f"Book {date} for {nights}? Yes or no?")
-    async def book(date: str, nights: int) -> str:
-        """Book."""
-        return "booked"
-
-    asked = await book(date="monday", nights=2)
-    assert isinstance(asked, InputRequired) and asked.question == "Book monday for 2? Yes or no?"
-    assert asked.verbatim
-
-
-async def test_a_read_back_may_ask_for_what_is_missing_first() -> None:
-    def read_back(date: str, email: str | None = None) -> str | InputRequired:
+async def test_a_read_back_function_takes_the_tools_parameters_or_asks_first() -> None:
+    def read_back(ctx: RunContext, date: str, email: str | None = None) -> str | InputRequired:
         return InputRequired("Which email?") if email is None else f"Book {date} to {email}?"
 
-    @function_tool(needs_approval=read_back)
-    async def book(date: str, email: str | None = None) -> str:
+    llm = FakeLLM(
+        fake_responses=[
+            respond(
+                "book monday",
+                "",
+                FunctionToolCall(name="book", arguments='{"date": "monday"}', call_id="b1"),
+            ),
+            respond(
+                "jo@example.com",
+                "",
+                FunctionToolCall(
+                    name="book",
+                    arguments='{"date": "monday", "email": "jo@example.com"}',
+                    call_id="b2",
+                ),
+            ),
+        ]
+    )
+    desk = Agent(instructions="desk", llm=llm)
+
+    @desk.tool(needs_approval=read_back)
+    async def book(ctx: RunContext, date: str, email: str | None = None) -> str:
         """Book."""
         return "booked"
 
-    first = FunctionCall(call_id="a", name="book", arguments="{}")
-    with approval_scope(first, False):
-        missing = await book(date="monday")
-    assert isinstance(missing, InputRequired) and not missing.verbatim
-    assert APPROVAL_KEY not in first.extra
-    second = FunctionCall(call_id="b", name="book", arguments="{}")
-    with approval_scope(second, False):
-        asked_ = await book(date="monday", email="jo@example.com")
-    assert isinstance(asked_, InputRequired) and asked_.verbatim
-    assert second.extra[APPROVAL_KEY] == "asked"
+    token = set_run_hooks(RunHooks(delegated=True))  # questions pass up as written
+    try:
+        missing = await desk.run("book monday")
+        assert missing.status == "input_required" and missing.question == "Which email?"
+        first = next(i for i in missing.new_messages() if i.type == "function_call")
+        assert APPROVAL_KEY not in first.extra, "a missing detail is not a read-back"
 
-
-def test_the_model_reads_an_answered_read_back_as_not_run() -> None:
-    history = [asked("c1"), out("c1", "yes"), call("c2"), out("c2", f"{WAITING_PREFIX}Cancel?")]
-    seen = as_model_reads(history)
-    assert seen[1].output == APPROVAL_ANSWERED.format(answer="yes", name="cancel")
-    assert history[1].output == "yes"  # what is stored stays the person's words
-    assert seen[3].output.startswith(WAITING_PREFIX)  # not answered yet, not an approval ask
+        asked = await desk.run("jo@example.com", message_history=missing.all_messages())
+    finally:
+        reset_run_hooks(token)
+    assert asked.status == "input_required"
+    assert asked.question == "Book monday to jo@example.com?"

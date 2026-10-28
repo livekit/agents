@@ -20,7 +20,7 @@ from typing import (
 )
 
 from opentelemetry import trace
-from typing_extensions import TypedDict
+from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault
 
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
@@ -64,6 +64,7 @@ class RunOutputOptions(TypedDict, total=False):
 
 
 Run_T = TypeVar("Run_T")
+Output_T = TypeVarDefault("Output_T", default=Any)
 
 
 @dataclass
@@ -79,11 +80,11 @@ class RunUsage:
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def _add_completion(self, usage: llm.CompletionUsage | None) -> None:
-        self.requests += 1
-        if usage is not None:
-            self.input_tokens += usage.prompt_tokens
-            self.output_tokens += usage.completion_tokens
+    def _add(self, other: RunUsage) -> None:
+        self.requests += other.requests
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.tool_calls += other.tool_calls
 
     @classmethod
     def from_session_usage(cls, usage: AgentSessionUsage) -> RunUsage:
@@ -94,6 +95,70 @@ class RunUsage:
             result.input_tokens += model_usage.input_tokens
             result.output_tokens += model_usage.output_tokens
         return result
+
+
+class _Settled:
+    """What both branches of a settled invocation expose: its history and usage."""
+
+    def __init__(
+        self,
+        *,
+        new_messages: list[llm.ChatItem],
+        all_messages: list[llm.ChatItem],
+        usage: RunUsage,
+        verbatim: str | None,
+    ) -> None:
+        self._new_messages = new_messages
+        self._all_messages = all_messages
+        self.usage = usage
+        """This invocation's usage alone."""
+        self.verbatim = verbatim
+        """The part of the answer, or of the question, that reached the person exactly as
+        written; ``None`` when nothing did (tools.md "Verbatim")."""
+
+    def new_messages(self) -> list[llm.ChatItem]:
+        """This invocation's input and everything it recorded, tool calls and results included."""
+        return list(self._new_messages)
+
+    def all_messages(self) -> list[llm.ChatItem]:
+        """The supplied history plus this invocation, without instructions: the next direct
+        run's ``message_history``."""
+        return list(self._all_messages)
+
+
+class RunCompleted(_Settled, Generic[Output_T]):
+    """``RunResult`` with ``status == "completed"``: ``output`` is the accepted value."""
+
+    status: Literal["completed"] = "completed"
+
+    def __init__(self, *, output: Output_T, **settled: Any) -> None:
+        super().__init__(**settled)
+        self.output = output
+
+    def __repr__(self) -> str:
+        return f"RunCompleted(output={self.output!r})"
+
+
+class RunInputRequired(_Settled):
+    """``RunResult`` with ``status == "input_required"``: the invocation asks ``question``."""
+
+    status: Literal["input_required"] = "input_required"
+
+    def __init__(self, *, question: str, answer_tool: str | None = None, **settled: Any) -> None:
+        super().__init__(**settled)
+        self.question = question
+        # the tool the person's next message is handed to (`InputRequired(tool=)`)
+        self._answer_tool = answer_tool
+
+    def __repr__(self) -> str:
+        return f"RunInputRequired(question={self.question!r})"
+
+
+RunResult = TypeAliasType(
+    "RunResult", RunCompleted[Output_T] | RunInputRequired, type_params=(Output_T,)
+)
+"""One agent invocation (agents.md "Running a turn"): narrow on ``status`` for ``output`` or
+``question``; both branches expose ``new_messages()``, ``all_messages()`` and ``usage``."""
 
 
 @dataclass
@@ -125,7 +190,9 @@ class AgentHandoffEvent:
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
-class RunResult(Generic[Run_T]):
+class VoiceRunResult(Generic[Run_T]):
+    """What ``VoiceSession.run()`` records of a reply on a call, for assertions (testing.md)."""
+
     def __init__(
         self,
         *,
@@ -150,7 +217,7 @@ class RunResult(Generic[Run_T]):
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
 
-        # set by AgentRun, derived from the session for a live run
+        # set by a delegate's result, derived from the session for a live run
         self._run_output: Any = None
         self._run_messages: list[llm.ChatItem] | None = None
         self._run_history: list[llm.ChatItem] | None = None
@@ -223,7 +290,7 @@ class RunResult(Generic[Run_T]):
         `ChatMessageEvent`, `FunctionCallEvent`,
         `FunctionCallOutputEvent`, and `AgentHandoffEvent`.
 
-        Use `RunResult.events` when validating what happened in a run instead
+        Use `VoiceRunResult.events` when validating what happened in a run instead
         of depending on lower-level session internals, room state, or raw media
         artifacts.
         """
@@ -272,8 +339,8 @@ class RunResult(Generic[Run_T]):
         """Indicates whether the run has finished processing all events."""
         return self._done_fut.done()
 
-    def __await__(self) -> Generator[None, None, RunResult[Run_T]]:
-        async def _await_impl() -> RunResult[Run_T]:
+    def __await__(self) -> Generator[None, None, VoiceRunResult[Run_T]]:
+        async def _await_impl() -> VoiceRunResult[Run_T]:
             await asyncio.shield(self._done_fut)
             return self
 
@@ -344,7 +411,7 @@ class RunResult(Generic[Run_T]):
 
 
 class RunAssert:
-    def __init__(self, run_result: RunResult):
+    def __init__(self, run_result: VoiceRunResult[Any]):
         self._events_list = run_result.events
         self._current_index = 0
 

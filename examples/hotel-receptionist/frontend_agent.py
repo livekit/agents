@@ -1,6 +1,6 @@
 import os
 
-from livekit.agents import Agent, AgentHandler, InputRequired, JobContext, VoiceSession
+from livekit.agents import Agent, AgentHandler, JobContext, RunResult, VoiceSession
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.delegation import A2ADelegate
 from livekit.plugins import openai
@@ -51,6 +51,5 @@ async def phone(ctx: JobContext) -> None:
 
 
 @front_desk.a2a_session(endpoint="frontend", description="The LiveKit Hotel front desk.")
-async def text(ctx: A2ASessionContext) -> str | InputRequired:
-    result = await chat.run(ctx.message, message_history=ctx.message_history)
-    return result.output
+async def text(ctx: A2ASessionContext) -> RunResult[str]:
+    return await chat.run(ctx.message, message_history=ctx.message_history)

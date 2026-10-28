@@ -19,7 +19,7 @@ from ..version import __version__
 
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
-    from .run_result import RunResult
+    from .run_result import VoiceRunResult
 
 
 class ConsoleCall:
@@ -62,7 +62,7 @@ class SessionPort:
     async def _core_run_input(self, text: str) -> tuple[list[_core.ChatItem] | None, str | None]:
         try:
             await self._session.interrupt(force=True)
-            result: RunResult[None] = self._session.run(user_input=text)
+            result: VoiceRunResult[None] = self._session.run(user_input=text)
             await result
         except Exception as e:
             return None, str(e)

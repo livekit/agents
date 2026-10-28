@@ -4,8 +4,9 @@ runs the Python function and classifies what it returned or raised (``llm.utils.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_type_hints
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
@@ -13,15 +14,8 @@ from typing_extensions import TypedDict
 from .. import _core
 from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 from ..llm import ToolContext
-from ..llm.tool_context import (
-    FunctionTool,
-    ModelRetry,
-    Tool,
-    Toolset,
-    _approval_scope,
-    _ApprovalScope,
-)
-from ..llm.utils import prepare_function_arguments, tool_outcome
+from ..llm.tool_context import FunctionTool, InputRequired, ModelRetry, Tool, Toolset
+from ..llm.utils import is_context_type, prepare_function_arguments, tool_outcome
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
 from .events import RunContext
@@ -103,13 +97,19 @@ class ToolRunner:
 
         binding = _VoiceBinding(self._session, self._agent, origin=f"tool:{fnc_call.call_id}")
         # a tool that requires approval runs only on the core's grant, else asks its read-back
-        approval = _ApprovalScope(granted=granted) if _needs_approval(tool) else None
+        approval: list[str] = []  # the call's mark once decided: "granted" or "asked"
+        gated = isinstance(tool, FunctionTool) and tool.info.needs_approval
+        if gated and granted:
+            approval.append("granted")
         token = _BindingContextVar.set(binding)
-        scope_token = _approval_scope.set(approval)
         try:
-            body = asyncio.create_task(tool(*args, **kwargs), name=f"tool_{fnc_call.name}")
+            work = (
+                _read_back(tool, args, kwargs, approval)  # type: ignore[arg-type]
+                if gated and not granted
+                else _call(tool, args, kwargs)
+            )
+            body = asyncio.create_task(work, name=f"tool_{fnc_call.name}")
         finally:
-            _approval_scope.reset(scope_token)
             _BindingContextVar.reset(token)
         self._running[fnc_call.call_id] = body
         body.add_done_callback(lambda _: self._running.pop(fnc_call.call_id, None))
@@ -142,7 +142,7 @@ class ToolRunner:
         except ValidationError as e:
             return {"kind": "tool_error", "text": str(e)}
         except ModelRetry as e:
-            return {"kind": "tool_error", "text": e.message}
+            return {"kind": "model_retry", "text": e.message}
         return {**outcome, "transition": value}
 
     def _core_cancel(self, call_id: str) -> None:
@@ -150,21 +150,54 @@ class ToolRunner:
             task.cancel()
 
 
-def _needs_approval(tool: Tool) -> bool:
-    return isinstance(tool, FunctionTool) and tool.info.needs_approval
+async def _call(tool: Tool, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The body, sync or async."""
+    out = tool(*args, **kwargs)  # type: ignore[operator]
+    return await out if inspect.isawaitable(out) else out
 
 
-def _ended(
-    fnc_call: FunctionCall, task: asyncio.Task[Any], approval: _ApprovalScope | None
-) -> dict[str, Any]:
+async def _read_back(
+    tool: FunctionTool, args: tuple[Any, ...], kwargs: dict[str, Any], approval: list[str]
+) -> InputRequired:
+    """The read-back of a call the person has not approved, asked as written. Transitional: the
+    voice path moves onto the core's approval gate with E-3 (the text path's is the core's)."""
+    if tool.info.read_back is not None:
+        question = tool.info.read_back(*args, **kwargs)
+        if inspect.isawaitable(question):
+            question = await question
+        if isinstance(question, InputRequired):
+            return question  # something is missing before there is anything to approve
+        approval.append("asked")
+        return InputRequired(str(question), verbatim=True)
+    approval.append("asked")
+    sig = inspect.signature(tool)
+    hints = get_type_hints(tool, include_extras=True)
+    bound = sig.bind_partial(*args, **kwargs)
+    shown = ", ".join(
+        f"{k}={v!r}"
+        for k, v in bound.arguments.items()
+        if k not in ("self", "cls")
+        and not is_context_type(hints.get(k, object), allow_subclasses=True)
+    )
+    description = tool.info.description or tool.info.name
+    plain = description.strip().split(". ", 1)[0].splitlines()[0].rstrip(".") or "this"
+    return InputRequired(
+        f"Please confirm: {plain} ({shown}). Yes or no?"
+        if shown
+        else f"Please confirm: {plain}. Yes or no?",
+        verbatim=True,
+    )
+
+
+def _ended(fnc_call: FunctionCall, task: asyncio.Task[Any], approval: list[str]) -> dict[str, Any]:
     if task.cancelled():
         outcome: dict[str, Any] = {"kind": "cancelled"}
     elif (exc := task.exception()) is not None:
         outcome = _outcome(fnc_call, None, exc)
     else:
         outcome = _outcome(fnc_call, task.result(), None)
-    if approval is not None and (approval.granted or approval.asked):
-        outcome["approval"] = "granted" if approval.granted else "asked"
+    if approval:
+        outcome["approval"] = approval[0]
     return outcome
 
 

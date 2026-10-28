@@ -125,10 +125,10 @@ T = TypeVar("T")
 
 async def call(agent: Agent[Any, T], prompt: str) -> T:
     """An agent called as a function: a fresh conversation, a typed output."""
-    output = (await agent.run(prompt)).output
-    if output is None or isinstance(output, InputRequired):
+    result = await agent.run(prompt)
+    if result.status == "input_required":
         raise ToolError("The specialist needs more information; ask the customer before retrying.")
-    return output
+    return result.output
 
 
 classifier = Agent(

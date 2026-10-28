@@ -39,7 +39,7 @@ from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
-    from .agent_run import AgentRun
+    from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .run_result import RunUsage
     from .tool_executor import UpdatePromptArgs
@@ -89,7 +89,7 @@ class RunContext(Generic[Context_T]):
         function_call: FunctionCall | None,
         session: VoiceSession[Any] | None = None,
         speech_handle: SpeechHandle | None = None,
-        run: AgentRun[Any] | None = None,
+        run: _TextRun[Any] | None = None,
     ) -> None:
         self._session = session
         self._speech_handle = speech_handle
@@ -276,9 +276,7 @@ class RunContext(Generic[Context_T]):
 
         if self._first_update is None:
             # agent.run(): the door that runs the turn forwards the text as progress
-            from .agent_run import current_run_hooks
-
-            hooks = current_run_hooks()
+            hooks = self._run.hooks if self._run is not None else None
             if hooks is not None and hooks.on_update is not None:
                 out = hooks.on_update(raw)
                 if inspect.isawaitable(out):

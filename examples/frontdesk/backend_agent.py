@@ -6,7 +6,15 @@ from dataclasses import dataclass
 from calendar_api import TIMEZONE, Calendar, Slot, SlotUnavailable, calendar
 from pydantic import BaseModel
 
-from livekit.agents import Agent, AgentHandler, InputRequired, RunContext, ToolError, persisted
+from livekit.agents import (
+    Agent,
+    AgentHandler,
+    InputRequired,
+    RunContext,
+    RunResult,
+    ToolError,
+    persisted,
+)
 from livekit.agents.a2a import A2ASessionContext
 
 
@@ -134,9 +142,9 @@ back_office = AgentHandler(lane="backend")
     public=False,
     inbox="queue",
 )
-async def text(ctx: A2ASessionContext) -> str | InputRequired:
+async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = AppContext(services=cal)
     await ctx.store.load_context(app)
     result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
     await ctx.store.save_context(app)
-    return result.output
+    return result

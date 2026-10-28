@@ -47,17 +47,26 @@ from ..llm.tool_context import (
     ToolFlag,
     function_tool,
 )
-from ..types import NOT_GIVEN, APIConnectOptions, FlushSentinel, NotGivenOr, TimedString
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    FlushSentinel,
+    NotGivenOr,
+    TimedString,
+)
 from ..utils import is_given, misc
 from .events import Context_T, UserTurnExceededEvent
 from .turn import TurnHandlingOptions
 
 if TYPE_CHECKING:
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
-    from .agent_run import AgentRun
+    from .agent_host import AgentHost
+    from .agent_run import _TextRun
     from .agent_session import ExpressiveOptions, VoiceSession
     from .events import RunContext
     from .run_result import RunResult, RunUsage
+    from .run_stream import RunStream
     from .turn import TurnDetectionMode
 
 
@@ -155,7 +164,10 @@ class Agent(Generic[Context_T, Output_T]):
         name: str | None = None,
         id: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        output_type: type[Output_T] | None = None,
+        output_type: type[Output_T]
+        | Callable[..., Awaitable[Output_T]]
+        | Callable[..., Output_T]
+        | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -188,7 +200,10 @@ class Agent(Generic[Context_T, Output_T]):
         self._output_validators: list[_OutputValidatorFn] = []
         self._frozen = False
 
-        self._output_type: type[Any] = output_type if output_type is not None else str
+        # a type, or an output function whose return value is the output
+        self._output_spec: Any = output_type if output_type is not None else str
+        self._output_type: type[Any] = _output_type_of(self._output_spec)
+        self._host_instance: AgentHost | None = None
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -285,58 +300,68 @@ class Agent(Generic[Context_T, Output_T]):
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
         usage: RunUsage | None = None,
-        max_steps: int | None = None,
     ) -> RunResult[Output_T]:
-        """One turn on the given history: the model and tool loop until the answer.
-
-        The run executes this agent using the supplied history and application context.
-        Requests for human input are returned in ``result.output``. ``stream()`` exposes
-        the same invocation with reply text delivered incrementally.
+        """One invocation on the given history: the model and tool loop until the accepted
+        output or a request for human input (agents.md "Running a turn").
 
         Args:
             message: The user's message.
             message_history: The conversation so far; omit for a fresh one.
             context: Application data and dependencies, read as ``ctx.context``.
-            usage: A ``RunUsage`` to add this run's usage to, for a delegated run.
-            max_steps: The most model requests one turn may make.
+            usage: A ``RunUsage`` this run's usage is added to, for a delegated run.
         """
-        run = self.stream(
-            message,
-            message_history=message_history,
-            context=context,
-            usage=usage,
-            max_steps=max_steps,
-        )
-        return await run._run()
+        from .agent_run import door_hooks
 
-    def stream(
+        hooks = door_hooks()
+        async with self.run_stream(
+            message, message_history=message_history, context=context, usage=usage
+        ) as stream:
+            if hooks is not None and hooks.on_token is not None:
+                # inside a managed turn the reply reaches the client as it is written
+                async for delta in stream.stream_text(delta=True):
+                    await hooks.on_token(delta)
+            return await stream.result()
+
+    def run_stream(
         self,
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
         usage: RunUsage | None = None,
-        max_steps: int | None = None,
-    ) -> AgentRun[Context_T, Output_T]:
-        """The turn of ``run()`` as an async iterator of the reply's text, one piece as the
-        model writes it; ``run.result`` is the ``RunResult`` once the loop ends::
+    ) -> RunStream[RunResult[Output_T]]:
+        """``run()`` as an async context manager streaming its text and events; execution
+        starts on entry (agents.md "Streaming runs")::
 
-            run = agent.stream("book me in", message_history=history)
-            async for delta in run:
-                print(delta, end="")
-            answer = run.result.output
+            async with agent.run_stream(message, message_history=history) as stream:
+                async for delta in stream.stream_text(delta=True):
+                    print(delta, end="")
+                result = await stream.result()
         """
-        from .agent_run import AgentRun
+        from .agent_run import interrupted_result, run_error, settled_result, start_run
+        from .run_stream import RunStream, _Started
 
-        return AgentRun[Context_T, Output_T](
-            self,
-            message,
-            message_history=message_history,
-            context=context,
-            usage=usage,
-            max_steps=max_steps,
-            output_type=self._output_type,
-        )
+        async def start() -> _Started[RunResult[Output_T]]:
+            run, updates = await start_run(
+                self,
+                message,
+                message_history=message_history,
+                context=context,
+                usage=usage,
+                conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            )
+
+            def settle(finished: dict[str, Any] | None) -> RunResult[Output_T]:
+                result = (
+                    interrupted_result(run) if finished is None else settled_result(run, finished)
+                )
+                if run.hooks is not None and run.hooks.on_result is not None:
+                    run.hooks.on_result(result)
+                return result
+
+            return _Started(id=run.id, updates=updates, settle=settle, fail=run_error)
+
+        return RunStream(start, agent_name=self.id)
 
     def output_validator(
         self,
@@ -353,6 +378,32 @@ class Agent(Generic[Context_T, Output_T]):
         self._check_not_frozen("an output validator")
         self._output_validators.append(f)
         return f
+
+    @property
+    def _host(self) -> AgentHost:
+        """The host side of this agent's invocations, built once its registrations froze."""
+        if self._host_instance is None:
+            from .agent_host import AgentHost
+
+            self._frozen = True
+            self._host_instance = AgentHost(self)
+        return self._host_instance
+
+    def _definition(self, tools: llm.ToolContext) -> dict[str, Any]:
+        """The core's ``AgentDefinition`` of this agent with ``tools``."""
+        from .agent_run import tool_infos
+
+        static = self._instructions
+        if isinstance(static, Instructions):
+            static = static.render(modality="text")
+        return {
+            "name": self.id,
+            "instructions": static,
+            "dynamic_instructions": bool(self._instruction_fns),
+            "tools": tool_infos(tools),
+            "output": self._host._output.spec(validated=bool(self._output_validators)),
+            "retries": {"tool": 1, "output": 1},
+        }
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
         """The output through every validator; raises ``ModelRetry`` from the first that does."""
@@ -679,7 +730,7 @@ class Agent(Generic[Context_T, Output_T]):
                 async for chunk in stream:
                     yield chunk
 
-    def _bound_binding(self) -> _VoiceBinding | AgentRun[Any] | None:
+    def _bound_binding(self) -> _VoiceBinding | _TextRun[Any] | None:
         """What runs this agent in the current context: a voice session or a run (internal).
 
         Resolved through the contextvar both set around every hook and tool, so one shared
@@ -690,7 +741,7 @@ class Agent(Generic[Context_T, Output_T]):
             return None
         return binding
 
-    def _get_binding_or_raise(self) -> _VoiceBinding | AgentRun[Any]:
+    def _get_binding_or_raise(self) -> _VoiceBinding | _TextRun[Any]:
         binding = self._bound_binding()
         if binding is None:
             raise RuntimeError(
@@ -861,6 +912,15 @@ class Agent(Generic[Context_T, Output_T]):
             RuntimeError: If the agent is not running
         """
         return self._get_session_or_raise()
+
+
+def _output_type_of(output: Any) -> type[Any]:
+    """The type of ``result.output``: the type itself, or an output function's return type."""
+    if isinstance(output, type) or not callable(output):
+        return output  # type: ignore[no-any-return]
+    from typing import get_type_hints
+
+    return get_type_hints(output).get("return", Any)  # type: ignore[no-any-return]
 
 
 class _InstructionsText(str):

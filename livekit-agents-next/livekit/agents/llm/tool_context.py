@@ -4,11 +4,8 @@ import asyncio
 import functools
 import inspect
 import itertools
-import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Iterator, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Flag, auto
@@ -283,6 +280,8 @@ class FunctionToolInfo:
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
     needs_approval: bool = False
+    read_back: ReadBack | None = None
+    """``needs_approval=`` as a function: the read-back the person approves."""
 
 
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
@@ -324,27 +323,6 @@ CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
 """Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
 
 
-@dataclass
-class _ApprovalScope:
-    """Set by the executor around one call of a tool that requires approval: whether it may
-    run, and whether it asked for approval instead."""
-
-    granted: bool
-    asked: bool = False
-
-
-APPROVAL_KEY = "lk.approval"
-
-
-"""``FunctionCall.extra`` key on a call of a tool that requires approval: ``asked`` when it
-returned the read-back, ``granted`` when it ran on the person's answer."""
-
-
-_approval_scope: ContextVar[_ApprovalScope | None] = ContextVar(
-    "agents_approval_scope", default=None
-)
-
-
 ASK_IN_OWN_WORDS = (
     "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
 )
@@ -359,99 +337,10 @@ DELIVERED = "delivered to the person as written: {text}"
 """What the model reads as the output of a verbatim result it did not write."""
 
 
-def delivered(result: ToolResult) -> ToolResult:
-    """A verbatim result as the model reads it once the person got it: that it was said, then
-    what the result carries for the model alone (``_more``, from a delegate)."""
-    text = DELIVERED.format(text=result.output)
-    more = getattr(result, "_more", None)
-    return ToolResult(f"{text}\n{more}" if more else text, reply_required=result.reply_required)
-
-
-APPROVAL_ANSWERED = (
-    "not run yet: the person answered {answer!r} to its read-back. If they agreed, call {name} "
-    "again with exactly the same arguments to run it; if not, do not, and go on from what they "
-    "said."
-)
-
-
-"""What the model reads as the output of a call that asked for approval, once answered: the
-answer alone reads like a call that ran."""
-
-
-def as_model_reads(items: Sequence[Any]) -> list[Any]:
-    """The history as the model reads it: an answered read-back's output says the call has not
-    run, and how to run it. What is stored stays the person's words."""
-    from .chat_context import FunctionCall, FunctionCallOutput
-
-    asked = {
-        i.call_id: i.name
-        for i in items
-        if isinstance(i, FunctionCall) and i.extra.get(APPROVAL_KEY) == "asked"
-    }
-    out: list[Any] = []
-    for item in items:
-        if (
-            isinstance(item, FunctionCallOutput)
-            and item.call_id in asked
-            and not str(item.output).startswith(WAITING_PREFIX)
-        ):
-            text = APPROVAL_ANSWERED.format(answer=str(item.output), name=asked[item.call_id])
-            item = item.model_copy(update={"output": text})
-        out.append(item)
-    return out
-
-
 WAITING_PREFIX = "waiting for the person's answer to: "
 
 
 """How a call's output reads while it waits on the person; the answer replaces it."""
-
-
-def approval_granted(items: Sequence[Any], call: Any) -> bool:
-    """Whether ``call`` repeats the latest read-back of its tool, with the same arguments,
-    after the person answered it, and no earlier repeat used that answer.
-
-    A reading of the history by the calls' ``APPROVAL_KEY`` marks: a call that asked something
-    else, such as a missing detail, is neither a read-back nor a run."""
-    from .chat_context import FunctionCall, FunctionCallOutput
-
-    def key(c: FunctionCall) -> str:
-        try:
-            return json.dumps(json.loads(c.arguments or "{}"), sort_keys=True)
-        except ValueError:
-            return c.arguments or ""
-
-    outputs = {i.call_id: i for i in items if isinstance(i, FunctionCallOutput)}
-    asked: str | None = None  # the arguments of the latest answered, unused read-back
-    for item in items:
-        if not isinstance(item, FunctionCall) or item.name != call.name:
-            continue
-        if item.call_id == call.call_id:
-            break
-        mark = item.extra.get(APPROVAL_KEY)
-        if mark == "granted" and key(item) == asked:
-            asked = None  # this repeat ran on the answer
-        elif mark == "asked":
-            out = outputs.get(item.call_id)
-            answered = out is not None and not str(out.output).startswith(WAITING_PREFIX)
-            asked = key(item) if answered else None
-    return asked is not None and key(call) == asked
-
-
-@contextmanager
-def approval_scope(call: Any, granted: bool) -> Iterator[None]:
-    """Around one call of a tool that requires approval: whether it is the approved repeat of
-    a read-back the person answered. Marks the call, for the next one to read."""
-    scope = _ApprovalScope(granted=granted)
-    token = _approval_scope.set(scope)
-    try:
-        yield
-    finally:
-        _approval_scope.reset(token)
-        if scope.granted:
-            call.extra[APPROVAL_KEY] = "granted"
-        elif scope.asked:
-            call.extra[APPROVAL_KEY] = "asked"
 
 
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
@@ -569,11 +458,10 @@ def function_tool(
     | RawFunctionTool[_P, _R]
     | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
-    """``needs_approval`` is plan 7.4's approval, held by the framework: a call returns
-    ``InputRequired`` with a read-back instead of running, verbatim. The person's answer is
-    written as that call's output, and the body runs only for a repeat of the same call, same
-    arguments, made after that answer. ``True`` builds the read-back from the description and
-    the arguments; a ``ReadBack`` function writes it. Typed tools only."""
+    """``needs_approval``: the framework asks the person to confirm each call with a read-back
+    and runs the body only on a repeat of the same validated call after the answer (tools.md
+    "Approval"). ``True`` reads back the description and the arguments; a ``ReadBack`` function
+    writes it. Typed tools only."""
 
     def deco_raw(
         func: Callable[_P, _R],
@@ -617,10 +505,8 @@ def function_tool(
             on_duplicate=on_duplicate,
             duplicate_scope=duplicate_scope,
             needs_approval=bool(needs_approval),
+            read_back=needs_approval if callable(needs_approval) else None,
         )
-        if needs_approval:
-            read_back = needs_approval if callable(needs_approval) else None
-            wrapped = _wrap_with_approval(wrapped, info.description or info.name, read_back)
         return FunctionTool(wrapped, info)
 
     if f is not None:
@@ -661,56 +547,6 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
     # __annotate__ must come last — assigning __annotations__ nulls it on 3.14.
     wrapper.__annotations__ = new_annotations
     wrapper.__annotate__ = lambda _format=1: dict(new_annotations)  # type: ignore[attr-defined]
-    return wrapper
-
-
-def _wrap_with_approval(
-    func: Callable[..., Any], description: str, read_back: ReadBack | None
-) -> Callable[..., Any]:
-    """A call runs only inside an approval scope that grants it; any other returns the
-    read-back as a verbatim ``InputRequired``. The schema is the tool's own: approval is not
-    the model's to give."""
-    from .utils import is_context_type
-
-    try:
-        resolved = get_type_hints(func, include_extras=True)
-    except Exception:
-        resolved = dict(getattr(func, "__annotations__", {}))
-
-    sig = inspect.signature(func)
-    # the description's first sentence is what the person is asked to confirm
-    plain = description.strip().split(". ", 1)[0].splitlines()[0].rstrip(".") or "this"
-    # the context, and a method's ``self``, are not the person's to confirm
-    hidden = {k for k, t in resolved.items() if is_context_type(t, allow_subclasses=True)}
-    hidden |= {k for k in sig.parameters if k in ("self", "cls")}
-
-    @functools.wraps(func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        scope = _approval_scope.get()
-        if scope is None or not scope.granted:
-            if read_back is not None:
-                question = read_back(*args, **kwargs)
-                if inspect.isawaitable(question):
-                    question = await question
-                if isinstance(question, InputRequired):
-                    return question  # something is missing before there is anything to approve
-            else:
-                bound = sig.bind_partial(*args, **kwargs)
-                arguments = {k: v for k, v in bound.arguments.items() if k not in hidden}
-                shown = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
-                question = (
-                    f"Please confirm: {plain} ({shown}). Yes or no?"
-                    if shown
-                    else f"Please confirm: {plain}. Yes or no?"
-                )
-            if scope is not None:
-                scope.asked = True
-            return InputRequired(str(question), verbatim=True)
-        result = func(*args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
-
     return wrapper
 
 

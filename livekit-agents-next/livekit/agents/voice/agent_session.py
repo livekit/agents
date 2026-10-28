@@ -77,7 +77,7 @@ from .events import (
 )
 from .remote_session import ConsoleCall, SessionPort
 from .room_io import AudioInputOptions, RoomOptions, TextInputCallback, TextInputEvent
-from .run_result import RunOutputOptions, RunResult
+from .run_result import RunOutputOptions, VoiceRunResult
 from .speech_handle import SpeechHandle
 from .tool_executor import ToolRunner
 
@@ -569,9 +569,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_input: str,
         output_type: type[Run_T] | None = None,
         output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
-    ) -> RunResult[Run_T]:
+    ) -> VoiceRunResult[Run_T]:
         """Reply to ``user_input`` and record what the reply did, for assertions."""
-        result = RunResult[Run_T](
+        result = VoiceRunResult[Run_T](
             user_input=user_input,
             output_type=output_type,
             output_options=output_options,

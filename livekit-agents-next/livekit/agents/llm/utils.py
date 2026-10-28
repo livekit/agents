@@ -349,17 +349,25 @@ def _prepare_function_arguments(
     args_dict: dict[str, Any],
     call_ctx: RunContext[Any] | None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    return bind_function_arguments(fnc, validated_arguments(fnc, args_dict), call_ctx)
+
+
+def bind_function_arguments(
+    fnc: FunctionTool | RawFunctionTool,
+    fields: dict[str, Any],
+    call_ctx: RunContext[Any] | None,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """The positional and keyword arguments of a call of ``fnc``: its validated ``fields`` and
+    the ``RunContext`` where the signature takes one."""
     signature = inspect.signature(fnc)
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(fnc, FunctionTool):
-        raw_fields = validated_arguments(fnc, args_dict)
+        raw_fields = fields
     elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
-        raw_fields = {
-            "raw_arguments": args_dict,
-        }
+        raw_fields = {"raw_arguments": fields}
     else:
         raise ValueError(f"Unsupported function tool type: {type(fnc)}")
 
@@ -474,6 +482,7 @@ def tool_outcome(output: Any, exception: BaseException | None = None) -> dict[st
         Completed,
         Failed,
         InputRequired,
+        ModelRetry,
         Rejected,
         StopResponse,
         ToolResult,
@@ -484,6 +493,8 @@ def tool_outcome(output: Any, exception: BaseException | None = None) -> dict[st
         exception, output = output, None
     if isinstance(exception, ToolError):
         return {"kind": "tool_error", "text": exception.message}
+    if isinstance(exception, ModelRetry):
+        return {"kind": "model_retry", "text": exception.message}
     if isinstance(exception, StopResponse):
         return {"kind": "stop_response"}
     if exception is not None:

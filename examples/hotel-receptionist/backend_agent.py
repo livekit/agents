@@ -22,6 +22,7 @@ from livekit.agents import (
     Failed,
     InputRequired,
     RunContext,
+    RunResult,
     ToolError,
     persisted,
 )
@@ -405,9 +406,9 @@ back_office = AgentHandler(lane="backend")
     public=False,
     inbox="queue",
 )
-async def text(ctx: A2ASessionContext) -> str | InputRequired:
+async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = HotelContext(hotel=hotel)
     await ctx.store.load_context(app)
     result = await backend.run(ctx.message, message_history=ctx.message_history, context=app)
     await ctx.store.save_context(app)
-    return result.output
+    return result

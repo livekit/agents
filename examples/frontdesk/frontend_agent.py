@@ -50,5 +50,6 @@ async def phone(ctx: JobContext) -> None:
 
 @front_desk.a2a_session(endpoint="frontend", description="Pearl Dental front desk.")
 async def text(ctx: A2ASessionContext) -> AsyncIterator[str]:
-    async for delta in chat.stream(ctx.message, message_history=ctx.message_history):
-        yield delta
+    async with chat.run_stream(ctx.message, message_history=ctx.message_history) as stream:
+        async for delta in stream.stream_text(delta=True):
+            yield delta

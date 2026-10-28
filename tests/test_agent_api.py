@@ -223,7 +223,7 @@ async def test_agent_run_returns_a_typed_result() -> None:
                 ],
             ),
             FakeLLMResponse(
-                input="Validation failed, fix the output and try again: the temperature must be at least 20",
+                input="invalid final_result: the temperature must be at least 20",
                 content="",
                 ttft=0,
                 duration=0,
@@ -267,8 +267,8 @@ async def test_agent_run_returns_a_typed_result() -> None:
     result = await weather.run(
         "weather in tokyo?",
         context=AppContext(settings=Deps(greeting="hello"), patient=state),
-        max_steps=5,
     )
+    assert result.status == "completed"
     assert result.output == Answer(city="Tokyo", temperature=21)
     assert state.looked_up == 1
     assert retries == ["too cold"]
@@ -298,7 +298,7 @@ async def test_agent_run_returns_a_typed_result() -> None:
         message_history=result.all_messages(),
         context=AppContext(settings=Deps(greeting="hi"), patient=state),
     )
-    assert second.output == Answer(city="Osaka", temperature=23)
+    assert second.status == "completed" and second.output == Answer(city="Osaka", temperature=23)
     assert len(second.all_messages()) > len(second.new_messages())
 
 
@@ -327,13 +327,13 @@ async def test_agent_run_stops_at_input_required() -> None:
         return InputRequired("Could you send a photo?")
 
     result = await fnol.run("my car is damaged")
-    assert isinstance(result.output, InputRequired)
-    assert result.output.question == "Could you send a photo?"
+    assert result.status == "input_required"
+    assert result.question == "Could you send a photo?"
     assert result.new_messages()[-1].type == "message"
     assert result.new_messages()[-1].text_content == "Could you send a photo?"
 
     second = await fnol.run("here it is", message_history=result.all_messages())
-    assert second.output == "thanks"
+    assert second.status == "completed" and second.output == "thanks"
 
 
 async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
@@ -409,7 +409,7 @@ def test_agent_session_alias_is_deprecated() -> None:
     assert any(issubclass(w.category, DeprecationWarning) for w in caught)
 
 
-async def test_stream_yields_the_reply_as_it_is_written() -> None:
+async def test_run_stream_yields_the_reply_as_it_is_written() -> None:
     llm = FakeLLM(
         fake_responses=[
             FakeLLMResponse(input="hello", content="hi there, friend", ttft=0, duration=0)
@@ -417,9 +417,10 @@ async def test_stream_yields_the_reply_as_it_is_written() -> None:
     )
     agent = Agent(instructions="say hi", llm=llm)
 
-    run = agent.stream("hello")
-    deltas = [delta async for delta in run]
+    async with agent.run_stream("hello") as stream:
+        deltas = [delta async for delta in stream.stream_text(delta=True)]
+        result = await stream.result()
 
     assert len(deltas) > 1, "the reply arrives in pieces"
     assert "".join(deltas) == "hi there, friend"
-    assert run.result.output == "hi there, friend"
+    assert result.status == "completed" and result.output == "hi there, friend"

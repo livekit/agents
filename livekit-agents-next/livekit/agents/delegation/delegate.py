@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 
 from ..llm.chat_context import ChatContext, ChatItem, ChatMessage
-from ..voice.run_result import RunResult, RunUsage
+from ..voice.run_result import RunUsage, VoiceRunResult
 
 Progress = Callable[[str], Awaitable[None] | None]
 """``progress=``: takes the expert's status messages; ``ctx.update`` on a call, a print in a
@@ -25,7 +25,7 @@ class DelegationFailed(Exception):
     """The expert ended the task ``failed``; the message is what it said."""
 
 
-class DelegationResult(RunResult[object]):
+class DelegationResult(VoiceRunResult[object]):
     """What a delegate's ``run`` returns: a finished ``RunResult`` with the task behind it.
 
     ``state`` is the A2A terminal state; ``task_id`` and ``context_id`` name the expert's task; ``endpoint``, ``transport``
