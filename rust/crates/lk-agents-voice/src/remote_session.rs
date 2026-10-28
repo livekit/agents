@@ -11,12 +11,14 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::AgentState;
+pub use lk_agents_abi::worker::remote_session::{
+    AgentInfo, IoUpdate, RtcStats, RunOutcome, SessionPort, SessionState, SimulationVerdict,
+    VerdictOutcome,
+};
 use lk_agents_abi::worker::remote_session::{
     FunctionCallRef, ToolExecutionUpdatedWire, ToolUpdateWire, WireEvent,
 };
 use prost::Message as _;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -336,67 +338,6 @@ pub fn decode_debug_message(raw: &[u8]) -> Result<Option<proto::Struct>, prost::
     proto::DebugMessage::decode(raw).map(|m| m.payload)
 }
 
-/// What `SessionHost` asks of the session it hosts: the port the reference's reach-ins into
-/// `AgentSession` become (`voice/remote_session.py`'s `_SessionPort`). An `Err` is a host failure
-/// (answered `"internal error"`); a `(value, error)` row's error becomes the response's `error`
-/// verbatim. The rows are the host's tuples, so each crosses as it is.
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait]
-pub trait SessionPort: Send + Sync {
-    /// `session.history.items`.
-    async fn chat_history(&self) -> Result<Vec<ChatItem>, HostError>;
-
-    /// `session.current_agent`, flattened; instructions rendered with `modality="audio"`.
-    async fn agent_info(&self) -> Result<AgentInfo, HostError>;
-
-    /// `interrupt(force=True)`, then `await session.run(user_input=text)` and its items. An empty
-    /// list is a silent turn, not a failure.
-    async fn run_input(&self, text: &str) -> Result<RunOutcome, HostError>;
-
-    async fn session_state(&self) -> Result<SessionState, HostError>;
-
-    /// `session._room_io.room.get_rtc_stats()`; `None` without room IO.
-    async fn rtc_stats(
-        &self,
-    ) -> Result<Option<(Vec<serde_json::Value>, Vec<serde_json::Value>)>, HostError>;
-
-    /// `session.usage.model_usage`.
-    async fn session_usage(&self) -> Result<Vec<ModelUsage>, HostError>;
-
-    /// `("python", __version__)` on the reference. Read once.
-    fn framework_info(&self) -> (String, String);
-
-    /// Only the `Some` channels are applied.
-    async fn update_io(&self, update: IoUpdate) -> Result<(), HostError>;
-
-    /// Hand the agent the simulator's provisional verdict; return the agent's own
-    /// (`on_simulation_end`). `(None, None)`: no simulation or no verdict.
-    async fn finalize_simulation(
-        &self,
-        provisional: SimulationVerdict,
-    ) -> Result<VerdictOutcome, HostError>;
-}
-
-/// `(id, instructions, tool names, chat_ctx items)`. `None` instructions differ from `""`; tools are
-/// flattened across `Toolset`s, names only.
-pub type AgentInfo = (String, Option<String>, Vec<String>, Vec<ChatItem>);
-
-/// `(items, None)` or `(None, error)`.
-pub type RunOutcome = (Option<Vec<ChatItem>>, Option<String>);
-
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-/// `(agent_state, user_state, agent_id, options, started_at)` as the host holds them: an unknown
-/// state word answers `AS_IDLE` / `US_LISTENING`; `options` keys are [`STATE_OPTION_FIELDS`];
-/// `started_at` is epoch seconds, `None` or `0` stamped with the answer time.
-pub type SessionState = (String, String, String, HashMap<String, String>, Option<f64>);
-
-/// `(publisher stats, subscriber stats)`, each `MessageToDict` of one stat.
-pub type RtcStats = (Vec<serde_json::Value>, Vec<serde_json::Value>);
-
-/// `(input audio, input video, output audio, output video, output transcription)`; `None` leaves
-/// the channel alone.
-pub type IoUpdate = (Option<bool>, Option<bool>, Option<bool>, Option<bool>, Option<bool>);
-
 /// Absent inner field == absent submessage, as the reference checks `HasField("input")` first.
 pub fn io_update(io: &proto::session_request::UpdateIo) -> IoUpdate {
     let (i, o) = (io.input.as_ref(), io.output.as_ref());
@@ -408,12 +349,6 @@ pub fn io_update(io: &proto::session_request::UpdateIo) -> IoUpdate {
         o.and_then(|o| o.transcription_enabled),
     )
 }
-
-/// `(success, reason)`.
-pub type SimulationVerdict = (bool, String);
-
-/// `(verdict, None)` or `(None, error)`.
-pub type VerdictOutcome = (Option<SimulationVerdict>, Option<String>);
 
 /// `request.WhichOneof("request")`, used in logs and client errors.
 pub fn request_name(request: &proto::session_request::Request) -> &'static str {
@@ -615,7 +550,6 @@ pub struct NonFiniteStamp;
 
 /// `SessionTransport` (`remote_session.py:78`), as `voice/remote_session.py`'s `_CoreTransport`
 /// sees it. A host failure keeps the original exception.
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
 #[async_trait]
 pub trait SessionTransport: Send + Sync {
     /// `start()`; idempotent.
@@ -638,7 +572,6 @@ pub trait SessionTransport: Send + Sync {
 
 /// The console's local legs (`TcpAudioInput.push_frame`, `TcpAudioOutput.notify_playout_finished`),
 /// on `SessionHost`.
-#[lk_agents_abi::host(proxy)]
 pub trait ConsoleSink: Send + Sync {
     fn push_input_frame(&self, frame: &proto::agent_session_message::console_io::AudioFrame);
 
@@ -646,7 +579,6 @@ pub trait ConsoleSink: Send + Sync {
 }
 
 /// Where a client's arriving events go: `RemoteSession.emit(name, event)`.
-#[lk_agents_abi::host(proxy)]
 pub trait ClientSink: Send + Sync {
     fn event(&self, name: &str, event: &proto::AgentSessionEvent);
 }

@@ -1,8 +1,8 @@
 //! `lk agent console`'s local call (`cli/tcp_console.py`): the CLI owns the microphone, the speakers
 //! and the TUI, and reaches the agent over one TCP socket carrying length-prefixed
 //! `AgentSessionMessage`s. [`ConsoleIo`] is that socket as the session sees it: the
-//! [`SessionTransport`] and [`ConsoleSink`] a [`RemoteSessionHost`](super::driver::HostRuntime)
-//! runs on, and the session's audio input and output legs.
+//! [`SessionTransport`] and [`ConsoleSink`] the session's remote session host
+//! ([`HostRuntime`](super::driver::HostRuntime)) runs on, and the session's audio input and output legs.
 
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
@@ -74,8 +74,8 @@ impl Playback {
     }
 }
 
-/// The `lk agent console` socket: pass it as the session's audio input and output and as a
-/// `RemoteSessionHost`'s transport and console.
+/// The `lk agent console` socket: the session takes it as its audio input and output and as its
+/// remote session's transport and console.
 #[lk_agents_abi::host(object(
     name = "ConsoleIo",
     cell = "arc",

@@ -59,7 +59,7 @@ class SessionPort:
             await result
         except Exception as e:
             return None, str(e)
-        return to_core_items([ev.item for ev in result.events]), None
+        return to_core_items(result.new_messages()), None
 
     async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
         options = self._session.options

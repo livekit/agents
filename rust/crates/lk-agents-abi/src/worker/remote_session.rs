@@ -1,16 +1,17 @@
-//! One extract target per `AgentSessionEvent` arm forwarded to `encode_wire`. The proto mapping lives
-//! in `lk-agents-voice/src/remote_session.rs`.
+//! One extract target per `AgentSessionEvent` arm forwarded to `encode_wire`, and the session port a
+//! remote client's requests are answered through. The proto mapping lives in
+//! `lk-agents-voice/src/remote_session.rs`.
 
 // The generated module globs this one to resolve field types.
 pub use crate::ChatItem;
 pub use crate::voice::amd::AmdCategory;
 pub use crate::voice::events::{AgentState, UserState};
 // The arms `events.rs` already declares, read back under `kind` (`#[binding(read_tag)]`).
+pub use crate::metrics::usage::AgentSessionUsage;
 pub use crate::voice::events::{
     AgentFalseInterruption, AgentStateChanged, EotPrediction, ItemAddedWire, ToolCallEnded,
     ToolCallUpdated, ToolReplyUpdated, UserInputTranscribed, UserStateChanged,
 };
-pub use crate::metrics::usage::AgentSessionUsage;
 use lk_agents_host_derive::Host;
 
 /// `id` and `created_at` are left unset, as in the reference (`remote_session.py:533`).
@@ -93,7 +94,12 @@ mod tool_wires {
         let Some(v) = v.filter(|v| !v.is_none()) else { return Ok(Vec::new()) };
         Ok(v.extract::<Vec<(String, String, String, bool)>>()?
             .into_iter()
-            .map(|(call_id, name, output, is_error)| FunctionCallOutputRef { call_id, name, output, is_error })
+            .map(|(call_id, name, output, is_error)| FunctionCallOutputRef {
+                call_id,
+                name,
+                output,
+                is_error,
+            })
             .collect())
     }
 
@@ -196,3 +202,79 @@ pub enum WireEvent {
     ToolExecutionUpdated(ToolExecutionUpdatedWire),
     AgentFalseInterruption(AgentFalseInterruption),
 }
+
+/// What `SessionHost` asks of the session it hosts: the port the reference's reach-ins into
+/// `AgentSession` become (`voice/remote_session.py`'s `SessionPort`). An `Err` is a host failure
+/// (answered `"internal error"`); a `(value, error)` row's error becomes the response's `error`
+/// verbatim. The rows are the host's tuples, so each crosses as it is.
+#[crate::host(proxy(host = "livekit.agents.voice.remote_session.SessionPort"))]
+#[async_trait::async_trait]
+pub trait SessionPort: Send + Sync {
+    /// `session.history.items`.
+    #[host(await, name = "_core_chat_history")]
+    async fn chat_history(&self) -> Result<Vec<ChatItem>, crate::errors::HostError>;
+
+    /// `session.current_agent`, flattened; instructions rendered with `modality="audio"`.
+    #[host(await, name = "_core_agent_info")]
+    async fn agent_info(&self) -> Result<AgentInfo, crate::errors::HostError>;
+
+    /// `interrupt(force=True)`, then `await session.run(user_input=text)` and its items. An empty
+    /// list is a silent turn, not a failure.
+    #[host(await, name = "_core_run_input")]
+    async fn run_input(&self, text: &str) -> Result<RunOutcome, crate::errors::HostError>;
+
+    #[host(await, name = "_core_session_state")]
+    async fn session_state(&self) -> Result<SessionState, crate::errors::HostError>;
+
+    /// `session._room_io.room.get_rtc_stats()`; `None` without room IO.
+    #[host(await, name = "_core_rtc_stats")]
+    async fn rtc_stats(&self) -> Result<Option<RtcStats>, crate::errors::HostError>;
+
+    /// `session.usage.model_usage`.
+    #[host(await, name = "_core_session_usage")]
+    async fn session_usage(
+        &self,
+    ) -> Result<Vec<crate::metrics::usage::ModelUsage>, crate::errors::HostError>;
+
+    /// `("python", __version__)` on the reference. Read once.
+    #[host(read_once, name = "_core_framework_info")]
+    fn framework_info(&self) -> (String, String);
+
+    /// Only the `Some` channels are applied.
+    #[host(await, name = "_core_update_io")]
+    async fn update_io(&self, update: IoUpdate) -> Result<(), crate::errors::HostError>;
+
+    /// Hand the agent the simulator's provisional verdict; return the agent's own
+    /// (`on_simulation_end`). `(None, None)`: no simulation or no verdict.
+    #[host(await, name = "_core_finalize_simulation")]
+    async fn finalize_simulation(
+        &self,
+        provisional: SimulationVerdict,
+    ) -> Result<VerdictOutcome, crate::errors::HostError>;
+}
+
+/// `(id, instructions, tool names, chat_ctx items)`. `None` instructions differ from `""`; tools are
+/// flattened across `Toolset`s, names only.
+pub type AgentInfo = (String, Option<String>, Vec<String>, Vec<ChatItem>);
+
+/// `(items, None)` or `(None, error)`.
+pub type RunOutcome = (Option<Vec<ChatItem>>, Option<String>);
+
+/// `(agent_state, user_state, agent_id, options, started_at)` as the host holds them: an unknown
+/// state word answers `AS_IDLE` / `US_LISTENING`; `options` keys are `STATE_OPTION_FIELDS`;
+/// `started_at` is epoch seconds, `None` or `0` stamped with the answer time.
+pub type SessionState =
+    (String, String, String, std::collections::BTreeMap<String, String>, Option<f64>);
+
+/// `(publisher stats, subscriber stats)`, each `MessageToDict` of one stat.
+pub type RtcStats = (Vec<serde_json::Value>, Vec<serde_json::Value>);
+
+/// `(input audio, input video, output audio, output video, output transcription)`; `None` leaves
+/// the channel alone.
+pub type IoUpdate = (Option<bool>, Option<bool>, Option<bool>, Option<bool>, Option<bool>);
+
+/// `(success, reason)`.
+pub type SimulationVerdict = (bool, String);
+
+/// `(verdict, None)` or `(None, error)`.
+pub type VerdictOutcome = (Option<SimulationVerdict>, Option<String>);

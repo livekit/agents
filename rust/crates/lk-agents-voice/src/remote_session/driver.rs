@@ -52,15 +52,10 @@ struct HostState {
 }
 
 /// `voice/remote_session.py`'s `SessionHost`, running in Rust. Events queue from construction.
-#[lk_agents_abi::host(object(name = "RemoteSessionHost", cell = "arc"))]
 impl HostRuntime {
     #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    #[host(new)]
-    pub fn new(
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
+    pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         HostRuntime {
             shared: Arc::new(HostShared {
@@ -75,20 +70,16 @@ impl HostRuntime {
             }),
         }
     }
-
-    #[host(getter)]
     pub fn started(&self) -> bool {
         self.shared.state.lock().expect("host state").started
     }
 
     /// `register_session`; until set, requests get no response.
-    #[host(method)]
     pub fn set_port(&self, port: Arc<dyn SessionPort>) {
         self.shared.state.lock().expect("host state").host = Some(Arc::new(SessionHost::new(port)));
     }
 
     /// The request types in flight, one per running handler.
-    #[host(method)]
     pub fn in_flight(&self) -> Vec<String> {
         self.shared.handlers.names()
     }
@@ -113,7 +104,6 @@ impl HostRuntime {
     /// Encode one session event from the facts the host reports and queue it, stamped `created_at`
     /// (now when `None`). `false` when the event has no wire form (a tool status outside the closed
     /// set), which the reference drops.
-    #[host(method(name = "send_event"))]
     pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) -> Result<bool, String> {
         let Some(ev) = super::encode_wire(event)? else { return Ok(false) };
         let at = created_at.unwrap_or_else(lk_agents_abi::unix_now);
@@ -122,19 +112,8 @@ impl HostRuntime {
         Ok(true)
     }
 
-    /// Queue an already-encoded `AgentSessionEvent`, stamped `created_at` (now when `None`).
-    #[host(method(name = "send_encoded_event"))]
-    pub fn send_encoded(&self, event: &[u8], created_at: Option<f64>) -> Result<(), String> {
-        use prost::Message as _;
-        let event = proto::AgentSessionEvent::decode(event)
-            .map_err(|e| format!("not an AgentSessionEvent: {e}"))?;
-        self.send_event(event, created_at.unwrap_or_else(lk_agents_abi::unix_now))
-            .map_err(|e| e.to_string())
-    }
-
     /// `start()`: transport, then writer and receive loop. Idempotent; a failed start still counts
     /// as started, as the reference. `console` is where the console messages go.
-    #[host(method)]
     pub async fn start(
         &self,
         transport: Arc<dyn SessionTransport>,
@@ -172,7 +151,6 @@ impl HostRuntime {
     /// `SessionHost.aclose()`: the receive loop cancelled, in-flight handlers drained, the writer
     /// flushed, then the transport closed, all within one shared `drain` budget. Returns the
     /// request types cancelled at the deadline, sorted and distinct.
-    #[host(method)]
     pub async fn aclose(&self, drain: Duration) -> Vec<String> {
         if !self.started() {
             return Vec::new();
@@ -366,56 +344,35 @@ async fn handle_request(
 }
 
 /// Why a client request did not produce a response, as the exception the host raises.
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RequestError {
     /// The transport refused the request; the transport's own error.
     #[error(transparent)]
-    #[host(delegate)]
     Transport(HostError),
     /// No response inside the timeout (`asyncio.TimeoutError`).
     #[error("")]
-    #[host(kind = "TimeoutError")]
     Timeout,
     /// The response carried a non-empty `error`: `session request {type} failed: {error}`.
     #[error("{0}")]
     Failed(String),
     /// The client closed while the request was pending (`future.cancel()`).
     #[error("")]
-    #[host(kind = "asyncio.CancelledError")]
     Cancelled,
     /// A request before `start()`.
     #[error("remote session is not started")]
     NotStarted,
-    /// Bytes that are no `SessionRequest`, or one that sets no request.
-    #[error("{0}")]
-    #[host(kind = "ValueError")]
-    Malformed(String),
 }
 
 /// Why `wait_for_ready` gave up.
-#[lk_agents_abi::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReadyError {
     #[error("wait_for_ready timed out")]
-    #[host(kind = "TimeoutError")]
     Timeout,
     /// The latched send failure, preferred to a bare timeout.
     #[error(transparent)]
-    #[host(delegate)]
     Transport(HostError),
     #[error("")]
-    #[host(kind = "asyncio.CancelledError")]
     Cancelled,
-}
-
-/// Host seconds as a wait: negative is zero, and infinity (or past `Duration`'s range) is "never".
-fn secs(s: f64) -> Duration {
-    Duration::try_from_secs_f64(s.max(0.0)).unwrap_or(if s.is_nan() {
-        Duration::ZERO
-    } else {
-        Duration::MAX / 4
-    })
 }
 
 /// `RemoteSession` (`remote_session.py:826`), running.
@@ -481,14 +438,9 @@ impl Drop for Unregister<'_> {
 
 /// `voice/remote_session.py`'s `RemoteSession`, running in Rust: ids, correlation, timeouts and the
 /// ready poll.
-#[lk_agents_abi::host(object(name = "RemoteSessionClient", cell = "arc"))]
 impl ClientRuntime {
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    #[host(new)]
-    pub fn new(
-        #[host(ambient)] clock: Arc<dyn Clock>,
-        #[host(ambient)] spawner: Arc<dyn Spawner>,
-    ) -> Self {
+    pub fn new(clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
         ClientRuntime {
             shared: Arc::new(ClientShared {
                 clock,
@@ -500,14 +452,11 @@ impl ClientRuntime {
             }),
         }
     }
-
-    #[host(getter)]
     pub fn started(&self) -> bool {
         self.shared.state.lock().expect("client state").started
     }
 
     /// `start()`: start the transport and the receive loop; arriving events go to `sink`. Idempotent.
-    #[host(method)]
     pub async fn start(
         &self,
         transport: Arc<dyn SessionTransport>,
@@ -532,7 +481,6 @@ impl ClientRuntime {
     }
 
     /// `aclose()`: cancel every pending request, stop reading, close the transport.
-    #[host(method)]
     pub async fn aclose(&self) {
         let transport = {
             let mut st = self.shared.state.lock().expect("client state");
@@ -548,34 +496,6 @@ impl ClientRuntime {
         if let Some(t) = transport {
             t.close().await;
         }
-    }
-
-    /// Send one encoded `SessionRequest` (its `request_id` is minted here and any given one is
-    /// ignored) and return the encoded `SessionResponse`, waiting up to `timeout` seconds.
-    #[host(method(name = "request"))]
-    pub async fn request_encoded(
-        &self,
-        request: Vec<u8>,
-        timeout: f64,
-    ) -> Result<Vec<u8>, RequestError> {
-        use prost::Message as _;
-        let request = proto::SessionRequest::decode(request.as_slice())
-            .map_err(|e| RequestError::Malformed(format!("not a SessionRequest: {e}")))?
-            .request
-            .ok_or_else(|| {
-                RequestError::Malformed("the SessionRequest sets no request".to_owned())
-            })?;
-        Ok(self.request(request, secs(timeout)).await?.encode_to_vec())
-    }
-
-    /// `wait_for_ready` in host seconds.
-    #[host(method(name = "wait_for_ready"))]
-    pub async fn wait_for_ready_secs(
-        &self,
-        timeout: f64,
-        retry_interval: f64,
-    ) -> Result<(), ReadyError> {
-        self.wait_for_ready(secs(timeout), secs(retry_interval)).await
     }
 
     /// `_send_request`: register an id, send, wait up to `timeout`, refuse a non-empty `error`.
@@ -657,9 +577,7 @@ impl ClientRuntime {
                 Err(RequestError::Cancelled) => return Err(ReadyError::Cancelled),
                 Err(RequestError::Transport(e)) => e,
                 Err(RequestError::Failed(m)) => HostError::new(m),
-                Err(e @ (RequestError::NotStarted | RequestError::Malformed(_))) => {
-                    HostError::new(e.to_string())
-                }
+                Err(e @ RequestError::NotStarted) => HostError::new(e.to_string()),
             };
             // The ping could not be sent: latch the error and sleep (nothing else paces the loop).
             now = clock.now();

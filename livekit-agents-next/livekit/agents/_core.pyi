@@ -138,8 +138,6 @@ from ._generated._core_classes import (
     ProcessPoolOptions as ProcessPoolOptions,
     ProcessStartOptions as ProcessStartOptions,
     RecordingOptions as RecordingOptions,
-    RemoteSessionClient as RemoteSessionClient,
-    RemoteSessionHost as RemoteSessionHost,
     RoomAudioInput as RoomAudioInput,
     RoomEventBus as RoomEventBus,
     RoomVideoInput as RoomVideoInput,

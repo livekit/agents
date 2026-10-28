@@ -323,6 +323,7 @@ fn native(ty: &Ty) -> bool {
     match ty {
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
+        Ty::Map(k, t) => native(k) && native(t),
         Ty::Tuple(ts) => ts.iter().all(native),
         _ => false,
     }
@@ -404,7 +405,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Duration => format!(
             "::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
         ),
-        Ty::Optional(inner) if **inner == Ty::Duration => format!(
+        Ty::Optional(inner) if !native(inner) => format!(
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
             from_object(v, inner, path, at)?
         ),

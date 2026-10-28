@@ -96,8 +96,6 @@
     "ProcessStartOptions",
     "RealtimeFallbackModel",
     "RecordingOptions",
-    "RemoteSessionClient",
-    "RemoteSessionHost",
     "Reply",
     "Role",
     "RoomAudioInput",

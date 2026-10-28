@@ -127,7 +127,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-inference/src/eot/options.rs",
     "rust/crates/lk-agents-abi/src/worker/job.rs",
     "rust/crates/lk-agents-voice/src/remote_session.rs",
-    "rust/crates/lk-agents-voice/src/remote_session/driver.rs",
     "rust/crates/lk-agents-voice/src/remote_session/console.rs",
     "rust/crates/lk-agents-abi/src/errors/api.rs",
     "rust/crates/lk-agents-abi/src/tts/markup/mod.rs",
