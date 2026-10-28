@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::class_stub::{Imports, docstring, py_literal};
+use crate::decl::Route;
 use std::collections::BTreeMap;
 
 /// A legacy generated module with the declared records of the same module: their imports merged
@@ -202,7 +203,68 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         text.push_str(if body.starts_with("\n\n@") { &body } else { &body[1..] });
         out.push(Out { path: format!("{module}.py"), text });
     }
+    for r in decls.records.iter().filter(|r| r.dispatch.is_some()) {
+        out.push(dispatch(r, decls)?);
+    }
     Ok(out)
+}
+
+/// `_generated/<dispatch>.py`: a dispatched record's routed members, keyed by model class.
+fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
+    let RecordBody::Variants(variants) = &r.body else {
+        unreachable!("a dispatched record is a transparent enum")
+    };
+    let mut imports = Imports::default();
+    let (mut events, mut mirrors, mut ignored) = (String::new(), String::new(), String::new());
+    for v in variants {
+        let Some(route) = &v.route else { continue };
+        let at = format!("{}: {}::{}", r.source, r.rust, v.rust_name);
+        let VariantShape::Tuple(Some(Field {
+            ty: Ty::Record(Record { host: HostForm::Record { module, name }, .. }),
+            ..
+        })) = &v.shape
+        else {
+            return Err(format!("{at}: a routed member is a declared record"));
+        };
+        imports.add(&format!(".{module}"), name);
+        match route {
+            Route::Ignored => ignored.push_str(&format!("        {name},\n")),
+            Route::Event { mirror } => {
+                let event = decls
+                    .records
+                    .iter()
+                    .find(|x| &x.module == module && &x.name == name)
+                    .and_then(|x| x.constants.iter().find(|(key, _)| key == "type"))
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| {
+                        format!("{at}: an event's model names it with constant(type = \"..\")")
+                    })?;
+                events.push_str(&format!("    {name}: {event:?},\n"));
+                if let Some(attr) = mirror {
+                    mirrors.push_str(&format!("    {name}: {attr:?},\n"));
+                }
+            }
+        }
+    }
+    let map = |entries: &str| match entries {
+        "" => "{}".to_owned(),
+        _ => format!("{{\n{entries}}}"),
+    };
+    let set = match ignored.as_str() {
+        "" => "frozenset()".to_owned(),
+        _ => format!("frozenset(\n    {{\n{ignored}    }}\n)"),
+    };
+    let union = &r.name;
+    Ok(Out {
+        path: format!("{}.py", r.dispatch.as_deref().expect("dispatched")),
+        text: format!(
+            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`\n# declarations in:\n#     {source}\n\n{imports}\n# `{union}` members the host emits as public session events: {{model class: event name}}.\nPUBLIC_EVENTS: dict[type, str] = {events}\n\n# Public events whose `new_state` the host keeps on the session: {{model class: attribute}}.\nMIRRORED_STATES: dict[type, str] = {mirrors}\n\n# `{union}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[type] = {set}\n",
+            source = r.source,
+            imports = imports.render(&[]),
+            events = map(&events),
+            mirrors = map(&mirrors),
+        ),
+    })
 }
 
 /// A record's model, with the models nested in it (`record(.., nested_in = "..")`) inside.

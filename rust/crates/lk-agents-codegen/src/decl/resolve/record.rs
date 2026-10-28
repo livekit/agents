@@ -15,6 +15,12 @@ impl Resolver<'_> {
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
         let enumeration = voc::find(&record.nested, "enum").is_some();
+        let dispatch = voc::text(at, &record.nested, "dispatch")?;
+        if dispatch.is_some() && !transparent {
+            return Err(format!(
+                "{at}: a dispatched record is transparent: its members cross as themselves"
+            ));
+        }
         let constants = match voc::find(&record.nested, "constant") {
             None => Vec::new(),
             Some(c) => c
@@ -83,7 +89,13 @@ impl Resolver<'_> {
                 } else {
                     let mut variants = Vec::new();
                     for v in &en.variants {
-                        variants.push(self.variant(v, &name, (extract, emit), transparent)?);
+                        variants.push(self.variant(
+                            v,
+                            &name,
+                            (extract, emit),
+                            transparent,
+                            dispatch.is_some(),
+                        )?);
                     }
                     RecordBody::Variants(variants)
                 }
@@ -125,6 +137,7 @@ impl Resolver<'_> {
             constants,
             persisted,
             members,
+            dispatch,
             body,
         })
     }
@@ -135,9 +148,11 @@ impl Resolver<'_> {
         owner: &str,
         dirs: (bool, bool),
         transparent: bool,
+        dispatched: bool,
     ) -> Result<Variant, String> {
         let at = format!("{}::{}", self.at, v.ident);
-        let entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
+        let mut entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
+        let route = route(&at, &mut entries, dispatched)?;
         let shape = match &v.fields {
             syn::Fields::Unit => {
                 voc::only(&at, &entries, &["name"])?;
@@ -199,6 +214,7 @@ impl Resolver<'_> {
             rust_name,
             doc: doc(&v.attrs),
             shape,
+            route,
         })
     }
 
@@ -265,6 +281,37 @@ impl Resolver<'_> {
     }
 }
 
+/// A dispatched member's `event` / `event(mirror = "..")` / `ignored`, taken out of `entries`.
+fn route(at: &str, entries: &mut Vec<Entry>, dispatched: bool) -> Result<Option<Route>, String> {
+    let mut routes = Vec::new();
+    entries.retain(|e| {
+        let route = matches!(e.key.as_str(), "event" | "ignored");
+        if route {
+            routes.push(e.clone());
+        }
+        !route
+    });
+    let route = match &routes[..] {
+        [] => return Ok(None),
+        [one] => one,
+        _ => return Err(format!("{at}: a member has one route: event or ignored")),
+    };
+    if !dispatched {
+        return Err(format!("{at}: `{}` routes a member of a dispatched record", route.key));
+    }
+    if route.value.is_some() {
+        return Err(format!("{at}: `{}` takes no value", route.key));
+    }
+    Ok(Some(match route.key.as_str() {
+        "event" => {
+            voc::only(at, &route.nested, &["mirror"])?;
+            Route::Event { mirror: voc::text(at, &route.nested, "mirror")? }
+        }
+        _ if route.nested.is_empty() => Route::Ignored,
+        _ => return Err(format!("{at}: `ignored` is a bare flag")),
+    }))
+}
+
 /// `record(module = "..", name = "..", extract, emit)`: its module, host name and directions.
 pub(super) fn record_target(
     at: &str,
@@ -284,6 +331,7 @@ pub(super) fn record_target(
             "enum",
             "constant",
             "nested_in",
+            "dispatch",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?

@@ -64,6 +64,9 @@ pub struct RecordDecl {
     pub persisted: bool,
     /// Computed views declared with the generated models' property vocabulary.
     pub members: Vec<crate::ir::Member>,
+    /// `record(.., transparent, dispatch = "session_dispatch")`: the host routes its members by
+    /// class through `_generated/<dispatch>.py` (each variant's [`Route`]).
+    pub dispatch: Option<String>,
     pub body: RecordBody,
 }
 
@@ -84,6 +87,17 @@ pub struct Variant {
     pub name: String,
     pub doc: Vec<String>,
     pub shape: VariantShape,
+    /// A dispatched record's member: how the host routes its value.
+    pub route: Option<Route>,
+}
+
+/// `#[host(event)]`: emitted as the public event its model's `type` names (`mirror`: the host also
+/// keeps the event's `new_state` on that attribute); `#[host(ignored)]`: received, not acted on.
+/// Other members have host behaviour.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Route {
+    Event { mirror: Option<String> },
+    Ignored,
 }
 
 #[derive(Debug, Clone)]

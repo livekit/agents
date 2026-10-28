@@ -41,6 +41,8 @@
 //! | record struct | `record(.., constant(type = "x"))` | a model field at that fixed value (a discriminator its readers compare), never Rust state: read past, emitted by its default |
 //! | record enum | `record(.., transparent)` | every variant is one value crossing as itself (`str \| Message`, `Policy \| dict[str, Policy] \| None`), told apart by its class (a model class, a literal record's `str`, else its Python type; a `float` takes an `int`); one unit variant may cross as `None` (a field of the record then takes `default = None`): the model is a union alias, no class per variant |
 //! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
+//! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `MIRRORED_STATES`, `IGNORED_EVENTS`) |
+//! | dispatched variant | `event`, `event(mirror = "_attr")`, `ignored` | emitted as the public event its model's `type` constant names (`mirror`: its `new_state` also kept on the session's `_attr`), or received and dropped; an unrouted member has host behaviour |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains `to_json()`/`from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |
 //! | record field, tuple variant | `skip` | does not cross (emit-only records) |
