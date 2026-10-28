@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{Sink, Stream, StreamExt};
+use lk_agents_core::mcp::TransportSettlement;
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::service::RoleClient;
 use rmcp::transport::async_rw::AsyncRwTransport;
@@ -14,45 +15,34 @@ use rmcp::transport::{StreamableHttpClientTransport, Transport};
 use tokio::sync::Notify;
 
 use super::http_client::CleanupClient;
-use super::{McpCleanup, McpCleanupStatus, McpError, McpTransport, conn};
+use super::{McpError, McpTransport, conn};
 use lk_agents_abi::llm::mcp::McpInvocation;
 
+/// The transport's settlement (`lk_agents_core::mcp::TransportSettlement`) and its waiters.
 #[derive(Default)]
 pub(super) struct TransportReceipt {
-    state: Mutex<ReceiptState>,
+    state: Mutex<TransportSettlement>,
     changed: Notify,
 }
-#[derive(Default)]
-struct ReceiptState {
-    closed: bool,
-    readers: usize,
-    child_pending: bool,
-    exit: Option<std::process::ExitStatus>,
-    failure: Option<Arc<McpError>>,
-    cleanup_failed: bool,
-    deadline_missed: bool,
-    // The SDK can stop trying a failed DELETE; the runtime retains the remote resource identity.
-    http_session: Option<HttpSession>,
-}
-type HttpSession = (
-    reqwest::Client,
-    Arc<str>,
-    Arc<str>,
-    Option<String>,
-    std::collections::HashMap<reqwest::header::HeaderName, reqwest::header::HeaderValue>,
-);
 
 struct Reader(Arc<TransportReceipt>);
 impl Drop for Reader {
     fn drop(&mut self) {
-        self.0.state.lock().unwrap().readers -= 1;
-        self.0.changed.notify_waiters();
+        self.0.update(TransportSettlement::reader_closed);
     }
 }
 
 impl TransportReceipt {
+    pub fn update<T>(&self, change: impl FnOnce(&mut TransportSettlement) -> T) -> T {
+        let out = change(&mut self.state.lock().unwrap());
+        self.changed.notify_waiters();
+        out
+    }
+    pub fn read<T>(&self, read: impl FnOnce(&TransportSettlement) -> T) -> T {
+        read(&self.state.lock().unwrap())
+    }
     fn reader(self: &Arc<Self>) -> Reader {
-        self.state.lock().unwrap().readers += 1;
+        self.update(TransportSettlement::reader_opened);
         Reader(self.clone())
     }
     pub fn track_reader(
@@ -70,75 +60,13 @@ impl TransportReceipt {
             })
             .boxed()
     }
-    pub fn deleting_http_session(
-        &self,
-        client: reqwest::Client,
-        uri: Arc<str>,
-        session: Arc<str>,
-        auth: Option<String>,
-        headers: std::collections::HashMap<
-            reqwest::header::HeaderName,
-            reqwest::header::HeaderValue,
-        >,
-    ) {
-        self.state.lock().unwrap().http_session = Some((client, uri, session, auth, headers));
-    }
-    pub fn deleted_http_session(&self) {
-        self.state.lock().unwrap().http_session = None;
-    }
-    pub fn transport_failure(&self, error: McpError) {
-        self.fail(error);
-    }
-
-    pub fn failed(&self) -> bool {
-        let state = self.state.lock().unwrap();
-        state.cleanup_failed
-            || state.child_pending
-            || state.deadline_missed
-            || state.http_session.is_some()
-    }
-    pub fn missed_deadline(&self) {
-        self.state.lock().unwrap().deadline_missed = true;
-    }
-    pub fn failure(&self) -> Option<Arc<McpError>> {
-        self.state.lock().unwrap().failure.clone()
-    }
     fn fail(&self, error: McpError) {
-        self.state.lock().unwrap().failure.get_or_insert_with(|| Arc::new(error));
-    }
-    pub fn cleanup(&self) -> McpCleanup {
-        let state = self.state.lock().unwrap();
-        McpCleanup {
-            status: if state.deadline_missed || state.cleanup_failed || state.http_session.is_some()
-            {
-                McpCleanupStatus::Incomplete
-            } else if state.closed && !state.child_pending && state.readers == 0 {
-                McpCleanupStatus::Clean
-            } else {
-                McpCleanupStatus::Pending
-            },
-            service_settled: state.closed,
-            calls_settled: true,
-            reader_settled: state.closed && state.readers == 0,
-            child_reaped: state.exit.is_some(),
-            child_exit_code: state.exit.and_then(|s| s.code()),
-            #[cfg(unix)]
-            child_exit_signal: state.exit.and_then(|s| {
-                use std::os::unix::process::ExitStatusExt;
-                s.signal()
-            }),
-            #[cfg(not(unix))]
-            child_exit_signal: None,
-        }
+        self.update(|state| state.fail(error));
     }
     pub async fn closed(&self) {
         loop {
             let changed = self.changed.notified();
-            let ready = {
-                let state = self.state.lock().unwrap();
-                state.closed && state.readers == 0
-            };
-            if ready {
+            if self.read(TransportSettlement::drained) {
                 return;
             }
             changed.await;
@@ -183,12 +111,13 @@ impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for Observed<T> {
     }
 }
 async fn finish<T: Transport<RoleClient>>(inner: &mut T, receipt: &TransportReceipt) {
-    if let Err(error) = inner.close().await {
-        receipt.fail(conn(error));
-        receipt.state.lock().unwrap().cleanup_failed = true;
-    }
-    receipt.state.lock().unwrap().closed = true;
-    receipt.changed.notify_waiters();
+    let failed = inner.close().await.err();
+    receipt.update(|state| {
+        if let Some(error) = failed {
+            state.cleanup_failed(conn(error));
+        }
+        state.close();
+    });
 }
 impl<T: Transport<RoleClient> + 'static> Drop for Observed<T> {
     fn drop(&mut self) {
@@ -267,10 +196,7 @@ impl Transport<RoleClient> for HostStreams {
         match (&mut self.reader).await {
             Ok(()) => {}
             Err(error) if error.is_cancelled() => {}
-            Err(error) => {
-                self.receipt.fail(conn(error));
-                self.receipt.state.lock().unwrap().cleanup_failed = true;
-            }
+            Err(error) => self.receipt.update(|state| state.cleanup_failed(conn(error))),
         }
         self.host.close(&self.invocation).await.map_err(McpError::Host)
     }
@@ -311,7 +237,7 @@ impl StdioTransport {
         }
         let mut child = command.spawn().map_err(conn)?;
         let io = AsyncRwTransport::new(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-        receipt.state.lock().unwrap().child_pending = true;
+        receipt.update(TransportSettlement::child_spawned);
         Ok(Self { io, child, receipt })
     }
 }
@@ -336,9 +262,11 @@ impl Transport<RoleClient> for StdioTransport {
                 self.child.wait().await.map_err(conn)?
             }
         };
-        let mut state = self.receipt.state.lock().unwrap();
-        state.exit = Some(status);
-        state.child_pending = false;
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        #[cfg(not(unix))]
+        let signal = None;
+        self.receipt.update(|state| state.child_exited(status.code(), signal));
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, timeout_duration};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
+use lk_agents_core::mcp::{ConnectionSettlement, TransportSettlement, allowed_tools};
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams,
@@ -42,18 +43,9 @@ struct Connection {
     progress: Progress,
     cancel: CancellationToken,
     service: Mutex<Option<RunningService<RoleClient, Progress>>>,
-    state: Mutex<ConnectionState>,
+    state: Mutex<ConnectionSettlement>,
     changed: Notify,
     receipt: Arc<TransportReceipt>,
-}
-
-#[derive(Default)]
-struct ConnectionState {
-    closing: bool,
-    calls: usize,
-    settled: bool,
-    incomplete: bool,
-    service_settled: bool,
 }
 
 struct Call {
@@ -62,10 +54,7 @@ struct Call {
 }
 impl Drop for Call {
     fn drop(&mut self) {
-        let mut state = self.connection.state.lock().unwrap();
-        state.calls -= 1;
-        state.incomplete |= self.host_callback_pending;
-        drop(state);
+        self.connection.state.lock().unwrap().release(self.host_callback_pending);
         if self.host_callback_pending {
             log::error!("MCP host callback cancellation lacks a settlement receipt");
         }
@@ -75,16 +64,12 @@ impl Drop for Call {
 
 impl Connection {
     fn borrow(self: &Arc<Self>) -> Result<Call, McpError> {
-        let mut state = self.state.lock().unwrap();
-        if state.closing {
-            return Err(McpError::Unavailable);
-        }
-        state.calls += 1;
+        self.state.lock().unwrap().borrow()?;
         Ok(Call { connection: self.clone(), host_callback_pending: false })
     }
 
     fn close(self: &Arc<Self>) {
-        self.state.lock().unwrap().closing = true;
+        self.state.lock().unwrap().close();
         self.cancel.cancel();
         let Some(service) = self.service.lock().unwrap().take() else { return };
         let owner = self.clone();
@@ -92,22 +77,20 @@ impl Connection {
         tokio::spawn(async move {
             let joined = service.waiting().await;
             owner.receipt.closed().await;
-            {
-                let mut state = owner.state.lock().unwrap();
-                state.service_settled = matches!(
-                    joined,
-                    Ok(rmcp::service::QuitReason::Cancelled | rmcp::service::QuitReason::Closed)
-                );
-                state.incomplete |= !state.service_settled || owner.receipt.failed();
-            }
+            let clean = matches!(
+                joined,
+                Ok(rmcp::service::QuitReason::Cancelled | rmcp::service::QuitReason::Closed)
+            );
+            owner
+                .receipt
+                .read(|transport| owner.state.lock().unwrap().service_joined(clean, transport));
             loop {
                 let changed = owner.changed.notified();
-                if owner.state.lock().unwrap().calls == 0 {
+                if owner.state.lock().unwrap().settle_when_idle() {
                     break;
                 }
                 changed.await;
             }
-            owner.state.lock().unwrap().settled = true;
             owner.changed.notify_waiters();
         });
     }
@@ -115,7 +98,7 @@ impl Connection {
     async fn settled(&self) {
         loop {
             let changed = self.changed.notified();
-            if self.state.lock().unwrap().settled {
+            if self.state.lock().unwrap().settled() {
                 return;
             }
             changed.await;
@@ -124,21 +107,12 @@ impl Connection {
 
     fn error(&self, error: ServiceError) -> McpError {
         self.receipt
-            .failure()
+            .read(TransportSettlement::failure)
             .map_or_else(|| service_error(error), |cause| McpError::Transport(cause))
     }
 
     fn cleanup(&self) -> McpCleanup {
-        let state = self.state.lock().unwrap();
-        let mut receipt = self.receipt.cleanup();
-        receipt.service_settled = state.service_settled;
-        receipt.calls_settled = state.calls == 0;
-        receipt.status = lk_agents_core::mcp::cleanup_status(
-            state.incomplete || self.receipt.failed(),
-            state.settled,
-            receipt.reader_settled,
-        );
-        receipt
+        self.receipt.read(|transport| self.state.lock().unwrap().cleanup(transport))
     }
 }
 
@@ -268,12 +242,12 @@ impl McpSessionPort for McpSession {
                 tools
             }
         };
-        let allowed = self.allowed.lock().unwrap().clone();
-        let tools: Vec<Tool> = tools
+        let tools = tools
             .into_iter()
-            .filter(|t| allowed.is_empty() || allowed.iter().any(|a| a == &t.name))
-            .collect();
-        serde_json::to_value(tools).map_err(|e| McpError::Decode(Arc::new(e)))
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(|e| McpError::Decode(Arc::new(e)))?;
+        Ok(allowed_tools(tools, &self.allowed.lock().unwrap()).into())
     }
     async fn call_tool(
         &self,
@@ -334,14 +308,14 @@ impl McpSessionPort for McpSession {
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
         {
-            connection.state.lock().unwrap().incomplete = true;
+            connection.state.lock().unwrap().missed_deadline();
             log::error!("MCP incomplete cleanup; runtime retains ownership");
         }
         let initializing = self.initializing.lock().unwrap().clone();
         if let Some(receipt) = initializing
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
-            receipt.missed_deadline();
+            receipt.update(TransportSettlement::missed_deadline);
             log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
         }
     }
@@ -353,7 +327,7 @@ impl McpSessionPort for McpSession {
             .lock()
             .unwrap()
             .as_ref()
-            .map_or_else(McpCleanup::default, |receipt| receipt.cleanup())
+            .map_or_else(McpCleanup::default, |receipt| receipt.read(TransportSettlement::cleanup))
     }
 }
 
@@ -382,7 +356,7 @@ impl McpSession {
             Err(error) => {
                 // Observed owns the transport even if the SDK handshake is cancelled.
                 if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
-                    receipt.missed_deadline();
+                    receipt.update(TransportSettlement::missed_deadline);
                     log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
                 }
                 return Err(McpError::Initialization(Arc::new(error)));

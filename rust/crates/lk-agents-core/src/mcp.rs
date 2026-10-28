@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use lk_agents_abi::llm::mcp::{
-    McpCleanupStatus, McpError, McpToolOptions, McpToolOptionsPatch, McpTools as McpToolsPort,
+    McpCleanup, McpCleanupStatus, McpError, McpToolOptions, McpToolOptionsPatch,
+    McpTools as McpToolsPort,
 };
 use serde_json::{Map, Value, json};
 
@@ -102,16 +103,161 @@ fn url_path(url: &str) -> String {
     }
 }
 
-/// The cleanup status a session reports: incomplete once anything was abandoned or failed, clean
-/// only when the service and its reader settled.
-pub fn cleanup_status(abandoned: bool, settled: bool, reader_settled: bool) -> McpCleanupStatus {
+/// Incomplete once anything was abandoned or failed; clean only once everything settled.
+fn cleanup_status(abandoned: bool, settled: bool) -> McpCleanupStatus {
     if abandoned {
         McpCleanupStatus::Incomplete
-    } else if settled && reader_settled {
+    } else if settled {
         McpCleanupStatus::Clean
     } else {
         McpCleanupStatus::Pending
     }
+}
+
+/// One transport's teardown as the runtime observes it: its readers, its child process and the
+/// remote HTTP session the SDK may fail to delete. A cleanup that failed or overran its deadline
+/// is never reported clean.
+#[derive(Debug, Default)]
+pub struct TransportSettlement {
+    closed: bool,
+    readers: usize,
+    child_pending: bool,
+    child_exit: Option<(Option<i32>, Option<i32>)>,
+    failure: Option<Arc<McpError>>,
+    cleanup_failed: bool,
+    deadline_missed: bool,
+    remote_session_pending: bool,
+}
+
+impl TransportSettlement {
+    pub fn reader_opened(&mut self) {
+        self.readers += 1;
+    }
+    pub fn reader_closed(&mut self) {
+        self.readers -= 1;
+    }
+    pub fn child_spawned(&mut self) {
+        self.child_pending = true;
+    }
+    pub fn child_exited(&mut self, code: Option<i32>, signal: Option<i32>) {
+        self.child_exit = Some((code, signal));
+        self.child_pending = false;
+    }
+    /// The first failure is the cause every later call reports.
+    pub fn fail(&mut self, error: McpError) {
+        self.failure.get_or_insert_with(|| Arc::new(error));
+    }
+    pub fn cleanup_failed(&mut self, error: McpError) {
+        self.fail(error);
+        self.cleanup_failed = true;
+    }
+    pub fn missed_deadline(&mut self) {
+        self.deadline_missed = true;
+    }
+    pub fn remote_session(&mut self, pending: bool) {
+        self.remote_session_pending = pending;
+    }
+    pub fn close(&mut self) {
+        self.closed = true;
+    }
+    pub fn failure(&self) -> Option<Arc<McpError>> {
+        self.failure.clone()
+    }
+    /// Closed, and no reader still holds the transport.
+    pub fn drained(&self) -> bool {
+        self.closed && self.readers == 0
+    }
+    fn abandoned(&self) -> bool {
+        self.cleanup_failed
+            || self.child_pending
+            || self.deadline_missed
+            || self.remote_session_pending
+    }
+    pub fn cleanup(&self) -> McpCleanup {
+        let (child_exit_code, child_exit_signal) = self.child_exit.unwrap_or_default();
+        McpCleanup {
+            status: if self.cleanup_failed || self.deadline_missed || self.remote_session_pending {
+                McpCleanupStatus::Incomplete
+            } else {
+                cleanup_status(false, self.drained() && !self.child_pending)
+            },
+            service_settled: self.closed,
+            calls_settled: true,
+            reader_settled: self.drained(),
+            child_reaped: self.child_exit.is_some(),
+            child_exit_code,
+            child_exit_signal,
+        }
+    }
+}
+
+/// One established connection's lifecycle: calls borrow it until close, and it settles once the
+/// SDK service joined and the last call returned. A call cancelled while its host progress
+/// callback was pending leaves the cleanup incomplete.
+#[derive(Debug, Default)]
+pub struct ConnectionSettlement {
+    closing: bool,
+    calls: usize,
+    settled: bool,
+    incomplete: bool,
+    service_settled: bool,
+}
+
+impl ConnectionSettlement {
+    pub fn borrow(&mut self) -> Result<(), McpError> {
+        if self.closing {
+            return Err(McpError::Unavailable);
+        }
+        self.calls += 1;
+        Ok(())
+    }
+    pub fn release(&mut self, host_callback_pending: bool) {
+        self.calls -= 1;
+        self.incomplete |= host_callback_pending;
+    }
+    pub fn close(&mut self) {
+        self.closing = true;
+    }
+    /// `clean`: the service quit by cancellation or close.
+    pub fn service_joined(&mut self, clean: bool, transport: &TransportSettlement) {
+        self.service_settled = clean;
+        self.incomplete |= !clean || transport.abandoned();
+    }
+    /// Settles once no call holds the connection; whether it is settled.
+    pub fn settle_when_idle(&mut self) -> bool {
+        self.settled |= self.calls == 0;
+        self.settled
+    }
+    pub fn settled(&self) -> bool {
+        self.settled
+    }
+    pub fn missed_deadline(&mut self) {
+        self.incomplete = true;
+    }
+    pub fn cleanup(&self, transport: &TransportSettlement) -> McpCleanup {
+        let mut cleanup = transport.cleanup();
+        cleanup.service_settled = self.service_settled;
+        cleanup.calls_settled = self.calls == 0;
+        cleanup.status = cleanup_status(
+            self.incomplete || transport.abandoned(),
+            self.settled && cleanup.reader_settled,
+        );
+        cleanup
+    }
+}
+
+/// The listed tools the session exposes: all of them, or only the allowed names.
+pub fn allowed_tools(tools: Vec<Value>, allowed: &[String]) -> Vec<Value> {
+    tools
+        .into_iter()
+        .filter(|tool| {
+            allowed.is_empty()
+                || tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| allowed.iter().any(|a| a == n))
+        })
+        .collect()
 }
 
 fn decode_error(message: impl Into<String>) -> McpError {

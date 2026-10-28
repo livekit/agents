@@ -1,5 +1,5 @@
 //! rmcp joins its HTTP worker but logs and swallows DELETE failures. Observe that SDK seam
-//! so joining the worker cannot turn missing remote-session cleanup into a Clean receipt.
+//! so joining the worker cannot turn a remote session left behind into a Clean receipt.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,27 +78,21 @@ impl StreamableHttpClient for CleanupClient {
         auth_header: Option<String>,
         headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
-        self.receipt.deleting_http_session(
-            self.client.clone(),
-            uri.clone(),
-            session_id.clone(),
-            auth_header.clone(),
-            headers.clone(),
-        );
+        self.receipt.update(|state| state.remote_session(true));
         let result = self.client.delete_session(uri, session_id, auth_header, headers).await;
         match result {
             Ok(()) => {
-                self.receipt.deleted_http_session();
+                self.receipt.update(|state| state.remote_session(false));
                 Ok(())
             }
             // Per MCP this method is optional. Match the SDK's documented successful close.
             Err(error @ StreamableHttpError::ServerDoesNotSupportDeleteSession) => {
-                self.receipt.deleted_http_session();
+                self.receipt.update(|state| state.remote_session(false));
                 Err(error)
             }
             Err(error) => {
                 let cause = Arc::new(error);
-                self.receipt.transport_failure(McpError::Transport(cause.clone()));
+                self.receipt.update(|state| state.fail(McpError::Transport(cause.clone())));
                 Err(StreamableHttpError::Io(std::io::Error::other(cause)))
             }
         }
