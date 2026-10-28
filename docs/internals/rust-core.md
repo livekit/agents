@@ -1615,13 +1615,15 @@ inputs to decision policy.
 
 Rust emits typed observations with operation identity, supplied timestamps and
 logical span relationships. Recording an observation is synchronous: Rust holds
-no SDK spans, exporters, export queues, upload tasks or watchdog. Each
+no SDK spans, exporters, export queues or watchdog for user telemetry. Each
 observation reaches the host through HostInvoker like every other host call;
 there the host OpenTelemetry SDK turns it into spans, metrics and log records, so applications
 intercept framework telemetry through their own provider, processors and
 exporters alongside their own instrumentation. Runtime owns invocation-context
-propagation. Export and upload, including Cloud, follow the host SDK boundary,
-just like a host provider.
+propagation. Export follows the host SDK boundary, just like a host provider.
+The LiveKit Cloud session report and recording upload is not user telemetry: it
+is ordinary async Rust in `lk-agents-net`, triggered at session end with its
+own bounded admission.
 
 Adopt the application's configured tracer provider by default. An explicitly
 configured framework provider is also used when activating framework invocation
