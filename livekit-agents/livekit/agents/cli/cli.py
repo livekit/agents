@@ -257,7 +257,10 @@ def _run_tcp_console(*, server: AgentServer, connect_addr: str, record: bool = F
     def _handle_exit(sig: int, frame: FrameType | None) -> None:
         nonlocal exit_triggered
         if exit_triggered:
-            os.killpg(os.getpgid(0), signal.SIGKILL)
+            if hasattr(os, "killpg"):
+                os.killpg(os.getpgid(0), signal.SIGKILL)
+            # Windows has no process groups to kill
+            os._exit(1)
         exit_triggered = True
         asyncio.run_coroutine_threadsafe(_graceful_shutdown(), loop)
 
