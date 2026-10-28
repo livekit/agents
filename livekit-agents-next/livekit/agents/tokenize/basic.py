@@ -4,7 +4,14 @@ import functools
 from dataclasses import dataclass
 
 from .. import _core
-from . import token_stream, tokenizer
+from . import (
+    BufferedSentenceStream,
+    BufferedWordStream,
+    SentenceStream,
+    SentenceTokenizer as _SentenceTokenizer,
+    WordStream,
+    WordTokenizer as _WordTokenizer,
+)
 
 # Really naive implementation of SentenceTokenizer, WordTokenizer + hyphenate_word
 # The basic tokenizer is rule-based and only English is really tested
@@ -25,7 +32,7 @@ class _TokenizerOptions:
     retain_format: bool
 
 
-class SentenceTokenizer(tokenizer.SentenceTokenizer):
+class SentenceTokenizer(_SentenceTokenizer):
     def __init__(
         self,
         *,
@@ -51,8 +58,8 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
             )
         ]
 
-    def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
-        return token_stream.BufferedSentenceStream(
+    def stream(self, *, language: str | None = None) -> SentenceStream:
+        return BufferedSentenceStream(
             tokenizer=functools.partial(
                 _core.basic_split_sentences,
                 min_sentence_len=self._config.min_sentence_len,
@@ -63,7 +70,7 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
         )
 
 
-class WordTokenizer(tokenizer.WordTokenizer):
+class WordTokenizer(_WordTokenizer):
     def __init__(
         self,
         *,
@@ -83,8 +90,8 @@ class WordTokenizer(tokenizer.WordTokenizer):
             )
         ]
 
-    def stream(self, *, language: str | None = None) -> tokenizer.WordStream:
-        return token_stream.BufferedWordStream(
+    def stream(self, *, language: str | None = None) -> WordStream:
+        return BufferedWordStream(
             tokenizer=functools.partial(
                 _core.split_words,
                 ignore_punctuation=self._ignore_punctuation,

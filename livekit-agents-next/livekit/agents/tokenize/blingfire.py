@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .. import _core
-from . import token_stream, tokenizer
+from . import BufferedSentenceStream, SentenceStream, SentenceTokenizer as _SentenceTokenizer
 
 __all__ = [
     "SentenceTokenizer",
@@ -20,7 +20,7 @@ class _TokenizerOptions:
     xml_aware: bool
 
 
-class SentenceTokenizer(tokenizer.SentenceTokenizer):
+class SentenceTokenizer(_SentenceTokenizer):
     def __init__(
         self,
         *,
@@ -69,8 +69,8 @@ class SentenceTokenizer(tokenizer.SentenceTokenizer):
             text, self._config.min_sentence_len, retain_format=self._config.retain_format
         )
 
-    def stream(self, *, language: str | None = None) -> tokenizer.SentenceStream:
-        return token_stream.BufferedSentenceStream(
+    def stream(self, *, language: str | None = None) -> SentenceStream:
+        return BufferedSentenceStream(
             tokenizer=self._split,
             max_token_len=self._config.max_token_len,
             min_token_len=(

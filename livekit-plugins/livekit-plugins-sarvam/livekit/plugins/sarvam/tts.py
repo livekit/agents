@@ -279,7 +279,7 @@ class SarvamTTSOptions:
     model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
-    word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
+    word_tokenizer: tokenize.SentenceTokenizer | None = None
     send_completion_event: bool = True
     output_audio_codec: str = "mp3"
 
@@ -926,7 +926,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             async for input in self.input:
                 if isinstance(input, str):
                     if word_stream is None:
-                        tokenizer_instance: tokenize.tokenizer.SentenceTokenizer
+                        tokenizer_instance: tokenize.SentenceTokenizer
                         if self._opts.word_tokenizer is None:
                             # Fallback to basic tokenizer if none provided
                             tokenizer_instance = tokenize.basic.SentenceTokenizer()
