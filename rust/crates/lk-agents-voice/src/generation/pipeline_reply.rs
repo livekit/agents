@@ -353,6 +353,7 @@ async fn follow_up(
         message_id: shared.mint_item_id(),
         speech: prev.speech,
         answering: None,
+        task: prev.task,
     }
 }
 

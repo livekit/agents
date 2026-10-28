@@ -663,6 +663,7 @@ impl Driver {
             message_id,
             speech: self.session.config.effective.speech,
             answering: spec.answering,
+            task: self.activity.voice_tasks.running(),
         };
 
         // Past the close's hard edge no generation is started.
@@ -1028,6 +1029,7 @@ impl Driver {
         self.activity.finished.insert(speech);
         self.publish_activity();
         self.speech_finished(now, speech, out);
+        self.voice_task_speech_released(now, speech, out);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.
         self.realtime_replay(now, Some(speech), out);
     }

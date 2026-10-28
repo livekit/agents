@@ -64,6 +64,12 @@ impl Rule for InterruptionHasCause {
                                 )
                         })
                 }
+                // A task's entry or end stops what the agent losing the floor still had to say.
+                InterruptCause::VoiceTask => internal.steps().iter().any(|(moved, step)| {
+                    use lk_agents_voice::trace::HandoffStep::{TaskEnded, TaskEntered};
+                    *moved <= at
+                        && matches!(step, Step::Handoff(TaskEntered { .. } | TaskEnded { .. }))
+                }),
                 InterruptCause::Detector
                 | InterruptCause::Superseded
                 | InterruptCause::ScheduleRejected => true,

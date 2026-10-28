@@ -497,8 +497,12 @@ pub enum Answer {
     DrainRefused(lk_agents_voice::agent_session::DrainRefused),
     /// What a driver-run DTMF collection answered its `Start` with.
     Dtmf(lk_agents_voice::workflows::dtmf::DtmfOutcome),
+    /// What `VoiceTask.run()` returned: its value's host object, or why it has none.
+    VoiceTask(Result<u64, lk_agents_voice::agent_activity::voice_task::VoiceTaskEnded>),
     /// The channel closed without an answer.
     Lost,
+    /// The host stopped awaiting it: the tool body that awaited a `VoiceTask.run()` ended first.
+    Abandoned,
 }
 
 /// A speech handle as the public API reports it, snapshotted after every input so a rule and its

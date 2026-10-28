@@ -984,6 +984,15 @@ impl Driver {
         if self.session.closing.is_some() {
             return self.join_close_drain(waiters, out);
         }
+        // A VoiceTask holds the floor: its parent's tool waits on it, so nothing would settle.
+        if self.activity.voice_tasks.running() {
+            let refused = crate::agent_session::DrainRefused::TaskRunning;
+            out.trace(crate::trace::HandoffStep::Drained { refused: Some(refused) });
+            for call in waiters {
+                out.answer(Some(call), Answer::Drain(Err(refused)));
+            }
+            return;
+        }
         self.drain_step(DrainEvent::Asked(waiters), out);
     }
 

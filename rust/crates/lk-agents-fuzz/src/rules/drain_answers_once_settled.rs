@@ -150,6 +150,7 @@ fn settled_then_answered() -> Recording {
 /// while the task's agent runs the exit its own drain asked for.
 fn answered_while_next_agent_exits() -> Recording {
     let swapped = Step::Handoff(HandoffStep::AgentUpdated {
+        agent: "agent".into(),
         tools: 0,
         chat_ctx: false,
         reopened: "",

@@ -300,6 +300,7 @@ impl Driver {
             Delivery::Say(text) => {
                 self.say_text(now, text, out);
             }
+            Delivery::Complete(value) => self.complete_voice_task(now, speech, value, out),
             Delivery::Ask(ask) => {
                 if let Some(transition) = &ask.transition {
                     let output = crate::run_result::RunOutput::Value(transition.clone());

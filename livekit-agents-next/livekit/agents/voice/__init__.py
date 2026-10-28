@@ -10,6 +10,7 @@ from .agent_session import (
     TextTransforms,
     VoiceActivityVideoSampler,
     VoiceSession,
+    VoiceTask,
 )
 from .events import (
     AgentEvent,
@@ -38,6 +39,7 @@ from .speech_handle import SpeechHandle
 
 __all__ = [
     "VoiceSession",
+    "VoiceTask",
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",

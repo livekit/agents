@@ -558,8 +558,29 @@ pub enum HandoffStep {
     /// Every waiter of the agent's drain was answered; `refused` is `None` on success.
     Drained { refused: Option<crate::agent_session::DrainRefused> },
 
-    /// The agent was replaced; `reopened` names the audio legs whose provider differed.
-    AgentUpdated { tools: usize, chat_ctx: bool, reopened: &'static str, legs: ProviderPresence },
+    /// `agent` was installed; `reopened` names the audio legs whose provider differed.
+    AgentUpdated {
+        agent: String,
+        tools: usize,
+        chat_ctx: bool,
+        reopened: &'static str,
+        legs: ProviderPresence,
+    },
+    /// `VoiceTask.run()` from `speech`'s tool: `agent` takes the floor, `parent` waits.
+    TaskEntered {
+        task: crate::agent_activity::voice_task::VoiceTaskId,
+        parent: String,
+        agent: String,
+        speech: SpeechId,
+    },
+    /// The task ended `how`; `restored` is the parent installed again, without its hooks.
+    TaskEnded {
+        task: crate::agent_activity::voice_task::VoiceTaskId,
+        how: crate::agent_activity::voice_task::TaskEnd,
+        restored: String,
+    },
+    /// `VoiceTask.run()` refused before the task started.
+    TaskRefused { why: crate::agent_activity::voice_task::VoiceTaskEnded },
     /// One call into user code issued, by kind. `OnExit` precedes the handoff's pause, `OnEnter`
     /// follows `AgentUpdated`. `HookFinished` closes it.
     HookIssued {
@@ -701,6 +722,9 @@ pub enum InterruptCause {
     /// The realtime model was replaced (a fallback adapter's swap, `restart_session()`): what
     /// played was the old model's.
     ModelSwapped,
+    /// A `VoiceTask` took the floor or gave it back: what the agent losing it still had to say
+    /// is not for the one taking it.
+    VoiceTask,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -898,6 +922,8 @@ impl Step {
             Step::Handoff(step) => match step {
                 HandoffStep::RunOutput { speech, .. } => Some(*speech),
                 HandoffStep::HookIssued { speech, .. } => *speech,
+                HandoffStep::TaskEntered { speech, .. } => Some(*speech),
+                HandoffStep::TaskEnded { .. } | HandoffStep::TaskRefused { .. } => None,
                 HandoffStep::DrainStarted { .. }
                 | HandoffStep::Drained { .. }
                 | HandoffStep::AgentUpdated { .. }

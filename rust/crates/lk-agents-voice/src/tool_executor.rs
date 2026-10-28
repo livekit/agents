@@ -525,6 +525,9 @@ pub enum Delivery {
     /// `InputRequired`: the question asked, and the person's next message written as the output
     /// `output_id` of the call `call_id` (the approval's read-back included).
     Ask(Ask),
+    /// A VoiceTask tool's validated `Completed(value)`: the task ends with the value, and its
+    /// agent says nothing more about it.
+    Complete(lk_agents_abi::HostRef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -604,11 +607,15 @@ pub trait HostToolRunner: Send + Sync {
     /// `speech` is the call's speech as the host's `SpeechHandle` sees it (`_core.SpeechHandle`),
     /// whose `host` is the host's own object once it made one. `granted`: the call repeats a
     /// read-back the person answered ([`approval_granted`]), so a tool that requires approval runs.
+    /// `task`: the speech is a `VoiceTask` agent's, so a `Completed` the body returns is
+    /// validated against the agent's `output_type` and reported with its value, which ends the
+    /// task.
     async fn run(
         &self,
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
         granted: bool,
+        task: bool,
     ) -> Result<ToolReport, lk_agents_abi::errors::HostError>;
 
     /// `_ToolExecutor.cancel`, unconditionally as its `aclose()` does: the body running under
@@ -625,8 +632,9 @@ impl dyn HostToolRunner {
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
         granted: bool,
+        task: bool,
     ) -> ToolReport {
-        self.run(call, speech, granted).await.unwrap_or_else(|e| {
+        self.run(call, speech, granted, task).await.unwrap_or_else(|e| {
             log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
                 "the tool executor failed outside the tool's own error handling: {e}");
             ToolOutcome::Internal.into()
@@ -660,6 +668,12 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
         call.extra.insert(APPROVAL_KEY.to_owned(), mark);
     }
     let end = ToolEnd::of(&outcome);
+    // A completion the host validated for a VoiceTask asks for no reply: the parent gets the floor.
+    if let (ToolOutcome::Completed { .. }, Some(value)) = (&outcome, &transition) {
+        output.reply_required = false;
+        let delivery = Some(Delivery::Complete(value.clone()));
+        return ToolExecution { call, output, end, raw_update: None, delivery };
+    }
     let delivery = match outcome {
         ToolOutcome::Update { raw, .. } => {
             // `RunContext.update`'s marker: a non-blocking tool may wait on its own speech.
@@ -734,6 +748,8 @@ pub struct StepDecision {
     max_steps_reached: bool,
     /// The second interruption read.
     interrupted: bool,
+    /// A call completed a VoiceTask: the step has no follow-up, whatever the outputs ask.
+    completes: bool,
     previous_user_metrics: Option<MetricsReport>,
 }
 
@@ -744,7 +760,7 @@ impl StepDecision {
         self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
         if self.next != NextStep::Interrupted {
             self.next = next_of(
-                event.has_tool_reply() && !self.interrupted,
+                event.has_tool_reply() && !self.interrupted && !self.completes,
                 self.max_steps_reached,
                 self.previous_user_metrics.clone(),
             );
@@ -828,6 +844,8 @@ pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
         deliveries: inputs.tool_output.iter().filter_map(|o| o.delivery.clone()).collect(),
         max_steps_reached,
         interrupted: inputs.interrupted,
+        completes: (inputs.tool_output.iter())
+            .any(|o| matches!(o.delivery, Some(Delivery::Complete(_)))),
         previous_user_metrics: inputs
             .forwarded_text_empty
             .then(|| inputs.user_metrics.clone())
@@ -861,6 +879,7 @@ fn quiet(next: NextStep) -> StepDecision {
         deliveries: Vec::new(),
         max_steps_reached: false,
         interrupted: false,
+        completes: false,
         previous_user_metrics: None,
     }
 }
@@ -882,12 +901,12 @@ fn interrupted(tool_output: &[ToolExecution]) -> StepDecision {
             handoff_required: false,
         }),
         commit,
-        // A verbatim result was the person's as the call returned; a question is not asked of
-        // a person who has moved on.
+        // A verbatim result was the person's as the call returned, as is a VoiceTask's validated
+        // completion; a question is not asked of a person who has moved on.
         deliveries: tool_output
             .iter()
             .filter_map(|o| o.delivery.clone())
-            .filter(|d| matches!(d, Delivery::Say(_)))
+            .filter(|d| matches!(d, Delivery::Say(_) | Delivery::Complete(_)))
             .collect(),
         ..quiet(NextStep::Interrupted)
     }
@@ -1025,14 +1044,16 @@ impl Driver {
         }
     }
 
-    /// Another live speech is in its tools.
+    /// Another live speech is in its tools. One awaiting a VoiceTask waits on the person, through
+    /// the task: the agent listens, not thinks.
     pub(crate) fn tools_running_elsewhere(&self, speech: SpeechId) -> bool {
         let scheduling = &self.activity.speech_scheduler;
+        let tasks = &self.activity.voice_tasks;
         self.activity
             .tools_in_flight
             .iter()
             .copied()
-            .any(|id| id != speech && scheduling.contains(id))
+            .any(|id| id != speech && scheduling.contains(id) && !tasks.awaits(id))
     }
 
     /// The speech whose tool sent the command (`Origin::Tool`).

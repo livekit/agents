@@ -21,12 +21,13 @@ import subprocess
 import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from aiohttp import web
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel, Field
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -40,6 +41,7 @@ from livekit.agents import (
     AudioConfig,
     BackgroundAudioPlayer,
     BuiltinAudioClip,
+    Completed,
     FlushSentinel,
     ModelSettings,
     RunContext,
@@ -48,6 +50,7 @@ from livekit.agents import (
     VADEventType,
     VADStream,
     VoiceSession,
+    VoiceTask,
     _core,
     function_tool,
     llm,
@@ -97,6 +100,8 @@ TOOL_CALLS = [
     ("keypad", "send_dtmf_events", lambda text: {"events": ["1", "#"]}),
     ("bye", "end_call", lambda text: {}),
     ("book", "book", lambda text: {"day": "Monday"}),
+    ("receipt", "change_receipt_email", lambda text: {}),
+    ("@", "confirm_email", lambda text: {"email_address": text.split()[-1]}),
 ]
 
 
@@ -1172,6 +1177,88 @@ async def tool_outcomes() -> None:
         outputs
     )
     await session.aclose()
+
+
+class EmailResult(BaseModel):
+    email_address: Annotated[str, Field(pattern=r"^[^@ ]+@[^@ ]+\.[a-z]+$")]
+
+
+email_collector = Agent[object](
+    instructions="Collect the passenger's receipt email and confirm it with confirm_email.",
+    output_type=EmailResult,
+)
+
+
+@email_collector.tool
+async def confirm_email(ctx: RunContext, email_address: str) -> Completed[Any]:
+    """Confirm the receipt email."""
+    # the framework validates the value against `output_type` before the task completes
+    return Completed({"email_address": email_address})
+
+
+async def voice_task() -> None:
+    """A frontend tool runs ``VoiceTask(agent=...).run()``: the task opens with a reply (its
+    agent has no ``on_enter``), takes the user's turns, retries an invalid completion, and
+    returns the validated value; the parent gets the floor back without its hooks and replies to
+    its own tool's output. A task still running at the close ends with the session."""
+    print("== voice task")
+    room = _core.FakeRoom(sample_rate=48000)
+    room.join("user")
+    hooks: list[str] = []
+    seen: list[object] = []
+
+    class Desk(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You are the front desk.")
+
+        async def on_enter(self) -> None:
+            hooks.append("on_enter")
+
+        async def on_exit(self) -> None:
+            hooks.append("on_exit")
+
+        @function_tool
+        async def change_receipt_email(self, ctx: RunContext) -> str:
+            """Collect and confirm the email address for the refund receipt."""
+            result = await VoiceTask(agent=email_collector).run()
+            seen.append(result)
+            return f"receipt email is now {result.email_address}"
+
+    session = VoiceSession(stt=ScriptedSTT(), llm=ScriptedLLM(), tts=SilentTTS(), vad=None)
+    desk = Desk()
+    await session.start(desk, room=room)
+    await settle(room, 1)
+    try:
+        await VoiceTask(agent=email_collector).run()
+        raise AssertionError("VoiceTask.run() outside a live tool must raise")
+    except RuntimeError as e:
+        print(f"voice task outside a tool: {e}")
+    session.generate_reply(user_input="send the receipt elsewhere")
+    await settle(room, 3)
+    assert session.current_agent is email_collector, session.current_agent
+    # the task asked and waits on the person: listening, not thinking about the parent's tool
+    assert session.agent_state == "listening", session.agent_state
+    session.generate_reply(user_input="it is theo@example")
+    await settle(room, 3)
+    assert not seen and session.current_agent is email_collector, seen
+    session.generate_reply(user_input="it is theo@example.com")
+    await settle(room, 8)
+    spoken = [text for topic, text in room.text_streams() if topic == "lk.transcription"]
+    print(f"voice task spoken={spoken} hooks={hooks}")
+    assert seen == [EmailResult(email_address="theo@example.com")], seen
+    assert session.current_agent is desk, session.current_agent
+    assert hooks == ["on_enter"], hooks
+    # the task opened with a reply of its own, and its model read the invalid completion
+    assert spoken[0].startswith("You said"), spoken
+    assert any("String should match pattern" in text for text in spoken), spoken
+    assert "The tool said: receipt email is now theo@example.com" in spoken, spoken
+    # a task running when the session closes ends with it
+    session.generate_reply(user_input="another receipt please")
+    await settle(room, 3)
+    assert session.current_agent is email_collector, session.current_agent
+    await session.aclose()
+    assert session.current_agent is desk, session.current_agent
+    assert hooks == ["on_enter", "on_exit"], hooks
 
 
 class KeytermSTT(ScriptedSTT):
@@ -2392,6 +2479,7 @@ async def main() -> int:
     await amd()
     await filler()
     await tool_outcomes()
+    await voice_task()
     await keyterms()
     await room_camera()
     await noise_cancellation()

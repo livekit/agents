@@ -111,6 +111,11 @@ impl Drain {
         }
     }
 
+    /// A drain is waiting or done: the agent stays idle until a close or a new agent.
+    pub(crate) fn active(&self) -> bool {
+        self.current.is_some()
+    }
+
     /// Every caller still waiting, taken: a left agent's first, then the driving agent's (whose
     /// drain is forgotten).
     pub(crate) fn take_waiters(&mut self) -> Vec<RequestId> {

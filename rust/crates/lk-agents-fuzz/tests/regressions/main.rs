@@ -108,3 +108,4 @@ mod voice_connection_reused;
 mod say_item_after_close_edge;
 mod tool_awaits_own_speech;
 mod turn_hook_sees_agent_context;
+mod voice_task;

@@ -731,14 +731,15 @@ impl Driver {
         }
         self.realtime_interrupt_session(generating, out);
         // Speeches whose step is spoken and tools running: still `_current_speech` to the
-        // reference, so they end (outputs commit, no follow-up).
+        // reference, so they end (outputs commit, no follow-up). One awaiting a VoiceTask is the
+        // suspended parent's: the task's turns are not addressed to it.
         let working: Vec<SpeechId> = self
             .activity
             .speech_scheduler
             .speech_ids()
             .filter(|id| {
                 let status = self.activity.speech_scheduler.status(*id);
-                status == Some(Status::Working)
+                status == Some(Status::Working) && !self.activity.voice_tasks.awaits(*id)
             })
             .collect();
         for id in working {

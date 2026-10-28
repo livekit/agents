@@ -241,6 +241,7 @@ fn command_accesses(command: &Command) -> Vec<Access> {
         Command::Recorder(_) => w(&[Recorder]),
         Command::Dtmf(_) => w(&[Dtmf, Floor]),
         Command::Run(_) => w(&[Run, Floor, Chat, Agent]),
+        Command::VoiceTask(_) => w(&[All]),
         Command::AmdSpan(_) => w(&[Spans]),
     }
 }

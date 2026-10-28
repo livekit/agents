@@ -279,6 +279,24 @@ impl SessionTrace {
         self.closing = Some(self.start("session_close", parent, now, attrs, out).id);
     }
 
+    /// A `VoiceTask` suspends `previous`: its agent's `on_enter` runs under this `update_agent`,
+    /// which that hook, or [`SessionTrace::agent_updated`] without one, ends.
+    pub(crate) fn agent_suspended(&mut self, now: f64, previous: &str, out: &mut Vec<SessionEvent>) {
+        if !self.live() || self.updating.is_some() {
+            return;
+        }
+        let attrs = Attrs::new().set("lk.previous_agent_label", previous);
+        let parent = self.root();
+        self.updating = Some(self.start("update_agent", parent, now, attrs, out));
+    }
+
+    /// The update is over with no `on_enter` to end it.
+    pub(crate) fn agent_updated(&mut self, now: f64, out: &mut Vec<SessionEvent>) {
+        if let Some(update) = self.updating.take() {
+            self.end(update, now, out);
+        }
+    }
+
     /// A callback the host was asked to run, in the activity span the reference runs it in:
     /// `on_enter` in `start_agent_activity`, `on_exit` in `drain_agent_activity` (a handoff's
     /// under `update_agent`), `on_user_turn_completed` in the session. Decided where the hook is

@@ -58,7 +58,7 @@ from ..types import (
 )
 from ..utils.misc import is_dev_mode, is_given, is_hosted
 from . import io
-from .agent import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
+from .agent import Agent, ModelSettings, Output_T, _BindingContextVar, _VoiceBinding
 from .events import (
     AgentEvent,
     AgentState,
@@ -1026,6 +1026,45 @@ _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
     "stt_error": (stt.STTError, "stt"),
     "realtime_model_error": (llm.RealtimeModelError, "llm"),
 }
+
+
+class VoiceTask(Generic[Output_T]):
+    """One bounded live interaction run by ``agent`` on the active ``VoiceSession``.
+
+    Like ``TextSession``, a ``VoiceTask`` is not an ``Agent``: it runs one. Await ``run()``
+    inside a tool of the agent holding the call: ``agent`` takes the floor (its ``on_enter``,
+    or a first reply without one) and ``run()`` returns once one of its tools returns
+    ``Completed(value)``, validated against its ``output_type``. The waiting agent then gets the
+    floor back without its ``on_exit`` or ``on_enter``. Cancelling the await, or closing the
+    session, ends the task.
+    """
+
+    def __init__(self, *, agent: Agent[Any, Output_T]) -> None:
+        self._agent = agent
+
+    @property
+    def agent(self) -> Agent[Any, Output_T]:
+        return self._agent
+
+    async def run(self) -> Output_T:
+        binding = _BindingContextVar.get(None)
+        if not isinstance(binding, _VoiceBinding):
+            raise RuntimeError(
+                "VoiceTask.run() needs a live VoiceSession: await it inside a tool of the agent "
+                "holding the call"
+            )
+        session, agent = binding.session, self._agent
+        reply = session._running.run_voice_task(
+            **session._frame(agent),
+            origin=binding.origin,
+            opens_with_reply=not agent._has_on_enter(),
+        )
+        session._agent = agent
+        try:
+            output: Output_T = await reply
+            return output
+        finally:
+            session._agent = binding.agent
 
 
 async def _setup_toolset(toolset: llm.Toolset) -> None:

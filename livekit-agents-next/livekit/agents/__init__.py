@@ -118,6 +118,7 @@ from .voice import (
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
     VoiceSession,
+    VoiceTask,
     io,
     room_io,
 )
@@ -242,6 +243,7 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "VoiceSession",
+    "VoiceTask",
     "ExpressiveOptions",
     "NonverbalOptions",
     "SpeechSteeringOptions",

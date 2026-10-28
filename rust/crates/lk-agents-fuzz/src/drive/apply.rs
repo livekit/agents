@@ -87,7 +87,7 @@ pub(super) struct Settled {
 }
 
 impl Settled {
-    fn of(answer: Answer) -> Self {
+    pub(super) fn of(answer: Answer) -> Self {
         Settled { answer, handle: None }
     }
 }
@@ -274,6 +274,8 @@ impl Run {
         let mut waiting: Option<Pending> = None;
         let mut stream: Option<(bool, Feeding)> = None;
         let mut wait = |pending: Pending| waiting = Some(pending);
+        // The tool body a `VoiceTask.run()` is awaited in.
+        let mut task_from: Option<String> = None;
 
         let sent = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
@@ -640,6 +642,19 @@ impl Run {
                 );
                 self.loop_runs()
             }
+            Input::VoiceTask { tool, agent, reply } => {
+                let Some(call_id) = self.tool_call_id(*tool) else { return false };
+                let tools = self.setup.tools.clone();
+                let instructions = format!("You are {agent}.");
+                let args = frame(&self.setup, &self.legs, &registry, agent, &instructions, &tools);
+                let origin = format!("tool:{call_id}");
+                task_from = Some(call_id);
+                api.run_voice_task(args, Some(&origin), *reply)
+                    .map(|reply| {
+                        wait(Pending::reply(reply, |r| Answer::VoiceTask(r.map(|v| v.id()))))
+                    })
+                    .is_ok()
+            }
             Input::Run { user_input, expects_output, retries } => api
                 .run(
                     user_input.clone().map(|UserText(t)| t),
@@ -662,8 +677,33 @@ impl Run {
         if let Some(waiting) = waiting {
             let nth = self.record.open(at, Kind::Answer, Id::Pending, Detail::None);
             self.pending.insert(nth, waiting);
+            if let Some(call_id) = task_from {
+                self.task_awaits.insert(call_id, nth);
+            }
         }
         true
+    }
+
+    /// The body of tool `nth` awaits a `VoiceTask.run()` not answered yet.
+    pub fn awaits_task(&self, nth: u32) -> bool {
+        let call_id = self.tool_call_id(Ref::new(nth));
+        let answer = call_id.and_then(|c| self.task_awaits.get(&c));
+        answer.is_some_and(|nth| self.pending.contains_key(nth))
+    }
+
+    /// The body of tool `nth` already ran a `VoiceTask`: it returns now.
+    pub fn awaited_task(&self, nth: u32) -> bool {
+        self.tool_call_id(Ref::new(nth)).is_some_and(|c| self.task_awaits.contains_key(&c))
+    }
+
+    /// The body of `tool` ends while it still awaits a `VoiceTask.run()`: the await is dropped,
+    /// which ends the task, and the body never sees an answer.
+    fn drop_task_await(&mut self, tool: Ref<crate::input::Tool>) {
+        let Some(call_id) = self.tool_call_id(tool) else { return };
+        let Some(nth) = self.task_awaits.remove(&call_id) else { return };
+        if self.pending.remove(&nth).is_some() {
+            self.record_abandoned(nth);
+        }
     }
 
     /// The host's answer to a hook call, as the command it is.
@@ -956,7 +996,10 @@ impl Run {
             Input::OverlapVerdict { port, .. } | Input::OverlapFail { port } => {
                 (Slot { kind: Kind::Interruption, nth: port.nth }, None)
             }
-            Input::ToolAnswered { tool, .. } => (Slot { kind: Kind::Tool, nth: tool.nth }, None),
+            Input::ToolAnswered { tool, .. } => {
+                self.drop_task_await(*tool);
+                (Slot { kind: Kind::Tool, nth: tool.nth }, None)
+            }
             Input::PlayoutStarted { segment }
             | Input::PlayoutFinished { segment }
             | Input::PlayoutProgressed { segment, .. } => {

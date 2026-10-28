@@ -86,6 +86,11 @@ impl Run {
         self.record.close(at, Kind::Answer, nth);
     }
 
+    /// The host dropped the await of answer `nth`: closed, with nothing answered.
+    pub(super) fn record_abandoned(&mut self, nth: u32) {
+        self.record_answer(nth, Settled::of(crate::record::Answer::Abandoned));
+    }
+
     /// Take everything the fakes have recorded, and close whatever they no longer hold.
     ///
     /// This is where the harness takes ownership: a control arrives with the invocation that

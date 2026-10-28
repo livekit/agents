@@ -7,12 +7,20 @@ import asyncio
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from .. import _core
 from .._generated.tool_executor import AsyncToolOptions, ToolHandlingOptions
 from ..llm import ToolContext
-from ..llm.tool_context import FunctionTool, Tool, Toolset, _approval_scope, _ApprovalScope
+from ..llm.tool_context import (
+    FunctionTool,
+    ModelRetry,
+    Tool,
+    Toolset,
+    _approval_scope,
+    _ApprovalScope,
+)
 from ..llm.utils import prepare_function_arguments, tool_outcome
 from ..log import logger
 from .agent import _BindingContextVar, _VoiceBinding
@@ -69,7 +77,7 @@ class ToolRunner:
         self._running: dict[str, asyncio.Task[Any]] = {}
 
     async def _core_run(
-        self, call: dict[str, Any], speech: _core.SpeechHandle, granted: bool
+        self, call: dict[str, Any], speech: _core.SpeechHandle, granted: bool, task: bool
     ) -> dict[str, Any]:
         from .._core_view import from_core_item
 
@@ -108,7 +116,11 @@ class ToolRunner:
         first_update = ctx._first_update
         await asyncio.wait({task, first_update}, return_when=asyncio.FIRST_COMPLETED)
         if task.done():
-            return _ended(fnc_call, task, approval)
+            outcome = _ended(fnc_call, task, approval)
+            # in a VoiceTask's speech a `Completed` ends the task, once validated
+            if task and outcome["kind"] == "completed":
+                return await self._validated(ctx, task.result().value, outcome)
+            return outcome
 
         # the first ctx.update() released the step; the core reads the end as a final update
         def _final(task: asyncio.Task[Any]) -> None:
@@ -117,6 +129,20 @@ class ToolRunner:
         task.add_done_callback(_final)
         message, raw = first_update.result()
         return {"kind": "update", "text": message, "raw": raw}
+
+    async def _validated(
+        self, ctx: RunContext, value: Any, outcome: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A task's `Completed(value)` through its agent's `output_type` and output validators:
+        the value the task returns, or the error its model reads and corrects."""
+        try:
+            value = TypeAdapter(self._agent.output_type).validate_python(value)
+            value = await self._agent._validate_output(ctx, value)
+        except ValidationError as e:
+            return {"kind": "tool_error", "text": str(e)}
+        except ModelRetry as e:
+            return {"kind": "tool_error", "text": e.message}
+        return {**outcome, "transition": value}
 
     def _core_cancel(self, call_id: str) -> None:
         if task := self._running.get(call_id):

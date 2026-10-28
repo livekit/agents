@@ -103,6 +103,8 @@ impl Driver {
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
         self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop, out);
+        // Every VoiceTask ends first: the agent the close exits is the one they suspended.
+        self.close_voice_tasks(now, out);
         let exit = self.plan_exit(out);
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
@@ -402,6 +404,14 @@ impl Driver {
                 self.join_close_drain(call.into_iter().collect(), out);
                 return;
             }
+            // A task somebody awaits: refused as closing; a late cancel has no task left.
+            Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
+                let why = crate::agent_activity::voice_task::VoiceTaskEnded::Closing;
+                out.trace(crate::trace::HandoffStep::TaskRefused { why });
+                out.answer(Some(run.call), Answer::VoiceTask(Err(why)));
+                return;
+            }
+            Command::VoiceTask(_) => return,
             // A run somebody awaits: refused as closing, on the stream.
             Command::Run(spec) => {
                 self.emit_now(SessionEvent::RunRefused {

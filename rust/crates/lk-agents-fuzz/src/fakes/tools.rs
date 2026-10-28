@@ -30,6 +30,21 @@ impl FakeTools {
     }
 }
 
+/// The value the runner reports for call `call_id`'s `Completed` in a task: the object `run()` must
+/// return, told apart from every other call's.
+pub fn completion_value(call_id: &str) -> u64 {
+    call_id
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// The side table a completion's value points into; nothing holds the object.
+struct NoRefs;
+
+impl lk_agents_abi::RefRegistry for NoRefs {
+    fn release(&self, _id: u64) {}
+}
+
 /// What the case tells a running body to do: answer, or first wait for the agent to go idle --
 /// `ctx.wait_for_idle()` -- and answer once it has.
 pub enum Body {
@@ -46,6 +61,7 @@ impl HostToolRunner for FakeTools {
         call: &FunctionCall,
         speech: &lk_agents_abi::CoreObject,
         granted: bool,
+        task: bool,
     ) -> Result<ToolReport, HostError> {
         let handle = Arc::clone(&speech.0)
             .downcast::<SpeechHandle>()
@@ -74,7 +90,13 @@ impl HostToolRunner for FakeTools {
         if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
             *tool = Some(call.name.clone());
         }
-        Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition: None })
+        // In a task's speech the completion is validated and its value handed over.
+        let transition =
+            (task && matches!(outcome, ToolOutcome::Completed { .. })).then(|| {
+                let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
+                lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
+            });
+        Ok(ToolReport { outcome, approval: granted.then_some(Approval::Granted), transition })
     }
 
     fn cancel(&self, call_id: &str) {

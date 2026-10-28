@@ -669,6 +669,11 @@ inputs! {
     Dtmf { input: DtmfInput, key: DtmfKey, digits: Count, confirm: bool, timeout: Millis }
         opens [Answer] leaf command::Dtmf;
     Recorder { attach: bool } leaf command::Recorder;
+    /// `VoiceTask(agent=...).run()` awaited inside this running tool's body: `agent` takes the floor
+    /// with the agent's tools, opening with a reply when `reply` (no `on_enter`).
+    /// The body waits on it; answering the tool first is the await cancelled. Made by the
+    /// conversation's tool bodies, not drawn uniformly: a run without tasks draws as before.
+    VoiceTask { tool: Ref<Tool>, agent: String, reply: bool } opens [Answer] leaf command::VoiceTask never true;
     /// The answering-machine detector's host calls (`amd_start_*`, `amd_settle`, `execute()`,
     /// `aclose()`), which reach its own system rather than the driver: no command leaf.
     Amd { input: AmdInput };

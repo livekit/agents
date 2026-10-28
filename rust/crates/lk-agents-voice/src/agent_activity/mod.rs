@@ -12,6 +12,7 @@ pub mod recognition;
 pub mod scheduling;
 pub mod speech;
 pub mod tools;
+pub mod voice_task;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::{InterruptOutcome, PausedSpeech};
@@ -81,6 +82,8 @@ pub(crate) struct AgentActivity {
     pub(crate) on_exit: crate::agent_activity::hooks::OnExit,
     /// The host's `drain()`.
     pub(crate) drain: crate::agent_activity::drain::Drain,
+    /// `VoiceTask.run()`: the tasks holding the floor and the parents they suspended.
+    pub(crate) voice_tasks: crate::agent_activity::voice_task::VoiceTasks,
     /// DTMF collection while it runs.
     pub(crate) dtmf: crate::workflows::dtmf::Dtmf,
     /// `EndCallTool`: the speech whose goodbye the session closes after.
@@ -283,6 +286,11 @@ impl Driver {
     pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand, out: &mut Out) {
         match cmd {
             // A sequence: `on_exit`, the drain, then the swap.
+            // A VoiceTask holds the floor: its parent waits on it, so no agent replaces it.
+            ActivityCommand::Update(update) if self.activity.voice_tasks.running() => {
+                let refused = crate::agent_session::HandoffRefused::TaskRunning;
+                self.refuse_handoff(None, update, refused, out)
+            }
             ActivityCommand::Update(update) => {
                 self.handoff_step(crate::agent_activity::handoff::HandoffEvent::Asked(update), out)
             }

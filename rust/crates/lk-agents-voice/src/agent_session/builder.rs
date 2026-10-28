@@ -443,6 +443,7 @@ impl DriverBuilder {
             handoff: Default::default(),
             on_exit: Default::default(),
             drain: Default::default(),
+            voice_tasks: Default::default(),
             dtmf: Default::default(),
             end_call: None,
             pending_turn: None,

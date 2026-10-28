@@ -499,6 +499,12 @@ class Agent(Generic[Context_T, Output_T]):
             result = await result
         return result
 
+    def _has_on_enter(self) -> bool:
+        """An ``on_enter`` was registered or overridden."""
+        return self._on_enter_fn is not None or not isinstance(
+            inspect.getattr_static(type(self), "on_enter"), _OnEnterHook
+        )
+
     async def _enter(self, ctx: RunContext[Any]) -> Any:
         """``on_enter`` as it was written: an override takes the context when it declares one,
         the decorator form takes the call's session and is nothing in text."""

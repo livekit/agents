@@ -130,6 +130,10 @@ const EXPORT_SOURCES: &[(&str, &str)] = &[
     ("rust/crates/lk-agents-inference/src/llm/mod.rs", "lk_agents_inference::llm"),
     // One subject per file, reached through `agent_session`'s re-exports, in the order they were
     // declared in when they were one file.
+    (
+        "rust/crates/lk-agents-voice/src/agent_activity/voice_task.rs",
+        "lk_agents_voice::agent_activity::voice_task",
+    ),
     ("rust/crates/lk-agents-voice/src/agent_session/mod.rs", "lk_agents_voice::agent_session"),
     ("rust/crates/lk-agents-voice/src/agent_session/commands.rs", "lk_agents_voice::agent_session"),
     ("rust/crates/lk-agents-abi/src/utils/clock.rs", "lk_agents_abi::utils::clock"),

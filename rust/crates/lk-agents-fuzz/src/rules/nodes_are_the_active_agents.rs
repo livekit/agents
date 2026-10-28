@@ -3,15 +3,14 @@
 //! An agent's `llm_node`, `tts_node`, `stt_node`, `transcription_node` and
 //! `realtime_audio_output_node` are its own: the reference calls each on the agent of the activity
 //! running the step, and a handoff drains the old activity before the new one speaks. So once the
-//! driver installed an agent (`AgentUpdated`, named by the `on_enter` it issues), no node of the
-//! agent it replaced opens again past the instant of that install (several handoffs landing in one
-//! cycle each ask for a recognition stream, opened after the cycle and discarded once superseded).
-//! The agent a handoff asked for may open its nodes from the call on: the journal is read after
-//! the fact, so its stamps can trail what the fakes saw.
-use lk_agents_voice::{
-    agent_session::{HookId, HookKind},
-    trace::{HandoffStep, Step},
-};
+//! driver installed an agent (`AgentUpdated`, which names it: a handoff's, a `VoiceTask`'s, or a
+//! parent a task gives the floor back to), no node of the agent it replaced opens again past the
+//! instant of that install (several handoffs landing in one cycle each ask for a recognition
+//! stream, opened after the cycle and discarded once superseded). The agent a handoff or a task
+//! asked for may open its nodes from the call on: the journal is read after the fact, so its
+//! stamps can trail what the fakes saw. A parent a task suspends finishes the step whose tool
+//! started the task: its nodes may open until the task ends.
+use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
     authored::Authored,
@@ -33,30 +32,45 @@ impl Rule for NodesAreTheActiveAgents {
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
-        // Each install, and the agent its `on_enter` names.
-        let mut installs: Vec<(Observed, &str)> = Vec::new();
-        let mut installing = None;
+        // Each install, and the agent it installed.
+        let installs: Vec<(Observed, &str)> = (r.internal_view().steps().iter())
+            .filter_map(|(at, step)| match step {
+                Step::Handoff(HandoffStep::AgentUpdated { agent, .. }) => {
+                    Some((*at, agent.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        // Each task's parent, from its entry to its end.
+        let mut suspended: Vec<(Observed, Observed, &str)> = Vec::new();
+        let mut open: Vec<(
+            lk_agents_voice::agent_activity::voice_task::VoiceTaskId,
+            Observed,
+            &str,
+        )> = Vec::new();
         for (at, step) in r.internal_view().steps() {
             match step {
-                Step::Handoff(HandoffStep::AgentUpdated { .. }) => installing = Some(at),
-                Step::Handoff(HandoffStep::HookIssued {
-                    kind: HookKind::OnEnter,
-                    agent: Some(agent),
-                    ..
-                }) => {
-                    if let Some(at) = installing.take() {
-                        installs.push((*at, agent.as_str()));
+                Step::Handoff(HandoffStep::TaskEntered { task, parent, .. }) => {
+                    open.push((*task, *at, parent.as_str()));
+                }
+                Step::Handoff(HandoffStep::TaskEnded { task, .. }) => {
+                    if let Some(i) = open.iter().position(|(t, ..)| t == task) {
+                        let (_, from, parent) = open.remove(i);
+                        suspended.push((from, *at, parent));
                     }
                 }
                 _ => {}
             }
         }
+        suspended.extend(open.into_iter().map(|(_, from, parent)| (from, Observed::END, parent)));
         let asked: Vec<(Observed, &str)> = r
             .host_view()
             .api_calls()
             .into_iter()
             .filter_map(|call| match call.input() {
-                Input::Handoff { agent, .. } => Some((call.called_at(), agent.as_str())),
+                Input::Handoff { agent, .. } | Input::VoiceTask { agent, .. } => {
+                    Some((call.called_at(), agent.as_str()))
+                }
                 _ => None,
             })
             .collect();
@@ -74,31 +88,25 @@ impl Rule for NodesAreTheActiveAgents {
             let arriving = asked
                 .iter()
                 .any(|(called, to)| *called < at && *to == agent && since < Some(*called));
+            let finishing = suspended
+                .iter()
+                .any(|(from, to, parent)| *from < at && at <= *to && *parent == agent);
             check.expect(
                 Subject::Session,
-                agent == active || arriving || same_instant,
+                agent == active || arriving || same_instant || finishing,
                 format!("{node:?} of {agent} opened at seq {} while {active} is active", at.seq),
             );
         }
     }
 }
 
-fn swapped() -> Step {
+fn swapped(agent: &str) -> Step {
     Step::Handoff(HandoffStep::AgentUpdated {
+        agent: agent.into(),
         tools: 0,
         chat_ctx: false,
         reopened: "",
         legs: Default::default(),
-    })
-}
-
-fn entered(hook: u64, agent: &str) -> Step {
-    Step::Handoff(HandoffStep::HookIssued {
-        hook: HookId(hook),
-        kind: HookKind::OnEnter,
-        agent: Some(agent.into()),
-        speech: None,
-        turn: None,
     })
 }
 
@@ -117,8 +125,7 @@ fn opened_by_each_agent_in_turn() -> Recording {
         .api_call(handoff("next"))
         .node("next", NodeUse::Stt)
         .node(OPENING_AGENT, NodeUse::Tts)
-        .journal(swapped())
-        .journal(entered(2, "next"))
+        .journal(swapped("next"))
         .node("next", NodeUse::Transcription)
         .done()
 }
@@ -128,8 +135,7 @@ fn opened_by_the_replaced_agent() -> Recording {
     Authored::new()
         .node(OPENING_AGENT, NodeUse::Transcription)
         .api_call(handoff("next"))
-        .journal(swapped())
-        .journal(entered(2, "next"))
+        .journal(swapped("next"))
         .node(OPENING_AGENT, NodeUse::Transcription)
         .done()
 }

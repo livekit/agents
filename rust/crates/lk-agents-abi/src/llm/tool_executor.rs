@@ -236,7 +236,8 @@ impl Approval {
 pub struct ToolReport {
     pub outcome: ToolOutcome,
     pub approval: Option<Approval>,
-    /// The `InputRequired` itself, the output of a run that ends on this call's speech.
+    /// The `InputRequired` itself, the output of a run that ends on this call's speech; for a
+    /// `Completed` from a VoiceTask's tool, the value the host validated, which ends the task.
     pub transition: Option<crate::HostRef>,
 }
 

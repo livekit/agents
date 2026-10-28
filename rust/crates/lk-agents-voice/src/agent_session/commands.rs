@@ -38,6 +38,7 @@ pub enum Command {
     Dtmf(DtmfCommand),
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
+    VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand),
     /// From `Origin::Amd`: the detector attached (`None`) or released its verdict; its `amd`
     /// span is the session trace's.
     AmdSpan(Option<lk_agents_abi::voice::amd::AmdPrediction>),
@@ -144,6 +145,8 @@ pub enum Answer {
     Drain(Result<(), DrainRefused>),
     Handoff(Result<(), HandoffRefused>),
     Dtmf(crate::workflows::dtmf::DtmfOutcome),
+    /// The value of the task's validated `Completed`.
+    VoiceTask(Result<lk_agents_abi::HostRef, crate::agent_activity::voice_task::VoiceTaskEnded>),
 }
 
 macro_rules! answer_picks {
@@ -167,6 +170,7 @@ answer_picks! {
     drain: Drain(Result<(), DrainRefused>),
     handoff: Handoff(Result<(), HandoffRefused>),
     dtmf: Dtmf(crate::workflows::dtmf::DtmfOutcome),
+    voice_task: VoiceTask(Result<lk_agents_abi::HostRef, crate::agent_activity::voice_task::VoiceTaskEnded>),
 }
 
 #[derive(Debug)]
@@ -192,6 +196,10 @@ impl Command {
             Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure, SkipReplies),
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Digit, Stop),
+            Command::VoiceTask(c) => {
+                use crate::agent_activity::voice_task::VoiceTaskCommand;
+                leaf!(c; VoiceTaskCommand: Run, Cancel)
+            }
             Command::Video(_) => "Command::Video",
             Command::Close(_) => "Command::Close",
             Command::HookDone { .. } => "Command::HookDone",
@@ -246,6 +254,12 @@ impl From<IvrCommand> for Command {
 impl From<ActivityCommand> for Command {
     fn from(c: ActivityCommand) -> Command {
         Command::Activity(c)
+    }
+}
+
+impl From<crate::agent_activity::voice_task::VoiceTaskCommand> for Command {
+    fn from(c: crate::agent_activity::voice_task::VoiceTaskCommand) -> Command {
+        Command::VoiceTask(c)
     }
 }
 
@@ -531,6 +545,8 @@ pub enum DrainRefused {
     Closing,
     /// Scheduling was resumed under the drain's pause: the agent runs again.
     ActivityChanging,
+    /// A `VoiceTask` holds the floor; its parent waits on it.
+    TaskRunning,
 }
 
 impl DrainRefused {
@@ -538,6 +554,7 @@ impl DrainRefused {
         match self {
             DrainRefused::Closing => "closing",
             DrainRefused::ActivityChanging => "activity_changing",
+            DrainRefused::TaskRunning => "voice_task_running",
         }
     }
 }
@@ -575,6 +592,8 @@ pub struct AgentUpdate {
 pub enum HandoffRefused {
     Closing,
     DrainRefused,
+    /// A `VoiceTask` holds the floor; its parent waits on it.
+    TaskRunning,
 }
 
 /// The provider a three-state argument hands over.
@@ -590,6 +609,9 @@ impl Command {
     pub fn resources(&self) -> Vec<ResourceId> {
         match self {
             Command::Activity(ActivityCommand::Update(update)) => update.resources().collect(),
+            Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
+                run.update.resources().collect()
+            }
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::UpdateModels { stt, vad, llm, tts }) => [

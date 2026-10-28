@@ -673,6 +673,8 @@ pub struct ReplyContext {
     pub speech: crate::agent_activity::options::SpeechOptions,
     /// This reply answers an `InputRequired(tool=)`: its call of that tool takes the person's words.
     pub answering: Option<crate::tool_executor::Answering>,
+    /// Made while a `VoiceTask`'s agent held the floor: a `Completed` from its tools ends the task.
+    pub task: bool,
 }
 
 /// The agent's `@agent.instructions` functions, rendered by the host for each model request of a

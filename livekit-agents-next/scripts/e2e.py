@@ -79,6 +79,8 @@ LINES = {
     "interrupt": "Sorry to interrupt, what time do you close today?",
     "hmm": "Hmm, umm.",
     "count": "Please count slowly from one to twenty.",
+    "receipt": "Please send my refund receipt to a different email address.",
+    "email": "It's theo at example dot com.",
 }
 LONG = (
     "Our store opens at nine in the morning and closes at six in the evening. "
@@ -88,8 +90,9 @@ LONG = (
 )
 HOST_SAY = "This is a message from the host."
 BILLING_GREETING = "Billing desk here, how can I help?"
+RECEIPT_SET = "The refund receipt email is now"
 # texts the scenarios fix: compared whole, where a model's words are compared by shape
-FIXED = [LONG, HOST_SAY, BILLING_GREETING, "Please confirm"]
+FIXED = [LONG, HOST_SAY, BILLING_GREETING, "Please confirm", RECEIPT_SET]
 
 INSTRUCTIONS = (
     "You are a test agent on a phone line. Answer in one short sentence of at most ten words "
@@ -97,6 +100,11 @@ INSTRUCTIONS = (
     "and never ask a follow-up question. If asked about the weather, call get_weather. If asked "
     "to delete the account, call delete_account. If asked to book a table, call book_table. If "
     "the person asks for billing, call transfer_to_billing."
+)
+EMAIL_INSTRUCTIONS = (
+    "You collect the person's new receipt email address on a phone line. Ask for it in one short "
+    "sentence. As soon as they say one, call confirm_email with it written as an address "
+    "(theo at example dot com is theo@example.com); never ask them to confirm it."
 )
 EVENTS = (
     "user_state_changed",
@@ -202,6 +210,29 @@ if function_tool is not None:  # module level: the reference pickles an agent's 
         await asyncio.sleep(3.0)
         return f"A table is booked at {time}."
 
+    try:  # 2.0's live task; the reference has none, and runs no scenario using it
+        from livekit.agents import Completed, VoiceTask
+    except ImportError:
+        VoiceTask = None
+
+    if VoiceTask is not None:
+        email_collector = Agent(instructions=EMAIL_INSTRUCTIONS, output_type=str)
+
+        @email_collector.tool
+        async def confirm_email(ctx: RunContext, email_address: str) -> Completed[str]:
+            """Confirm the receipt email address.
+
+            Args:
+                email_address: the address, as an email address
+            """
+            return Completed(email_address)
+
+        @function_tool
+        async def change_receipt_email(ctx: RunContext) -> str:
+            """Collect and confirm a new email address for the refund receipt."""
+            email = await VoiceTask(agent=email_collector).run()
+            return f"{RECEIPT_SET} {email}."
+
     @function_tool
     async def transfer_to_billing(ctx: RunContext) -> str:
         """Transfer the caller to the billing desk."""
@@ -241,9 +272,12 @@ async def entry(ctx: Any) -> None:
     if "user_away_timeout" in cfg:
         kwargs["user_away_timeout"] = cfg["user_away_timeout"]
     session: Any = VoiceSession(**kwargs)
-    agent = Agent(
-        instructions=INSTRUCTIONS, tools=[get_weather, delete_account, transfer_to_billing]
-    )
+    tools = [get_weather, delete_account, transfer_to_billing]
+    instructions = INSTRUCTIONS
+    if cfg.get("voice_task"):
+        tools.append(change_receipt_email)
+        instructions += " If asked to change the receipt email, call change_receipt_email."
+    agent = Agent(instructions=instructions, tools=tools)
 
     for name in EVENTS:
 
@@ -752,6 +786,8 @@ class Scenario:
     agent: dict[str, Any] = dataclasses.field(default_factory=dict)
     # what the scenario is for, checked on each stack alone: name -> predicate over its view
     expect: dict[str, Callable[[dict[str, Any]], bool]] = dataclasses.field(default_factory=dict)
+    # a 2.0 feature the reference does not have runs on next alone, judged by its checks
+    stacks: tuple[str, ...] = STACKS
 
 
 async def sc_turns(c: Call) -> None:
@@ -784,6 +820,12 @@ async def sc_tools(c: Call) -> None:
     await c.say("book")
     await asyncio.sleep(4.0)  # the background tool's result comes back on its own
     await c.settle()
+
+
+async def sc_voice_task(c: Call) -> None:
+    await c.start()
+    await c.say("receipt")
+    await c.say("email")
 
 
 async def sc_handoff(c: Call) -> None:
@@ -906,6 +948,22 @@ SCENARIOS: dict[str, Scenario] = {
         expect={
             "handed off": lambda v: sum(i == "agent_handoff" for i in v["history"]) >= 2,
             "billing greeted": lambda v: any(_norm(BILLING_GREETING) in i for i in v["history"]),
+        },
+    ),
+    "voice_task": Scenario(
+        sc_voice_task,
+        agent={"voice_task": True},
+        stacks=("next",),
+        expect={
+            "the task returned the address to the tool": lambda v: any(
+                i.startswith("function_call_output change_receipt_email")
+                and "theo example com" in i
+                for i in v["history"]
+            ),
+            "the task's agent took the floor and gave it back": lambda v: (
+                sum(i == "agent_handoff" for i in v["history"]) >= 2
+            ),
+            "the frontend replied to its tool": _tool_ran("change_receipt_email"),
         },
     ),
     "host": Scenario(
@@ -1524,10 +1582,11 @@ async def drive(args: argparse.Namespace) -> int:
     async def scenario(name: str, attempt: int) -> None:
         async with sem:
             print(f"  {name} (attempt {attempt}) ...", flush=True)
+            stacks = SCENARIOS[name].stacks
             both = await asyncio.gather(
-                *(run_one(name, s, workers[s].name, lkapi, speech, runs) for s in STACKS)
+                *(run_one(name, s, workers[s].name, lkapi, speech, runs) for s in stacks)
             )
-            results[name] = dict(zip(STACKS, both, strict=True))
+            results[name] = dict(zip(stacks, both, strict=True))
 
     try:
         await asyncio.gather(*(w.registered() for w in workers.values()))
@@ -1555,20 +1614,18 @@ def _differs(name: str, run: dict[str, Any]) -> bool:
 
 def _regressions(j: dict[str, Any]) -> list[str]:
     """A check failing on next alone, or a consistency problem next alone has."""
-    out = [
-        f"next did not: {k}"
-        for k in j["expect_failed"]["next"]
-        if k not in j["expect_failed"]["ref"]
-    ]
-    out += [f"next: {p}" for p in j["consistency"]["next"] if p not in j["consistency"]["ref"]]
+    ref_failed = j["expect_failed"].get("ref", [])
+    ref_consistency = j["consistency"].get("ref", [])
+    out = [f"next did not: {k}" for k in j["expect_failed"]["next"] if k not in ref_failed]
+    out += [f"next: {p}" for p in j["consistency"]["next"] if p not in ref_consistency]
     return out
 
 
 def _judge(name: str, run: dict[str, Any]) -> dict[str, Any]:
-    views = {s: view(run[s]) for s in STACKS}
-    unknown, intended = diff(views["ref"], views["next"], name)
+    views = {s: view(run[s]) for s in STACKS if s in run}
+    unknown, intended = diff(views["ref"], views["next"], name) if len(views) == 2 else ([], [])
     checks = {
-        s: [k for k, f in SCENARIOS[name].expect.items() if not _safe(f, views[s])] for s in STACKS
+        s: [k for k, f in SCENARIOS[name].expect.items() if not _safe(f, views[s])] for s in views
     }
     return {
         "views": views,
@@ -1576,7 +1633,7 @@ def _judge(name: str, run: dict[str, Any]) -> dict[str, Any]:
         "intended": intended,
         "flaky": [],
         "expect_failed": checks,
-        "consistency": {s: consistency(views[s]) for s in STACKS},
+        "consistency": {s: consistency(views[s]) for s in views},
     }
 
 
@@ -1632,8 +1689,8 @@ def report(names: list[str], results: dict[str, Any], runs: Path) -> int:
                 f"same but for intended ({', '.join(sorted({d['key'] for d in j['intended']}))})"
             )
         print(f"{n}: {status}")
-        if any(j["views"][s]["caller"]["av_lag"] is not None for s in STACKS):
-            lags = {s: j["views"][s]["caller"]["av_lag"] for s in STACKS}
+        if any(v["caller"]["av_lag"] is not None for v in j["views"].values()):
+            lags = {s: v["caller"]["av_lag"] for s, v in j["views"].items()}
             print(f"    video behind audio (s): {lags}")
         for d in unknown:
             for line in delta(d["ref"], d["next"]):
@@ -1644,17 +1701,17 @@ def report(names: list[str], results: dict[str, Any], runs: Path) -> int:
             print(
                 f"    (did not repeat) {d['field']}: " + "; ".join(delta(d["ref"], d["next"]))[:300]
             )
-        for s in STACKS:
+        for s in j["views"]:
             if j["expect_failed"][s] and s == "ref":
                 print(f"    ref did not: {j['expect_failed'][s]}")
             for p in j["consistency"][s]:
-                if s == "ref" or p not in j["consistency"]["ref"]:
+                if s == "ref" or p not in j["consistency"].get("ref", []):
                     print(f"    ({s}) {p}")
         if bad:
             failed.append(n)
 
     print("\nlatency per stage (s), every reply of every scenario")
-    lat = {s: latencies({n: results[n][s] for n in names}) for s in STACKS}
+    lat = {s: latencies({n: results[n][s] for n in names if s in results[n]}) for s in STACKS}
     print(f"{'stage':<20}{'ref p50':>10}{'next p50':>10}{'ref p90':>10}{'next p90':>10}{'n':>8}")
     for stage in lat["ref"]:
         a, b = lat["ref"][stage], lat["next"][stage]

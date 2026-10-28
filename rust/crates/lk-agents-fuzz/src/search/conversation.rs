@@ -250,6 +250,9 @@ struct Host {
     tool_calls: u8,
     /// How often it scopes a filler on a tool it is waiting on.
     fillers: u8,
+    /// How often a tool it is waiting on runs a `VoiceTask` (collecting an email, say) before it
+    /// returns: nested when the task's own tool does, cancelled when the body ends first.
+    voice_tasks: u8,
 }
 
 impl Host {
@@ -265,6 +268,7 @@ impl Host {
             speaking: if busy { rng.u8(20..=60) } else { rng.u8(0..=30) },
             tool_calls: rng.u8(0..=100),
             fillers: rng.u8(0..=100),
+            voice_tasks: if rng.u8(0..100) < 50 { rng.u8(5..=40) } else { 0 },
         }
     }
 }
@@ -483,6 +487,7 @@ async fn converse_in(
         randomness: dials.randomness,
         call_length_ms: dials.call_length_ms,
         ending: false,
+        tasks: Rng::with_seed(seed ^ 0x0000_0056_5461_736b),
     };
     talk.speaker = talk.draw::<Option<Speaker>>();
     talk.voice_down = talk.providers.voice_down;
@@ -530,6 +535,8 @@ struct Talk {
     call_length_ms: f64,
     /// The call is being ended: no second ending starts inside the first.
     ending: bool,
+    /// The `VoiceTask` coins, a stream of their own: a run without tasks draws as it always did.
+    tasks: Rng,
 }
 
 /// Plumbing: how an input reaches the driver, and the small draws.
@@ -1377,6 +1384,17 @@ impl Talk {
                             .find(|row| matches!(row, Input::FillerStart { .. }))
                     };
                     rows.extend(filler);
+                }
+                // A body awaiting its `VoiceTask` returns once the task answered, or now and then
+                // first (the await cancelled); a body may start one instead of returning.
+                if self.run.awaits_task(tool) && self.tasks.u8(0..100) >= 10 {
+                    continue;
+                }
+                if !self.run.awaited_task(tool) && self.tasks.u8(0..100) < self.host.voice_tasks {
+                    let agent = (*self.tasks.choice(&["collector", "speller"]).unwrap()).into();
+                    let reply = self.tasks.bool();
+                    rows.push(Input::VoiceTask { tool: Ref::new(tool), agent, reply });
+                    continue;
                 }
                 let answer = self.draw::<ToolAnswer>();
                 let text = self.line();

@@ -323,6 +323,7 @@ impl Run {
             steps,
             livelock,
             pending: BTreeMap::new(),
+            task_awaits: BTreeMap::new(),
             streams: BTreeMap::new(),
             handles: BTreeMap::new(),
             utterances: BTreeMap::new(),

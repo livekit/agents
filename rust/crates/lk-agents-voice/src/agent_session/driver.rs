@@ -596,6 +596,7 @@ impl Driver {
             Command::Close(close) => self.begin_closing(now, close, out),
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome, out),
             Command::Run(spec) => self.on_run(now, *spec, out),
+            Command::VoiceTask(cmd) => self.on_voice_task(now, cmd, out),
             Command::AmdSpan(verdict) => {
                 let mut spans = Vec::new();
                 let wall = self.step.wall_secs_at(now);

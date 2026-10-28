@@ -68,6 +68,7 @@ fn on_exit(hook: u64, agent: &str) -> Step {
 
 fn swapped() -> Step {
     Step::Handoff(HandoffStep::AgentUpdated {
+        agent: "agent".into(),
         tools: 0,
         chat_ctx: false,
         reopened: "",

@@ -612,6 +612,9 @@ pub struct Run {
     /// Set by the observer when it stopped a step for journaling without bound at one instant.
     livelock: Arc<Mutex<Option<String>>>,
     pending: BTreeMap<u32, Pending>,
+    /// The `VoiceTask.run()` answer each tool body awaits, by call id: answering the tool first
+    /// drops the await, as a cancelled body does.
+    task_awaits: BTreeMap<String, u32>,
     streams: BTreeMap<u32, Feeding>,
     handles: BTreeMap<u64, Arc<SpeechHandle>>,
     /// Which recognition stream each utterance is on: an `SttInterim` names the utterance, and the

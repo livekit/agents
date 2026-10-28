@@ -63,6 +63,7 @@
 //! - `lk_agents_voice::agent_session::SessionApi::host_attach_recorder`: parameter `recorder`: not yet: `Arc<dyn AudioRecorder>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_models`: parameter `llm`: not yet: `Arc<dyn Llm>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::update_agent`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
+//! - `lk_agents_voice::agent_session::SessionApi::run_voice_task`: parameter `frame`: not yet: `UpdateAgentArgs` is a keyword record (spread into keywords in Python; an options object in Node)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_input`: parameter `source`: not yet: `Arc<dyn AudioInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_video_input`: parameter `source`: not yet: `Arc<dyn VideoInput>` (a host object behind a proxy)
 //! - `lk_agents_voice::agent_session::SessionApi::set_audio_output`: parameter `sink`: not yet: `Arc<dyn AudioOutput>` (a host object behind a proxy)

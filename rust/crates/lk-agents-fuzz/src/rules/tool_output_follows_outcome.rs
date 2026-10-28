@@ -5,9 +5,14 @@
 //! open is answered by the person's next message: that call's output becomes what they said.
 //!
 //! A step cut short records its outputs asking for no reply, and the close settles calls still
-//! running as an error, so neither is held to the reply flag; a body cancelled has no outcome.
+//! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
+//! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
+//! agent asks for no reply to it.
 use lk_agents_abi::{ChatItem, Role, llm::tool_executor::WAITING_PREFIX};
-use lk_agents_voice::{events::SessionEvent, trace::Step};
+use lk_agents_voice::{
+    events::SessionEvent,
+    trace::{HandoffStep, Step},
+};
 
 use crate::{
     authored::Authored,
@@ -46,6 +51,25 @@ impl Rule for ToolOutputFollowsOutcome {
                 _ => None,
             })
             .collect();
+        // Each task's stretch, from its entry to its end: a speech created in one is the task's.
+        let mut stretches = Vec::new();
+        let mut open = Vec::new();
+        for (at, step) in r.journal() {
+            match step {
+                Step::Handoff(HandoffStep::TaskEntered { task, .. }) => open.push((*task, *at)),
+                Step::Handoff(HandoffStep::TaskEnded { task, .. }) => {
+                    if let Some(i) = open.iter().position(|(t, _)| t == task) {
+                        stretches.push((open.remove(i).1, *at));
+                    }
+                }
+                _ => {}
+            }
+        }
+        stretches.extend(open.into_iter().map(|(_, from)| (from, crate::record::Observed::END)));
+        let in_task = |speech: u64| {
+            let created = host.speech(speech).created_at();
+            created.is_some_and(|c| stretches.iter().any(|(from, to)| *from < c && c <= *to))
+        };
         for applied in inputs.accepted() {
             let Input::ToolAnswered { tool, answer, text: AgentText(text) } = &applied.input else {
                 continue;
@@ -68,7 +92,10 @@ impl Rule for ToolOutputFollowsOutcome {
                 continue;
             }
             let outcome = crate::fakes::tools::outcome_of(*answer, text);
-            let shape = outcome.shape();
+            let mut shape = outcome.shape();
+            if *answer == ToolAnswer::Completed && in_task(speech) {
+                shape.reply_required = false;
+            }
             let want = outcome.delivered().unwrap_or(shape.text);
             let subject = Subject::Resource(Kind::Tool, tool.nth);
             check.expect_with(subject.clone(), output.output == want, || {

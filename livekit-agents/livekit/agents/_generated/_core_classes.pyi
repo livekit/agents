@@ -879,6 +879,33 @@ class VoiceSession:
         transcription_node: Any | None = None,
         realtime_audio_output_node: Any | None = None,
     ) -> bool: ...
+    async def run_voice_task(
+        self,
+        *,
+        instructions: Any,
+        dynamic_instructions: Any | None = None,
+        agent: str,
+        agent_host: Any | None = None,
+        tools: list[Any] | None = None,
+        tools_host: Any | None = None,
+        tool_runner: Any | None = None,
+        chat_ctx: list[ChatItem] | None = None,
+        llm: NotGivenOr[Any | None] = ...,
+        tts: NotGivenOr[Any | None] = ...,
+        stt: NotGivenOr[Any | None] = ...,
+        vad: NotGivenOr[Any | None] = ...,
+        turn_handling: Any | None = None,
+        min_consecutive_speech_delay: float | None = None,
+        use_tts_aligned_transcript: bool | None = None,
+        expressive: NotGivenOr[Any] = ...,
+        llm_node: Any | None = None,
+        tts_node: Any | None = None,
+        stt_node: Any | None = None,
+        transcription_node: Any | None = None,
+        realtime_audio_output_node: Any | None = None,
+        origin: str | None = None,
+        opens_with_reply: bool = False,
+    ) -> Any: ...
     def set_audio_input(self, source: Any | None) -> None: ...
     def set_video_input(self, source: Any | None) -> None: ...
     def set_audio_output(self, sink: Any | None) -> None: ...

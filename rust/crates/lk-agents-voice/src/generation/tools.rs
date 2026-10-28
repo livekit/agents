@@ -130,6 +130,7 @@ impl ToolStep {
             let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
             let previous = self.last_deferred_start.replace(started_rx);
             let task_owner = Arc::clone(&handle);
+            let task = ctx.task;
             let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(&*spawner, async move {
                 // A start already reported runs, as the reference's executor starts the body
                 // right after `tool_execution_started_cb`, interrupted or not.
@@ -163,7 +164,7 @@ impl ToolStep {
                             Some(rx) => rx.await.unwrap_or(false),
                             None => false,
                         };
-                        let report = runner.answer(&one, &host_speech, granted).await;
+                        let report = runner.answer(&one, &host_speech, granted, task).await;
                         handle.tool_returned(&one.call_id);
                         report
                     }

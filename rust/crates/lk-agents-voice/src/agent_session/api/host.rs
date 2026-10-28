@@ -566,12 +566,70 @@ impl SessionApi {
         let mut update = self.frame(frame);
         update.call = Some(call);
         let answer = Reply::new(async move { matches!(rx.await, Ok(Ok(()))) });
+        self.send_frame(Origin::Host, update, |u| ActivityCommand::Update(Box::new(u)).into())?;
+        Ok(answer)
+    }
+
+    /// `VoiceTask.run()`: `update_agent`'s keywords for the task's agent, sent from inside a tool
+    /// (`origin` is its `"tool:<call_id>"`). The agent holds the floor until one of its tools
+    /// completes with a value the host validated, which this resolves to; the parent comes back
+    /// without its hooks. Raises when refused or ended without a value. A cancelled await ends
+    /// the task, and every task it started, and puts the parent back.
+    #[host(method(kw_only = "frame", defaults(opens_with_reply = false)))]
+    pub fn run_voice_task(
+        &self,
+        #[host(kwargs)] frame: UpdateAgentArgs,
+        origin: Option<&str>,
+        opens_with_reply: bool,
+    ) -> Result<
+        Reply<Result<lk_agents_abi::HostRef, crate::agent_activity::voice_task::VoiceTaskEnded>>,
+        CommandRefused,
+    > {
+        use crate::agent_activity::voice_task::{VoiceTaskCommand, VoiceTaskEnded, VoiceTaskRun};
+        let origin = origin_of(origin)?;
+        let (call, rx) = self.call(Answer::voice_task)?;
+        let tx = self.api()?;
+        // `session.options` keeps the parent's layer: the task's is temporary.
+        let vad = self.vad.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let (stack, legs) = (self.stack(), self.legs());
+        let update = self.frame(frame);
+        *self.stack.lock().unwrap_or_else(|p| p.into_inner()) = stack;
+        *self.legs.lock().unwrap_or_else(|p| p.into_inner()) = legs;
+        *self.vad.lock().unwrap_or_else(|p| p.into_inner()) = vad;
+        self.send_frame(origin, update, move |update| {
+            let run = VoiceTaskRun { update: Box::new(update), opens_with_reply, call };
+            VoiceTaskCommand::Run(Box::new(run)).into()
+        })?;
+        // Dropped unanswered (the awaiter was cancelled): the task ends.
+        struct Awaiting(Option<(crate::agent_session::Tx, crate::agent_session::RequestId)>);
+        impl Drop for Awaiting {
+            fn drop(&mut self) {
+                if let Some((tx, call)) = self.0.take() {
+                    let _ = tx.send_from(Origin::Host, VoiceTaskCommand::Cancel { call }.into());
+                }
+            }
+        }
+        let awaiting = Awaiting(Some((tx, call)));
+        Ok(Reply::new(async move {
+            let mut awaiting = awaiting;
+            let answer = rx.await;
+            awaiting.0 = None;
+            answer.unwrap_or(Err(VoiceTaskEnded::Closing))
+        }))
+    }
+
+    /// `update`'s toolsets set up first, in call order: the turn is taken now. Then the command
+    /// `wrap` makes of it is sent as `origin`.
+    fn send_frame(
+        &self,
+        origin: Origin,
+        mut update: crate::agent_session::AgentUpdate,
+        wrap: impl FnOnce(crate::agent_session::AgentUpdate) -> Command + Send + 'static,
+    ) -> Result<(), SessionRefused> {
         let (Some(hooks), Some(tools)) = (self.host.hooks.clone(), update.toolset.host.clone())
         else {
-            self.send(ActivityCommand::Update(Box::new(update)))?;
-            return Ok(answer);
+            return self.send_from(origin, wrap(update));
         };
-        // The new agent's toolsets set up first, in call order: the turn is taken now.
         let api = self.running(|r| Ok(r.api.clone()))?;
         let resources = self.resources.clone();
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
@@ -588,14 +646,14 @@ impl SessionApi {
                 hooks.hook_failed("setup_tools", e.host_ref.clone());
                 Vec::new()
             });
-            let cmd: Command = ActivityCommand::Update(Box::new(update)).into();
+            let cmd = wrap(update);
             let handed = cmd.resources();
-            if api.send_from(Origin::Host, cmd).is_err() {
+            if api.send_from(origin, cmd).is_err() {
                 handed.into_iter().for_each(|id| resources.release(id));
             }
         };
         self.spawner.spawn(Box::pin(handoff));
-        Ok(answer)
+        Ok(())
     }
 
     /// `session.input.audio = ..` after `start()`; `None` detaches. The reference delivers audio

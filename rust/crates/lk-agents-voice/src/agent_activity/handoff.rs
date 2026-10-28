@@ -426,6 +426,7 @@ impl Driver {
             realtime: self.activity.rt_session.is_some(),
         };
         out.trace(HandoffStep::AgentUpdated {
+            agent: self.activity.agent.clone(),
             tools: count,
             chat_ctx: replaced_ctx,
             reopened,

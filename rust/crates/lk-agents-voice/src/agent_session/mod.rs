@@ -559,7 +559,7 @@ impl Driver {
             s.outputs.audio.as_ref().map(|r| r.id),
             s.outputs.transcription.as_ref().map(|r| r.id),
         ];
-        let updates = self.activity.handoff.updates();
+        let updates = self.activity.handoff.updates().chain(self.activity.voice_tasks.parents());
         slots.into_iter().flatten().chain(updates.flat_map(|u| u.resources())).collect()
     }
 
