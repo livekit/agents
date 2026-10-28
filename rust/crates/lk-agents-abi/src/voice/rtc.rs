@@ -18,6 +18,10 @@ use std::time::Duration;
 use lk_agents_abi::{AudioFrame, HostRef, MediaRef};
 use lk_agents_host_derive::Host;
 
+mod error;
+
+pub use error::RtcError;
+
 /// A participant's stable identity string. `room_io/` keys everything on this and never on `sid`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[crate::host(string)]
