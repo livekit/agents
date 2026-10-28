@@ -1,0 +1,38 @@
+livekit-agents/livekit/agents/voice/amd/_chat_context.py
+  s_aaf78334cb7322::t_2e51da9148984e 110
+  s_aaf78334cb7322::t_529ee6a4a7d72e 50-57,67-68,118
+livekit-agents/livekit/agents/voice/amd/_fsm.py
+  s_aaf78334cb7322::t_c5affa267dae67 51-56
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_aaf78334cb7322::t_74c8f8118811df 100-103,155-163,171
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  s_aaf78334cb7322::t_8c1a5ec9a9beea 54-58,89-97,106-108,111-121,127-146
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_aaf78334cb7322::t_6b1ac7030e82ac 4,23,53-55,299,584,605-609,614-648,654,657,760-764,798-806,925-927
+tests/test_amd_corrections.py
+  s_aaf78334cb7322::t_9e5e64f5e7b560 9,19,107-109
+tests/test_amd_detector.py
+  s_aaf78334cb7322::t_ac40b2aad21477 37,316-327,568-569,573,598-601,900-901,1008-1027,1038,1056,1066,1798-1826,2018-2020,2048-2064,2074-2076,2096-2180,2447,2484,2507,2912-2916,3005
+tests/test_amd_realtime.py
+  s_aaf78334cb7322::t_fb0e9159d2f7d6 290-291,302,616-620
+tests/test_amd_silence.py
+  s_aaf78334cb7322::t_a3c1fa3c49346e 13-16,21,514,1000-1005
+tests/test_amd_stt.py
+  s_aaf78334cb7322::t_bf5b9067fce375 80-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8157c2e13e0ee4ec9f256af393844fc74e08e90f",
+  "prompts": {},
+  "sessions": {
+    "s_aaf78334cb7322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2193486-0057-4a50-bb24-44082ff248d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
