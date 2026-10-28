@@ -308,3 +308,13 @@ pub struct StartJobFields {
     pub assigned_at: f64,
     pub launched_at: f64,
 }
+
+/// The job a session runs in, as `start()` sequences it: the room connected beside the opening,
+/// before the remote session host starts on it.
+#[crate::host(proxy(host = "livekit.agents.job.JobContext"))]
+#[async_trait::async_trait]
+pub trait SessionJob: Send + Sync {
+    /// `JobContext.connect()`: the room connected, once however many callers.
+    #[host(await, name = "_core_connect")]
+    async fn connect(&self) -> Result<(), crate::errors::HostError>;
+}

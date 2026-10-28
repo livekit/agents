@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_media::{Mixer, StreamId};
@@ -219,15 +218,7 @@ impl Playback {
     }
 }
 
-/// A caller-supplied stream. Cancellation must reach any pending host-side pull. A host
-/// `AsyncIterator[rtc.AudioFrame]` is this trait through `background_audio.py`'s `_FrameStream`.
-#[lk_agents_abi::host(proxy)]
-#[async_trait]
-pub trait FrameStream: Send + Sync {
-    async fn next(&self) -> Result<Option<AudioFrame>, ProviderError>;
-    fn cancel_pending(&self);
-    async fn close(&self);
-}
+pub use lk_agents_abi::voice::background_audio::FrameStream;
 
 /// `AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip`; a builtin clip arrives
 /// as its file path.

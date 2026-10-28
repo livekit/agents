@@ -17,7 +17,7 @@ fn file(path: &str, probability: f64) -> Sound {
 #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Frames(Mutex<u32>);
 
-#[async_trait]
+#[async_trait::async_trait]
 impl FrameStream for Frames {
     async fn next(&self) -> Result<Option<AudioFrame>, ProviderError> {
         let mut left = self.0.lock().unwrap();

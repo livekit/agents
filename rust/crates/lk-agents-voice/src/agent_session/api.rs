@@ -823,14 +823,7 @@ pub trait SessionEvents: Send + Sync {
     }
 }
 
-/// The job a session runs in, as `start()` sequences it: the room connected beside the opening,
-/// before the remote session host starts on it.
-#[lk_agents_abi::host(proxy(cancel_on_drop))]
-#[async_trait::async_trait]
-pub trait SessionJob: Send + Sync {
-    /// `JobContext.connect()`: the room connected, once however many callers.
-    async fn connect(&self) -> Result<(), HostError>;
-}
+pub use lk_agents_abi::worker::job::SessionJob;
 
 /// The agent's hooks, run by the host and awaited by the core: each hook call is answered with
 /// what its method returns, or `Failed` when it raises (after `hook_failed`). A hook still running

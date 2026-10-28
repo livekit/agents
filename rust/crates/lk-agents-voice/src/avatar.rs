@@ -484,11 +484,7 @@ pub enum ReceiverEnd {
     Failed(String),
 }
 
-/// The `clear_buffer` event the receiver emits when the agent clears (`AudioReceiver.emit`).
-#[lk_agents_abi::host(proxy)]
-pub trait ClearBufferListener: Send + Sync {
-    fn clear_buffer(&self);
-}
+pub use lk_agents_abi::voice::avatar::ClearBufferListener;
 
 /// `STREAM_IDLE_TIMEOUT`: with no chunk or trailer for this long, the last segment's trailer is
 /// assumed lost.
