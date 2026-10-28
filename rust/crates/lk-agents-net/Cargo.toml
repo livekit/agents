@@ -33,13 +33,13 @@ serde.workspace = true
 # (`lk_agents_core::a2a`, sans-IO; this edge is pending owner approval).
 a2a.workspace = true
 lk-agents-core = { path = "../lk-agents-core" }
-# The Cloud session report upload: its protobuf header, Google RPC retry records and jitter.
+# The Cloud session report upload: its protobuf header and Google RPC retry records.
 livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
 tonic-types = { version = "0.14", default-features = false }
-rand = "0.9"
 web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
+rand = "0.9"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

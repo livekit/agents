@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::telemetry::upload::{PreparedTranscript, UploadError};
-use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::sync::OwnedSemaphorePermit;
 
 use super::{TRANSCRIPT_BYTES, upload_error};
 use crate::env::Env;
@@ -12,15 +12,12 @@ use crate::env::Env;
 pub(super) const TRANSCRIPT_ITEMS: usize = 10_000;
 pub(super) const TRANSCRIPT_ITEM_BYTES: usize = 64 * 1024;
 
-/// Transcripts in preparation per process, each retaining at most its transcript, event and
-/// console report bounds. A refused preparation fails at once.
-static PREPARATIONS: Semaphore = Semaphore::const_new(4);
-
 /// Retains only bounded JSON, rather than a second copy of every native chat item.
-/// `E` lends the blocking pool the console report serializes on (decision 88).
+/// `E` lends the preparation admission and the blocking pool the console report serializes on
+/// (decision 88).
 pub struct TranscriptBuilder<E> {
     state: Mutex<TranscriptState>,
-    permit: Arc<SemaphorePermit<'static>>,
+    permit: Arc<OwnedSemaphorePermit>,
     env: PhantomData<fn() -> E>,
 }
 
@@ -36,9 +33,10 @@ struct TranscriptState {
 
 impl<E: Env> PreparedTranscript for TranscriptBuilder<E> {
     fn new() -> Result<Self, UploadError> {
-        let permit = PREPARATIONS
-            .try_acquire()
-            .map_err(|_| UploadError("session report preparation capacity exhausted".into()))?;
+        let permit = E::report_admission()
+            .map_err(UploadError)?
+            .preparation()
+            .ok_or_else(|| UploadError("session report preparation capacity exhausted".into()))?;
         let mut bytes = Vec::with_capacity(TRANSCRIPT_BYTES);
         bytes.extend_from_slice(b"{\"items\":[");
         Ok(Self {

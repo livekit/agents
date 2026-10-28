@@ -1,4 +1,3 @@
-//! The event-loop watchdog thread and the session report's event retention.
+//! The event-loop watchdog thread.
 
-pub mod observation;
 pub mod watchdog;

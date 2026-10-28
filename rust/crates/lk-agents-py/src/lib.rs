@@ -131,12 +131,15 @@ impl generated::Implementations for Selected {
     type CliSignals = lk_agents_runtime::worker_cli::CliSignals;
     type SessionReportProjection = lk_agents_abi::telemetry::report::projection::ReportProjection;
     type TelemetryPolicy = lk_agents_runtime::cores::DestinationPolicy;
-    type EventRetention = lk_agents_runtime::telemetry::observation::EventRetention;
+    type EventRetention =
+        lk_agents_runtime::net::session_report::EventRetention<lk_agents_runtime::process::Process>;
     type PreparedTranscript = lk_agents_runtime::net::session_report::TranscriptBuilder<
         lk_agents_runtime::process::Process,
     >;
     type MetricSeries = lk_agents_runtime::cores::MetricSeries;
-    type SessionReportUpload = lk_agents_runtime::net::session_report::SessionReportUploader;
+    type SessionReportUpload = lk_agents_runtime::net::session_report::SessionReportUploader<
+        lk_agents_runtime::process::Process,
+    >;
     type LoopMonitor = crate::host::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds = lk_agents_runtime::cores::LoopMonitorOptions;
     type TextSessionRunner = lk_agents_runtime::text_session::Runner;

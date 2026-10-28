@@ -272,7 +272,24 @@ impl Attempts {
             return;
         }
         self.close_attempt(attempt, now);
-        self.fail(attempt, error, now, steps);
+        self.fail(attempt, error, Duration::ZERO, now, steps);
+    }
+
+    /// The server named when to retry (`Retry-After`, `google.rpc.RetryInfo`): a retry waits at
+    /// least `retry_after`.
+    pub fn failed_retry_after(
+        &mut self,
+        attempt: u32,
+        error: ApiError,
+        retry_after: Duration,
+        now: Ts,
+        steps: &mut Vec<AttemptStep>,
+    ) {
+        if self.current() != Some(attempt) {
+            return;
+        }
+        self.close_attempt(attempt, now);
+        self.fail(attempt, error, retry_after, now, steps);
     }
 
     /// A long-lived recognition completed one utterance. Its next failure gets a fresh retry
@@ -306,7 +323,7 @@ impl Attempts {
         if self.current() == Some(attempt) {
             self.unresolved |= self.sent();
             let failure = AttemptFailure::Connection("the response ended unexpectedly".into());
-            self.fail(attempt, failure.into_error(), now, steps);
+            self.fail(attempt, failure.into_error(), Duration::ZERO, now, steps);
         }
     }
 
@@ -380,7 +397,7 @@ impl Attempts {
                 {
                     self.unresolved |= self.sent();
                     self.stop(attempt, now, steps);
-                    self.fail(attempt, ApiError::timed_out(phase), now, steps);
+                    self.fail(attempt, ApiError::timed_out(phase), Duration::ZERO, now, steps);
                 }
             }
             _ => {}
@@ -428,14 +445,22 @@ impl Attempts {
 
     /// Retries while the error allows it, a replay is safe and attempts remain; the backoff
     /// never outlives the total deadline, whose own wake ends the request.
-    fn fail(&mut self, attempt: u32, error: ApiError, now: Ts, steps: &mut Vec<AttemptStep>) {
+    fn fail(
+        &mut self,
+        attempt: u32,
+        error: ApiError,
+        at_least: Duration,
+        now: Ts,
+        steps: &mut Vec<AttemptStep>,
+    ) {
         let retryable = error.retryable && !self.replay_unsafe;
         if retryable && self.failures < self.policy.max_retry {
             let delay = if self.failures == 0 {
                 Duration::from_secs_f64(lk_agents_abi::types::connect::FIRST_RETRY_INTERVAL)
             } else {
                 self.policy.retry_interval
-            };
+            }
+            .max(at_least);
             self.failures += 1;
             self.phase = Phase::Waiting { attempt: attempt + 1, at: now.saturating_add(delay) };
             steps.push(AttemptStep::Retry { attempt, error });

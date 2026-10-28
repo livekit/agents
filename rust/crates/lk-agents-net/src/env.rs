@@ -1,11 +1,13 @@
 //! What the hosting process lends the async crates' clients (decision 88): its Tokio runtime, the
-//! executor its host awaits on and the host's clock. Every client takes these values in its
+//! executor its host awaits on, the host's clock and process admissions. Every client takes these values in its
 //! constructor; a class the host constructs (a declared `new`) reads them through its [`Env`]
 //! type parameter, which `lk-agents-runtime` binds to its process.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use lk_agents_abi::{Clock, Spawner};
+
+use crate::session_report::ReportAdmission;
 
 pub trait Env: Send + Sync + 'static {
     /// The runtime this crate's tasks and sockets run on.
@@ -20,6 +22,8 @@ pub trait Env: Send + Sync + 'static {
     }
     /// The host's clock (virtual in a virtual-time test).
     fn clock() -> Arc<dyn Clock>;
+    /// The process's session report admission.
+    fn report_admission() -> Result<ReportAdmission, String>;
 }
 
 /// A Rust caller with no host: the current Tokio runtime and the wall clock.
@@ -32,5 +36,10 @@ impl Env for Standalone {
 
     fn clock() -> Arc<dyn Clock> {
         Arc::new(lk_agents_abi::RealClock::new())
+    }
+
+    fn report_admission() -> Result<ReportAdmission, String> {
+        static ADMISSION: LazyLock<ReportAdmission> = LazyLock::new(ReportAdmission::default);
+        Ok(ADMISSION.clone())
     }
 }

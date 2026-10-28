@@ -2,26 +2,33 @@
 //! upload at session end. Not user telemetry (decision 87): it has its own small process
 //! admission, and cancelling an upload drops its transport and file.
 //!
-//! - [`attempts`]: when the next upload attempt is due, on supplied time and jitter.
+//! - [`admission`]: the process's preparation, upload and event retention capacity.
+//! - [`events`]: a session's retained event snapshots.
 //! - [`transcript`]: the bounded transcript and console report.
 
-pub mod attempts;
+mod admission;
+pub mod events;
 pub mod transcript;
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{StreamExt, stream};
 use livekit_protocol::MetricsRecordingHeader;
+use lk_agents_abi::Ts;
+use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::UploadGate;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection as _;
 use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use prost::Message;
 use reqwest::multipart::{Form, Part};
 use tokio::io::AsyncReadExt;
-use tokio::sync::Semaphore;
 
-use attempts::{UploadOutcome, UploadPolicy};
+use crate::attempts::{AttemptStep, Attempts, RequestPolicy};
+use crate::env::Env;
+pub use admission::ReportAdmission;
+pub use events::EventRetention;
 pub use transcript::TranscriptBuilder;
 
 const CHUNK_BYTES: usize = 64 * 1024;
@@ -29,9 +36,15 @@ const TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
 const RESPONSE_BYTES: usize = 64 * 1024;
 const UPLOAD_TIMEOUT: Duration =
     Duration::from_secs(lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS);
-
-/// Recordings in flight per process; a refused upload fails at once rather than waiting.
-static UPLOADS: Semaphore = Semaphore::const_new(2);
+/// Four attempts; the outer [`UPLOAD_TIMEOUT`] bounds them all.
+const UPLOAD_ATTEMPTS: RequestPolicy = RequestPolicy {
+    connect_timeout: None,
+    write_timeout: None,
+    read_timeout: None,
+    total_timeout: None,
+    max_retry: 3,
+    retry_interval: Duration::from_secs(2),
+};
 
 /// The immutable input of one recording upload; no host objects or file contents are retained.
 #[derive(Debug, Clone)]
@@ -47,18 +60,19 @@ struct RecordingUpload {
     disabled: bool,
 }
 
-/// Credentials for the session recording endpoint and host OTLP exporters.
-pub struct SessionReportUploader {
+/// Credentials for the session recording endpoint and host OTLP exporters. `E` lends the
+/// process's upload admission (decision 88).
+pub struct SessionReportUploader<E> {
     api_key: String,
     api_secret: String,
+    admission: ReportAdmission,
     disabled: AtomicBool,
+    env: PhantomData<fn() -> E>,
 }
 
-impl SessionReportUpload for SessionReportUploader {
+impl<E: Env> SessionReportUpload for SessionReportUploader<E> {
     fn new(api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        // Validate credentials before retaining a report.
-        crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
-        Ok(Self { api_key, api_secret, disabled: AtomicBool::new(false) })
+        Self::with_admission(api_key, api_secret, E::report_admission().map_err(UploadError)?)
     }
 
     fn bearer(&self) -> Result<String, UploadError> {
@@ -115,7 +129,23 @@ fn upload_error(err: impl std::fmt::Display) -> UploadError {
     UploadError(err.to_string())
 }
 
-impl SessionReportUploader {
+impl<E: Env> SessionReportUploader<E> {
+    fn with_admission(
+        api_key: String,
+        api_secret: String,
+        admission: ReportAdmission,
+    ) -> Result<Self, UploadError> {
+        // Validate credentials before retaining a report.
+        crate::token::observability_bearer(&api_key, &api_secret).map_err(upload_error)?;
+        Ok(Self {
+            api_key,
+            api_secret,
+            admission,
+            disabled: AtomicBool::new(false),
+            env: PhantomData,
+        })
+    }
+
     async fn send(&self, mut recording: RecordingUpload) -> Result<bool, UploadError> {
         if recording.disabled || self.disabled.load(Ordering::Acquire) {
             return Ok(false);
@@ -132,9 +162,10 @@ impl SessionReportUploader {
         if transcript_bytes > TRANSCRIPT_BYTES {
             return Err(UploadError("session transcript exceeds the 2 MiB upload limit".into()));
         }
-        let _permit = UPLOADS
-            .try_acquire()
-            .map_err(|_| UploadError("session recording upload capacity exhausted".into()))?;
+        let _permit = self
+            .admission
+            .upload()
+            .ok_or_else(|| UploadError("session recording upload capacity exhausted".into()))?;
         let url =
             format!("{}/observability/recordings/v0", recording.base_url.trim_end_matches('/'));
         let url = reqwest::Url::parse(&url).map_err(upload_error)?;
@@ -159,66 +190,55 @@ impl SessionReportUploader {
         url: reqwest::Url,
     ) -> Result<bool, UploadError> {
         let epoch = tokio::time::Instant::now();
-        let mut policy = UploadPolicy::new(false);
+        let now = || Ts::from_nanos(epoch.elapsed().as_nanos() as u64);
+        let mut steps = Vec::new();
+        let mut attempts = Attempts::start(UPLOAD_ATTEMPTS, now(), &mut steps);
+        let mut failure = String::new();
         loop {
-            let now = epoch.elapsed().as_millis() as u64;
-            if policy.next_attempt(now).is_none() {
-                return Err(UploadError("recording upload attempt was not due".into()));
+            let mut launched = None;
+            for step in steps.drain(..) {
+                match step {
+                    AttemptStep::Launch(attempt) => launched = Some(attempt),
+                    AttemptStep::GiveUp(_) => return Err(UploadError(failure)),
+                    _ => {}
+                }
             }
+            let Some(attempt) = launched else {
+                let at = attempts.wake_at(None).expect("an undecided upload is waiting to retry");
+                tokio::time::sleep_until(epoch + at.saturating_duration_since(Ts::ZERO)).await;
+                attempts.wake(now(), None, &mut steps);
+                continue;
+            };
             let result = client
                 .post(url.clone())
                 .bearer_auth(self.bearer()?)
                 .multipart(multipart(&recording).await?)
                 .send()
                 .await;
-            let (outcome, failure) = match result {
-                Ok(response) if response.status().is_success() => (UploadOutcome::Success, None),
+            let (error, retry_after) = match result {
+                Ok(response) if response.status().is_success() => return Ok(true),
                 Ok(response) => {
-                    let status = response.status();
+                    let status = response.status().as_u16();
                     let body = response_body(response).await?;
-                    if UploadGate::is_disabled_response(status.as_u16(), &body) {
-                        (UploadOutcome::Disabled, None)
-                    } else {
-                        let delay = retry_delay(&body);
-                        let retryable = delay.is_some()
-                            || status.as_u16() == 408
-                            || status.as_u16() == 429
-                            || status.is_server_error();
-                        let outcome = if retryable {
-                            UploadOutcome::Retryable(delay)
-                        } else {
-                            UploadOutcome::Permanent
-                        };
-                        (
-                            outcome,
-                            Some(format!("recording upload failed with HTTP {}", status.as_u16())),
-                        )
+                    if UploadGate::is_disabled_response(status, &body) {
+                        self.disabled.store(true, Ordering::Release);
+                        return Ok(false);
                     }
+                    failure = format!("recording upload failed with HTTP {status}");
+                    let retry_after = retry_delay(&body);
+                    let error = ApiError::from_http(&failure, status.into(), None);
+                    let retryable = error.retryable || retry_after.is_some();
+                    (error.with_retryable(retryable), retry_after)
                 }
                 Err(err) => {
+                    failure = format!("recording upload transport failed: {err}");
                     let retryable = err.is_connect() || err.is_timeout() || err.is_body();
-                    let outcome = if retryable {
-                        UploadOutcome::Retryable(None)
-                    } else {
-                        UploadOutcome::Permanent
-                    };
-                    (outcome, Some(format!("recording upload transport failed: {err}")))
+                    (ApiError::connection(Some(failure.clone())).with_retryable(retryable), None)
                 }
             };
-            let now = epoch.elapsed().as_millis() as u64;
-            policy.observed(now, outcome, rand::random_range(0.0..=1.0));
-            match outcome {
-                UploadOutcome::Success => return Ok(true),
-                UploadOutcome::Disabled => {
-                    self.disabled.store(true, Ordering::Release);
-                    return Ok(false);
-                }
-                _ if policy.finished() => return Err(UploadError(failure.unwrap_or_default())),
-                _ => {
-                    let due = policy.retry_at().expect("retry retains a supplied deadline");
-                    tokio::time::sleep_until(epoch + Duration::from_millis(due)).await;
-                }
-            }
+            let retry_after = Duration::from_millis(retry_after.unwrap_or(0));
+            attempts.failed_retry_after(attempt, error, retry_after, now(), &mut steps);
+            attempts.closed(attempt, now(), &mut steps);
         }
     }
 }

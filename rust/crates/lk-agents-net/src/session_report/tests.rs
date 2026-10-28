@@ -5,9 +5,28 @@ use lk_agents_abi::telemetry::upload::PreparedTranscript as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-type Builder = TranscriptBuilder<Standalone>;
+/// Every report gets its own admission, so tests run concurrently.
+struct Isolated;
 
-static UPLOAD_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+impl Env for Isolated {
+    fn runtime() -> Result<tokio::runtime::Handle, String> {
+        Standalone::runtime()
+    }
+
+    fn clock() -> std::sync::Arc<dyn lk_agents_abi::Clock> {
+        Standalone::clock()
+    }
+
+    fn report_admission() -> Result<ReportAdmission, String> {
+        Ok(ReportAdmission::default())
+    }
+}
+
+type Builder = TranscriptBuilder<Isolated>;
+
+fn uploader() -> SessionReportUploader<Isolated> {
+    SessionReportUploader::new("key".into(), "secret".into()).unwrap()
+}
 
 struct Request {
     headers: String,
@@ -75,12 +94,11 @@ fn recording(base_url: String) -> RecordingUpload {
 
 #[tokio::test]
 async fn session_upload_streams_file_bytes_and_uses_the_runtime_token() {
-    let _serial = UPLOAD_TESTS.lock().await;
     let audio: Vec<u8> = (0..200_000).map(|n| (n % 251) as u8).collect();
     let path = std::env::temp_dir().join(format!("lk-telemetry-{}.ogg", rand::random::<u64>()));
     tokio::fs::write(&path, &audio).await.unwrap();
     let (url, peer) = peer(vec![(200, vec![])]).await;
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let uploader = uploader();
     let mut report = recording(url);
     report.audio_path = Some(path.to_str().unwrap().to_owned());
     let result = uploader.send(report).await;
@@ -125,8 +143,7 @@ async fn session_upload_streams_file_bytes_and_uses_the_runtime_token() {
 
 #[tokio::test]
 async fn disabled_and_redacted_recordings_never_open_the_endpoint() {
-    let _serial = UPLOAD_TESTS.lock().await;
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let uploader = uploader();
     let mut report = recording("http://127.0.0.1:1".into());
     report.disabled = true;
     assert!(!uploader.send(report.clone()).await.unwrap());
@@ -138,9 +155,8 @@ async fn disabled_and_redacted_recordings_never_open_the_endpoint() {
 
 #[tokio::test]
 async fn a_recording_disabled_response_latches_without_retries() {
-    let _serial = UPLOAD_TESTS.lock().await;
     let (url, peer) = peer(vec![(401, b"data recording is disabled for project".to_vec())]).await;
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let uploader = uploader();
     assert!(!uploader.send(recording(url)).await.unwrap());
     assert_eq!(peer.await.unwrap().len(), 1);
     assert!(!uploader.send(recording("http://127.0.0.1:1".into())).await.unwrap());
@@ -148,7 +164,6 @@ async fn a_recording_disabled_response_latches_without_retries() {
 
 #[tokio::test]
 async fn retry_info_is_decoded_from_the_upstream_google_rpc_record() {
-    let _serial = UPLOAD_TESTS.lock().await;
     let retry = tonic_types::pb::RetryInfo { retry_delay: Some(Default::default()) };
     let mut response = tonic_types::pb::Status { code: 8, ..Default::default() };
     response.details.push(Default::default());
@@ -157,14 +172,13 @@ async fn retry_info_is_decoded_from_the_upstream_google_rpc_record() {
     let body = response.encode_to_vec();
     assert_eq!(retry_delay(&body), Some(0));
     let (url, peer) = peer(vec![(429, body), (200, vec![])]).await;
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let uploader = uploader();
     assert!(uploader.send(recording(url)).await.unwrap());
     assert_eq!(peer.await.unwrap().len(), 2);
 }
 
 #[test]
 fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversize_content() {
-    let _serial = UPLOAD_TESTS.blocking_lock();
     use lk_agents_abi::{ChatContent, ChatContext, ChatItem, ChatMessage, Role, ToDictOptions};
     let message = |text: String| {
         ChatItem::Message(ChatMessage::new(
@@ -197,10 +211,9 @@ fn transcript_serialization_preserves_the_existing_projection_and_rejects_oversi
 
 #[tokio::test]
 async fn an_ordinary_authorization_failure_is_permanent_but_does_not_disable_recording() {
-    let _serial = UPLOAD_TESTS.lock().await;
     let (url, peer) =
         peer(vec![(401, b"missing observability grant".to_vec()), (200, vec![])]).await;
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let uploader = uploader();
     let failure = uploader.send(recording(url.clone())).await.unwrap_err();
     assert!(failure.0.contains("HTTP 401"));
     assert!(uploader.send(recording(url)).await.unwrap());
@@ -209,7 +222,6 @@ async fn an_ordinary_authorization_failure_is_permanent_but_does_not_disable_rec
 
 #[tokio::test]
 async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admission() {
-    let _serial = UPLOAD_TESTS.lock().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (started, received) = tokio::sync::oneshot::channel();
@@ -221,7 +233,13 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
         std::future::pending::<()>().await;
         drop(socket);
     });
-    let uploader = SessionReportUploader::new("key".into(), "secret".into()).unwrap();
+    let admission = ReportAdmission::default();
+    let uploader = SessionReportUploader::<Isolated>::with_admission(
+        "key".into(),
+        "secret".into(),
+        admission.clone(),
+    )
+    .unwrap();
     let mut upload =
         tokio::spawn(async move { uploader.send(recording(format!("http://{address}"))).await });
     let mut early_result = None;
@@ -251,13 +269,12 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
     assert!(started, "upload failed before reaching the peer: {result:?}");
     let failure = result.unwrap().unwrap_err();
     assert!(failure.0.contains("deadline elapsed"), "{failure}");
-    assert_eq!(UPLOADS.available_permits(), 2, "a settled upload releases its admission");
+    assert_eq!(admission.uploads_available(), 2, "a settled upload releases its admission");
 }
 
 #[test]
 fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_finish() {
     use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role};
-    let _serial = UPLOAD_TESTS.blocking_lock();
     let message = || {
         ChatItem::Message(ChatMessage::new(
             "item",
@@ -287,7 +304,6 @@ fn incremental_transcript_cannot_grow_beyond_its_report_budget_or_mutate_after_f
 
 #[test]
 fn report_input_facts_refuse_oversize_before_item_conversion_and_poison_partial_output() {
-    let _serial = UPLOAD_TESTS.blocking_lock();
     let builder = Builder::new().unwrap();
     builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES).unwrap();
     assert!(builder.check_input(TRANSCRIPT_ITEMS, TRANSCRIPT_ITEM_BYTES + 1).is_err());

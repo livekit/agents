@@ -78,6 +78,3 @@ python = [
     "lk-agents-media/blingfire",
 ]
 
-[build-dependencies]
-serde.workspace = true
-serde_json.workspace = true

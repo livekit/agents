@@ -426,8 +426,8 @@ fn _extract_event_retention_expire_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u6
 
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
-#[pyclass(frozen, name = "_core_EventRetention", module = "livekit.agents._core")]
-pub struct _core_EventRetention(pub(crate) ::std::sync::Arc<_core_EventRetentionImpl>);
+#[pyclass(name = "_core_EventRetention", module = "livekit.agents._core")]
+pub struct _core_EventRetention(pub(crate) _core_EventRetentionImpl);
 
 #[pymethods]
 impl _core_EventRetention {
@@ -435,15 +435,15 @@ impl _core_EventRetention {
     #[pyo3(signature = (capture_content))]
     fn new(capture_content: bool) -> PyResult<_core_EventRetention> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(capture_content);
-        Ok(_core_EventRetention(::std::sync::Arc::new(out)))
+        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(capture_content).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(_core_EventRetention(out))
     }
 
     /// Bind report access to the first job that starts the session. Ownership cannot transfer.
     #[pyo3(signature = (job_id))]
-    fn claim(&self, job_id: ::std::string::String) -> PyResult<()> {
+    fn claim(&mut self, job_id: ::std::string::String) -> PyResult<()> {
         ::lk_agents_abi::python::check_pid()?;
-        <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&self.0, job_id);
+        <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::claim(&mut self.0, job_id);
         Ok(())
     }
 
@@ -474,16 +474,16 @@ impl _core_EventRetention {
     /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
     /// exactly the returned prefix before appending the newly admitted snapshot.
     #[pyo3(signature = (retained_bytes, now_ns))]
-    fn admit(&self, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
+    fn admit(&mut self, #[pyo3(from_py_with = _extract_event_retention_admit_retained_bytes)] retained_bytes: usize, #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)] now_ns: u64) -> PyResult<(usize, bool)> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&self.0, retained_bytes, now_ns);
+        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::admit(&mut self.0, retained_bytes, now_ns);
         Ok(out)
     }
 
     #[pyo3(signature = (now_ns))]
-    fn expire(&self, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
+    fn expire(&mut self, #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)] now_ns: u64) -> PyResult<usize> {
         ::lk_agents_abi::python::check_pid()?;
-        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&self.0, now_ns);
+        let out = <_core_EventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::expire(&mut self.0, now_ns);
         Ok(out)
     }
 

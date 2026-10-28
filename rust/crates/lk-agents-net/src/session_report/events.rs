@@ -1,8 +1,14 @@
-//! The session report's event retention: per-session snapshot budgets under one process ceiling.
+//! The session report's event retention: per-session snapshot budgets under the process ceiling
+//! of its [`ReportAdmission`].
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use lk_agents_abi::telemetry::upload::UploadError;
+
+use super::admission::{EventQuota, ReportAdmission};
+use crate::env::Env;
 
 /// Session report snapshots expire after one hour. These budgets apply before the host copies
 /// an event, independently of SDK exporter retention.
@@ -10,53 +16,9 @@ const EVENT_ITEMS: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_ITEMS;
 const EVENT_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES;
 const EVENT_RECORD_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_RECORD_BYTES;
 const EVENT_RETENTION_NS: u64 = 3600 * 1_000_000_000;
-include!(concat!(env!("OUT_DIR"), "/telemetry_event_limits.rs"));
-
-/// Every session store in the process shares one retention ceiling (`budgets.json`).
-static PROCESS_EVENTS: EventQuota = EventQuota::new();
-
-/// Quotas publish no payload; in-flight reservations may conservatively refuse optional data.
-struct EventQuota {
-    items: AtomicUsize,
-    bytes: AtomicUsize,
-}
-
-impl EventQuota {
-    const fn new() -> Self {
-        Self { items: AtomicUsize::new(0), bytes: AtomicUsize::new(0) }
-    }
-
-    fn admit(&self, bytes: usize) -> bool {
-        if self
-            .items
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |items| {
-                (items < PROCESS_EVENT_ITEMS).then_some(items + 1)
-            })
-            .is_err()
-        {
-            return false;
-        }
-        if self
-            .bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
-                retained.checked_add(bytes).filter(|total| *total <= PROCESS_EVENT_BYTES)
-            })
-            .is_err()
-        {
-            self.items.fetch_sub(1, Ordering::Relaxed);
-            return false;
-        }
-        true
-    }
-
-    fn release(&self, items: usize, bytes: usize) {
-        self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-        self.items.fetch_sub(items, Ordering::Relaxed);
-    }
-}
 
 struct RetainedEvents {
-    quota: &'static EventQuota,
+    quota: Arc<EventQuota>,
     job_id: Option<String>,
     entries: VecDeque<(u64, usize)>,
     bytes: usize,
@@ -66,7 +28,7 @@ struct RetainedEvents {
 }
 
 impl RetainedEvents {
-    fn new(quota: &'static EventQuota) -> Self {
+    fn new(quota: Arc<EventQuota>) -> Self {
         Self {
             quota,
             job_id: None,
@@ -120,27 +82,34 @@ impl Drop for RetainedEvents {
     }
 }
 
-pub struct EventRetention {
+/// `E` lends the process's report admission (decision 88).
+pub struct EventRetention<E> {
     capture_content: bool,
-    retained: Mutex<RetainedEvents>,
+    retained: RetainedEvents,
+    env: PhantomData<fn() -> E>,
 }
 
-impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
-    fn new(capture_content: bool) -> Self {
-        Self { capture_content, retained: Mutex::new(RetainedEvents::new(&PROCESS_EVENTS)) }
+impl<E> EventRetention<E> {
+    fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
+        Self {
+            capture_content,
+            retained: RetainedEvents::new(admission.events.clone()),
+            env: PhantomData,
+        }
+    }
+}
+
+impl<E: Env> lk_agents_abi::telemetry::observation::EventRetention for EventRetention<E> {
+    fn new(capture_content: bool) -> Result<Self, UploadError> {
+        Ok(Self::with_admission(capture_content, &E::report_admission().map_err(UploadError)?))
     }
 
-    fn claim(&self, job_id: String) {
-        self.retained.lock().unwrap_or_else(|p| p.into_inner()).job_id.get_or_insert(job_id);
+    fn claim(&mut self, job_id: String) {
+        self.retained.job_id.get_or_insert(job_id);
     }
 
     fn allows_read(&self, job_id: String) -> bool {
-        self.retained
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .job_id
-            .as_ref()
-            .is_none_or(|owner| owner == &job_id)
+        self.retained.job_id.as_ref().is_none_or(|owner| owner == &job_id)
     }
 
     fn capture_content(&self) -> bool {
@@ -155,16 +124,16 @@ impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
         )
     }
 
-    fn admit(&self, retained_bytes: usize, now_ns: u64) -> (usize, bool) {
-        self.retained.lock().unwrap_or_else(|p| p.into_inner()).admit(retained_bytes, now_ns)
+    fn admit(&mut self, retained_bytes: usize, now_ns: u64) -> (usize, bool) {
+        self.retained.admit(retained_bytes, now_ns)
     }
 
-    fn expire(&self, now_ns: u64) -> usize {
-        self.retained.lock().unwrap_or_else(|p| p.into_inner()).expire(now_ns)
+    fn expire(&mut self, now_ns: u64) -> usize {
+        self.retained.expire(now_ns)
     }
 
     fn diagnostics(&self) -> Vec<(String, u64)> {
-        let retained = self.retained.lock().unwrap_or_else(|p| p.into_inner());
+        let retained = &self.retained;
         vec![
             ("retained_events".into(), retained.entries.len() as u64),
             ("retained_bytes".into(), retained.bytes as u64),
@@ -177,11 +146,15 @@ impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::Standalone;
+
+    type Retention = EventRetention<Standalone>;
 
     #[test]
     fn event_retention_expires_charged_snapshots_and_refuses_live_or_denied_content() {
         use lk_agents_abi::telemetry::observation::EventRetention as _;
-        let recording = EventRetention::new(false);
+        let admission = ReportAdmission::default();
+        let mut recording = Retention::with_admission(false, &admission);
         assert!(recording.allows_read("outside".into()));
         recording.claim("owner".into());
         recording.claim("another".into());
@@ -191,7 +164,7 @@ mod tests {
         assert!(!recording.accepts("speech_created".into(), false));
         assert!(!recording.accepts("unknown".into(), false));
         assert!(recording.accepts("agent_state_changed".into(), false));
-        let opted_in = EventRetention::new(true);
+        let opted_in = Retention::with_admission(true, &admission);
         assert!(opted_in.accepts("user_input_transcribed".into(), false));
         assert!(!opted_in.accepts("user_input_transcribed".into(), true));
         for _ in 0..EVENT_BYTES / EVENT_RECORD_BYTES {
@@ -232,16 +205,13 @@ mod tests {
         let limits = serde_json::from_str::<Budgets>(include_str!("budgets.json"))
             .expect("native telemetry budget manifest")
             .session_events;
-        let quota: &'static EventQuota = Box::leak(Box::new(EventQuota::new()));
-        let store = || EventRetention {
-            capture_content: false,
-            retained: Mutex::new(RetainedEvents::new(quota)),
-        };
+        let admission = ReportAdmission::default();
+        let store = || Retention::with_admission(false, &admission);
         let records_per_store = limits.bytes / limits.record_bytes;
         let mut stores: Vec<_> = (0..limits.worker_bytes / limits.bytes).map(|_| store()).collect();
         // Concurrent sessions consume the manifest's full byte ceiling before any is released.
         std::thread::scope(|scope| {
-            for session in &stores {
+            for session in &mut stores {
                 scope.spawn(move || {
                     for _ in 0..records_per_store {
                         assert_eq!(session.admit(limits.record_bytes, 1), (0, true));
@@ -249,7 +219,7 @@ mod tests {
                 });
             }
         });
-        let overflow = store();
+        let mut overflow = store();
         assert_eq!(overflow.admit(limits.record_bytes, 1), (0, false));
         assert_eq!(
             stores[0].expire(limits.retention_seconds * 1_000_000_000 + 1),
@@ -265,13 +235,13 @@ mod tests {
         drop(overflow);
 
         // Tiny events exhaust the manifest's item ceiling before its byte ceiling.
-        let stores: Vec<_> = (0..limits.worker_items / limits.items).map(|_| store()).collect();
-        for session in &stores {
+        let mut stores: Vec<_> = (0..limits.worker_items / limits.items).map(|_| store()).collect();
+        for session in &mut stores {
             for _ in 0..limits.items {
                 assert_eq!(session.admit(1, 1), (0, true));
             }
         }
-        let overflow = store();
+        let mut overflow = store();
         assert_eq!(overflow.admit(1, 1), (0, false));
         drop(stores);
         assert_eq!(overflow.admit(1, 1), (0, true));

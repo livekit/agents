@@ -24,6 +24,7 @@ struct Started {
     runtime: tokio::runtime::Runtime,
     workers: MediaWorkers,
     worker_io: lk_agents_worker::io::WorkerIo,
+    report_admission: lk_agents_net::session_report::ReportAdmission,
 }
 
 static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
@@ -66,7 +67,8 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .map_err(|error| ProcessError::Start(error.to_string()))?;
     let worker_io = lk_agents_worker::io::WorkerIo::new(runtime.handle().clone(), 4)
         .map_err(|error| ProcessError::Start(error.to_string()))?;
-    let started = slot.insert(Started { pid, runtime, workers, worker_io });
+    let report_admission = Default::default();
+    let started = slot.insert(Started { pid, runtime, workers, worker_io, report_admission });
     Ok(read(started))
 }
 
@@ -108,6 +110,10 @@ impl lk_agents_net::env::Env for Process {
 
     fn clock() -> Arc<dyn Clock> {
         host_clock()
+    }
+
+    fn report_admission() -> Result<lk_agents_net::session_report::ReportAdmission, String> {
+        with_started(|started| started.report_admission.clone()).map_err(|error| error.to_string())
     }
 }
 
