@@ -22,7 +22,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+/// A realtime speech's end of the socket's events, which the runtime routes to it by speech
+/// (`Effect::RealtimePlayer`). The step that plays a generation owns it; it outlives the step,
+/// because a tool follow-up arrives on it.
+pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
+
+/// How many of a speech's events its player holds ahead of the playout: the server sends a
+/// reply faster than it plays, so this is a whole reply (minutes of the smallest audio deltas).
+/// A full player is overrun: the runtime stops delivering to it and its speech ends on what it
+/// holds.
+pub(crate) const PLAYER_CAPACITY: usize = 8192;
+
 #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
@@ -30,8 +40,7 @@ pub(crate) async fn realtime_generation_task(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyContext,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    events: &tokio::sync::Mutex<mpsc::UnboundedReceiver<Event>>,
+    events: &mut RealtimePlayer,
     wake: &Tx,
     retries: &mut lk_agents_core::tool_outcome::ToolRetries,
 ) -> Result<StepOutcome, DriverError> {
@@ -45,7 +54,7 @@ pub(crate) async fn realtime_generation_task(
     if !authorized {
         // Interrupted while parked. Nothing of it was heard: what the server already said of it is deleted.
         let mut unheard = Vec::new();
-        while let Ok(ev) = events.lock().await.try_recv() {
+        while let Ok(ev) = events.try_recv() {
             if let Event::MessageStarted(m) = ev {
                 unheard.push(rt::Truncate {
                     message_id: m.message_id,
@@ -64,8 +73,6 @@ pub(crate) async fn realtime_generation_task(
     handle.clear_authorization();
 
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
-    // Locked for the step by the one task that ever reads it; the channel outlives the step.
-    let mut rx = events.lock().await;
     let audio_out = shared.audio_output();
     // `text_output`, read once for the step as the reference does: each message's words go down it.
     let text_out = shared.transcription_enabled().then(|| shared.transcription_output());
@@ -96,7 +103,7 @@ pub(crate) async fn realtime_generation_task(
         handle,
         ctx,
         acc: &mut acc,
-        events: &mut rx,
+        events,
         current: None,
         segments: Vec::new(),
         tools: &mut tools,
@@ -140,7 +147,6 @@ pub(crate) async fn realtime_generation_task(
         let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
     }
     let Generation { segments, received, response_id, message_id, .. } = generation;
-    drop(rx);
     // An empty follow-up round: the reply ends on the step already spoken.
     if !received && handle.num_steps() > 0 {
         return Ok(StepOutcome::Released);
@@ -213,8 +219,7 @@ struct Generation<'a> {
     handle: &'a Arc<SpeechHandle>,
     ctx: &'a ReplyContext,
     acc: &'a mut TurnAccumulator,
-    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-    events: &'a mut mpsc::UnboundedReceiver<Event>,
+    events: &'a mut RealtimePlayer,
     /// The message the text deltas append to: a provider may interleave two.
     current: Option<usize>,
     segments: Vec<String>,

@@ -78,6 +78,8 @@ struct TrackerState {
     /// Bumped by [`PlaybackTracker::reset`]; a waiter latches it so a reset releases it.
     epoch: u64,
     progressed: Duration,
+    /// Audio captured into the open segment that no clear has dropped yet.
+    uncleared: Duration,
 }
 
 impl TrackerState {
@@ -125,6 +127,7 @@ impl PlaybackTracker {
                 last: PlaybackFinished::default(),
                 epoch: 0,
                 progressed: Duration::ZERO,
+                uncleared: Duration::ZERO,
             }),
             wake: IoChainNotify::new(),
             observers: Mutex::new(Vec::new()),
@@ -213,13 +216,26 @@ impl PlaybackTracker {
     /// `AudioOutput.capture_frame`'s `super()` half: the first frame after a flush opens a segment.
     #[host(method)]
     pub fn note_capture(&self) {
+        self.note_captured(Duration::ZERO);
+    }
+
+    /// [`note_capture`](Self::note_capture) of `duration` of audio.
+    pub fn note_captured(&self, duration: Duration) {
         let mut s = self.state.lock().unwrap();
         if !s.capturing {
             s.capturing = true;
             s.segments += 1;
             // A new segment: what was heard of the previous one is not this one's position.
             s.progressed = Duration::ZERO;
+            s.uncleared = Duration::ZERO;
         }
+        s.uncleared += duration;
+    }
+
+    /// The audio captured into the current segment since it opened or since the last take: what
+    /// a sink's clear still drops. Zero when a clear already dropped everything captured.
+    pub fn take_uncleared(&self) -> Duration {
+        std::mem::take(&mut self.state.lock().unwrap().uncleared)
     }
 
     /// `AudioOutput.flush`'s `super()` half: the segment is closed; its playout is still owed.
@@ -521,7 +537,7 @@ pub trait AudioOutput: Send + Sync {
 #[async_trait]
 pub trait AudioOutputExt: AudioOutput {
     async fn capture_frame(&self, frame: &AudioFrame) -> Result<()> {
-        self.tracker().note_capture();
+        self.tracker().note_captured(Duration::from_secs_f64(frame.duration()));
         self.capture(frame).await
     }
 

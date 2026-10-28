@@ -10,6 +10,7 @@
 
 use super::forward::{Voice, voice_leg};
 use super::llm::{SegEvent, produce_segments};
+use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
 use crate::agent_session::DriverError;
 use crate::agent_session::SessionShared;
@@ -23,11 +24,6 @@ use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use lk_agents_core::tool_outcome::ToolRetries;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
-/// A realtime speech's end of the socket's events (`RealtimeWake` routes them by speech).
-type RealtimePlayer =
-    tokio::sync::Mutex<mpsc::UnboundedReceiver<lk_agents_abi::llm::realtime::Event>>;
 
 /// `_pipeline_reply_task`, and **the one task every speech runs** (`say` and realtime generations
 /// too). Spawned through the injected [`Spawner`](lk_agents_abi::Spawner), never `tokio::spawn`.
@@ -85,7 +81,7 @@ async fn run(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     mut ctx: ReplyContext,
-    player: Option<RealtimePlayer>,
+    mut player: Option<RealtimePlayer>,
 ) -> Result<Finished, DriverError> {
     if let Some(replan) = ctx.replan.take() {
         let Some(planned) = request_plan(
@@ -114,7 +110,7 @@ async fn run(
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
             ReplySource::Realtime => {
                 let events =
-                    player.as_ref().expect("the runtime gives a realtime speech its player");
+                    player.as_mut().expect("the runtime gives a realtime speech its player");
                 let wake = &shared.queue;
                 realtime_generation_task(shared, handle, &ctx, events, wake, &mut retries).await?
             }

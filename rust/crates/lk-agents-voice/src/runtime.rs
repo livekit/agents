@@ -44,7 +44,7 @@ pub struct Runtime {
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
         crate::agent_activity::scheduling::SpeechId,
-        tokio::sync::mpsc::UnboundedSender<lk_agents_abi::llm::realtime::Event>,
+        tokio::sync::mpsc::Sender<lk_agents_abi::llm::realtime::Event>,
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
     video_parts: crate::audio::VideoForwarderParts,

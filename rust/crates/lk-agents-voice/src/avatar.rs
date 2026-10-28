@@ -97,8 +97,6 @@ struct Inner {
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Option<Arc<Segment>>>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-    pushed: Mutex<Duration>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The give-up timer after a clear, and when it fires.
     clear_timer: Mutex<Option<(AbortHandle, Ts)>>,
 }
@@ -178,7 +176,6 @@ impl Inner {
                 ]),
             };
             *writer = Some(self.room.local().stream_bytes(opts).await?);
-            *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) = Duration::ZERO;
             if !self.wait_playback_start {
                 // approximated: the avatar does not report lk.playback_started
                 self.tracker.report_started(unix_secs(self.clock.wall()));
@@ -187,8 +184,6 @@ impl Inner {
         if let Some(writer) = writer.as_ref() {
             writer.write(&frame.data).await?;
         }
-        *self.pushed.lock().unwrap_or_else(|p| p.into_inner()) +=
-            Duration::from_secs_f64(frame.duration());
         Ok(())
     }
 
@@ -317,7 +312,6 @@ impl DataStreamAudioOutput {
             spawner: Arc::clone(&spawner),
             started: watch::channel(None).0,
             segment: Mutex::new(None),
-            pushed: Mutex::new(Duration::ZERO),
             clear_timer: Mutex::new(None),
         });
         let start = spawner.spawn_unboxed(Arc::clone(&inner).start());
@@ -446,8 +440,7 @@ impl AudioOutput for DataStreamAudioOutput {
         if !self.inner.is_started() {
             return;
         }
-        let pushed =
-            std::mem::take(&mut *self.inner.pushed.lock().unwrap_or_else(|p| p.into_inner()));
+        let pushed = self.inner.tracker.take_uncleared();
         if pushed.is_zero() {
             return;
         }

@@ -59,7 +59,13 @@ impl Runtime {
         // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
         match effect {
             E::RealtimePlayer { speech, event } => {
-                if self.realtime_players.get(&speech).is_some_and(|tx| tx.send(*event).is_err()) {
+                let Some(player) = self.realtime_players.get(&speech) else { return };
+                if let Err(error) = player.try_send(*event) {
+                    if matches!(error, tokio::sync::mpsc::error::TrySendError::Full(_)) {
+                        log::error!(target: "livekit.agents", speech = speech.0,
+                            capacity = crate::generation::realtime_generation::PLAYER_CAPACITY;
+                            "a realtime speech fell too far behind its reply; it ends on what it holds");
+                    }
                     self.realtime_players.remove(&speech);
                     let _ = self.reports.send(RealtimeWake::PlayerEnded(speech));
                 }
@@ -220,9 +226,10 @@ impl Runtime {
             E::SpeechStart { handle, mut context, llm, tts } => {
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
-                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    let capacity = crate::generation::realtime_generation::PLAYER_CAPACITY;
+                    let (tx, rx) = tokio::sync::mpsc::channel(capacity);
                     self.realtime_players.insert(handle.id(), tx);
-                    tokio::sync::Mutex::new(rx)
+                    rx
                 });
                 context.providers.llm = llm.and_then(|id| self.shared.resources.llm(id));
                 context.providers.tts = tts.and_then(|id| self.shared.resources.tts(id));
