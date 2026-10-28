@@ -24,7 +24,7 @@ from livekit.agents.llm import function_tool
 # uncomment to enable Krisp voice isolation
 # from livekit.plugins import krisp
 
-logger = logging.getLogger("basic-agent")
+logger = logging.getLogger("inference-responses-agent")
 
 load_dotenv()
 
