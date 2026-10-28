@@ -160,6 +160,30 @@ async def test_update_same_model_keeps_ws_pool(monkeypatch: pytest.MonkeyPatch) 
     assert calls == []
 
 
+async def test_update_extra_headers_invalidates_ws_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _make_ws_llm()
+    assert model._ws is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(model._ws._pool, "invalidate", lambda: calls.append(True))
+
+    model.update_options(extra_kwargs={"extra_headers": {"X-Deployment": "blue"}})
+
+    assert calls == [True]
+
+
+async def test_update_extra_kwargs_without_header_change_keeps_ws_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _make_ws_llm()
+    assert model._ws is not None
+    calls: list[bool] = []
+    monkeypatch.setattr(model._ws._pool, "invalidate", lambda: calls.append(True))
+
+    model.update_options(extra_kwargs={"max_output_tokens": 64})
+
+    assert calls == []
+
+
 async def test_update_model_rest_uses_new_model(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _GatewayTransport()
     model = _make_rest_llm(monkeypatch, transport)
