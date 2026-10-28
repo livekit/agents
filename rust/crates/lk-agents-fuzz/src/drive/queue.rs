@@ -127,12 +127,14 @@ struct Queued {
     event: Event,
 }
 
-/// Who sent an event: one host origin, one recognition stream, one kind of input, or the decision
-/// core's commands to the data plane.
+/// Who sent an event: one host origin, one recognition stream, one detector leg, one kind of
+/// input, or the decision core's commands to the data plane. A leg's end comes from the drain that
+/// sent its items, after them, so it is that leg's.
 #[derive(PartialEq, Eq)]
 enum Source {
     Host(String),
     Stt(ResourceId),
+    Leg(&'static str),
     Kind(Discriminant<Input>),
     Event(Discriminant<Event>),
 }
@@ -142,6 +144,14 @@ impl Source {
         match event {
             Event::Input(Input::Host(sent)) => Source::Host(format!("{:?}", sent.origin)),
             Event::Input(Input::Stt(tagged)) => Source::Stt(tagged.stream),
+            Event::Input(Input::Vad(_)) => Source::Leg("vad"),
+            Event::Input(Input::Eot(..)) => Source::Leg("eot"),
+            Event::Input(Input::Overlap(_)) => Source::Leg("interruption"),
+            Event::Input(input @ Input::ChannelEnded(end)) => match (end.leg(), end.sink()) {
+                ("stt", Some(stream)) => Source::Stt(stream),
+                (leg @ ("vad" | "eot" | "interruption"), _) => Source::Leg(leg),
+                _ => Source::Kind(std::mem::discriminant(input)),
+            },
             Event::Input(other) => Source::Kind(std::mem::discriminant(other)),
             other => Source::Event(std::mem::discriminant(other)),
         }

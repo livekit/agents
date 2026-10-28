@@ -658,6 +658,9 @@ fn dump_journal(record: &crate::record::Recording) {
     lines.extend(record.host().iter().map(|(at, h)| {
         (at.seq, format!("{:>6} {:>7}ms H {h:?}", at.seq, at.at_ms))
     }));
+    lines.extend(record.avatar().iter().map(|(at, step)| {
+        (at.seq, format!("{:>6} {:>7}ms A {step:?}", at.seq, at.at_ms))
+    }));
     lines.extend(record.applied().iter().map(|a| {
         let mark = if a.accepted { ">" } else { "x" };
         (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))

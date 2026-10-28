@@ -239,6 +239,18 @@ pub struct ChannelEnd {
     pub(super) error: Option<lk_agents_abi::errors::ProviderError>,
 }
 
+impl ChannelEnd {
+    /// The leg whose reader or drain ended.
+    pub fn leg(&self) -> &'static str {
+        self.leg
+    }
+
+    /// The stream a drain read: what its items were tagged with, sent before this end.
+    pub fn sink(&self) -> Option<ResourceId> {
+        self.sink
+    }
+}
+
 /// Journal a [`ChannelEnd`].
 pub(super) fn on_leg_ended(end: ChannelEnd, out: &mut Out) {
     out.trace(InputStep::ChannelEnded { leg: end.leg, cause: end.cause });
