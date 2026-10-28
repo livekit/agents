@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .amd import AMD
+    from .turn import EndpointingOptions, TurnDetectionMode
 
 __all__ = [
     "VoiceSession",
@@ -171,6 +172,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         thread: Thread | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
         **options: Any,
     ) -> None:
         """A voice session over the Rust core.
@@ -181,6 +184,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tools: Tools shared by every agent of the session.
             userdata, context, thread: Read by tools through ``RunContext``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
+            turn_detection, endpointing_opts: The session's turn completion and endpointing
+                policy, as ``update_options`` changes them.
             options: The session options the core resolves: ``turn_handling``,
                 ``stt_context_options``, ``tool_handling``, ``max_tool_steps``,
                 ``use_tts_aligned_transcript``, ``tts_text_transforms``,
@@ -191,6 +196,13 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         super().__init__()
         if unknown := options.keys() - _OPTION_DEFAULTS.keys():
             raise TypeError(f"unexpected VoiceSession options: {sorted(unknown)}")
+        listening = dict(options.get("turn_handling") or {})
+        if is_given(turn_detection):
+            listening["turn_detection"] = turn_detection
+        if is_given(endpointing_opts):
+            listening["endpointing"] = endpointing_opts
+        if listening:
+            options["turn_handling"] = listening
         self._conn_options = conn_options or SessionConnectOptions()
         self._options = _core.SessionOptions(
             {**_OPTION_DEFAULTS, **options, "conn_options": conn_options}
@@ -231,6 +243,9 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._core: _core.VoiceSession = None  # type: ignore[assignment]
         self._room: rtc.Room | _core.FakeRoom | _core.OfflineRoom | None = None
         self._amd: AMD | None = None
+        # `override_options`: what `update_options` wrote under a layer, and the layers in order
+        self._base_options: dict[str, Any] = {}
+        self._option_layers: list[dict[str, Any]] = []
         self._agent: Agent | None = None
         self._chat_ctx = ChatContext.empty()
         self._agent_state: AgentState = "initializing"
@@ -706,7 +721,59 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return ChatContext([from_core_item(i) for i in self._running.agent_chat_ctx()])
 
     def update_options(self, **update: Any) -> None:
-        """Change the turn options and ``expressive`` of a session (``UpdateKwargs``)."""
+        """Change the turn options and ``expressive`` of a session (``UpdateKwargs``). A setting
+        an ``override_options`` layer holds takes the new value once the layer is released."""
+        self._base_options.update(update)
+        self._send_options({k: v for k, v in update.items() if not self._layered(k)})
+
+    @contextlib.asynccontextmanager
+    async def override_options(
+        self,
+        *,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+    ) -> AsyncIterator[None]:
+        """Layer settings over the session's for the block: each takes its value from the
+        topmost layer that sets it, else from the base, and the layer is released when the
+        block ends, however it ends."""
+        layer: dict[str, Any] = {
+            "turn_detection": turn_detection,
+            "endpointing_opts": endpointing_opts,
+        }
+        layer = {k: v for k, v in layer.items() if is_given(v)}
+        for key in layer:
+            if not self._layered(key):
+                self._base_options.setdefault(key, self._current_option(key))
+        self._option_layers.append(layer)
+        self._send_options(layer)
+        try:
+            yield
+        finally:
+            del self._option_layers[
+                next(i for i, held in enumerate(self._option_layers) if held is layer)
+            ]
+            self._send_options({k: self._effective_option(k) for k in layer})
+
+    def _layered(self, key: str) -> bool:
+        return any(key in layer for layer in self._option_layers)
+
+    def _effective_option(self, key: str) -> Any:
+        for layer in reversed(self._option_layers):
+            if key in layer:
+                return layer[key]
+        return self._base_options[key]
+
+    def _current_option(self, key: str) -> Any:
+        """The value ``key`` has now, as ``update_options`` takes it."""
+        resolved = self.options
+        if key == "turn_detection":
+            return resolved["turn_detection_mode"]
+        endpointing = resolved["endpointing"]
+        return {k: endpointing[k] for k in ("mode", "min_delay", "max_delay", "alpha")}
+
+    def _send_options(self, update: dict[str, Any]) -> None:
+        if not update:
+            return
         if self._core is None:
             self._options.update(update)
         else:
