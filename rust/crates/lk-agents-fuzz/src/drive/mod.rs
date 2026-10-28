@@ -340,6 +340,9 @@ pub struct RealtimeSetup {
     pub text_only: bool,
     /// `RealtimeModelFallbackAdapter` over two such servers: a fatal error swaps to the other.
     pub fallback: bool,
+    /// A full-duplex speech model (`DuplexRealtimeAdapter`) instead of the server: it detects
+    /// turns and speaks on its own; the server's switches above do not apply.
+    pub duplex: bool,
 }
 
 impl Default for RealtimeSetup {
@@ -351,6 +354,7 @@ impl Default for RealtimeSetup {
             tool_calls: None,
             text_only: false,
             fallback: false,
+            duplex: false,
         }
     }
 }

@@ -154,6 +154,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         realtime.tool_calls = rng.bool().then(|| rng.u8(0..=100));
         realtime.text_only = rng.u8(0..100) < 25;
         realtime.fallback = rng.u8(0..100) < 30;
+        // A duplex model now and then, from the model's own dice: the draws after it are kept.
+        realtime.duplex = realtime.seed % 100 < 15;
     }
     // The legs' retry budgets, and a voice that does not stream, drawn last too.
     setup.conn = rng.bool().then(|| ConnSetup {

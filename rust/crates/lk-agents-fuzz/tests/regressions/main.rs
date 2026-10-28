@@ -8,6 +8,7 @@ mod determinism;
 mod dtmf_close;
 mod dtmf_interrupt_has_cause;
 mod dtmf_read_back_realtime;
+mod duplex_late_transcript;
 mod eot_asks_again_after_resumed_speech;
 mod eot_judged_by_detector_thresholds;
 mod failed_step_releases_floor;

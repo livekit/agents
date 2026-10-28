@@ -45,9 +45,11 @@ use crate::{
     record::{Detail, Kind, Tag},
 };
 
+pub mod duplex;
 pub mod fallback;
 pub mod server;
 
+pub use duplex::FakeDuplex;
 pub use fallback::FallbackRealtime;
 pub use server::{Exo, Server, Vad};
 

@@ -143,6 +143,12 @@ impl Run {
                     fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
                         as Arc<dyn Realtime>
                 };
+                if server.duplex {
+                    let clock = time.clock();
+                    let duplex =
+                        fakes::FakeDuplex::new(registry.clone(), server.seed, clock, tasks.clone());
+                    return duplex as Arc<dyn Realtime>;
+                }
                 if !server.fallback {
                     return fake(server.seed, connect);
                 }

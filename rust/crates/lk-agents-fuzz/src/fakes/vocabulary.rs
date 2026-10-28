@@ -97,7 +97,7 @@ table! { RealtimeEvents:
     event::Metrics => Covered("response.done usage, transcription usage");
     event::Error => Covered("error, a failed connection");
     event::HostError => Skipped("a host session's wall-clock error");
-    event::TranscriptAttribution => Skipped("a duplex model's (`lk_agents_inference::duplex::Segmenter`): the DST runs no duplex setup yet");
+    event::TranscriptAttribution => Covered("a duplex model's last words arriving after its utterance ended");
 }
 
 /// Compiles only while every variant of every provider vocabulary is covered or skipped.
