@@ -341,9 +341,6 @@ class _GatewayResponsesLLMStream(ResponsesLLMStream):
             return None
         return super()._parse_ws_event(event)
 
-    def _ws_receive_timeout(self) -> float | None:
-        return self._conn_options.timeout
-
     def _handle_error(self, event: ResponseErrorEvent) -> None:
         mapped = _GATEWAY_ERROR_STATUS.get(event.code or "")
         if mapped is None:

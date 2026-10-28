@@ -286,7 +286,7 @@ class ResponsesLLMStream(llm.LLMStream):
                     **self._extra_kwargs,
                 }
                 async for raw_event in self._llm._ws.generate_response(
-                    payload, receive_timeout=self._ws_receive_timeout()
+                    payload, receive_timeout=self._conn_options.timeout
                 ):
                     parsed_ev = self._parse_ws_event(raw_event)
                     chunk = self._process_event(parsed_ev)
@@ -336,10 +336,6 @@ class ResponsesLLMStream(llm.LLMStream):
                 raise
             except Exception as e:
                 raise APIConnectionError(retryable=retryable) from e
-
-    def _ws_receive_timeout(self) -> float | None:
-        """Seconds to wait for each WebSocket event; None waits as long as the socket lives."""
-        return None
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
         # Strip prompt_cache_retention from any response object before validation:
