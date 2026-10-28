@@ -12,7 +12,10 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::provider_format::PreResolved;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{ChatContext, ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamSource, ToolSpec, Ts};
+use lk_agents_abi::{
+    ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk, LlmStream, StreamSource,
+    ToolChoice, ToolSpec, Ts,
+};
 use lk_agents_inference::headers::{Headers, identification_headers};
 use lk_agents_inference::llm::lifecycle::{LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy};
 use lk_agents_inference::llm::request::ChatArgs;
@@ -59,7 +62,7 @@ impl GatewayLlm {
     }
 
     /// The same client as a session of the job `identity` names holds it.
-    pub fn identified(&self, identity: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
+    pub fn view(&self, identity: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
         GatewayLlm {
             opts: self.opts.clone(),
             http: self.http.clone(),
@@ -119,6 +122,93 @@ impl GatewayLlm {
     }
 }
 
+/// `_core.InferenceLlm`: the generated adapter calls this.
+impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
+    type Chunks = LlmChunks;
+
+    fn new(
+        model: String,
+        provider: Option<String>,
+        base_url: String,
+        api_key: String,
+        api_secret: String,
+        inference_class: Option<String>,
+        extra_kwargs: Option<Extra>,
+    ) -> Result<Self, ApiError> {
+        let unavailable = |e: String| ApiError::new(e).with_retryable(false);
+        let runtime = crate::process::handle().map_err(|e| unavailable(e.to_string()))?;
+        let http = GatewayHttp::shared().map_err(unavailable)?;
+        let opts = LlmOptions {
+            model,
+            base_url,
+            api_key,
+            api_secret,
+            provider,
+            inference_class,
+            extra_kwargs: extra_kwargs.unwrap_or_default(),
+        };
+        Ok(GatewayLlm::new(opts, http, runtime, host_clock()))
+    }
+
+    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Llm>>) -> Self {
+        self.view(headers.into_iter().collect(), reporter)
+    }
+
+    fn model(&self) -> String {
+        self.options().model
+    }
+
+    fn extra_kwargs(&self) -> Extra {
+        self.options().extra_kwargs
+    }
+
+    fn update_options(&self, model: Option<String>, extra_kwargs: Option<Extra>) {
+        self.update_options(|opts| {
+            if let Some(model) = model {
+                opts.model = model;
+            }
+            if let Some(extra) = extra_kwargs {
+                opts.extra_kwargs = extra;
+            }
+        });
+    }
+
+    fn chat(
+        &self,
+        items: Vec<ChatItem>,
+        tools: Vec<ToolSpec>,
+        conn_options: ApiConnectOptions,
+        parallel_tool_calls: Option<bool>,
+        tool_choice: Option<ToolChoice>,
+        response_format: Option<serde_json::Value>,
+        extra_kwargs: Option<Extra>,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<LlmChunks, ApiError> {
+        conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
+        let args = ChatArgs {
+            extra_kwargs,
+            parallel_tool_calls,
+            tool_choice,
+            response_format: response_format.filter(|f| !f.is_null()),
+            inference_class: None,
+        };
+        let identification: Option<Headers> = headers.map(|pairs| pairs.into_iter().collect());
+        let policy = RequestPolicy::from_options(&conn_options);
+        GatewayLlm::chat(self, &ChatContext::new(items), &tools, args, policy, identification.as_ref())
+    }
+}
+
+/// The host loop's clock (virtual in a virtual-time test), else the real one.
+#[cfg(feature = "python")]
+fn host_clock() -> Arc<dyn Clock> {
+    <Arc<dyn Clock> as lk_agents_abi::python::Ambient>::ambient()
+}
+
+#[cfg(not(feature = "python"))]
+fn host_clock() -> Arc<dyn Clock> {
+    Arc::new(lk_agents_abi::RealClock::new())
+}
+
 #[async_trait]
 impl Llm for GatewayLlm {
     fn failed(&self, error: ProviderError, recoverable: bool) {
@@ -169,7 +259,7 @@ impl Llm for GatewayLlm {
             response_format: None,
             inference_class: req.inference_class.clone(),
         };
-        Ok(Box::new(self.chat(&req.chat_ctx, &req.tools, args, policy, None)?))
+        Ok(Box::new(GatewayLlm::chat(self, &req.chat_ctx, &req.tools, args, policy, None)?))
     }
 }
 
