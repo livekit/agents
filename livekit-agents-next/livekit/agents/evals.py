@@ -30,7 +30,7 @@ __all__ = [
     "tool_use_judge",
 ]
 
-_JUDGE_CONN_OPTIONS = APIConnectOptions(timeout=90.0)
+_JUDGE_CONN_OPTIONS = APIConnectOptions(read_timeout=90.0)
 
 
 Verdict = Literal["pass", "fail", "maybe"]
