@@ -8,11 +8,14 @@ use a2a::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lk_agents_abi::a2a::door::DoorFrame;
+use lk_agents_abi::a2a::turn::TurnEvent;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState as StoredState;
 use lk_agents_abi::storage::thread::TaskRow;
 use serde::{Deserialize, Serialize};
+
+use crate::a2a::TurnResult;
 
 /// Where a resubscribe resumes: after `offset` in one of the task's response streams. Opaque to
 /// clients.
@@ -174,4 +177,100 @@ pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {
     sse.push_str(&json);
     sse.push_str("\n\n");
     DoorFrame { json, sse, is_error }
+}
+
+/// What one request's response stream says, decided from the turn: the task announced once, its
+/// progress and answer tokens while they belong to that task, then the answer artifact (closing
+/// the streamed one when the tokens already were the answer) and the final status.
+#[derive(Debug)]
+pub struct Publication {
+    /// The announced task; `None` until announced.
+    task_id: Option<String>,
+    artifact_id: String,
+    /// The answer tokens streamed so far.
+    text: String,
+}
+
+impl Publication {
+    pub fn new(artifact_id: String) -> Self {
+        Self { task_id: None, artifact_id, text: String::new() }
+    }
+
+    /// The `submitted` announcement of `task_id`, once.
+    pub fn announce(
+        &mut self,
+        task_id: &str,
+        context: &str,
+        now_ms: i64,
+    ) -> Option<StreamResponse> {
+        if self.task_id.is_some() {
+            return None;
+        }
+        self.task_id = Some(task_id.to_owned());
+        Some(submitted(task_id, context, now_ms))
+    }
+
+    /// A handler event of the announced task as a stream event; `message_id` names a progress
+    /// message.
+    pub fn event(
+        &mut self,
+        event: &TurnEvent,
+        context: &str,
+        message_id: String,
+        now_ms: i64,
+    ) -> Option<StreamResponse> {
+        match event {
+            TurnEvent::Progress { task_id, text } if self.announced(task_id) => {
+                Some(progress(task_id, context, text.clone(), message_id, now_ms))
+            }
+            TurnEvent::Token { task_id, delta } if self.announced(task_id) && !delta.is_empty() => {
+                let append = !self.text.is_empty();
+                self.text.push_str(delta);
+                Some(artifact(
+                    task_id,
+                    context,
+                    &self.artifact_id,
+                    Some(delta.clone()),
+                    append,
+                    false,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn announced(&self, task_id: &str) -> bool {
+        self.task_id.as_deref() == Some(task_id)
+    }
+
+    /// The turn's end: its announcement if none was made, the answer artifact, the final status.
+    pub fn finish(
+        &mut self,
+        result: &TurnResult,
+        context: &str,
+        now_ms: i64,
+    ) -> Vec<StreamResponse> {
+        let row = &result.task;
+        let mut events: Vec<StreamResponse> =
+            self.announce(&row.task_id, context, now_ms).into_iter().collect();
+        if let Some(answer) = row.data.artifacts.as_ref().and_then(|a| a.first()) {
+            let streamed = !self.text.is_empty()
+                && result.output.as_ref().and_then(serde_json::Value::as_str)
+                    == Some(self.text.as_str());
+            events.push(if streamed {
+                artifact(&row.task_id, context, &self.artifact_id, None, true, true)
+            } else {
+                StreamResponse::ArtifactUpdate(a2a::TaskArtifactUpdateEvent {
+                    task_id: row.task_id.clone(),
+                    context_id: context.into(),
+                    artifact: answer.clone(),
+                    append: Some(false),
+                    last_chunk: Some(true),
+                    metadata: None,
+                })
+            });
+        }
+        events.push(final_status(row, context));
+        events
+    }
 }

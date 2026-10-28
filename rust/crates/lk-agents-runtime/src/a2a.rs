@@ -31,10 +31,13 @@ use crate::storage::{
     CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid,
 };
 
-/// Notification after durable acceptance, before admission waits or application work.
+/// Who watches a turn from outside: its response stream.
 #[async_trait::async_trait]
-pub trait Acceptance: Send + Sync {
+pub trait Observer: Send + Sync {
+    /// The message's task is durable, before admission waits or application work.
     async fn accepted(&self, task: &TaskRow) -> Result<(), StorageError>;
+    /// A handler's progress or answer token.
+    async fn event(&self, event: &TurnEvent) -> Result<(), StorageError>;
 }
 
 /// How many task rows the handler's context carries.
@@ -72,7 +75,7 @@ pub struct Turn {
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
     stream: Option<StreamInfo>,
-    acceptance: Option<Arc<dyn Acceptance>>,
+    observer: Option<Arc<dyn Observer>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: TaskTracker,
@@ -97,14 +100,14 @@ impl Turn {
             clock,
             opts: options,
             stream: None,
-            acceptance: None,
+            observer: None,
             host_context: None,
             resolvers: TaskTracker::new(),
         }
     }
 
-    pub fn with_acceptance(mut self, acceptance: Arc<dyn Acceptance>) -> Self {
-        self.acceptance = Some(acceptance);
+    pub fn with_observer(mut self, observer: Arc<dyn Observer>) -> Self {
+        self.observer = Some(observer);
         self
     }
 
@@ -276,7 +279,7 @@ impl Turn {
                 }
             }
             Operation::Accepted(task_id) => {
-                if let Some(observer) = &self.acceptance {
+                if let Some(observer) = &self.observer {
                     let task = call.lane.task(&task_id).await?.ok_or_else(|| {
                         StorageError::Unavailable("an accepted task was not durable".into())
                     })?;
@@ -504,7 +507,11 @@ impl Turn {
             loop {
                 match events.next().await.map_err(host_error)? {
                     Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
-                    Some(TurnEvent::Progress { .. } | TurnEvent::Token { .. }) => {}
+                    Some(event @ (TurnEvent::Progress { .. } | TurnEvent::Token { .. })) => {
+                        if let Some(observer) = &self.observer {
+                            observer.event(&event).await?;
+                        }
+                    }
                     Some(TurnEvent::Output { output }) => {
                         let out = HandlerOutput::try_from(output)?;
                         if let Some(err) = &out.error {

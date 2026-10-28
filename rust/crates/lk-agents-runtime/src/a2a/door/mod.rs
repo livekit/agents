@@ -522,38 +522,33 @@ impl Inner {
         }
         let streams = self.storage.response_streams();
         let created = streams.create(None).await?;
-        let task_id = shortuuid("AST_");
-        let sink = Arc::new(stream::Publisher::new(
+        let publisher = Arc::new(stream::Publisher::new(
             streams.clone(),
             created.stream_id.clone(),
             id.clone(),
+            context.clone(),
+            continuing,
             streaming.then_some(sender.clone()),
         ));
-        let host =
-            Arc::new(stream::WireHost::new(self.host.clone(), sink.clone(), context.clone()));
         let turn = Turn::new(
             thread.clone(),
             &self.lane,
-            host,
+            self.host.clone(),
             crate::process::host_clock(),
             self.options.clone(),
         )
         .with_stream(created.clone())
         .with_owner(self.owner.clone())
-        .with_acceptance(Arc::new(stream::Accepted {
-            task_id: continuing,
-            publisher: sink.clone(),
-            context: context.clone(),
-        }));
+        .with_observer(publisher.clone());
         let turn = match host_context {
             Some(context) => turn.with_context(context),
             None => turn,
         };
-        let result = turn.run_message(message, Some(task_id)).await;
+        let result = turn.run_message(message, None).await;
         thread.close().await;
         match result {
             Ok(result) => {
-                sink.finish(&result, &context).await?;
+                publisher.finish(&result).await?;
                 if !streaming {
                     let _ = sender
                         .send(Ok(wire::success(
