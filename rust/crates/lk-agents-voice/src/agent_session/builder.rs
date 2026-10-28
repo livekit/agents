@@ -64,7 +64,7 @@ pub struct DriverBuilder {
     pub vad: Option<Arc<dyn Vad>>,
     pub audio_in: Option<Arc<dyn AudioInput>>,
     pub video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
-    pub recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+    pub recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     pub audio_out: Option<Arc<dyn AudioOutput>>,
     pub text_out: Option<Arc<dyn TextOutput>>,
     pub room_events: Option<Rx<RoomEvent>>,

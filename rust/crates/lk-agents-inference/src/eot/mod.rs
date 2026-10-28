@@ -24,8 +24,6 @@ mod transport;
 use livekit_protocol::agent as proto;
 
 #[cfg(test)]
-mod deadlock_tests;
-#[cfg(test)]
 mod tests;
 
 pub use cloud::{

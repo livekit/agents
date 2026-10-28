@@ -11,6 +11,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
 use lk_agents_abi::turn::eot::MetricsEvent;
 use lk_agents_abi::utils::resample::{Quality, Resampler};
+use lk_agents_abi::utils::workers::{WorkerClass, WorkerError, try_spawn};
 use lk_agents_abi::{AudioFrame, EotPrediction, ProviderId};
 use tokio::sync::{oneshot, watch};
 
@@ -83,7 +84,7 @@ pub struct EotStream {
     rate: u32,
     make: TransportFactory,
     on_metrics: Option<MetricsCallback>,
-    /// Bumped by each swap, so the run loop remounts.
+    /// A swap or prediction wakes a driver whose local construction was refused.
     swaps: watch::Sender<u64>,
     settled: watch::Sender<bool>,
     id: ProviderId,
@@ -163,6 +164,9 @@ impl EotStream {
         inner.waiters.insert(request_id.clone(), tx);
         let actions = inner.session.start(now(), EotRequestId::from_string(request_id));
         let warnings = self.apply(&mut inner, actions);
+        if inner.shell.is_none() && !inner.session.is_closed() {
+            self.swaps.send_modify(|n| *n += 1);
+        }
         drop(inner);
         Self::warn(warnings);
         rx
@@ -345,7 +349,6 @@ impl EotStream {
     }
 
     #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// `_run`: the mounted transport for its lifetime, remounted after a swap.
     async fn run(self: Arc<Self>) {
         let mut swaps = self.swaps.subscribe();
@@ -367,19 +370,39 @@ impl EotStream {
                 return;
             }
             let Some(shell) = shell else {
-                // Admission precedes spawn_blocking: simultaneous cloud failures cannot fill
-                // Tokio's blocking queue with model constructors waiting for the GIL.
-                static CONSTRUCTION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-                let permit = tokio::select! {
-                    permit = CONSTRUCTION.acquire() => permit.expect("construction semaphore"),
-                    _ = swaps.changed() => continue,
-                };
                 let make = self.make.clone();
-                let replacement = tokio::task::spawn_blocking(move || {
-                    let _permit = permit;
-                    make(model)
-                })
-                .await;
+                let (send, receive) = oneshot::channel();
+                let replacement = match try_spawn(
+                    WorkerClass::EotModel,
+                    Box::new(move || {
+                        let _ = send.send(make(model));
+                    }),
+                ) {
+                    Ok(worker) => match worker.await {
+                        Ok(()) => receive.await.map_err(|error| error.to_string()),
+                        Err(error) => Err(error),
+                    },
+                    Err(error @ WorkerError::Exhausted(_)) => {
+                        let warnings = {
+                            let mut inner = self.lock();
+                            if inner.session.is_closed() {
+                                return;
+                            }
+                            let actions =
+                                inner.session.construction_refused(now(), &error.to_string());
+                            let warnings = self.apply(&mut inner, actions);
+                            swaps.borrow_and_update();
+                            warnings
+                        };
+                        Self::warn(warnings);
+                        // Another prediction retries; returning capacity alone queues no work.
+                        if swaps.changed().await.is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                    Err(error) => Err(error.to_string()),
+                };
                 match replacement {
                     Ok(shell) => {
                         let mut inner = self.lock();
@@ -402,7 +425,7 @@ impl EotStream {
                     }
                     Err(error) => {
                         let mut inner = self.lock();
-                        let actions = inner.session.transport_failed(now(), &error.to_string());
+                        let actions = inner.session.construction_failed(now(), &error);
                         let warnings = self.apply(&mut inner, actions);
                         drop(inner);
                         Self::warn(warnings);

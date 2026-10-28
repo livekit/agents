@@ -516,7 +516,7 @@ pub enum RecorderCommand {
     Detach,
 }
 
-pub struct HostRecorder(pub Arc<dyn lk_agents_media::recorder::AudioRecorder>);
+pub struct HostRecorder(pub Arc<dyn lk_agents_abi::recorder::AudioRecorder>);
 
 pub struct HostVideo(pub Arc<dyn lk_agents_abi::voice::io::VideoInput>);
 

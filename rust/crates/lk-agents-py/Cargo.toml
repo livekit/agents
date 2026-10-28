@@ -30,7 +30,7 @@ lk-agents-voice = { path = "../lk-agents-voice", features = ["native-audio", "py
 lk-agents-inference = { path = "../lk-agents-inference", features = ["native-audio", "python"] }
 lk-agents-worker = { path = "../lk-agents-worker", features = ["python"] }
 # The runtime implements the declared classes the generated adapters (`src/generated/`) call.
-lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python"] }
+lk-agents-runtime = { path = "../lk-agents-runtime", features = ["python", "media-resample"] }
 # The session storage client (plan 13.4). Host-neutral: its Python face is `src/storage.rs` here,
 # hand-written pyo3 over its typed methods, registered on `_core` like every other class.
 lk-agents-storage = { path = "../lk-agents-storage" }
@@ -53,7 +53,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 extension-module = ["pyo3/extension-module"]
 # The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml
 # `features`), never by the workspace build.
-ffmpeg = ["lk-agents-media/ffmpeg"]
+ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-runtime/media-ffmpeg"]
 
 # `#[derive(Host)]` on a unit enum expands its pyo3 conversions under `cfg(feature = "python")`,
 # a feature this crate does not have: name the value so check-cfg does not warn.

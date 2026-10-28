@@ -10,6 +10,7 @@
 
 // `Host` stays in this crate; `Vocabulary`, `host` and `class` are the only items re-exported from
 // `lk-agents-host-derive`.
+pub use inventory;
 pub use lk_agents_host_derive::Vocabulary;
 pub use lk_agents_host_derive::class;
 pub use lk_agents_host_derive::host;
@@ -24,9 +25,11 @@ pub mod errors;
 pub mod evals;
 pub mod inference;
 pub mod llm;
+pub mod media;
 pub mod metrics;
 #[cfg(feature = "python")]
 pub mod python;
+pub mod recorder;
 pub mod resources;
 pub mod storage;
 pub mod stt;

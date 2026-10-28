@@ -20,29 +20,39 @@ pub enum ProcessError {
 struct Started {
     pid: u32,
     runtime: tokio::runtime::Runtime,
+    workers: crate::media_workers::MediaWorkers,
 }
 
 static RUNTIME: Mutex<Option<Started>> = Mutex::new(None);
 
 /// The runtime's handle, starting it in this process on first use.
 pub fn handle() -> Result<tokio::runtime::Handle, ProcessError> {
+    with_started(|started| started.runtime.handle().clone())
+}
+
+/// The process-owned native admission pool. Clones share the same class and total capacity.
+pub fn workers() -> Result<crate::media_workers::MediaWorkers, ProcessError> {
+    with_started(|started| started.workers.clone())
+}
+
+fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> {
     let pid = std::process::id();
     let mut slot = RUNTIME.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(started) = slot.as_ref() {
-        return if started.pid == pid {
-            Ok(started.runtime.handle().clone())
-        } else {
-            Err(ProcessError::Forked)
-        };
+        return if started.pid == pid { Ok(read(started)) } else { Err(ProcessError::Forked) };
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("lk-agents-runtime")
         .enable_all()
         .build()
         .map_err(|e| ProcessError::Start(e.to_string()))?;
-    let handle = runtime.handle().clone();
-    *slot = Some(Started { pid, runtime });
-    Ok(handle)
+    let workers = crate::media_workers::MediaWorkers::new(
+        runtime.handle().clone(),
+        crate::media_workers::MediaWorkerLimits::default(),
+    )
+    .map_err(|error| ProcessError::Start(error.to_string()))?;
+    let started = slot.insert(Started { pid, runtime, workers });
+    Ok(read(started))
 }
 
 /// Declares this process as the runtime's owner (`_core.init` in a forked child): a runtime

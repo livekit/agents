@@ -67,7 +67,7 @@ pub(crate) struct VoiceSession {
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
     /// `start(record=..)`, attached by the opening.
-    pub(crate) start_recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+    pub(crate) start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     pub(crate) recorder_attached: bool,
     pub(crate) room: crate::room_io::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
@@ -96,7 +96,7 @@ pub(crate) struct SessionParts {
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     pub(crate) outputs: Outputs,
     pub(crate) max_unrecoverable_errors: u32,
-    pub(crate) start_recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+    pub(crate) start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     pub(crate) room_link: Option<crate::room_io::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).

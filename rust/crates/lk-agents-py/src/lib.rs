@@ -41,6 +41,7 @@ pub mod handles {
 pub struct Selected;
 
 impl generated::Implementations for Selected {
+    type SessionRecorder = lk_agents_runtime::recording::SessionRecorder;
     type Credentials = lk_agents_runtime::a2a_auth::Credentials;
     type AuthPermissions = lk_agents_runtime::a2a_auth::Credentials;
     type McpSession = lk_agents_runtime::mcp::McpSession;

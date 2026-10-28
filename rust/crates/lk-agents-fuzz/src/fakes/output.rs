@@ -16,7 +16,7 @@ use lk_agents_abi::voice::io::{
 };
 use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
 use lk_agents_abi::errors::HostError;
-use lk_agents_media::recorder::{AudioRecorder, RecorderError};
+use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_voice::remote_session::{self, FrameDecoder, console::ConsoleIo, proto};
 use prost::Message as _;
 use proto::agent_session_message::{Message, console_io};
@@ -508,7 +508,7 @@ impl AudioRecorder for FakeRecorder {
     fn on_playback_finished(&self, _now: f64, _playback_position: f64) {
         self.registry.record_sink(Sink::Recorder(RecorderCall::PlaybackFinished));
     }
-    fn flush(&self, _now: f64) -> Result<(), RecorderError> {
+    fn flush(&self, _now: f64) -> Result<(), RecordingFailure> {
         self.registry.record_sink(Sink::Recorder(RecorderCall::Flush));
         Ok(())
     }

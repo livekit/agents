@@ -516,7 +516,7 @@ impl SessionApi {
     #[host(method(name = "attach_recorder"))]
     pub fn host_attach_recorder(
         &self,
-        #[host(required)] recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+        #[host(required)] recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     ) {
         self.attach_recorder(recorder);
     }

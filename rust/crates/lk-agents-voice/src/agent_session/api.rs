@@ -238,7 +238,7 @@ impl SessionApi {
     /// `None` detaches. Safe before or after `open`.
     pub fn attach_recorder(
         &self,
-        recorder: Option<Arc<dyn lk_agents_media::recorder::AudioRecorder>>,
+        recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     ) {
         match &mut *self.lock() {
             Stage::Ready(ready) => ready.builder.recorder = recorder,

@@ -93,11 +93,7 @@ mod tests {
                 .filter(|n| !n.starts_with("__"))
                 .collect();
             names.sort();
-            let mut expected = frozen_names();
-            // `SessionRecorder` is `ffmpeg`-gated (in `media.rs`); the workspace test build lacks it.
-            if cfg!(not(feature = "ffmpeg")) {
-                expected.retain(|n| n != "SessionRecorder");
-            }
+            let expected = frozen_names();
             assert_eq!(names, expected);
         });
     }

@@ -1,12 +1,13 @@
-//! Streaming decode resources. The runtime owns admission, AVIO waits, bounded input/PCM queues
-//! and native settlement; media receives only supplied chunks or synchronous codec callbacks.
+//! Background file decoding: one admitted native job owns reads, codec state and bounded PCM.
+//! Pulls yield cooperatively; cancellation retains native ownership through worker settlement.
 
 use std::collections::VecDeque;
-use std::io::{self, Read};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
 
+use lk_agents_abi::AudioFrame;
 use lk_agents_media::decoder::DecodeLimits;
 use lk_agents_media::{AudioFormat, CodecError, Decoder};
 use tokio::sync::Notify;
@@ -16,8 +17,6 @@ use crate::media_workers::{MediaWorker, MediaWorkerClass, MediaWorkerError, Medi
 #[derive(Debug, Clone, Copy)]
 pub struct DecoderLimits {
     pub format: DecodeLimits,
-    pub input_bytes: usize,
-    pub input_chunks: usize,
     pub output_samples: usize,
     pub output_chunk_samples: usize,
 }
@@ -32,8 +31,6 @@ pub enum DecoderError {
     WorkerAdmission(#[from] MediaWorkerError),
     #[error("decoder input is closed")]
     InputClosed,
-    #[error("decoder ingress is busy; input was not accepted")]
-    Busy,
     #[error("decoder {0} capacity exceeded")]
     Overflow(&'static str),
     #[error(transparent)]
@@ -44,26 +41,15 @@ pub enum DecoderError {
     IncompleteCleanup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecodedAudio {
-    pub data: Vec<u8>,
-    pub sample_rate: u32,
-    pub num_channels: u16,
-}
-
 struct State {
-    input: VecDeque<Vec<u8>>,
-    input_offset: usize,
-    input_bytes: usize,
-    eof: bool,
-    output: VecDeque<DecodedAudio>,
+    output: VecDeque<AudioFrame>,
     output_samples: usize,
     done: bool,
     error: Option<DecoderError>,
 }
 
 enum DecoderPoll {
-    Audio(DecodedAudio),
+    Audio(AudioFrame),
     Pending,
     Finished(Result<(), DecoderError>),
     Busy,
@@ -82,14 +68,13 @@ impl Shared {
         if state.error.is_none() {
             state.error = Some(error);
         }
-        state.eof = true;
     }
 
-    fn try_state(&self) -> Result<MutexGuard<'_, State>, DecoderError> {
+    fn try_state(&self) -> Result<MutexGuard<'_, State>, ()> {
         match self.state.try_lock() {
             Ok(state) => Ok(state),
             Err(TryLockError::Poisoned(error)) => Ok(error.into_inner()),
-            Err(TryLockError::WouldBlock) => Err(DecoderError::Busy),
+            Err(TryLockError::WouldBlock) => Err(()),
         }
     }
 
@@ -129,7 +114,7 @@ impl Shared {
         if chunk_size == 0 || samples.len() % channels != 0 {
             return Err(DecoderError::InvalidLimits);
         }
-        {
+        loop {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if self.cancelled.load(Ordering::Acquire) {
                 return Err(DecoderError::InputClosed);
@@ -137,22 +122,32 @@ impl Shared {
             if let Some(error) = state.error.as_ref() {
                 return Err(error.clone());
             }
-            if samples.len() > self.limits.output_samples.saturating_sub(state.output_samples) {
-                let error = DecoderError::Overflow("PCM output");
-                Self::fail(&mut state, error.clone());
-                self.wake_reader();
-                self.ready.notify_one();
-                return Err(error);
+            if samples.len() <= self.limits.output_samples.saturating_sub(state.output_samples) {
+                // Reserve worker-local prepared PCM before releasing the lock.
+                state.output_samples += samples.len();
+                break;
             }
-            // Count worker-local prepared PCM as retained output before releasing the lock.
-            state.output_samples += samples.len();
+            if samples.len() <= self.limits.output_samples {
+                drop(state);
+                std::thread::park();
+                continue;
+            }
+            let error = DecoderError::Overflow("PCM output");
+            Self::fail(&mut state, error.clone());
+            self.wake_reader();
+            self.ready.notify_one();
+            return Err(error);
         }
         let prepared = samples
             .chunks(chunk_size)
-            .map(|chunk| DecodedAudio {
-                data: lk_agents_media::pcm_bytes(chunk),
-                sample_rate: format.sample_rate,
-                num_channels: format.num_channels,
+            .map(|chunk| {
+                AudioFrame::new(
+                    lk_agents_media::pcm_bytes(chunk),
+                    format.sample_rate,
+                    format.num_channels,
+                    u32::try_from(chunk.len() / channels)
+                        .expect("validated native frame size fits i32"),
+                )
             })
             .collect::<VecDeque<_>>();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -170,74 +165,59 @@ impl Shared {
     }
 }
 
-struct Input(Arc<Shared>);
-
-impl Read for Input {
-    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        if output.is_empty() {
-            return Ok(0);
-        }
-        loop {
-            let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-            if self.0.cancelled.load(Ordering::Acquire) || state.error.is_some() {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "decoder input cancelled"));
-            }
-            if let Some(bytes) = state.input.front() {
-                let n = output.len().min(4096).min(bytes.len() - state.input_offset);
-                output[..n].copy_from_slice(&bytes[state.input_offset..state.input_offset + n]);
-                state.input_offset += n;
-                if state.input_offset == state.input.front().expect("present").len() {
-                    state.input_bytes -= state.input.front().expect("present").capacity();
-                    state.input.pop_front();
-                    state.input_offset = 0;
-                }
-                return Ok(n);
-            }
-            if state.eof {
-                return Ok(0);
-            }
-            drop(state);
-            std::thread::park();
-        }
-    }
-}
-
-/// One admitted decode stream. Ingress never waits for native work; EOF is reported only after
-/// successful native completion and delivery of every accepted PCM chunk.
+/// One admitted file decoder. EOF follows native completion and delivery of all decoded PCM.
 pub struct AudioDecoder {
     shared: Arc<Shared>,
     worker: Option<MediaWorker<Result<(), DecoderError>>>,
 }
 
 impl AudioDecoder {
-    pub fn open(
+    pub fn open_file(
         workers: &MediaWorkers,
-        mime: &str,
-        sample_rate: Option<u32>,
+        path: String,
+        looping: bool,
+        sample_rate: u32,
         num_channels: u16,
         limits: DecoderLimits,
     ) -> Result<Self, DecoderError> {
+        let decode = move |shared: &Arc<Shared>| {
+            #[cfg(feature = "media-ffmpeg")]
+            let mime = "";
+            #[cfg(not(feature = "media-ffmpeg"))]
+            let mime = if std::path::Path::new(&path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+            {
+                "audio/wav"
+            } else {
+                ""
+            };
+            loop {
+                if shared.cancelled.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                let mut file = std::fs::File::open(&path)
+                    .map_err(|error| DecoderError::WorkerFailed(error.to_string()))?;
+                let emitted = decode_reader(shared, mime, sample_rate, num_channels, &mut file)?;
+                if !looping || !emitted {
+                    return Ok(());
+                }
+            }
+        };
         if !limits.format.is_valid()
-            || limits.input_chunks == 0
-            || limits.input_bytes == 0
             || limits.output_samples == 0
             || limits.output_chunk_samples == 0
             || limits.output_chunk_samples > limits.output_samples
             || num_channels == 0
             || num_channels > limits.format.max_channels
-            || sample_rate.is_some_and(|rate| {
-                !(limits.format.min_sample_rate..=limits.format.max_sample_rate).contains(&rate)
-            })
+            || !(limits.format.min_sample_rate..=limits.format.max_sample_rate)
+                .contains(&sample_rate)
             || limits.output_chunk_samples % usize::from(num_channels) != 0
         {
             return Err(DecoderError::InvalidLimits);
         }
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
-                input: VecDeque::new(),
-                input_offset: 0,
-                input_bytes: 0,
-                eof: false,
                 output: VecDeque::new(),
                 output_samples: 0,
                 done: false,
@@ -248,20 +228,17 @@ impl AudioDecoder {
             ready: Notify::new(),
             limits,
         });
-        let mime = mime.to_owned();
         let resource = shared.clone();
         let worker = workers.try_spawn(MediaWorkerClass::Decoder, move || {
             let _ = resource.reader.set(std::thread::current());
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                decode(&resource, &mime, sample_rate, num_channels)
-            }))
-            .unwrap_or_else(|_| Err(DecoderError::WorkerFailed("native decode panicked".into())));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&resource)))
+                    .unwrap_or_else(|_| {
+                        Err(DecoderError::WorkerFailed("native decode panicked".into()))
+                    });
             {
                 let mut state = resource.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.done = true;
-                state.input.clear();
-                state.input_bytes = 0;
-                state.input_offset = 0;
                 if let Err(error) = &result {
                     if !resource.cancelled.load(Ordering::Acquire) {
                         Shared::fail(&mut state, error.clone());
@@ -289,49 +266,7 @@ impl AudioDecoder {
         Ok(Self { shared, worker: Some(worker) })
     }
 
-    /// Move a chunk only after admission. Busy leaves the caller's buffer unchanged for retry.
-    pub fn try_push(&self, data: &mut Vec<u8>) -> Result<(), DecoderError> {
-        let mut state = self.shared.try_state()?;
-        if let Some(error) = &state.error {
-            return Err(error.clone());
-        }
-        if state.eof || self.shared.cancelled.load(Ordering::Acquire) || state.done {
-            return Err(DecoderError::InputClosed);
-        }
-        if data.capacity() > self.shared.limits.input_bytes.saturating_sub(state.input_bytes)
-            || (!data.is_empty() && state.input.len() >= self.shared.limits.input_chunks)
-        {
-            let error = DecoderError::Overflow("compressed input");
-            Shared::fail(&mut state, error.clone());
-            drop(state);
-            self.shared.wake_reader();
-            self.shared.ready.notify_one();
-            return Err(error);
-        }
-        if !data.is_empty() {
-            state.input_bytes += data.capacity();
-            state.input.push_back(std::mem::take(data));
-        }
-        drop(state);
-        self.shared.wake_reader();
-        Ok(())
-    }
-
-    pub fn end_input(&self) -> Result<(), DecoderError> {
-        let mut state = self.shared.try_state()?;
-        if let Some(error) = &state.error {
-            return Err(error.clone());
-        }
-        if self.shared.cancelled.load(Ordering::Acquire) {
-            return Err(DecoderError::InputClosed);
-        }
-        state.eof = true;
-        drop(state);
-        self.shared.wake_reader();
-        Ok(())
-    }
-
-    pub async fn next(&mut self) -> Result<Option<DecodedAudio>, DecoderError> {
+    pub async fn next(&mut self) -> Result<Option<AudioFrame>, DecoderError> {
         tokio::task::consume_budget().await;
         loop {
             let ready = self.shared.ready.notified();
@@ -392,17 +327,18 @@ impl Drop for AudioDecoder {
     }
 }
 
-fn decode(
+fn decode_reader(
     shared: &Arc<Shared>,
     mime: &str,
-    sample_rate: Option<u32>,
+    sample_rate: u32,
     num_channels: u16,
-) -> Result<(), DecoderError> {
-    let mut input = Input(shared.clone());
+    input: &mut std::fs::File,
+) -> Result<bool, DecoderError> {
+    let mut emitted = false;
     if lk_agents_media::mime_to_av_format(Some(mime)) == Some("wav") {
         let mut decoder =
-            Decoder::new_bounded(mime, sample_rate, num_channels, shared.limits.format)?;
-        let mut bytes = vec![0; 4096.min(shared.limits.input_bytes)];
+            Decoder::new_bounded(mime, Some(sample_rate), num_channels, shared.limits.format)?;
+        let mut bytes = vec![0; 4096];
         loop {
             let n =
                 input.read(&mut bytes).map_err(|e| DecoderError::WorkerFailed(e.to_string()))?;
@@ -412,30 +348,33 @@ fn decode(
             let pcm = decoder.push(&bytes[..n])?;
             if let Some(format) = decoder.output_format() {
                 shared.output(format, &pcm)?;
+                emitted |= !pcm.is_empty();
             }
         }
         let tail = decoder.finish()?;
         if let Some(format) = decoder.output_format() {
             shared.output(format, &tail)?;
+            emitted |= !tail.is_empty();
         }
-        Ok(())
+        Ok(emitted)
     } else {
         #[cfg(feature = "media-ffmpeg")]
         {
             lk_agents_media::ffmpeg::decode_stream(
                 lk_agents_media::mime_to_av_format(Some(mime)),
-                sample_rate.unwrap_or(0),
+                sample_rate,
                 num_channels,
                 shared.limits.format,
-                &mut input,
+                input,
                 |format, samples| {
+                    emitted |= !samples.is_empty();
                     shared.output(format, samples).map_err(|e| CodecError::Ffmpeg {
                         op: "PCM delivery",
                         detail: e.to_string(),
                     })
                 },
             )?;
-            Ok(())
+            Ok(emitted)
         }
         #[cfg(not(feature = "media-ffmpeg"))]
         {
@@ -449,41 +388,67 @@ fn decode(
     }
 }
 
+impl lk_agents_abi::media::decoder::FileDecoder for AudioDecoder {
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::utils::spawner::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::AudioFrame>, String>,
+    > {
+        Box::pin(async move { self.next().await.map_err(|error| error.to_string()) })
+    }
+
+    fn close(
+        &mut self,
+        timeout: Duration,
+    ) -> lk_agents_abi::utils::spawner::BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move { self.close(timeout).await.map_err(|error| error.to_string()) })
+    }
+}
+
+lk_agents_abi::inventory::submit! {
+    lk_agents_abi::media::decoder::FileDecoderProvider {
+        open: |options| {
+            let lk_agents_abi::media::decoder::FileDecoderOptions {
+                path, looping, sample_rate, num_channels,
+            } = options;
+            let workers = crate::process::workers().map_err(|error| error.to_string())?;
+            let output_samples = (sample_rate as usize) * usize::from(num_channels) * 2;
+            let limits = DecoderLimits {
+                format: DecodeLimits {
+                    min_sample_rate: 8_000,
+                    max_sample_rate: 192_000,
+                    max_channels: 8,
+                    max_streams: 8,
+                    max_expansion_ratio: 24,
+                    max_samples_per_frame: output_samples,
+                },
+                output_samples,
+                output_chunk_samples: (sample_rate as usize / 100).max(1) * usize::from(num_channels),
+            };
+            AudioDecoder::open_file(&workers, path, looping, sample_rate, num_channels, limits)
+                .map(|decoder| Box::new(decoder) as Box<dyn lk_agents_abi::media::decoder::FileDecoder>)
+                .map_err(|error| error.to_string())
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::media_workers::MediaWorkerLimits;
 
-    async fn push(decoder: &AudioDecoder, mut data: Vec<u8>) -> Result<(), DecoderError> {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                match decoder.try_push(&mut data) {
-                    Err(DecoderError::Busy) => tokio::task::yield_now().await,
-                    result => return result,
-                }
-            }
-        })
-        .await
-        .map_err(|_| DecoderError::Busy)?
-    }
-
-    async fn end_input(decoder: &AudioDecoder) -> Result<(), DecoderError> {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                match decoder.end_input() {
-                    Err(DecoderError::Busy) => tokio::task::yield_now().await,
-                    result => return result,
-                }
-            }
-        })
-        .await
-        .map_err(|_| DecoderError::Busy)?
-    }
-
     fn workers() -> MediaWorkers {
         MediaWorkers::new(
             tokio::runtime::Handle::current(),
-            MediaWorkerLimits { total: 3, decoders: 1, recordings: 1, images: 1 },
+            MediaWorkerLimits {
+                total: 3,
+                decoders: 1,
+                recordings: 1,
+                images: 1,
+                eot_models: 1,
+                uploads: 1,
+            },
         )
         .unwrap()
     }
@@ -498,8 +463,6 @@ mod tests {
                 max_expansion_ratio: 24,
                 max_samples_per_frame: 65536,
             },
-            input_bytes: 16 * 1024,
-            input_chunks: 1024,
             output_samples: 16 * 1024,
             output_chunk_samples: 128,
         }
@@ -523,147 +486,121 @@ mod tests {
         bytes
     }
 
-    #[tokio::test]
-    async fn input_end_drains_accepted_pcm_before_eof_and_rejects_late_input() {
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits()).unwrap();
-        let samples = (0..2000).map(|n| n as i16).collect::<Vec<_>>();
-        for chunk in wav(1, &samples).chunks(37) {
-            push(&decoder, chunk.to_vec()).await.unwrap();
+    struct AudioFile(std::path::PathBuf);
+
+    impl AudioFile {
+        fn wav(name: &str, pcm: &[i16]) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("lk-decoder-{name}-{}.wav", std::process::id()));
+            std::fs::write(&path, wav(1, pcm)).unwrap();
+            Self(path)
         }
-        end_input(&decoder).await.unwrap();
-        assert_eq!(push(&decoder, vec![0; 2]).await, Err(DecoderError::InputClosed));
-        let mut pcm = Vec::new();
-        while let Some(frame) = decoder.next().await.unwrap() {
-            assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
-            assert!(frame.data.len() <= 256);
-            pcm.extend(frame.data);
+
+        fn path(&self) -> String {
+            self.0.to_str().unwrap().to_owned()
         }
-        assert_eq!(pcm, lk_agents_media::pcm_bytes(&samples));
-        decoder.close(Duration::from_secs(1)).await.unwrap();
+    }
+
+    impl Drop for AudioFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     #[tokio::test]
-    async fn ragged_stereo_input_never_splits_a_channel_frame() {
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 2, limits()).unwrap();
-        let samples = [1, -1, 2, -2, 3, -3, 4, -4];
-        for chunk in wav(2, &samples).chunks(7) {
-            push(&decoder, chunk.to_vec()).await.unwrap();
-        }
-        end_input(&decoder).await.unwrap();
-        let mut pcm = Vec::new();
+    async fn background_file_service_preserves_audio_and_reports_file_and_codec_failures() {
+        let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
+        let file = AudioFile::wav("service", &pcm);
+        let mut decoder = lk_agents_abi::media::decoder::open(
+            lk_agents_abi::media::decoder::FileDecoderOptions {
+                path: file.path(),
+                looping: false,
+                sample_rate: 24_000,
+                num_channels: 1,
+            },
+        )
+        .unwrap();
+        let mut actual = Vec::new();
         while let Some(frame) = decoder.next().await.unwrap() {
-            assert_eq!(frame.num_channels, 2);
-            assert_eq!(frame.data.len() % 4, 0);
-            pcm.extend(frame.data);
+            assert_eq!((frame.sample_rate, frame.num_channels), (24_000, 1));
+            actual.extend(
+                frame.data.chunks_exact(2).map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
+            );
         }
-        assert_eq!(pcm, lk_agents_media::pcm_bytes(&samples));
+        assert_eq!(actual, pcm);
         decoder.close(Duration::from_secs(1)).await.unwrap();
+        let mut missing = lk_agents_abi::media::decoder::open(
+            lk_agents_abi::media::decoder::FileDecoderOptions {
+                path: format!("{}.missing", file.path()),
+                looping: false,
+                sample_rate: 24_000,
+                num_channels: 1,
+            },
+        )
+        .unwrap();
+        assert!(missing.next().await.unwrap_err().contains("No such file"));
+        missing.close(Duration::from_secs(1)).await.unwrap();
+
+        let garbage = AudioFile::wav("garbage", &[]);
+        std::fs::write(&garbage.0, b"not audio at all").unwrap();
+        let mut unreadable = lk_agents_abi::media::decoder::open(
+            lk_agents_abi::media::decoder::FileDecoderOptions {
+                path: garbage.path(),
+                looping: false,
+                sample_rate: 24_000,
+                num_channels: 1,
+            },
+        )
+        .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), unreadable.next())
+            .await
+            .expect("garbage input must settle its pull")
+            .unwrap_err();
+        #[cfg(feature = "media-ffmpeg")]
+        assert!(error.starts_with("ffmpeg:"), "expected codec failure, got {error}");
+        #[cfg(not(feature = "media-ffmpeg"))]
+        assert!(error.starts_with("invalid WAV file:"), "expected codec failure, got {error}");
+        unreadable.close(Duration::from_secs(1)).await.unwrap();
     }
 
     #[tokio::test]
-    async fn malformed_audio_is_a_decode_error_instead_of_normal_eof() {
+    async fn looping_file_backpressure_keeps_its_slot_until_cancelled_decode_settles() {
+        let pcm = (0..48_000).map(|sample| (sample % 16_000) as i16).collect::<Vec<_>>();
+        let file = AudioFile::wav("looping", &pcm);
+        let workers = workers();
+        let limits = DecoderLimits { output_samples: 4096, ..limits() };
         let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits()).unwrap();
-        push(&decoder, b"this is not a wave file".to_vec()).await.unwrap();
-        end_input(&decoder).await.unwrap();
+            AudioDecoder::open_file(&workers, file.path(), true, 24_000, 1, limits).unwrap();
+        let mut actual = Vec::new();
+        while actual.len() < pcm.len() + 4096 {
+            let frame = decoder.next().await.unwrap().unwrap();
+            actual.extend(
+                frame.data.chunks_exact(2).map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]])),
+            );
+        }
+        assert_eq!(&actual[..pcm.len()], pcm);
+        assert_eq!(&actual[pcm.len()..], &pcm[..actual.len() - pcm.len()]);
         assert!(matches!(
-            decoder.next().await,
-            Err(DecoderError::Codec(CodecError::MissingRiffWave(_)))
+            AudioDecoder::open_file(&workers, file.path(), false, 24_000, 1, limits),
+            Err(DecoderError::WorkerAdmission(MediaWorkerError::Exhausted(
+                MediaWorkerClass::Decoder
+            )))
         ));
         decoder.close(Duration::from_secs(1)).await.unwrap();
+        let mut replacement =
+            AudioDecoder::open_file(&workers, file.path(), false, 24_000, 1, limits).unwrap();
+        replacement.close(Duration::from_secs(1)).await.unwrap();
     }
 
     #[tokio::test]
-    async fn truncated_wave_is_an_error_instead_of_normal_eof() {
-        for bytes in [b"RIF".to_vec(), wav(1, &[1])[..45].to_vec()] {
-            let mut decoder =
-                AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits()).unwrap();
-            push(&decoder, bytes).await.unwrap();
-            end_input(&decoder).await.unwrap();
-            assert!(
-                decoder.next().await.is_err(),
-                "truncation cannot become a successful empty stream"
-            );
-            decoder.close(Duration::from_secs(1)).await.unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn an_extreme_source_rate_is_rejected_before_native_resampling() {
-        let mut bytes = wav(1, &[1; 1024]);
-        bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
+    async fn ready_file_pcm_yields_to_control_without_dropping_audio() {
+        let file = AudioFile::wav("fairness", &[1; 16_000]);
+        let limits = DecoderLimits { output_chunk_samples: 1, ..limits() };
         let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(48000), 1, limits()).unwrap();
-        push(&decoder, bytes).await.unwrap();
-        end_input(&decoder).await.unwrap();
-        assert_eq!(
-            decoder.next().await,
-            Err(DecoderError::Codec(CodecError::DecodeLimit("sample rate")))
-        );
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn compressed_input_overflow_fails_the_stream_and_releases_queued_data() {
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits()).unwrap();
-        let error = DecoderError::Overflow("compressed input");
-        assert_eq!(push(&decoder, vec![0; limits().input_bytes + 1]).await, Err(error.clone()));
-        assert_eq!(decoder.next().await, Err(error));
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-        assert!(decoder.shared.state.lock().unwrap().input.is_empty());
-    }
-
-    #[tokio::test]
-    async fn stalled_pcm_consumer_fails_with_bounded_retained_output() {
-        let limits = DecoderLimits { output_samples: 128, ..limits() };
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits).unwrap();
-        push(&decoder, wav(1, &[1; 4096])).await.unwrap();
-        end_input(&decoder).await.unwrap();
-        let result = decoder.worker.as_mut().unwrap().await.unwrap();
-        decoder.worker = None;
-        assert!(matches!(result, Err(DecoderError::Overflow("PCM output"))));
-        assert_eq!(decoder.next().await, Err(DecoderError::Overflow("PCM output")));
-        assert!(decoder.shared.state.lock().unwrap().output_samples <= limits.output_samples);
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn busy_admission_preserves_the_callers_chunk_and_does_not_publish_eof() {
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits()).unwrap();
-        let mut bytes = wav(1, &[1, 2, 3, 4]);
-        let expected = bytes.clone();
-        {
-            let _worker_state = decoder.shared.state.lock().unwrap();
-            assert_eq!(decoder.try_push(&mut bytes), Err(DecoderError::Busy));
-            assert_eq!(bytes, expected);
-            assert_eq!(decoder.end_input(), Err(DecoderError::Busy));
-        }
-        push(&decoder, bytes).await.unwrap();
-        end_input(&decoder).await.unwrap();
-        let mut pcm = Vec::new();
-        while let Some(frame) = decoder.next().await.unwrap() {
-            pcm.extend(frame.data);
-        }
-        assert_eq!(pcm, lk_agents_media::pcm_bytes(&[1, 2, 3, 4]));
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_ready_pcm_backlog_does_not_starve_queued_control() {
-        let limits = DecoderLimits { input_bytes: 65536, output_chunk_samples: 1, ..limits() };
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/wav", Some(24000), 1, limits).unwrap();
-        push(&decoder, wav(1, &[1; 16000])).await.unwrap();
-        end_input(&decoder).await.unwrap();
+            AudioDecoder::open_file(&workers(), file.path(), false, 24_000, 1, limits).unwrap();
         loop {
             let ready = decoder.shared.ready.notified();
-            let done = decoder.shared.try_state().map(|state| state.done).unwrap_or(false);
-            if done {
+            if decoder.shared.try_state().map(|state| state.done).unwrap_or(false) {
                 break;
             }
             ready.await;
@@ -679,66 +616,12 @@ mod tests {
                 break;
             }
         }
-        assert!(delivered < 16000, "ready PCM must yield before draining the entire backlog");
+        assert!(delivered < 16_000, "ready PCM must yield before draining the file");
+        while decoder.next().await.unwrap().is_some() {
+            delivered += 1;
+        }
+        assert_eq!(delivered, 16_000);
         decoder.close(Duration::from_secs(1)).await.unwrap();
         control_task.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn cancelling_a_blocked_reader_settles_before_admitting_a_replacement() {
-        let workers = workers();
-        let mut first =
-            AudioDecoder::open(&workers, "audio/wav", Some(24000), 1, limits()).unwrap();
-        assert!(matches!(
-            AudioDecoder::open(&workers, "audio/wav", Some(24000), 1, limits()),
-            Err(DecoderError::WorkerAdmission(MediaWorkerError::Exhausted(
-                MediaWorkerClass::Decoder
-            )))
-        ));
-        first.close(Duration::from_secs(1)).await.unwrap();
-        let mut next = AudioDecoder::open(&workers, "audio/wav", Some(24000), 1, limits()).unwrap();
-        next.close(Duration::from_secs(1)).await.unwrap();
-    }
-
-    #[cfg(feature = "media-ffmpeg")]
-    #[tokio::test]
-    async fn ragged_compressed_input_delivers_resampled_audio_and_the_encoder_tail() {
-        let samples = (0..4800)
-            .map(|n| (12000. * (n as f64 * 440. * std::f64::consts::TAU / 48000.).sin()) as i16)
-            .collect::<Vec<_>>();
-        let mut encoder = lk_agents_media::OggOpusEncoder::new(48000, 1, 64000).unwrap();
-        let mut encoded = encoder.push(&samples).unwrap();
-        encoded.extend(encoder.finish().unwrap());
-        let mut decoder =
-            AudioDecoder::open(&workers(), "audio/ogg", Some(24000), 1, limits()).unwrap();
-        for chunk in encoded.chunks(7) {
-            push(&decoder, chunk.to_vec()).await.unwrap();
-        }
-        end_input(&decoder).await.unwrap();
-        let mut pcm = Vec::new();
-        while let Some(frame) = decoder.next().await.unwrap() {
-            assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
-            pcm.extend(frame.data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])));
-        }
-        assert!((2300..=2800).contains(&pcm.len()), "all 100ms and the drained tail must arrive");
-        assert!(
-            pcm.iter().any(|sample| *sample > 1000) && pcm.iter().any(|sample| *sample < -1000),
-            "decoded audio must contain the supplied signal"
-        );
-        assert_eq!(decoder.next().await.unwrap(), None);
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-    }
-
-    #[cfg(feature = "media-ffmpeg")]
-    #[tokio::test]
-    async fn cancelling_blocked_ffmpeg_avio_observes_native_cleanup() {
-        let workers = workers();
-        let mut decoder =
-            AudioDecoder::open(&workers, "audio/mpeg", Some(24000), 1, limits()).unwrap();
-        push(&decoder, b"ID3".to_vec()).await.unwrap();
-        decoder.close(Duration::from_secs(1)).await.unwrap();
-        let mut replacement =
-            AudioDecoder::open(&workers, "audio/mpeg", Some(24000), 1, limits()).unwrap();
-        replacement.close(Duration::from_secs(1)).await.unwrap();
     }
 }

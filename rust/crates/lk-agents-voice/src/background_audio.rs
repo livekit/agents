@@ -553,9 +553,7 @@ impl BackgroundAudioPlayer {
         }
         let handle = PlaybackHandle::new(sound.config.fade_out);
         let input = match sound.input {
-            PlaybackInput::File(path) => {
-                Input::File(FileInput { path, looping, receiver: None, worker: None })
-            }
+            PlaybackInput::File(path) => Input::File(FileInput { path, looping, decoder: None }),
             PlaybackInput::Stream(stream) => Input::Stream(stream),
         };
         self.queued.lock().unwrap().push(Source {
@@ -839,9 +837,12 @@ impl Source {
             match input {
                 Input::Stream(stream) => stream.close().await,
                 Input::File(mut file) => {
-                    file.receiver.take();
-                    if let Some(worker) = file.worker.take() {
-                        let _ = worker.await;
+                    if let Some(decoder) = file.decoder.as_mut() {
+                        if let Err(error) =
+                            decoder.close(lk_agents_abi::HOST_TEARDOWN_TIMEOUT).await
+                        {
+                            log::warn!("background audio cleanup incomplete: {error}");
+                        }
                     }
                 }
                 Input::Closed => {}
@@ -862,69 +863,39 @@ impl Drop for Source {
 struct FileInput {
     path: String,
     looping: bool,
-    receiver: Option<tokio::sync::mpsc::Receiver<Result<Vec<i16>, String>>>,
-    worker: Option<tokio::task::JoinHandle<()>>,
+    decoder: Option<Box<dyn lk_agents_abi::media::decoder::FileDecoder>>,
 }
 
 impl FileInput {
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn next(
         &mut self,
         sample_rate: u32,
         num_channels: u16,
     ) -> Option<Result<Vec<i16>, String>> {
-        if self.receiver.is_none() {
-            let (tx, rx) = tokio::sync::mpsc::channel(2);
-            self.receiver = Some(rx);
-            let path = self.path.clone();
-            let looping = self.looping;
-            // Decode off the event loop; dropping the receiver stops the worker.
-            self.worker = Some(tokio::task::spawn_blocking(move || {
-                let decode = || -> Result<(), String> {
-                    use std::io::Read;
-                    loop {
-                        let mut file = std::fs::File::open(&path).map_err(|err| err.to_string())?;
-                        let mut decoder =
-                            lk_agents_media::Decoder::new("", Some(sample_rate), num_channels)
-                                .map_err(|err| err.to_string())?;
-                        let mut buffer = [0; 4096];
-                        let mut emitted = false;
-                        loop {
-                            let size = file.read(&mut buffer).map_err(|err| err.to_string())?;
-                            let pcm = if size == 0 {
-                                decoder.flush()
-                            } else {
-                                decoder.push(&buffer[..size])
-                            }
-                            .map_err(|err| err.to_string())?;
-                            if !pcm.is_empty() {
-                                emitted = true;
-                                for frame in pcm.chunks(
-                                    (sample_rate as usize / 100).max(1) * usize::from(num_channels),
-                                ) {
-                                    if tx.blocking_send(Ok(frame.to_vec())).is_err() {
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                            if size == 0 {
-                                break;
-                            }
-                        }
-                        if !looping || !emitted || tx.is_closed() {
-                            return Ok(());
-                        }
-                    }
-                };
-                if let Err(err) = decode() {
-                    let _ = tx.blocking_send(Err(err));
-                }
-            }));
+        if self.decoder.is_none() {
+            match lk_agents_abi::media::decoder::open(
+                lk_agents_abi::media::decoder::FileDecoderOptions {
+                    path: self.path.clone(),
+                    looping: self.looping,
+                    sample_rate,
+                    num_channels,
+                },
+            ) {
+                Ok(decoder) => self.decoder = Some(decoder),
+                Err(error) => return Some(Err(error)),
+            }
         }
-        self.receiver.as_mut().unwrap().recv().await
+        match self.decoder.as_mut().unwrap().next().await {
+            Ok(Some(frame)) => Some(Ok(frame
+                .data
+                .chunks_exact(2)
+                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .collect())),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        }
     }
 }
-
 
 #[cfg(test)]
 #[path = "background_audio_tests.rs"]

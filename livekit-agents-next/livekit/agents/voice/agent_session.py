@@ -481,11 +481,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             assert job_ctx is not None
             if self._recording_options["audio"] or (console is not None and ConsoleCall.record):
                 self._recording_path = job_ctx.session_directory / "audio.ogg"
-                self._recorder = _core.SessionRecorder(self._recording_path)
+                self._recorder = _core.SessionRecorder(str(self._recording_path))
+                await self._recorder.ready()
                 self._core.attach_recorder(self._recorder)
-            job_ctx.add_shutdown_callback(
-                lambda: self._core.aclose(reason=CloseReason.JOB_SHUTDOWN.value, drain=False)
-            )
+            job_ctx.add_shutdown_callback(lambda: self._aclose(CloseReason.JOB_SHUTDOWN))
         await self._core.start(capture_run=capture_run)
         if self.options["ivr_detection"]:
             await self._start_ivr_detection()
@@ -545,8 +544,18 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return None
 
     async def aclose(self) -> None:
+        await self._aclose(CloseReason.USER_INITIATED)
+
+    async def _aclose(self, reason: CloseReason) -> None:
         if self._core is not None:
-            await self._core.aclose(drain=False)
+            await self._core.aclose(reason=reason.value, drain=False)
+        if self._recording_finished is None and self._recorder is not None:
+            self._recording_finished = asyncio.ensure_future(self._recorder.finish())
+        if self._recording_finished is not None:
+            await asyncio.wait((self._recording_finished,))
+            if not self._recording_finished.cancelled():
+                # Keep the failure on the future for the job's recording reporter.
+                self._recording_finished.exception()
 
     async def drain(self) -> None:
         await self._running.drain()
@@ -979,9 +988,8 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_close(self, wire: dict[str, Any]) -> None:
         error = self._error_record(cause)[0] if (cause := wire.get("error")) else None
         self.emit("close", CloseEvent(reason=CloseReason(wire["reason"]), error=error))
-        if (recorder := self._recorder) is not None:
-            # the core flushed it at the close's edge; the trailer and the file's close are ours
-            self._recording_finished = asyncio.ensure_future(asyncio.to_thread(recorder.finish))
+        if self._recording_finished is None and (recorder := self._recorder) is not None:
+            self._recording_finished = asyncio.ensure_future(recorder.finish())
         # a frame processor given directly is the room input's for the session's life
         audio_in = self._audio_input_options
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):

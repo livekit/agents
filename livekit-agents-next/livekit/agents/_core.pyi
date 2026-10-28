@@ -24,6 +24,7 @@ from ._generated._core_classes import *  # noqa: F401, F403
 from ._generated._core_classes import ChatItem, StartJobFields
 from ._generated._core_inference import *  # noqa: F401, F403
 from ._generated._core_llm import *  # noqa: F401, F403
+from ._generated._core_recorder import *  # noqa: F401, F403
 from ._generated._core_telemetry import *  # noqa: F401, F403
 from ._generated._core_telemetry import (
     _core_SessionReportUpload as _core_SessionReportUpload,

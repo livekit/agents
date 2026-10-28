@@ -1,490 +1,318 @@
-//! Run with `cargo run -p lk-agents-runtime --features media-images,media-ffmpeg,lk-agents-storage/sqlite
-//! --example media_bench -- output.json [iterations] [all|images|codecs|recording]`.
-//! Encodes identical JPEG frames inline and through
-//! admitted media workers while a current-thread Tokio runtime services a 1 ms heartbeat.
+//! `cargo run -p lk-agents-runtime --features media-ffmpeg,media-resample,media-images
+//! --example media_bench -- output.json [codecs|recording|images|all]`.
+//! Measures the registered background decoder, declared recorder implementation and shipped
+//! synchronous image encoder against an independent 1ms Tokio heartbeat.
 
-#[cfg(not(feature = "media-images"))]
+#[cfg(not(all(feature = "media-ffmpeg", feature = "media-images")))]
 fn main() {
-    eprintln!("media_bench requires --features media-images");
+    eprintln!("media_bench requires media-ffmpeg,media-resample,media-images");
     std::process::exit(2);
 }
 
-#[cfg(feature = "media-images")]
+#[cfg(all(feature = "media-ffmpeg", feature = "media-images"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     bench::run()
 }
 
-#[cfg(feature = "media-images")]
-#[path = "media_bench/codecs.rs"]
-mod codecs;
-
-#[cfg(all(feature = "media-images", feature = "media-ffmpeg"))]
-#[path = "media_bench/recording.rs"]
-mod recording;
-
-#[cfg(feature = "media-images")]
+#[cfg(all(feature = "media-ffmpeg", feature = "media-images"))]
 mod bench {
-    use std::io::Write;
-    use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::path::Path;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use lk_agents_media::images::{
-        EncodeOptions, ResizeOptions, ResizeStrategy, RgbaFrame, encode,
-    };
-    use lk_agents_runtime::images::{ImageEncoder, ImageLimits, RgbaImage};
-    use lk_agents_runtime::media_workers::{MediaWorkerLimits, MediaWorkers};
-    use serde::Serialize;
+    use lk_agents_abi::AudioFrame;
+    use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderClass};
+    use lk_agents_media::images::encode_image;
+    use lk_agents_runtime::recording::SessionRecorder;
+    use serde_json::{Value, json};
     use tokio::sync::oneshot;
-    use tokio::time::Instant;
 
-    const WORKERS: usize = 8;
-    const BLOCKING_THREADS: usize = 34;
-    const HEARTBEAT: Duration = Duration::from_millis(1);
+    type Error = Box<dyn std::error::Error>;
+    const RATE: u32 = 48_000;
+    const SAMPLES: usize = RATE as usize * 10;
 
-    #[derive(Serialize)]
-    pub(crate) struct Distribution {
-        pub(crate) count: usize,
-        pub(crate) p99_ms: f64,
-        pub(crate) p999_ms: f64,
-        pub(crate) max_ms: f64,
-        buckets_ms: std::collections::BTreeMap<&'static str, usize>,
-    }
-
-    impl Distribution {
-        pub(crate) fn from_ns(mut values: Vec<u64>) -> Result<Self, &'static str> {
-            if values.is_empty() {
-                return Err("empty measurement");
-            }
-            values.sort_unstable();
-            let mut buckets_ms = std::collections::BTreeMap::new();
-            for value in &values {
-                let label = [
-                    (10_000, "0.01"),
-                    (100_000, "0.1"),
-                    (500_000, "0.5"),
-                    (1_000_000, "1"),
-                    (2_000_000, "2"),
-                    (5_000_000, "5"),
-                    (10_000_000, "10"),
-                    (20_000_000, "20"),
-                ]
-                .into_iter()
-                .find(|(limit, _)| value <= limit)
-                .map_or(">20", |(_, label)| label);
-                *buckets_ms.entry(label).or_default() += 1;
-            }
-            let quantile = |percent: f64| {
-                values[(values.len() as f64 * percent).ceil() as usize - 1] as f64 / 1e6
-            };
-            Ok(Self {
-                count: values.len(),
-                p99_ms: quantile(0.99),
-                p999_ms: quantile(0.999),
-                max_ms: values[values.len() - 1] as f64 / 1e6,
-                buckets_ms,
-            })
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, Serialize)]
-    enum Mode {
-        Inline,
-        Worker,
-    }
-
-    #[derive(Serialize)]
-    struct Case {
-        mode: Mode,
-        width: u32,
-        height: u32,
-        resize_to: Option<(u32, u32)>,
-        concurrent_images: usize,
-        completed: usize,
-        elapsed_ms: f64,
-        encode_wall: Distribution,
-        loop_lag: Distribution,
-        gates: Vec<Gate>,
-    }
-
-    #[derive(Clone)]
-    struct ImageWorkload {
-        width: u32,
-        height: u32,
-        resize_to: Option<(u32, u32)>,
-        concurrent_images: usize,
-        source: Arc<Vec<u8>>,
-        options: EncodeOptions,
-        expected_bytes: usize,
-    }
-
-    #[derive(Serialize)]
-    struct Gate {
-        cadence_ms: u64,
-        lag_p999_limit_ms: f64,
-        lag_max_exclusive_ms: f64,
-        passed: bool,
-    }
-
-    #[derive(Serialize)]
-    struct Provenance {
-        head_at_capture: String,
-        executable_git_blob: String,
-        compiled_source_git_blobs: Vec<(&'static str, String)>,
-        debug_assertions: bool,
-        os: &'static str,
-        arch: &'static str,
-        available_parallelism: usize,
-    }
-
-    #[derive(Serialize)]
-    struct Capture {
-        provenance: Provenance,
-        heartbeat_ms: u64,
-        image_worker_limit: usize,
-        blocking_thread_limit: usize,
-        iterations: usize,
-        captured_scope: String,
-        workload: &'static str,
-        evidence_limits: [&'static str; 4],
-        cases: Vec<Case>,
-        images_status: &'static str,
-        codecs: serde_json::Value,
-        recording: serde_json::Value,
-    }
-
-    pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let mut args = std::env::args_os().skip(1);
-        let output =
-            PathBuf::from(args.next().ok_or("usage: media_bench output.json [iterations]")?);
-        let iterations = args
+    pub fn run() -> Result<(), Error> {
+        let mut arguments = std::env::args().skip(1);
+        let output = arguments
             .next()
-            .map(|value| value.to_string_lossy().parse::<usize>())
-            .transpose()?
-            .unwrap_or(3);
-        let selected = args
-            .next()
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "all".to_owned());
-        if args.next().is_some()
-            || !(1..=100).contains(&iterations)
-            || !["all", "images", "codecs", "recording"].contains(&selected.as_str())
+            .ok_or("usage: media_bench output.json [codecs|recording|images|all]")?;
+        let selected = arguments.next().unwrap_or_else(|| "all".into());
+        if arguments.next().is_some()
+            || !["codecs", "recording", "images", "all"].contains(&selected.as_str())
         {
-            return Err("usage: media_bench output.json [iterations in 1..=100] [all|images|codecs|recording]".into());
+            return Err("invalid workload".into());
         }
-        #[cfg(not(feature = "media-ffmpeg"))]
-        if ["all", "recording"].contains(&selected.as_str()) {
-            return Err("recording capture requires --features media-ffmpeg".into());
-        }
-        let provenance = provenance()?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .max_blocking_threads(BLOCKING_THREADS)
-            .build()?;
-        let cases = if ["all", "images"].contains(&selected.as_str()) {
-            runtime.block_on(measure(iterations))?
-        } else {
-            Vec::new()
-        };
-        let codecs = if ["all", "codecs"].contains(&selected.as_str()) {
-            runtime.block_on(crate::codecs::measure())?
-        } else {
-            serde_json::json!({ "status": "not_run" })
-        };
-        #[cfg(feature = "media-ffmpeg")]
-        let recording = if ["all", "recording"].contains(&selected.as_str()) {
-            runtime.block_on(crate::recording::measure())?
-        } else {
-            serde_json::json!({ "status": "not_run" })
-        };
-        #[cfg(not(feature = "media-ffmpeg"))]
-        let recording =
-            serde_json::json!({ "status": "not_run", "requires_feature": "media-ffmpeg" });
-        let capture = Capture {
-            provenance,
-            heartbeat_ms: 1,
-            image_worker_limit: WORKERS,
-            blocking_thread_limit: BLOCKING_THREADS,
-            iterations,
-            captured_scope: selected,
-            workload: "nonuniform deterministic RGBA; JPEG quality 75; full size or 1024x1024 aspect-fit canvas; source copy and RGB conversion included",
-            evidence_limits: [
-                "Tokio current-thread worker boundary; Python bindings, GIL and RTC SDK conversion are excluded.",
-                "No native image decoding, encoded cache or production capacity qualification.",
-                "Shared host scheduling and CPU contention affect heartbeat maxima; source preparation and warmup are outside capture.",
-                "Gate thresholds match bench/budgets.json: p99.9 <=20% and max <50% of each frame cadence.",
-            ],
-            images_status: if cases.is_empty() { "not_run" } else { "completed" },
-            cases,
-            codecs,
-            recording,
-        };
-        let temporary = output.with_extension("json.tmp");
-        std::fs::write(&temporary, serde_json::to_vec_pretty(&capture)?)?;
-        std::fs::rename(temporary, output)?;
+        let root = std::env::temp_dir().join(format!("media-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&root)?;
+        let wav = root.join("source.wav");
+        std::fs::write(&wav, wav_bytes())?;
+        let ogg = root.join("source.ogg");
+        let pcm = (0..SAMPLES)
+            .map(|n| {
+                ((n as f64 * 440. * std::f64::consts::TAU / f64::from(RATE)).sin() * 12000.) as i16
+            })
+            .collect::<Vec<_>>();
+        let mut encoder = lk_agents_media::OggOpusEncoder::new(RATE, 1, 64_000)?;
+        let mut encoded = encoder.push(&pcm)?;
+        encoded.extend(encoder.finish()?);
+        std::fs::write(&ogg, encoded)?;
+        // Starting the production process service is outside steady-state heartbeat capture.
+        lk_agents_runtime::process::workers()?;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build()?;
+        let outcome = runtime.block_on(async {
+            let mut cases = Vec::new();
+            if ["all", "codecs"].contains(&selected.as_str()) {
+                for path in [&wav, &ogg] {
+                    for count in [1, 8, 32, 64] {
+                        cases.push(decode(path, count).await?);
+                    }
+                }
+            }
+            if ["all", "recording"].contains(&selected.as_str()) {
+                for count in [1, 8, 32, 64] {
+                    for samples in [960, SAMPLES] {
+                        cases.push(record(&root, count, samples).await?);
+                    }
+                }
+            }
+            if ["all", "images"].contains(&selected.as_str()) {
+                for (width, height) in [(1920, 1080), (3840, 2160)] {
+                    let rgba = (0..width*height).flat_map(|n| [(n%251) as u8, (n%193) as u8, (n%137) as u8, 255]).collect::<Vec<_>>();
+                    for count in [1, 8] {
+                        for resize in [false, true] {
+                            cases.push(image(&rgba, width, height, count, resize).await?);
+                        }
+                    }
+                }
+            }
+            Ok::<_, Error>(json!({
+                "heartbeat_ms": 1, "cadence_ms": 20,
+                "scope": "Shipped native entrypoints: registered background file decoder, ABI recorder implementation, synchronous encode_image. Python/GIL/RTC conversion excluded; loaded shared host; no soak or hardware-profile qualification.",
+                "cases": cases
+            }))
+        });
+        std::fs::remove_dir_all(root)?;
+        let result = outcome?;
+        std::fs::write(output, serde_json::to_vec_pretty(&result)?)?;
         Ok(())
     }
 
-    async fn measure(iterations: usize) -> Result<Vec<Case>, Box<dyn std::error::Error>> {
-        let workers = MediaWorkers::new(
-            tokio::runtime::Handle::current(),
-            MediaWorkerLimits { total: WORKERS, decoders: 1, recordings: 1, images: WORKERS },
-        )?;
-        let encoder = ImageEncoder::new(
-            workers,
-            ImageLimits {
-                source_pixels: 3840 * 2160,
-                encoded_pixels: 3840 * 2160,
-                encoded_bytes: 32 * 1024 * 1024,
-            },
-        )?;
-        let mut cases = Vec::new();
-        for (width, height) in [(1920, 1080), (3840, 2160)] {
-            let source = Arc::new(source(width, height));
-            for resize in [None, Some((1024, 1024))] {
-                let options = EncodeOptions {
-                    resize_options: resize.map(|(width, height)| ResizeOptions {
-                        width,
-                        height,
-                        strategy: ResizeStrategy::CenterAspectFit,
-                    }),
-                    ..EncodeOptions::default()
-                };
-                // Both measured paths must encode the same content before collecting timings.
-                let expected = encode(RgbaFrame { width, height, data: &source }, &options)?;
-                let prepared = source.clone();
-                let actual = encoder
-                    .encode(width, height, options.clone(), move || {
-                        Ok(RgbaImage { width, height, data: (*prepared).clone() })
-                    })
-                    .await?;
-                if expected != actual {
-                    return Err("worker and inline encoded bytes differ".into());
-                }
-                let encoded_bytes = expected.len();
-                for concurrent in [1, WORKERS] {
-                    let workload = ImageWorkload {
-                        width,
-                        height,
-                        resize_to: resize,
-                        concurrent_images: concurrent,
-                        source: source.clone(),
-                        options: options.clone(),
-                        expected_bytes: encoded_bytes,
-                    };
-                    for mode in [Mode::Inline, Mode::Worker] {
-                        let case =
-                            measure_case(mode, iterations, workload.clone(), encoder.clone())
-                                .await?;
-                        eprintln!(
-                            "{mode:?} {width}x{height} resize={resize:?} concurrent={concurrent}: lag p99.9={:.3}ms max={:.3}ms",
-                            case.loop_lag.p999_ms, case.loop_lag.max_ms,
-                        );
-                        cases.push(case);
-                    }
-                }
-            }
-        }
-        Ok(cases)
-    }
-
-    async fn measure_case(
-        mode: Mode,
-        iterations: usize,
-        workload: ImageWorkload,
-        encoder: ImageEncoder,
-    ) -> Result<Case, Box<dyn std::error::Error>> {
-        let ImageWorkload {
-            width,
-            height,
-            resize_to,
-            concurrent_images,
-            source,
-            options,
-            expected_bytes,
-        } = workload;
-        let (stop, stopped) = oneshot::channel();
+    async fn start_heartbeat() -> (oneshot::Sender<()>, tokio::task::JoinHandle<Vec<f64>>) {
+        let (stop, mut stopped) = oneshot::channel();
         let (ready, started) = oneshot::channel();
-        let heartbeat = tokio::spawn(heartbeat(stopped, ready));
-        started.await?;
-        let start = Instant::now();
-        let mut durations = Vec::with_capacity(concurrent_images * iterations);
-        for _ in 0..iterations {
-            let mut jobs = tokio::task::JoinSet::new();
-            for _ in 0..concurrent_images {
-                let source = source.clone();
-                let options = options.clone();
-                let encoder = encoder.clone();
-                jobs.spawn(async move {
-                    let start = Instant::now();
-                    let bytes = match mode {
-                        Mode::Inline => {
-                            let prepared = (*source).clone();
-                            encode(RgbaFrame { width, height, data: &prepared }, &options)
-                                .map_err(|error| error.to_string())?
-                        }
-                        Mode::Worker => encoder
-                            .encode(width, height, options, move || {
-                                Ok(RgbaImage { width, height, data: (*source).clone() })
-                            })
-                            .await
-                            .map_err(|error| error.to_string())?,
-                    };
-                    if bytes.len() != expected_bytes {
-                        return Err("encoded output length changed".to_owned());
+        let task = tokio::spawn(async move {
+            let interval = Duration::from_millis(1);
+            let mut deadline = tokio::time::Instant::now() + interval;
+            let mut samples = Vec::new();
+            let _ = ready.send(());
+            loop {
+                tokio::select! {
+                    _ = &mut stopped => return samples,
+                    _ = tokio::time::sleep_until(deadline) => {
+                        let now = tokio::time::Instant::now();
+                        samples.push(now.saturating_duration_since(deadline).as_secs_f64()*1000.);
+                        deadline = now + interval;
                     }
-                    Ok(start.elapsed().as_nanos() as u64)
-                });
+                }
             }
-            while let Some(job) = jobs.join_next().await {
-                durations.push(job??);
-            }
-            // Give the heartbeat an observation after the final synchronous encode returns.
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        });
+        started.await.unwrap();
+        (stop, task)
+    }
+
+    async fn stop_heartbeat(
+        stop: oneshot::Sender<()>,
+        task: tokio::task::JoinHandle<Vec<f64>>,
+    ) -> Result<Value, Error> {
+        tokio::time::sleep(Duration::from_millis(5)).await;
         let _ = stop.send(());
-        let loop_lag = Distribution::from_ns(heartbeat.await?)?;
-        let gates = [10, 20]
-            .into_iter()
-            .map(|cadence_ms| {
-                let lag_p999_limit_ms = cadence_ms as f64 * 0.2;
-                let lag_max_exclusive_ms = cadence_ms as f64 * 0.5;
-                Gate {
-                    cadence_ms,
-                    lag_p999_limit_ms,
-                    lag_max_exclusive_ms,
-                    passed: loop_lag.p999_ms <= lag_p999_limit_ms
-                        && loop_lag.max_ms < lag_max_exclusive_ms,
+        let mut samples = task.await?;
+        if samples.is_empty() {
+            return Err("heartbeat collected no observations".into());
+        }
+        samples.sort_by(f64::total_cmp);
+        let p999 = samples[(samples.len() as f64 * 0.999).ceil() as usize - 1];
+        let max = samples[samples.len() - 1];
+        Ok(json!({"observations":samples.len(),"p999_ms":p999,"max_ms":max,
+            "gate_20ms":{"p999_limit_ms":4.,"max_exclusive_ms":10.,"passed":p999<=4. && max<10.}}))
+    }
+
+    async fn decode(path: &Path, count: usize) -> Result<Value, Error> {
+        let (stop, heartbeat) = start_heartbeat().await;
+        let start = Instant::now();
+        let mut jobs = tokio::task::JoinSet::new();
+        let mut refused = 0;
+        for _ in 0..count {
+            match lk_agents_abi::media::decoder::open(
+                lk_agents_abi::media::decoder::FileDecoderOptions {
+                    path: path.to_string_lossy().into_owned(),
+                    looping: false,
+                    sample_rate: RATE,
+                    num_channels: 1,
+                },
+            ) {
+                Ok(mut decoder) => {
+                    jobs.spawn(async move {
+                        let mut samples = 0;
+                        let mut signal = false;
+                        while let Some(frame) = decoder.next().await? {
+                            samples += frame.samples_per_channel as usize;
+                            signal |= frame.data.iter().any(|byte| *byte != 0);
+                        }
+                        decoder.close(Duration::from_secs(5)).await?;
+                        if samples.abs_diff(SAMPLES) > 1920 || !signal {
+                            return Err("decoded duration/signal mismatch".to_owned());
+                        }
+                        Ok::<_, String>(samples)
+                    });
                 }
-            })
-            .collect();
-        Ok(Case {
-            mode,
-            width,
-            height,
-            resize_to,
-            concurrent_images,
-            completed: durations.len(),
-            elapsed_ms,
-            encode_wall: Distribution::from_ns(durations)?,
-            loop_lag,
-            gates,
-        })
-    }
-
-    pub(crate) async fn heartbeat(
-        mut stop: oneshot::Receiver<()>,
-        ready: oneshot::Sender<()>,
-    ) -> Vec<u64> {
-        let mut deadline = Instant::now() + HEARTBEAT;
-        let mut samples = Vec::new();
-        let _ = ready.send(());
-        loop {
-            tokio::select! {
-                _ = &mut stop => return samples,
-                _ = tokio::time::sleep_until(deadline) => {
-                    let now = Instant::now();
-                    let late = now.saturating_duration_since(deadline);
-                    samples.push(late.as_nanos() as u64);
-                    let missed = late.as_nanos() / HEARTBEAT.as_nanos();
-                    deadline += HEARTBEAT * (missed as u32 + 1);
-                }
+                Err(error) if error.contains("capacity exhausted") => refused += 1,
+                Err(error) => return Err(error.into()),
             }
         }
+        let mut samples = 0;
+        while let Some(job) = jobs.join_next().await {
+            samples += job??;
+        }
+        let elapsed = start.elapsed().as_secs_f64() * 1000.;
+        let lag = stop_heartbeat(stop, heartbeat).await?;
+        let result = json!({"kind":"background_file_decoder","format":path.extension().unwrap().to_string_lossy(),"requested":count,"admitted":count-refused,"refused":refused,"decoded_samples":samples,"elapsed_ms":elapsed,"loop_lag":lag});
+        eprintln!("{result}");
+        Ok(result)
     }
 
-    fn source(width: u32, height: u32) -> Vec<u8> {
-        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
-        for y in 0..height {
-            for x in 0..width {
-                pixels.extend_from_slice(&[
-                    (x ^ y) as u8,
-                    (x / 3 + y / 7) as u8,
-                    (x * 13 + y * 29) as u8,
-                    255,
-                ]);
+    async fn record(root: &Path, count: usize, samples: usize) -> Result<Value, Error> {
+        let data = lk_agents_media::pcm_bytes(
+            &(0..samples).map(|n| ((n * 37) % 20_000) as i16 - 10_000).collect::<Vec<_>>(),
+        );
+        let frame = AudioFrame::new(data, RATE, 1, samples as u32);
+        let (stop, heartbeat) = start_heartbeat().await;
+        let start = Instant::now();
+        let mut recorders = Vec::new();
+        let mut refused = 0;
+        for index in 0..count {
+            let path = root.join(format!("record-{count}-{samples}-{index}.ogg"));
+            match <SessionRecorder as RecorderClass>::new(
+                path.to_string_lossy().into_owned(),
+                RATE,
+                Some(0.),
+                64_000,
+            ) {
+                Ok(recorder) => recorders.push((Arc::new(recorder), path)),
+                Err(error) if error.to_string().contains("capacity exhausted") => refused += 1,
+                Err(error) => return Err(error.into()),
             }
         }
-        pixels
+        let mut max_capture_ms = 0_f64;
+        let mut jobs = tokio::task::JoinSet::new();
+        for (recorder, path) in recorders {
+            let frame = frame.clone();
+            jobs.spawn(async move {
+                recorder.ready().await.map_err(|e| e.to_string())?;
+                let start = Instant::now();
+                AudioRecorder::capture_frame(&*recorder, 0., &frame);
+                recorder.on_playback_progressed(0., 0., samples as f64 / f64::from(RATE));
+                let capture_ms = start.elapsed().as_secs_f64() * 1000.;
+                recorder
+                    .flush(samples as f64 / f64::from(RATE))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                <SessionRecorder as RecorderClass>::finish(
+                    &*recorder,
+                    Some(samples as f64 / f64::from(RATE)),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                Ok::<_, String>((capture_ms, path))
+            });
+        }
+        let mut paths = Vec::new();
+        while let Some(job) = jobs.join_next().await {
+            let (capture, path) = job??;
+            max_capture_ms = max_capture_ms.max(capture);
+            paths.push(path);
+        }
+        let elapsed = start.elapsed().as_secs_f64() * 1000.;
+        let lag = stop_heartbeat(stop, heartbeat).await?;
+        // Verify actual final output after capture; filesystem/decoder validation is excluded from lag.
+        for path in &paths {
+            let mut reader = std::fs::File::open(path)?;
+            let mut decoded = 0_usize;
+            let mut signal = false;
+            lk_agents_media::ffmpeg::decode_stream(
+                Some("ogg"),
+                RATE,
+                2,
+                lk_agents_media::decoder::DecodeLimits {
+                    min_sample_rate: 8000,
+                    max_sample_rate: 192000,
+                    max_channels: 2,
+                    max_streams: 1,
+                    max_expansion_ratio: 128,
+                    max_samples_per_frame: 192000,
+                },
+                &mut reader,
+                |_, pcm| {
+                    decoded += pcm.len() / 2;
+                    signal |= pcm.iter().any(|sample| *sample != 0);
+                    Ok(())
+                },
+            )?;
+            if decoded.abs_diff(samples) > 1920 || !signal {
+                return Err("recorded duration/signal mismatch".into());
+            }
+        }
+        let result = json!({"kind":"declared_session_recorder","requested":count,"admitted":paths.len(),"refused":refused,"frame_samples":samples,"capture_max_ms":max_capture_ms,"elapsed_ms":elapsed,"loop_lag":lag});
+        eprintln!("{result}");
+        Ok(result)
     }
 
-    fn provenance() -> Result<Provenance, Box<dyn std::error::Error>> {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let head = Command::new("git").current_dir(&repo).args(["rev-parse", "HEAD"]).output()?;
-        if !head.status.success() {
-            return Err("git rev-parse failed".into());
+    async fn image(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        count: usize,
+        resize: bool,
+    ) -> Result<Value, Error> {
+        let (stop, heartbeat) = start_heartbeat().await;
+        let mut encoded = 0;
+        let mut max_encode_ms = 0_f64;
+        for _ in 0..count {
+            let start = Instant::now();
+            encoded += encode_image(
+                rgba,
+                width,
+                height,
+                "JPEG",
+                Some(75),
+                resize.then_some(1024),
+                resize.then_some(1024),
+                resize.then_some("center_aspect_fit"),
+            )?
+            .len();
+            max_encode_ms = max_encode_ms.max(start.elapsed().as_secs_f64() * 1000.);
         }
-        let executable = Command::new("git")
-            .current_dir(&repo)
-            .arg("hash-object")
-            .arg(std::env::current_exe()?)
-            .output()?;
-        if !executable.status.success() {
-            return Err("executable hashing failed".into());
-        }
-        let mut sources = Vec::new();
-        for (name, data) in [
-            ("runtime/images.rs", include_bytes!("../src/images.rs").as_slice()),
-            ("runtime/media_workers.rs", include_bytes!("../src/media_workers.rs").as_slice()),
-            (
-                "media/images/encode.rs",
-                include_bytes!("../../lk-agents-media/src/images/encode.rs").as_slice(),
-            ),
-            ("runtime/examples/media_bench.rs", include_bytes!("media_bench.rs").as_slice()),
-            (
-                "runtime/examples/media_bench/codecs.rs",
-                include_bytes!("media_bench/codecs.rs").as_slice(),
-            ),
-            ("runtime/codecs.rs", include_bytes!("../src/codecs.rs").as_slice()),
-            ("media/decoder.rs", include_bytes!("../../lk-agents-media/src/decoder.rs").as_slice()),
-            ("media/wav.rs", include_bytes!("../../lk-agents-media/src/wav.rs").as_slice()),
-            #[cfg(feature = "media-ffmpeg")]
-            (
-                "runtime/examples/media_bench/recording.rs",
-                include_bytes!("media_bench/recording.rs").as_slice(),
-            ),
-            #[cfg(feature = "media-ffmpeg")]
-            ("runtime/recording.rs", include_bytes!("../src/recording.rs").as_slice()),
-            #[cfg(feature = "media-ffmpeg")]
-            (
-                "media/recorder.rs",
-                include_bytes!("../../lk-agents-media/src/recorder.rs").as_slice(),
-            ),
-            #[cfg(feature = "media-ffmpeg")]
-            (
-                "media/ffmpeg/encode.rs",
-                include_bytes!("../../lk-agents-media/src/ffmpeg/encode.rs").as_slice(),
-            ),
-            #[cfg(feature = "media-ffmpeg")]
-            (
-                "media/ffmpeg.pin",
-                include_bytes!("../../lk-agents-media/vendor/ffmpeg.pin").as_slice(),
-            ),
-            ("Cargo.lock", include_bytes!("../../../Cargo.lock").as_slice()),
-        ] {
-            let mut hash = Command::new("git")
-                .current_dir(&repo)
-                .args(["hash-object", "--stdin"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()?;
-            hash.stdin.take().ok_or("hash stdin missing")?.write_all(data)?;
-            let output = hash.wait_with_output()?;
-            if !output.status.success() {
-                return Err("source hashing failed".into());
-            }
-            sources.push((name, String::from_utf8(output.stdout)?.trim().to_owned()));
-        }
-        Ok(Provenance {
-            head_at_capture: String::from_utf8(head.stdout)?.trim().to_owned(),
-            executable_git_blob: String::from_utf8(executable.stdout)?.trim().to_owned(),
-            compiled_source_git_blobs: sources,
-            debug_assertions: cfg!(debug_assertions),
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
-            available_parallelism: std::thread::available_parallelism()?.get(),
-        })
+        let lag = stop_heartbeat(stop, heartbeat).await?;
+        let result = json!({"kind":"shipped_sync_image_encoder","width":width,"height":height,"count":count,"resize":resize,"encoded_bytes":encoded,"encode_max_ms":max_encode_ms,"loop_lag":lag});
+        eprintln!("{result}");
+        Ok(result)
+    }
+
+    fn wav_bytes() -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(44 + SAMPLES * 2);
+        bytes.extend(b"RIFF");
+        bytes.extend((36 + SAMPLES as u32 * 2).to_le_bytes());
+        bytes.extend(b"WAVEfmt ");
+        bytes.extend(16_u32.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(RATE.to_le_bytes());
+        bytes.extend((RATE * 2).to_le_bytes());
+        bytes.extend(2_u16.to_le_bytes());
+        bytes.extend(16_u16.to_le_bytes());
+        bytes.extend(b"data");
+        bytes.extend((SAMPLES as u32 * 2).to_le_bytes());
+        bytes.extend((0..SAMPLES).flat_map(|n| ((n % 32768) as i16).to_le_bytes()));
+        bytes
     }
 }

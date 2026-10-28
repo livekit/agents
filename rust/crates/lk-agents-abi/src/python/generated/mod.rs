@@ -8,6 +8,7 @@
 mod a2a;
 mod agent;
 mod llm;
+mod recorder;
 mod storage;
 mod telemetry;
 mod tts;

@@ -9,7 +9,14 @@ use crate::media_workers::{MediaWorkerLimits, MediaWorkers};
 fn workers(total: usize) -> MediaWorkers {
     MediaWorkers::new(
         tokio::runtime::Handle::current(),
-        MediaWorkerLimits { total, decoders: 1, recordings: 1, images: 1 },
+        MediaWorkerLimits {
+            total,
+            decoders: 1,
+            recordings: 1,
+            images: 1,
+            eot_models: 1,
+            uploads: 1,
+        },
     )
     .unwrap()
 }
@@ -21,7 +28,6 @@ fn limits() -> RecordingLimits {
         frame_bytes: 1024,
         retained_bytes: 4096,
         segment_bytes: 1024,
-        segments: 4,
         block_duration: Duration::from_millis(100),
     }
 }
@@ -157,7 +163,7 @@ async fn recording_overflow_releases_pcm_and_preserves_other_work() {
         RecordingStatus::Failing(RecordingFailure::Overflow("staging commands"))
     ));
     assert_eq!(
-        recorder.close(0.4, Duration::from_millis(10)).await,
+        recorder.close(Some(0.4), Duration::from_millis(10)).await,
         Err(RecordingFailure::IncompleteCleanup)
     );
     assert!(recorder.retained_bytes() <= limits.queued_bytes + limits.retained_bytes);
@@ -186,7 +192,7 @@ async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() 
     };
     started.await.unwrap();
     assert_eq!(
-        recorder.close(0.1, Duration::from_millis(10)).await,
+        recorder.close(Some(0.1), Duration::from_millis(10)).await,
         Err(RecordingFailure::IncompleteCleanup)
     );
     assert!(
@@ -217,7 +223,7 @@ async fn recording_write_failure_reaches_flush_and_terminal_outcome_once() {
 }
 
 #[tokio::test]
-async fn replaced_output_generations_keep_independent_segment_pcm() {
+async fn sequential_playback_segments_release_previous_pcm() {
     let workers = workers(1);
     let (sink, _, _) = Sink::new(false, false);
     let bytes = sink.bytes;
@@ -227,15 +233,13 @@ async fn replaced_output_generations_keep_independent_segment_pcm() {
     })
     .await
     .unwrap();
-    let old = RecordingSegment { generation: 1, segment: 7 };
-    let new = RecordingSegment { generation: 2, segment: 7 };
-    recorder.try_capture_frame(old, 0.0, frame(&[100, 200])).unwrap();
-    recorder.try_capture_frame(new, 0.2, frame(&[300])).unwrap();
-    recorder.try_playback_started(old, 0.0).unwrap();
-    recorder.try_playback_started(new, 0.2).unwrap();
-    recorder.try_playback_finished(new, 0.3, 0.1).unwrap();
-    recorder.try_playback_progressed(old, 0.0, 0.0, 0.2).unwrap();
-    recorder.try_playback_finished(old, 0.3, 0.2).unwrap();
+    recorder.try_capture_frame(0.0, frame(&[100, 200])).unwrap();
+    recorder.try_playback_started(0.0).unwrap();
+    recorder.try_playback_progressed(0.0, 0.0, 0.2).unwrap();
+    recorder.try_playback_finished(0.2, 0.2).unwrap();
+    recorder.try_capture_frame(0.2, frame(&[300])).unwrap();
+    recorder.try_playback_started(0.2).unwrap();
+    recorder.try_playback_finished(0.3, 0.1).unwrap();
     recorder.finish(0.3).await.unwrap();
     let mut want = lk_agents_media::pcm_bytes(&[0, 100, 0, 200, 0, 300]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
@@ -272,14 +276,13 @@ async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
 
 #[tokio::test]
 async fn segment_pcm_limits_fail_recording_and_release_the_buffer() {
-    for field in ["segment PCM", "segments", "retained PCM"] {
+    for field in ["segment PCM", "retained PCM"] {
         let workers = workers(1);
         let (sink, _, _) = Sink::new(false, false);
         let encoder = Encoder(sink.trace.clone());
         let mut limits = limits();
         match field {
             "segment PCM" => limits.segment_bytes = 2,
-            "segments" => limits.segments = 1,
             "retained PCM" => limits.retained_bytes = 4,
             _ => unreachable!(),
         }
@@ -288,12 +291,7 @@ async fn segment_pcm_limits_fail_recording_and_release_the_buffer() {
         })
         .await
         .unwrap();
-        let first = RecordingSegment { generation: 1, segment: 1 };
-        recorder.try_capture_frame(first, 0.0, frame(&[1, 2, 3])).unwrap();
-        if field == "segments" {
-            let second = RecordingSegment { generation: 1, segment: 2 };
-            recorder.try_capture_frame(second, 0.0, frame(&[4])).unwrap();
-        }
+        recorder.try_capture_frame(0.0, frame(&[1, 2, 3])).unwrap();
         assert_eq!(recorder.finish(0.4).await, Err(RecordingFailure::Overflow(field)));
         assert_eq!(recorder.retained_bytes(), 0);
     }
@@ -346,4 +344,25 @@ async fn finalization_preserves_the_input_resamplers_tail() {
             "input must remain on the left channel"
         );
     }
+}
+
+#[tokio::test]
+async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
+    let workers = workers(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace.clone());
+    let recorder = SessionRecorder::open_with(&workers, 10, Some(0.0), limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+    recorder.try_on_input_frame(0.1, frame(&[1234])).unwrap();
+    // A recent microphone is only settled through its most recent frame; the session closes
+    // later. Finalization must still extend the timeline through the requested close time.
+    assert_eq!(recorder.flush(0.5).await.unwrap().last_flushed, Some(0.1));
+    lk_agents_abi::recorder::SessionRecorder::finish(&*recorder, None).await.unwrap();
+    let mut expected = lk_agents_media::pcm_bytes(&[1234, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expected.extend_from_slice(PCM_ENCODER_TRAILER);
+    assert_eq!(*bytes.lock().unwrap(), expected);
 }

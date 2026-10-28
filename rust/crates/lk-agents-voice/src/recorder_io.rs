@@ -4,7 +4,7 @@ use crate::room_io::RECORDER_FLUSH;
 use crate::trace::PlayoutStep;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackEvent, PlaybackObserver};
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_media::recorder::AudioRecorder;
+use lk_agents_abi::recorder::AudioRecorder;
 use std::sync::Arc;
 
 /// A recorder, and the monotonic-to-wall anchor its stamps are converted against.
@@ -63,7 +63,7 @@ impl Driver {
     pub(crate) fn attach_recorder(
         &mut self,
         now: Ts,
-        recorder: Arc<dyn lk_agents_media::recorder::AudioRecorder>,
+        recorder: Arc<dyn lk_agents_abi::recorder::AudioRecorder>,
         out: &mut Out,
     ) {
         self.session.recorder_attached = true;

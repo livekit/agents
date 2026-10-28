@@ -25,3 +25,5 @@ pub mod strings;
 pub mod vocabulary;
 pub mod timer;
 pub mod video;
+
+pub mod workers;

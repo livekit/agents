@@ -6,8 +6,8 @@
 #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 
-use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::EotPrediction;
+use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 
 use crate::eot::{CancelReason, EotRequestId, EotWarning};
 
@@ -204,6 +204,22 @@ impl EotSession {
             actions.extend(self.degrade(reason));
             return actions;
         }
+        self.on_local_failure(now, reason)
+    }
+
+    /// No local transport can be mounted. Settle both pending and future predictions instead of
+    /// leaving an open session behind a stopped driver.
+    pub fn construction_failed(&mut self, now: f64, reason: &str) -> Vec<EotAction> {
+        let mut actions = self.on_local_failure(now, reason);
+        self.closed = true;
+        self.degraded = true;
+        actions.push(EotAction::Degrade(EotDegrade {}));
+        actions
+    }
+
+    /// A refused admission starts no transport. Default this prediction and let the next one
+    /// request construction again.
+    pub fn construction_refused(&mut self, now: f64, reason: &str) -> Vec<EotAction> {
         self.on_local_failure(now, reason)
     }
 

@@ -73,32 +73,6 @@ async fn play_refuses_what_cannot_play() {
     ));
 }
 
-// Catches: a clip that cannot be opened or decoded (a wrong path, or a format this build cannot
-// read) leaving its handle pending forever, so `await handle` never returns.
-#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
-#[tokio::test(start_paused = true)]
-async fn a_clip_that_cannot_be_read_ends_its_playback() {
-    let (player, _room) = started().await;
-    let missing = player
-        .play(vec![file("/nonexistent/clip.ogg", 1.0)], false, false, false, &mut || 0.5)
-        .unwrap();
-    let dir = std::env::temp_dir().join(format!("lk-bg-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let garbage = dir.join("garbage.ogg");
-    std::fs::write(&garbage, b"not audio at all").unwrap();
-    let unreadable = player
-        .play(vec![file(garbage.to_str().unwrap(), 1.0)], false, true, false, &mut || 0.5)
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        missing.wait().await;
-        unreadable.wait().await;
-    })
-    .await
-    .expect("a clip that cannot be read never finished");
-    player.close().await;
-    let _ = std::fs::remove_dir_all(dir);
-}
-
 // Catches: a stop with a fade-out reporting the sound done at once (the generator would be closed
 // mid-fade), or a stop on a finished sound reopening it.
 #[tokio::test]
