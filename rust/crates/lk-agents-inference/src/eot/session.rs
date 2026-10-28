@@ -100,6 +100,11 @@ impl EotSession {
         self.is_fallback
     }
 
+    /// The table a prediction is judged against, as it is now.
+    pub fn thresholds(&self) -> ThresholdOptions {
+        self.thresholds.lock().expect("thresholds mutex").clone()
+    }
+
     /// True once the cloud transport is gone with no local model to replace it (`base.py:151`).
     /// Turn detection is off for the rest of the stream and turns commit on the endpointing delay.
     pub fn is_degraded(&self) -> bool {

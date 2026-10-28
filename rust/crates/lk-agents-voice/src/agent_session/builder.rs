@@ -31,7 +31,6 @@ pub struct DriverBuilder {
     pub time: Timebase,
     pub spawner: Arc<dyn Spawner>,
     pub config: DriverConfig,
-    pub thresholds: lk_agents_abi::tokenize::language::ThresholdOptions,
     pub agent: String,
     pub instructions: Instructions,
     pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
@@ -411,8 +410,8 @@ impl DriverBuilder {
         requested_detection: lk_agents_abi::voice::session_options::TurnDetection,
     ) -> AgentActivity {
         let effective = &self.config.effective;
-        let mut audio_recognition =
-            AudioRecognition::new(effective, &self.config.legs, self.thresholds.clone());
+        let mut audio_recognition = AudioRecognition::new(effective, &self.config.legs);
+        audio_recognition.set_thresholds(eot.as_ref().and_then(|leg| leg.thresholds()));
         // `_adaptive_interruption_active` is "a detector was supplied"; without it the sentinels
         // are unreachable.
         audio_recognition.set_interruption_active(self.interruption.is_some());

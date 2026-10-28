@@ -237,6 +237,10 @@ class TurnDetector:
     def _core_flush(self, reason: str) -> None:
         self._stream.flush(reason)
 
+    def _core_thresholds(self) -> None:
+        # the stream answers per language; the core judges it by the mini model's stock table
+        return None
+
     async def _core_predict(self, timeout: float | None) -> dict[str, Any]:
         ev = await self._stream.predict()
         return {

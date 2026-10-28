@@ -141,6 +141,7 @@ thread = threading.Thread(target=run, daemon=True); thread.start(); ready.wait()
 class Detector:
     def __init__(self): self.calls = []; self.done = threading.Event()
     def _core_id(self): return {"label": "t", "model": "m", "provider": "p"}
+    def _core_thresholds(self): return None
     def _core_push_audio(self, f): self.calls.append(("push", f.sample_rate, threading.get_ident()))
     def _core_flush(self, reason): self.calls.append(("flush", reason, threading.get_ident()))
     def _core_cancel(self, timed_out):
@@ -156,6 +157,7 @@ out = (loop, thread.ident, Detector())
             );
             let proxy = crate::turn::detector::PyEotDetector::from_bridge(handle).unwrap();
             assert_eq!(proxy.id().model, "m", "the identity is read once, off `_core_id`");
+            assert!(proxy.thresholds().is_none(), "a host detector hands over no table");
             proxy.push_audio(AudioFrame::new(vec![0u8; 4], 16_000, 1, 2));
             proxy.flush("end_of_speech");
             proxy.cancel(true);

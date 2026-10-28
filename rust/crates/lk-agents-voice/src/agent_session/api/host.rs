@@ -307,11 +307,6 @@ impl SessionApi {
             }),
             // **The one resolution**; no default restated beside it.
             config: DriverConfig::new(stack, legs),
-            thresholds: lk_agents_abi::tokenize::language::ThresholdOptions::new(
-                lk_agents_abi::tokenize::language::TurnDetectorModel::V1Mini,
-                None,
-                None,
-            ),
             instructions: instructions.unwrap_or_default(),
             dynamic_instructions,
             // Opened at each use, above the synchroniser: the node rewrites, the synchroniser paces.

@@ -341,6 +341,10 @@ impl lk_agents_abi::EotDetector for EotStream {
         EotStream::flush(self);
     }
 
+    fn thresholds(&self) -> Option<lk_agents_abi::tokenize::language::ThresholdOptions> {
+        Some(self.lock().session.thresholds())
+    }
+
     async fn predict(
         &self,
         _timeout: Option<std::time::Duration>,

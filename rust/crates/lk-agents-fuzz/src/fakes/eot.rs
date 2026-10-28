@@ -3,6 +3,7 @@
 //! left unanswered it times out, which is a real provider outcome the driver must handle.
 use std::{sync::Arc, time::Duration};
 
+use lk_agents_abi::tokenize::language::{ThresholdOptions, ThresholdOverride, TurnDetectorModel};
 use lk_agents_abi::{AudioFrame, EotDetector, EotPrediction, errors::ProviderError};
 use tokio::sync::oneshot;
 
@@ -11,6 +12,11 @@ use crate::{
     input::{Confidence, Input},
     record::{Detail, Kind},
 };
+
+/// The detector's own unlikely threshold, every language, as a user's `unlikely_threshold=0.5`:
+/// between the sampled confidences 45 and 55 and above the mini model's stock table (en 0.36), so
+/// a turn judged by any table but the detector's is visible.
+pub const THRESHOLD: f64 = 0.5;
 
 /// What an unanswered prediction waits before failing when the driver set no timeout of its own.
 /// Virtual time, so it costs nothing to reach.
@@ -38,6 +44,14 @@ impl EotDetector for FakeEot {
     fn cancel(&self, _timed_out: bool) {}
 
     fn flush(&self, _reason: &'static str) {}
+
+    fn thresholds(&self) -> Option<ThresholdOptions> {
+        Some(ThresholdOptions::new(
+            TurnDetectorModel::V1Mini,
+            Some(ThresholdOverride::All(THRESHOLD)),
+            None,
+        ))
+    }
 
     async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError> {
         let (sender, receiver) = oneshot::channel();

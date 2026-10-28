@@ -7,7 +7,7 @@ use crate::agent_session::effects::{Effects, Timer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
-use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions};
+use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, SpeechEvent, Ts};
 use std::collections::VecDeque;
@@ -108,7 +108,7 @@ pub struct AudioRecognition {
 }
 
 impl AudioRecognition {
-    pub fn new(cfg: &AgentSessionOptions, legs: &LegSet, thresholds: ThresholdOptions) -> Self {
+    pub fn new(cfg: &AgentSessionOptions, legs: &LegSet) -> Self {
         let i = &cfg.turn.interruption;
         let turn = TurnConfig {
             stt_enabled: legs.stt,
@@ -138,7 +138,7 @@ impl AudioRecognition {
             cfg: turn,
             phase: Phase::Idle,
             endpointing: Endpointing::new(&cfg.turn.endpointing),
-            thresholds,
+            thresholds: ThresholdOptions::new(TurnDetectorModel::V1Mini, None, None),
             wall_anchor: None,
             audio_transcript: String::new(),
             interim_transcript: String::new(),
@@ -289,6 +289,15 @@ impl AudioRecognition {
     ) {
         self.eot = eot;
         self.interruption = interruption;
+    }
+
+    /// The detector's own thresholds (`unlikely_threshold(language)`, ..), read by the driver
+    /// when the session opens and with each answer, as the reference reads them once the
+    /// prediction lands. `None` (a detector without a table) keeps what the machine has.
+    pub(crate) fn set_thresholds(&mut self, thresholds: Option<ThresholdOptions>) {
+        if let Some(thresholds) = thresholds {
+            self.thresholds = thresholds;
+        }
     }
 
     /// `_adaptive_interruption_active`: the interruption channel exists and is not closed.

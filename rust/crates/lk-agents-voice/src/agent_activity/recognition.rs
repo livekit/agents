@@ -583,6 +583,10 @@ impl Driver {
         let result = p.map_err(|_| {
             out.trace(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
         });
+        // Judged by the detector's thresholds as they are now: the user's overrides, the gateway's
+        // defaults and a fallback's rescale all live on the detector.
+        let thresholds = self.activity.audio_recognition.eot().and_then(|leg| leg.thresholds());
+        self.activity.audio_recognition.set_thresholds(thresholds);
         let eff = self.activity.audio_recognition.on_prediction(now, req, result);
         out.machine().append(eff);
     }

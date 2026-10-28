@@ -62,6 +62,14 @@ pub trait EotDetector: Send + Sync + 'static {
     /// is not a turn failure: the countdown proceeds as if no detector were configured.
     async fn predict(&self, timeout: Option<Duration>) -> Result<EotPrediction, ProviderError>;
 
+    /// What a prediction is judged against (`unlikely_threshold(language)`,
+    /// `backchannel_threshold(language)`, `supports_language(language)`), as it is now: the user's
+    /// overrides over the model's defaults, the gateway's once its session is created. `None`: the
+    /// detector keeps no table, and the mini model's stock one judges it.
+    fn thresholds(&self) -> Option<crate::tokenize::language::ThresholdOptions> {
+        None
+    }
+
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
     async fn aclose(&self) {}

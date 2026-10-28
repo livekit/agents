@@ -45,7 +45,7 @@ mod tts;
 mod vad;
 
 pub use avatar::FakeAvatarWorker;
-pub use eot::FakeEot;
+pub use eot::{FakeEot, THRESHOLD as EOT_THRESHOLD};
 pub use interruption::{FakeInterruption, FakeInterruptionSource};
 pub use llm::{COMPLETION_TOKENS, FakeLlm, request_of};
 pub use nodes::FakeNodes;
