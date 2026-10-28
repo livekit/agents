@@ -3,7 +3,7 @@
 use super::tree::Crate;
 use super::*;
 
-const LIB: &str = "pub mod errors; pub mod llm; pub use llm::chat::Item;";
+const LIB: &str = "pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item;";
 
 const ERRORS: &str = r#"
 #[crate::host(error(with = crate::errors::raise))]
@@ -58,6 +58,8 @@ fn read(llm: &str) -> Result<Declarations, String> {
             ("llm.rs", "pub mod chat; pub mod class;"),
             ("llm/chat.rs", CHAT),
             ("llm/class.rs", llm),
+            ("utils.rs", "pub mod stream;"),
+            ("utils/stream.rs", "pub trait StreamSource<T> {}"),
         ],
     )?;
     resolve::declarations(&krate)
@@ -359,10 +361,20 @@ fn declared_proxies_call_the_host_in_their_context() {
     ))
     .expect("resolves");
     let p = &decls.proxies[0];
-    assert_eq!((p.rust_name.as_str(), p.host.as_str(), p.family.as_str()), ("Callbacks", "livekit.agents.Callbacks", "llm"));
+    assert_eq!(
+        (p.rust_name.as_str(), p.host.as_str(), p.family.as_str()),
+        ("Callbacks", "livekit.agents.Callbacks", "llm")
+    );
     assert!(p.async_trait);
     let kinds: Vec<_> = p.methods.iter().map(|m| (m.kind, m.name.as_str(), m.context)).collect();
-    assert_eq!(kinds, [(ProxyCall::Await, "render", 0), (ProxyCall::Await, "prepare", 0), (ProxyCall::Notify, "abort", 0)]);
+    assert_eq!(
+        kinds,
+        [
+            (ProxyCall::Await, "render", Some(0)),
+            (ProxyCall::Await, "prepare", Some(0)),
+            (ProxyCall::Notify, "abort", Some(0))
+        ]
+    );
     let refusal = p.methods[1].ret.refusal.as_ref().expect("declared");
     assert_eq!((refusal.module.as_str(), refusal.class.as_str()), ("livekit.agents", "Refused"));
     assert_eq!(p.methods[1].ret.err.as_deref(), Some("::lk_agents_abi::errors::HostError"));
@@ -371,8 +383,8 @@ fn declared_proxies_call_the_host_in_their_context() {
     for want in [
         "impl ::lk_agents_abi::llm::class::Callbacks for CallbacksProxy {",
         "#[::async_trait::async_trait]",
-        "let context = ::lk_agents_abi::agent::HostContext::host_context(at);",
-        "Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {",
+        "let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(at).cloned() else {",
+        "let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {",
         "Ok((host.bind(py).getattr(\"render\")?",
         "::lk_agents_abi::python::extra_to_py(py, &args_arg)?.into_any()",
         "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
@@ -389,23 +401,112 @@ fn declared_proxies_call_the_host_in_their_context() {
     }
 }
 
+// Catches: a provider's identity read per call instead of once, a call without its own context
+// left with none (rather than the one captured when the proxy was taken), a bound value not
+// reaching the awaited calls, or a returned host stream read as a value instead of pulled in the
+// call's context.
+#[test]
+fn provider_proxies_read_once_bind_and_pull_host_streams() {
+    let decls = read(&proxy(
+        r#"
+        #[host(read_once, name = "_core_label")] fn label(&self) -> String;
+        #[host(notify)] fn prewarm(&self) {}
+        #[host(bind)] fn with_conn(&self, _conn: &Report) -> Option<std::sync::Arc<dyn Callbacks>> { None }
+        #[host(await)] async fn chat(&self, #[host(context)] at: &Report) -> Result<Box<dyn crate::utils::stream::StreamSource<Chunk>>, HostError>;
+        #[host(await)] async fn count(&self) -> Result<u32, HostError>;
+        "#,
+    ))
+    .expect("resolves");
+    let p = &decls.proxies[0];
+    assert!(p.captures_context());
+    assert_eq!(p.bound().map(|b| b.name.as_str()), Some("conn"));
+    let kinds: Vec<_> = p.methods.iter().map(|m| (m.kind, m.context)).collect();
+    assert_eq!(
+        kinds,
+        [
+            (ProxyCall::ReadOnce, None),
+            (ProxyCall::Notify, None),
+            (ProxyCall::Bind, None),
+            (ProxyCall::Await, Some(0)),
+            (ProxyCall::Await, None)
+        ]
+    );
+    let out = crate::adapter::emit(&decls).expect("emits");
+    let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    for want in [
+        "let v = obj.call_method0(\"_core_label\")?;",
+        "context: ::lk_agents_runtime::host::python::capture_context(obj.py())?",
+        "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
+        "let context = ::std::clone::Clone::clone(&self.context);",
+        "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
+        "if let Some(bound) = bound {\n                    args.push(",
+        "::lk_agents_runtime::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::llm::chat::Chunk>()?)",
+        "DeclaredProxy::of::<dyn ::lk_agents_abi::llm::class::Callbacks>",
+    ] {
+        assert!(llm.contains(want), "{want}\n{llm}");
+    }
+    let bridges = crate::records::rust(&decls).expect("emits");
+    let bridge = &bridges.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    assert!(
+        bridge.contains(
+            "impl crate::python::HostProxy for dyn ::lk_agents_abi::llm::class::Callbacks {"
+        ) && bridge.contains(
+            "crate::python::declared_proxy::<dyn ::lk_agents_abi::llm::class::Callbacks>(obj)"
+        ),
+        "{bridge}"
+    );
+}
+
 // Catches: a proxy call with no context to enter (or two), a failure swallowed into a default, an
 // error or refusal with no declared conversion, a call kind guessed from the signature, or a
 // value handed to the host that it cannot receive.
 #[test]
 fn incomplete_proxy_declarations_fail_generation() {
     for (body, want) in [
-        ("#[host(await)] async fn f(&self, at: &Report) -> Result<String, HostError>;", "one #[host(context)] parameter"),
+        (
+            "#[host(read_once)] fn f(&self, #[host(context)] a: &Report) -> String;",
+            "does not fit `read_once`",
+        ),
+        (
+            "#[host(bind)] fn f(&self, c: &Report) -> Option<std::sync::Arc<dyn super::chat::Llm>>;",
+            "returns `Option<Arc<dyn Self>>` of this trait",
+        ),
+        (
+            "#[host(await)] async fn f(&self) -> Result<Box<dyn crate::utils::stream::StreamSource<Report>>, HostError>;",
+            "not declared for input",
+        ),
+        (
+            "#[host(notify)] fn f(&self, s: Box<dyn crate::utils::stream::StreamSource<Chunk>>);",
+            "a host stream is not handed back to the host",
+        ),
         (
             "#[host(await)] async fn f(&self, #[host(context)] a: &Report, #[host(context)] b: &Report) -> Result<String, HostError>;",
             "one parameter is the call's #[host(context)]",
         ),
-        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> String;", "a host failure is reported"),
-        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, std::fmt::Error>;", "not an ABI declaration"),
-        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Result<String, HostError>, HostError>;", "error(raised"),
-        ("#[host(await)] fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>;", "does not fit `await`"),
-        ("#[host(notify)] fn f(&self, #[host(context)] a: &Report) -> u32;", "does not fit `notify`"),
-        ("#[host(await, notify)] fn f(&self, #[host(context)] a: &Report);", "exactly one of await, notify"),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> String;",
+            "a host failure is reported",
+        ),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, std::fmt::Error>;",
+            "not an ABI declaration",
+        ),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Result<String, HostError>, HostError>;",
+            "error(raised",
+        ),
+        (
+            "#[host(await)] fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>;",
+            "does not fit `await`",
+        ),
+        (
+            "#[host(notify)] fn f(&self, #[host(context)] a: &Report) -> u32;",
+            "does not fit `notify`",
+        ),
+        (
+            "#[host(await, notify)] fn f(&self, #[host(context)] a: &Report);",
+            "exactly one of await, notify, read_once, bind",
+        ),
         (
             "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>; fn g(&self);",
             "Callbacks::g: a proxy method declares exactly one of",
@@ -414,9 +515,79 @@ fn incomplete_proxy_declarations_fail_generation() {
             "#[host(await)] async fn f(&self, #[host(context)] a: &Report, c: Conn) -> Result<(), HostError>;",
             "f(c): record `::lk_agents_abi::llm::chat::Conn` is not declared for output",
         ),
-        ("#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Report, HostError>;", "not declared for input"),
+        (
+            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Report, HostError>;",
+            "not declared for input",
+        ),
     ] {
         let err = refuse_proxy(body);
         assert!(err.contains("Callbacks") && err.contains(want), "`{body}`: {err}");
     }
+}
+
+#[test]
+fn a_native_only_tap_is_registered_by_its_declared_class_and_other_traits_are_refused() {
+    let declaration = r#"
+        #[crate::host(native(refused = "expected the native recorder"))]
+        pub trait Tap: Send + Sync {}
+        #[crate::host(class(name = "Recorder", native = Tap))]
+        pub trait Recorder: Sized {
+            #[host(new)] fn new() -> Self;
+        }
+    "#;
+    let declarations = read(declaration).expect("native-only tap resolves");
+    assert_eq!(declarations.classes[0].native, ["::lk_agents_abi::llm::class::Tap"]);
+    assert!(declarations.proxies.is_empty(), "a native-only tap must not call Python");
+    let output = crate::adapter::emit(&declarations).unwrap();
+    let class = output.iter().find(|output| output.path == "llm.rs").unwrap();
+    assert!(class.text.contains("TypeId::of::<dyn ::lk_agents_abi::llm::class::Tap>()"));
+    let plain = declaration
+        .replace("#[crate::host(native(refused = \"expected the native recorder\"))]", "");
+    assert!(
+        read(&plain).unwrap_err().contains("`Tap` is not a #[host(proxy)] trait"),
+        "an undeclared trait cannot cross"
+    );
+}
+
+// Catches: an ordered map or set refused as undeclared (TextSession state), a map's keys or a
+// set's items crossing by anything but their declared kind, or a host proxy handed back to the
+// host from an emitted record.
+#[test]
+fn records_carry_ordered_maps_sets_and_host_proxies() {
+    let decls = read(
+        r#"
+        use std::collections::{BTreeMap, BTreeSet};
+        use super::chat::Llm;
+        #[crate::host(record(module = "session", extract, emit))]
+        pub struct State { pub frames: BTreeMap<String, u32>, pub started: BTreeSet<String> }
+        #[crate::host(record(module = "session", extract))]
+        pub struct Registration { pub llm: std::sync::Arc<dyn Llm> }
+        "#,
+    )
+    .expect("resolves");
+    let rust = crate::records::rust(&decls).expect("emits");
+    let llm = &rust.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
+    for want in [
+        "cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)|",
+        "collect::<PyResult<::std::collections::BTreeSet<_>>>()",
+        "::pyo3::types::PyFrozenSet::new(py,",
+        "<dyn ::lk_agents_abi::llm::chat::Llm as crate::python::HostProxy>::from_host(",
+    ] {
+        assert!(llm.contains(want), "{want}\n{llm}");
+    }
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(
+        session.contains("frames: dict[str, int]")
+            && session.contains("started: frozenset[str]")
+            && session.contains("llm: LLM"),
+        "{session}"
+    );
+    let err = read(
+        r#"use super::chat::Llm;
+        #[crate::host(record(module = "session", emit))]
+        pub struct Out { pub llm: std::sync::Arc<dyn Llm> }"#,
+    )
+    .expect_err("an emitted proxy is refused");
+    assert!(err.contains("Out") && err.contains("a host proxy is not returned"), "{err}");
 }

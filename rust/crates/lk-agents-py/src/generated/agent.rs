@@ -25,7 +25,7 @@ impl AgentRunner {
     #[pyo3(signature = (definition, llm, host))]
     fn new(definition: ::lk_agents_abi::agent::AgentDefinition, llm: Bound<'_, PyAny>, host: Bound<'_, PyAny>) -> PyResult<AgentRunner> {
         ::lk_agents_abi::python::check_pid()?;
-        let llm = <dyn ::lk_agents_abi::Llm as ::lk_agents_abi::python::HostProxy>::from_host(&llm, None)?;
+        let llm = super::llm::LlmProxy::from_host(&llm)?;
         let host = super::agent::AgentHostProxy::from_host(&host)?;
         let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(definition, llm, host).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
         Ok(AgentRunner(::std::sync::Arc::new(out)))
@@ -69,9 +69,11 @@ impl AgentRunUpdates {
 
 // Declared in rust/crates/lk-agents-abi/src/agent.rs.
 
-/// [`::lk_agents_abi::agent::AgentHost`] over a host `livekit.agents.voice.agent_host.AgentHost`:
-/// each call runs in a copy of the host context its `#[host(context)]` parameter captured.
-pub struct AgentHostProxy(::std::sync::Arc<Py<PyAny>>);
+/// [`::lk_agents_abi::agent::AgentHost`] over a host `livekit.agents.voice.agent_host.AgentHost`.
+#[derive(Clone)]
+pub struct AgentHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
 
 impl AgentHostProxy {
     /// A registered native class as itself, any other host object behind this proxy.
@@ -79,24 +81,27 @@ impl AgentHostProxy {
         if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::agent::AgentHost>(obj) {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(AgentHostProxy(::std::sync::Arc::new(obj.clone().unbind()))))
+        Ok(::std::sync::Arc::new(AgentHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) }))
     }
+}
+
+::lk_agents_abi::python::inventory::submit! {
+    ::lk_agents_abi::python::DeclaredProxy::of::<dyn ::lk_agents_abi::agent::AgentHost>(|obj| AgentHostProxy::from_host(obj).map(|p| ::std::boxed::Box::new(p) as ::std::boxed::Box<dyn ::std::any::Any>))
 }
 
 #[::async_trait::async_trait]
 impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     async fn render_instructions(&self, invocation: &::lk_agents_abi::agent::Invocation) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let out = match context {
-            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
-                Ok((host.bind(py).getattr("render_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
-            })
-            .await,
-            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.render_instructions: the call captured no host context")),
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.render_instructions: the call captured no host context"))));
         };
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                Ok((host.bind(py).getattr("render_instructions")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -111,18 +116,17 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     }
 
     async fn prepare_tool(&self, invocation: &::lk_agents_abi::agent::Invocation, arguments: ::serde_json::Map<::std::string::String, ::serde_json::Value>) -> ::std::result::Result<::std::result::Result<::lk_agents_abi::agent::PreparedArguments, ::lk_agents_abi::agent::ToolArgumentError>, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let arguments_arg = arguments;
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let out = match context {
-            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any()];
-                Ok((host.bind(py).getattr("prepare_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
-            })
-            .await,
-            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.prepare_tool: the call captured no host context")),
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.prepare_tool: the call captured no host context"))));
         };
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::lk_agents_abi::python::extra_to_py(py, &arguments_arg)?.into_any()];
+                Ok((host.bind(py).getattr("prepare_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -140,18 +144,17 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     }
 
     async fn read_back(&self, invocation: &::lk_agents_abi::agent::Invocation, prepared: &::lk_agents_abi::HostRef) -> ::std::result::Result<::lk_agents_abi::agent::ReadBackAnswer, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let out = match context {
-            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
-                Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
-            })
-            .await,
-            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.read_back: the call captured no host context")),
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.read_back: the call captured no host context"))));
         };
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -166,18 +169,17 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     }
 
     async fn run_tool(&self, invocation: &::lk_agents_abi::agent::Invocation, prepared: &::lk_agents_abi::HostRef) -> ::std::result::Result<::lk_agents_abi::llm::tool_executor::ToolReport, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let prepared_arg = ::std::clone::Clone::clone(prepared);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let out = match context {
-            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
-                Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
-            })
-            .await,
-            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.run_tool: the call captured no host context")),
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.run_tool: the call captured no host context"))));
         };
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(prepared_arg, py)?];
+                Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -192,18 +194,17 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     }
 
     async fn validate_output(&self, invocation: &::lk_agents_abi::agent::Invocation, candidate: ::lk_agents_abi::agent::OutputCandidate) -> ::std::result::Result<::lk_agents_abi::agent::ValidatedOutput, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
         let candidate_arg = candidate;
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let out = match context {
-            Some(context) => ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(candidate_arg, py)?];
-                Ok((host.bind(py).getattr("validate_output")?, ::pyo3::types::PyTuple::new(py, args)?))
-            })
-            .await,
-            None => Err(::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.validate_output: the call captured no host context")),
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
+            return Err(::pyo3::Python::attach(|py| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.validate_output: the call captured no host context"))));
         };
+        let context = &context;
+        let out = ::lk_agents_runtime::host::python::call_in(context, move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(candidate_arg, py)?];
+                Ok((host.bind(py).getattr("validate_output")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }).await;
         ::pyo3::Python::attach(|py| {
             let out = match out {
                 Ok(out) => out,
@@ -218,10 +219,9 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
     }
 
     fn cancel(&self, invocation: &::lk_agents_abi::agent::Invocation) {
-        let host = ::std::sync::Arc::clone(&self.0);
+        let host = ::std::sync::Arc::clone(&self.host);
         let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(invocation);
-        let Some(context) = context.cloned() else {
+        let Some(context) = ::lk_agents_abi::agent::HostContext::host_context(invocation).cloned() else {
             ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {}", ::pyo3::exceptions::PyRuntimeError::new_err("AgentHost.cancel: the call captured no host context"));
             return;
         };
@@ -235,7 +235,7 @@ impl ::lk_agents_abi::agent::AgentHost for AgentHostProxy {
         runtime.spawn(async move {
             let context = &context;
             if let Err(e) = ::lk_agents_runtime::host::python::call_in(context, move |py| {
-                let args = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_arg, py)?];
                 Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
             }).await {
                 ::lk_agents_abi::python::log::warn!("AgentHost.cancel failed: {e}");

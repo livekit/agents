@@ -172,6 +172,10 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(c, t, dir, imports)),
         Ty::List(t) => format!("list[{}]", annotation(c, t, dir, imports)),
+        Ty::Map(k, t) => {
+            format!("dict[{}, {}]", annotation(c, k, dir, imports), annotation(c, t, dir, imports))
+        }
+        Ty::Set(t) => format!("frozenset[{}]", annotation(c, t, dir, imports)),
         Ty::Tuple(ts) => format!(
             "tuple[{}]",
             ts.iter().map(|t| annotation(c, t, dir, imports)).collect::<Vec<_>>().join(", ")
@@ -213,6 +217,15 @@ fn annotation(c: &Class, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             }
         }
         Ty::Source { class, .. } => class.clone(),
+        Ty::HostSource(item) => {
+            imports.add("collections.abc", "AsyncIterable");
+            format!("AsyncIterable[{}]", annotation(c, item, dir, imports))
+        }
+        Ty::Error(_) => "BaseException".into(),
+        Ty::HostDuplex { output, .. } => {
+            imports.add("collections.abc", "AsyncIterable");
+            format!("AsyncIterable[{}]", annotation(c, output, dir, imports))
+        }
         Ty::Handle { class, .. } => {
             imports.add(".._core", class);
             class.clone()

@@ -159,6 +159,15 @@ where
     })
 }
 
+/// The running loop and a copy of the current context, interned: what a host object's proxy
+/// runs its calls in when they carry no context of their own. Refused outside a running loop.
+pub fn capture_context(py: Python<'_>) -> PyResult<HostRef> {
+    let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
+    let ctx = py.import("contextvars")?.call_method0("copy_context")?;
+    let pair = pyo3::types::PyTuple::new(py, [event_loop, ctx])?;
+    Ok(lk_agents_abi::python::intern_host(pair.into_any().unbind()))
+}
+
 /// The `(loop, contextvars.Context)` pair `context` interned at its operation's entry.
 pub(crate) fn captured_pair<'py>(
     py: Python<'py>,

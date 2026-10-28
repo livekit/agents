@@ -91,7 +91,8 @@ impl Field {
 
 /// `#[host(proxy(host = ".."))] trait X` whose methods declare their calls: the core calling a
 /// host object. The generated proxy implements the trait over the object; each call runs in the
-/// host context its `#[host(context)]` parameter carries.
+/// host context its `#[host(context)]` parameter carries, or, with none, the one the proxy
+/// captured when it was taken from the host.
 #[derive(Debug, Clone)]
 pub struct Proxy {
     /// The trait's identifier: the generated proxy is `<rust_name>Proxy`.
@@ -107,6 +108,19 @@ pub struct Proxy {
     pub methods: Vec<ProxyMethod>,
 }
 
+impl Proxy {
+    /// Some call has no `#[host(context)]` parameter: the proxy captures the host's context
+    /// (running loop and a copy of its context) when it is taken, and those calls run in it.
+    pub fn captures_context(&self) -> bool {
+        self.methods.iter().any(|m| m.context.is_none() && m.kind != ProxyCall::ReadOnce)
+    }
+
+    /// The parameter a `bind` method appends to every awaited call of its proxy.
+    pub fn bound(&self) -> Option<&Param> {
+        self.methods.iter().find(|m| m.kind == ProxyCall::Bind).map(|m| &m.params[0])
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProxyMethod {
     pub rust_name: String,
@@ -115,8 +129,9 @@ pub struct ProxyMethod {
     pub kind: ProxyCall,
     /// Passed to the host in order, the context parameter included.
     pub params: Vec<Param>,
-    /// The `#[host(context)]` parameter: its type implements `HostContext`.
-    pub context: usize,
+    /// The `#[host(context)]` parameter: its type implements `HostContext`. `None`: the context
+    /// the proxy captured.
+    pub context: Option<usize>,
     pub ret: ProxyRet,
 }
 
@@ -127,6 +142,12 @@ pub enum ProxyCall {
     Await,
     /// A sync `fn` returning nothing: scheduled on the host and not awaited; a failure is logged.
     Notify,
+    /// `fn(&self) -> T`: read from the host once, when the proxy is taken; a failure to read it
+    /// refuses the object.
+    ReadOnce,
+    /// `fn(&self, x: &X) -> Option<Arc<dyn Self>>`: this proxy with `x` appended to the arguments
+    /// of every awaited call. No host call.
+    Bind,
 }
 
 /// What an awaited call returns: `Result<T, E>`, or `Result<Result<T, R>, E>` when the host may
@@ -270,6 +291,10 @@ pub enum Ty {
     /// `Option<T>`: the value or the explicit null.
     Optional(Box<Ty>),
     List(Box<Ty>),
+    /// `BTreeMap<K, V>`: a dict, its keys converted by their declared kind.
+    Map(Box<Ty>, Box<Ty>),
+    /// `BTreeSet<T>`: a set (a `frozenset` on a model).
+    Set(Box<Ty>),
     Tuple(Vec<Ty>),
     /// A `#[derive(Host)]` record, crossing by its generated conversions.
     Record(Record),
@@ -292,6 +317,19 @@ pub enum Ty {
         item: Box<Ty>,
         class: String,
     },
+    /// `Box<dyn StreamSource<T>>` a host call returns: the host's async iterable of `T`, pulled
+    /// in its own context (`lk_agents_runtime::host::stream::HostStream`). Input only.
+    HostSource(Box<Ty>),
+    /// `(Box<dyn StreamSink<I>>, Box<dyn StreamSource<T>>)` a host call returns: the host's duplex
+    /// stream, input through its `_core_push`/`_core_flush`/`_core_end_input` and output by
+    /// iterating it, in one context (`HostStream::duplex`). Input only.
+    HostDuplex {
+        input: Box<Ty>,
+        output: Box<Ty>,
+    },
+    /// A declared error (`#[host(error(with = ..))]`) passed to the host as the exception it
+    /// raises as. Output only.
+    Error(ErrorDecl),
     /// `Self::<assoc>` declared `handle(class = "X")`: an implementation's own object handed to
     /// the host as the registration shell's class `crate::handles::X` (`From` the implementation's
     /// type). Output only.
@@ -355,6 +393,8 @@ impl Ty {
             }
             Ty::Optional(t) => format!("::std::option::Option<{}>", t.rust()),
             Ty::List(t) => format!("::std::vec::Vec<{}>", t.rust()),
+            Ty::Map(k, v) => format!("::std::collections::BTreeMap<{}, {}>", k.rust(), v.rust()),
+            Ty::Set(t) => format!("::std::collections::BTreeSet<{}>", t.rust()),
             Ty::Tuple(ts) if ts.len() == 1 => format!("({},)", ts[0].rust()),
             Ty::Tuple(ts) => {
                 format!("({})", ts.iter().map(Ty::rust).collect::<Vec<_>>().join(", "))
@@ -363,9 +403,15 @@ impl Ty {
             Ty::This => "Self".into(),
             Ty::Proxy { rust, .. } => format!("::std::sync::Arc<dyn {rust}>"),
             Ty::Handle { assoc, .. } => format!("Self::{assoc}"),
-            Ty::Source { item, .. } => {
+            Ty::Source { item, .. } | Ty::HostSource(item) => {
                 format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())
             }
+            Ty::Error(e) => e.rust.clone(),
+            Ty::HostDuplex { input, output } => format!(
+                "(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>)",
+                input.rust(),
+                output.rust()
+            ),
         }
     }
 }

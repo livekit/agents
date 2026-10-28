@@ -11,8 +11,9 @@ pub mod agent;
 pub mod inference;
 pub mod llm;
 pub mod storage;
-pub mod worker;
 pub mod telemetry;
+pub mod tts;
+pub mod worker;
 
 /// The implementation of each declared class. The registration shell implements it.
 pub trait Implementations: 'static {
@@ -24,12 +25,12 @@ pub trait Implementations: 'static {
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type Storage: ::lk_agents_abi::storage::Storage;
-    type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
-    type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
     type LoopMonitor: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitor;
     type LoopMonitorThresholds: ::lk_agents_abi::telemetry::loop_monitor::LoopMonitorThresholds;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type TelemetryWorker: ::lk_agents_abi::telemetry::work::TelemetryWorker;
+    type WorkerCli: ::lk_agents_abi::worker::cli::WorkerCli;
+    type CliSignals: ::lk_agents_abi::worker::cli::CliSignals;
 }
 
 /// Adds every declared class to `_core`.
@@ -49,12 +50,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::mcp_render_result, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_check_result, m)?)?;
     m.add_class::<storage::Storage>()?;
-    m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
-    m.add_class::<worker::ExitSignals>()?;
     m.add_class::<telemetry::LoopMonitor>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_loop_monitor_thresholds_from_env, m)?)?;
     m.add_class::<telemetry::_core_SessionReportUpload>()?;
     m.add_class::<telemetry::_core_TelemetryWorker>()?;
+    m.add_function(wrap_pyfunction!(worker::parse_cli, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::entrypoint_module, m)?)?;
+    m.add_class::<worker::ExitSignals>()?;
     Ok(())
 }

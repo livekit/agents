@@ -191,9 +191,6 @@ const EXPORT_SOURCES: &[&str] = &[
     "rust/crates/lk-agents-voice/src/transcription/synchronizer.rs",
     "rust/crates/lk-agents-abi/src/llm/schema/defaults.rs",
     "rust/crates/lk-agents-media/src/images/serialize.rs",
-    "rust/crates/lk-agents-inference/src/mcp/mod.rs",
-    "rust/crates/lk-agents-inference/src/mcp/render.rs",
-    "rust/crates/lk-agents-inference/src/mcp/session.rs",
 ];
 
 /// The generated Python package, under every Python project the repo has: `python/livekit-agents`

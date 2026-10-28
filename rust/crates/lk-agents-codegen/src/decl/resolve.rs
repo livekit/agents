@@ -77,9 +77,21 @@ impl Resolver<'_> {
             None => Vec::new(),
             Some(t) => match self.shape(self.module, &t, &[], at)? {
                 Shape::Named { found: Found::Item { module, item }, .. } => {
-                    match self.proxy(module, item, at)? {
-                        Ty::Proxy { rust, .. } => vec![rust],
-                        _ => unreachable!("proxy() returns a proxy"),
+                    let syn::Item::Trait(tr) = &self.krate.modules[module].items[item] else {
+                        return Err(format!("{at}: `native` names a declared trait"));
+                    };
+                    let entries = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
+                    if voc::find(&entries, "native").is_some() {
+                        vec![
+                            self.krate
+                                .extern_path(module, item)
+                                .map_err(|e| format!("{at}: {e}"))?,
+                        ]
+                    } else {
+                        match self.proxy(module, item, at)? {
+                            Ty::Proxy { rust, .. } => vec![rust],
+                            _ => unreachable!("proxy() returns a proxy"),
+                        }
                     }
                 }
                 _ => return Err(format!("{at}: `native` names a #[host(proxy)] trait")),
@@ -437,6 +449,10 @@ impl Resolver<'_> {
         };
         match shape {
             Shape::Tuple(items) if items.is_empty() => Ok(Ty::Unit),
+            Shape::Tuple(items) if let Some((input, output)) = self.duplex(items) => Ok(Ty::HostDuplex {
+                input: Box::new(self.classify(input, at)?),
+                output: Box::new(self.classify(output, at)?),
+            }),
             Shape::Tuple(items) => Ok(Ty::Tuple(items.iter().map(|i| self.classify(i, at)).collect::<Result<_, _>>()?)),
             Shape::SelfType => Ok(Ty::This),
             Shape::SelfAssoc(name) => self
@@ -461,10 +477,19 @@ impl Resolver<'_> {
                     (["std", "string", "String"], []) => Ty::Str,
                     (["std", "option", "Option"], a) => Ty::Optional(Box::new(one(a)?)),
                     (["std", "vec", "Vec"], a) => Ty::List(Box::new(one(a)?)),
+                    (["std", "collections", "BTreeSet"], a) => Ty::Set(Box::new(one(a)?)),
+                    (["std", "collections", "BTreeMap"], [k, v]) => {
+                        Ty::Map(Box::new(self.classify(k, at)?), Box::new(self.classify(v, at)?))
+                    }
                     (["serde_json", "Value"], []) => Ty::Json,
                     (["serde_json", "Map"], [k, v]) if self.classify(k, at)? == Ty::Str && self.classify(v, at)? == Ty::Json => Ty::JsonObject,
                     (["std", "sync", "Arc"], [Shape::Dyn { found: Found::Item { module, item }, args }]) if args.is_empty() => {
                         self.proxy(*module, *item, at)?
+                    }
+                    (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
+                        if self.is_stream_source(*module, *item) =>
+                    {
+                        Ty::HostSource(Box::new(one(args)?))
                     }
                     _ => return Err(format!("{at}: `{}` has no declared conversion", p.join("::"))),
                 })
@@ -476,6 +501,30 @@ impl Resolver<'_> {
                 }
                 self.declared(*module, *item, at)
             }
+        }
+    }
+
+    /// The item is the ABI's `StreamSource` trait.
+    fn is_stream_source(&self, module: usize, item: usize) -> bool {
+        let path: syn::Path = syn::parse_quote!(crate::utils::stream::StreamSource);
+        self.krate.resolve(0, &path).is_ok_and(|f| f == Found::Item { module, item })
+    }
+
+    /// `(Box<dyn StreamSink<I>>, Box<dyn StreamSource<T>>)`: `I` and `T`.
+    fn duplex<'s>(&self, items: &'s [Shape]) -> Option<(&'s Shape, &'s Shape)> {
+        let boxed = |s: &'s Shape, path: syn::Path| -> Option<&'s Shape> {
+            let Shape::Named { found: Found::External(b), args } = s else { return None };
+            let [Shape::Dyn { found, args }] = &args[..] else { return None };
+            let wanted = self.krate.resolve(0, &path).ok()?;
+            (is(b, &["std", "boxed", "Box"]) && *found == wanted && args.len() == 1)
+                .then(|| &args[0])
+        };
+        match items {
+            [sink, source] => Some((
+                boxed(sink, syn::parse_quote!(crate::utils::stream::StreamSink))?,
+                boxed(source, syn::parse_quote!(crate::utils::stream::StreamSource))?,
+            )),
+            _ => None,
         }
     }
 
@@ -524,10 +573,11 @@ impl Resolver<'_> {
             .iter()
             .position(|i| matches!(i, syn::Item::Trait(t) if t.ident == tr.ident))
             .expect("read from here");
+        let trait_path = k.extern_path(self.module, item).map_err(|e| format!("{at}: {e}"))?;
         let mut methods = Vec::new();
         for inner in &tr.items {
             match inner {
-                syn::TraitItem::Fn(f) => methods.push(self.proxy_method(f)?),
+                syn::TraitItem::Fn(f) => methods.push(self.proxy_method(f, &trait_path)?),
                 other => {
                     return Err(format!(
                         "{at}: a proxy declares methods only, not `{}`",
@@ -536,9 +586,12 @@ impl Resolver<'_> {
                 }
             }
         }
+        if methods.iter().filter(|m| m.kind == ProxyCall::Bind).count() > 1 {
+            return Err(format!("{at}: a proxy binds one value"));
+        }
         Ok(Proxy {
             rust_name: tr.ident.to_string(),
-            trait_path: k.extern_path(self.module, item).map_err(|e| format!("{at}: {e}"))?,
+            trait_path,
             family: module.path.first().cloned().ok_or_else(|| {
                 format!("{at}: a proxy is declared in a subject module, not the crate root")
             })?,
@@ -552,28 +605,38 @@ impl Resolver<'_> {
         })
     }
 
-    fn proxy_method(&self, f: &syn::TraitItemFn) -> Result<ProxyMethod, String> {
+    fn proxy_method(&self, f: &syn::TraitItemFn, trait_path: &str) -> Result<ProxyMethod, String> {
         let at = format!("{}::{}", self.at, f.sig.ident);
         let entries = voc::read(&f.attrs).map_err(|e| format!("{at}: {e}"))?;
-        voc::only(&at, &entries, &["await", "notify", "name"])?;
-        let kind = match (voc::find(&entries, "await"), voc::find(&entries, "notify")) {
-            (Some(_), None) => ProxyCall::Await,
-            (None, Some(_)) => ProxyCall::Notify,
-            _ => return Err(format!("{at}: a proxy method declares exactly one of await, notify")),
-        };
-        let shared_receiver = f.sig.receiver().is_some_and(shared);
-        let fits = match kind {
-            ProxyCall::Await => shared_receiver && f.sig.asyncness.is_some(),
-            ProxyCall::Notify => {
-                shared_receiver
-                    && f.sig.asyncness.is_none()
-                    && matches!(f.sig.output, syn::ReturnType::Default)
+        voc::only(&at, &entries, &["await", "notify", "read_once", "bind", "name"])?;
+        let kinds = [
+            ("await", ProxyCall::Await),
+            ("notify", ProxyCall::Notify),
+            ("read_once", ProxyCall::ReadOnce),
+            ("bind", ProxyCall::Bind),
+        ];
+        let mut declared = kinds.iter().filter(|(k, _)| voc::find(&entries, k).is_some());
+        let (key, kind) = match (declared.next(), declared.next()) {
+            (Some((key, kind)), None) => (*key, *kind),
+            _ => {
+                return Err(format!(
+                    "{at}: a proxy method declares exactly one of await, notify, read_once, bind"
+                ));
             }
         };
+        let shared_receiver = f.sig.receiver().is_some_and(shared);
+        let sync = f.sig.asyncness.is_none();
+        let inputs = f.sig.inputs.iter().filter(|i| matches!(i, syn::FnArg::Typed(_))).count();
+        let fits = shared_receiver
+            && match kind {
+                ProxyCall::Await => !sync,
+                ProxyCall::Notify => sync && matches!(f.sig.output, syn::ReturnType::Default),
+                ProxyCall::ReadOnce => sync && inputs == 0,
+                ProxyCall::Bind => sync && inputs == 1,
+            };
         if !fits {
             return Err(format!(
-                "{at}: the signature does not fit `{}` (await: `async fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing)",
-                format!("{kind:?}").to_lowercase()
+                "{at}: the signature does not fit `{key}` (await: `async fn(&self, ..) -> Result<T, E>`; notify: `fn(&self, ..)` returning nothing; read_once: `fn(&self) -> T`; bind: `fn(&self, x: &X) -> Option<Arc<dyn Self>>`)"
             ));
         }
         let mut params = Vec::new();
@@ -583,7 +646,9 @@ impl Resolver<'_> {
             let syn::Pat::Ident(ident) = &*pt.pat else {
                 return Err(format!("{at}: a parameter is a plain name"));
             };
-            let pat = format!("{at}({})", ident.ident);
+            let name = ident.ident.to_string();
+            let name = name.trim_start_matches('_').to_owned();
+            let pat = format!("{at}({name})");
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
             voc::only(&pat, &entries, &["context"])?;
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
@@ -600,22 +665,32 @@ impl Resolver<'_> {
             };
             // It crosses to the host.
             check_output(&pat, &ty)?;
-            params.push(Param {
-                name: ident.ident.to_string(),
-                ty,
-                by_ref,
-                kw_only: false,
-                default: None,
-            });
+            params.push(Param { name, ty, by_ref, kw_only: false, default: None });
         }
-        let context = context.ok_or_else(|| {
-            format!(
-                "{at}: a proxy call runs in the host context one #[host(context)] parameter carries"
-            )
-        })?;
         let ret = match kind {
             ProxyCall::Notify => ProxyRet { ok: Ty::Unit, refusal: None, err: None },
             ProxyCall::Await => self.proxy_ret(&f.sig.output, &at)?,
+            ProxyCall::ReadOnce => {
+                let syn::ReturnType::Type(_, t) = &f.sig.output else {
+                    return Err(format!("{at}: read_once returns the value it reads"));
+                };
+                let ok = self.ty(t, &at)?;
+                check_input(&at, &ok)?;
+                ProxyRet { ok, refusal: None, err: None }
+            }
+            ProxyCall::Bind => {
+                let syn::ReturnType::Type(_, t) = &f.sig.output else {
+                    return Err(format!("{at}: bind returns `Option<Arc<dyn Self>>`"));
+                };
+                let ok = self.ty(t, &at)?;
+                let own = matches!(&ok, Ty::Optional(p) if matches!(&**p, Ty::Proxy { rust, .. } if rust == trait_path));
+                if !own || context.is_some() {
+                    return Err(format!(
+                        "{at}: bind takes the value it binds and returns `Option<Arc<dyn Self>>` of this trait"
+                    ));
+                }
+                ProxyRet { ok, refusal: None, err: None }
+            }
         };
         Ok(ProxyMethod {
             rust_name: f.sig.ident.to_string(),
@@ -688,7 +763,13 @@ impl Resolver<'_> {
                 emit,
             }));
         }
-        if let Some(own) = voc::find(&entries, "handwritten") {
+        if voc::find(&entries, "error").is_some() {
+            let shape = Shape::Named { found: Found::Item { module, item }, args: Vec::new() };
+            return Ok(Ty::Error(self.error(&shape, at)?));
+        }
+        if let Some(own) = voc::find(&entries, "handwritten")
+            && !derives_host(attrs)
+        {
             voc::only(at, &own.nested, &["extract", "emit", "host"])?;
             let host = voc::text(at, &own.nested, "host")?.ok_or_else(|| {
                 format!("{at}: handwritten(host = \"..\") is its host annotation")
@@ -704,7 +785,15 @@ impl Resolver<'_> {
         if derives_host(attrs) {
             let words = binding_words(attrs);
             let (name, module_name) = python_target(attrs);
-            voc::only(at, &entries, &["host_type", "rename", "wire"])?;
+            voc::only(at, &entries, &["host_type", "rename", "wire", "handwritten"])?;
+            // `handwritten(extract)` beside the derive: the read is the type's own conversion.
+            let own_extract = match voc::find(&entries, "handwritten") {
+                Some(own) => {
+                    voc::only(at, &own.nested, &["extract"])?;
+                    voc::find(&own.nested, "extract").is_some()
+                }
+                None => false,
+            };
             let external = voc::text(at, &entries, "host_type")?;
             let from_items = words.iter().any(|w| w == "from_items");
             let host = match (
@@ -733,7 +822,7 @@ impl Resolver<'_> {
             return Ok(Ty::Record(Record {
                 rust,
                 host,
-                extract: unit || words.iter().any(|w| w == "extract"),
+                extract: unit || own_extract || words.iter().any(|w| w == "extract"),
                 emit: unit || words.iter().any(|w| w == "emit"),
             }));
         }
@@ -745,6 +834,18 @@ impl Resolver<'_> {
                 continue;
             }
             let entries = voc::read(&imp.attrs).map_err(|e| format!("{at}: {e}"))?;
+            // A `#[class]` struct's object: the host holds a `_core` handle over a clone.
+            if let Some(object) = voc::find(&entries, "object")
+                && object.nested.is_empty()
+                && class_struct(it)
+            {
+                return Ok(Ty::Record(Record {
+                    rust,
+                    host: HostForm::CoreClass(ident.clone()),
+                    extract: false,
+                    emit: true,
+                }));
+            }
             if let Some(object) = voc::find(&entries, "object")
                 && voc::text(at, &object.nested, "cell")?.as_deref() == Some("value")
             {
@@ -775,7 +876,8 @@ impl Resolver<'_> {
         let at = self.at;
         let k = self.krate;
         let module = &k.modules[self.module];
-        let index = module.items.iter().position(|i| std::ptr::eq(i, item)).expect("read from here");
+        let index =
+            module.items.iter().position(|i| std::ptr::eq(i, item)).expect("read from here");
         let ident = item_ident(item);
         let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
         let entries = voc::read(item_attrs(item)).map_err(|e| format!("{at}: {e}"))?;
@@ -830,7 +932,12 @@ impl Resolver<'_> {
         })
     }
 
-    fn variant(&self, v: &syn::Variant, owner: &str, dirs: (bool, bool)) -> Result<Variant, String> {
+    fn variant(
+        &self,
+        v: &syn::Variant,
+        owner: &str,
+        dirs: (bool, bool),
+    ) -> Result<Variant, String> {
         let at = format!("{}::{}", self.at, v.ident);
         let entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
         let shape = match &v.fields {
@@ -849,7 +956,9 @@ impl Resolver<'_> {
                 };
                 if voc::find(&entries, "skip").is_some() {
                     if dirs.0 {
-                        return Err(format!("{at}: an extracted record reads every value: no `skip`"));
+                        return Err(format!(
+                            "{at}: an extracted record reads every value: no `skip`"
+                        ));
                     }
                     VariantShape::Tuple(None)
                 } else {
@@ -872,7 +981,8 @@ impl Resolver<'_> {
         };
         let rust_name = v.ident.to_string();
         Ok(Variant {
-            name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| format!("{owner}{rust_name}")),
+            name: voc::text(&at, &entries, "name")?
+                .unwrap_or_else(|| format!("{owner}{rust_name}")),
             rust_name,
             doc: doc(&v.attrs),
             shape,
@@ -942,7 +1052,15 @@ fn literal_default(at: &str, entries: &[Entry]) -> Result<Option<Literal>, Strin
 /// (no class, proxy or source).
 fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Result<(), String> {
     match ty {
-        Ty::This | Ty::Proxy { .. } | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit | Ty::Tuple(_) => {
+        // A proxy field is taken from the host (`extract` only: `check_output` refuses it).
+        Ty::This
+        | Ty::Source { .. }
+        | Ty::Handle { .. }
+        | Ty::HostSource(_)
+        | Ty::HostDuplex { .. }
+        | Ty::Error(_)
+        | Ty::Unit
+        | Ty::Tuple(_) => {
             return Err(format!("{at}: `{}` is not a record field", ty.rust()));
         }
         _ => {}
@@ -984,10 +1102,17 @@ fn snake(s: &str) -> String {
 fn declares_calls(tr: &syn::ItemTrait) -> bool {
     tr.items.iter().any(|i| {
         let syn::TraitItem::Fn(f) = i else { return false };
-        voc::read(&f.attrs).is_ok_and(|entries| {
-            voc::find(&entries, "await").is_some() || voc::find(&entries, "notify").is_some()
-        })
+        voc::read(&f.attrs)
+            .is_ok_and(|entries| PROXY_CALLS.iter().any(|k| voc::find(&entries, k).is_some()))
     })
+}
+
+/// The method keys of a declared proxy (`lk-agents-host-derive` reads the same list).
+const PROXY_CALLS: &[&str] = &["await", "notify", "read_once", "bind"];
+
+/// A struct carrying `#[class]` (`#[crate::class]`, `#[lk_agents_abi::class]`).
+fn class_struct(item: &syn::Item) -> bool {
+    matches!(item, syn::Item::Struct(st) if st.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "class")))
 }
 
 fn shared(r: &syn::Receiver) -> bool {
@@ -1019,10 +1144,19 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
             "{at}: record `{}` is not declared for input (#[binding(extract)])",
             r.rust
         )),
-        Ty::Optional(t) | Ty::List(t) => check_input(at, t),
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => check_input(at, t),
+        Ty::Map(k, v) => {
+            check_input(at, k)?;
+            check_input(at, v)
+        }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_input(at, t)),
-        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit => {
+        Ty::This | Ty::Source { .. } | Ty::Handle { .. } | Ty::Unit | Ty::Error(_) => {
             Err(format!("{at}: `{}` is not an input", ty.rust()))
+        }
+        Ty::HostSource(item) => check_input(at, item),
+        Ty::HostDuplex { input, output } => {
+            check_output(at, input)?;
+            check_input(at, output)
         }
         _ => Ok(()),
     }
@@ -1034,9 +1168,16 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         Ty::Record(r) if !r.emit => {
             Err(format!("{at}: record `{}` is not declared for output (#[binding(emit)])", r.rust))
         }
-        Ty::Optional(t) | Ty::List(t) => check_output(at, t),
+        Ty::Optional(t) | Ty::List(t) | Ty::Set(t) => check_output(at, t),
+        Ty::Map(k, v) => {
+            check_output(at, k)?;
+            check_output(at, v)
+        }
         Ty::Tuple(ts) => ts.iter().try_for_each(|t| check_output(at, t)),
         Ty::Proxy { .. } => Err(format!("{at}: a host proxy is not returned to the host")),
+        Ty::HostSource(_) | Ty::HostDuplex { .. } => {
+            Err(format!("{at}: a host stream is not handed back to the host"))
+        }
         Ty::Source { item, .. } => check_output(at, item),
         _ => Ok(()),
     }

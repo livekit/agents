@@ -8,21 +8,35 @@
 //! caller stops awaiting: the next call resumes it instead of advancing the iterator again. The
 //! host's `CancelledError` is a failure, never the end. Closing cancels a pull in flight, waits
 //! for it to settle, then awaits `aclose()` where the iterator has one, all under the deadline.
+//!
+//! A duplex host stream ([`HostStream::duplex`]) adds its input half, a [`HostSink`] in the same
+//! context: input is queued owned and bounded, and one drain scheduled on the loop at a time
+//! converts and hands the queue to the host's `_core_push`/`_core_flush`/`_core_end_input` in
+//! order. The caller never converts or waits; a full queue or a failed delivery refuses the next
+//! push.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::python::captured;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::host_ref::HostRef;
-use lk_agents_abi::{Closed, StreamSource};
+use lk_agents_abi::{Closed, StreamSink, StreamSource};
 use pyo3::prelude::*;
 
 use super::python::{Started, captured_pair, start_in};
 
 /// Reads one host item as `T`.
 pub type Convert<T> = fn(&Bound<'_, PyAny>) -> PyResult<T>;
+
+/// Writes one input item as the host's.
+pub type ToHost<I> = fn(Python<'_>, I) -> PyResult<Bound<'_, PyAny>>;
+
+/// Input entries a host stream holds before its drain hands them over: past this, a push is
+/// refused rather than queued.
+pub const SINK_QUEUE: usize = 256;
 
 pub struct HostStream<T> {
     iterator: Py<PyAny>,
@@ -58,6 +72,33 @@ impl<T> HostStream<T> {
             pending: None,
             ended: false,
         })
+    }
+
+    /// The two halves of the duplex stream `obj`: input through its `_core_push`, `_core_flush`
+    /// and `_core_end_input`, output by iterating it, both in one copy of `context`.
+    pub fn duplex<I>(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        context: &HostRef,
+        to_host: ToHost<I>,
+        convert: Convert<T>,
+        clock: Arc<dyn Clock>,
+    ) -> PyResult<(HostSink<I>, Self)> {
+        let source = Self::open(py, obj, context, convert, clock)?;
+        let sink = HostSink {
+            shared: Arc::new(SinkShared {
+                target: obj.clone().unbind(),
+                event_loop: source.event_loop.clone_ref(py),
+                ctx: source.ctx.clone_ref(py),
+                to_host,
+                queue: Mutex::new(SinkQueue {
+                    entries: VecDeque::new(),
+                    scheduled: false,
+                    failed: None,
+                }),
+            }),
+        };
+        Ok((sink, source))
     }
 
     fn start(&self, method: &'static str) -> Result<Started, ProviderError> {
@@ -130,6 +171,117 @@ impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
     }
 }
 
+/// The input half of a duplex host stream.
+pub struct HostSink<I> {
+    shared: Arc<SinkShared<I>>,
+}
+
+struct SinkShared<I> {
+    target: Py<PyAny>,
+    event_loop: Py<PyAny>,
+    ctx: Py<PyAny>,
+    to_host: ToHost<I>,
+    queue: Mutex<SinkQueue<I>>,
+}
+
+struct SinkQueue<I> {
+    entries: VecDeque<Entry<I>>,
+    /// A drain is scheduled on the loop and has not emptied the queue yet.
+    scheduled: bool,
+    /// The first failed delivery: every later push reports it.
+    failed: Option<ProviderError>,
+}
+
+enum Entry<I> {
+    Item(I),
+    Flush,
+    EndInput,
+}
+
+impl<I: Send + 'static> HostSink<I> {
+    fn admit(&self, entry: Entry<I>) -> Result<(), ProviderError> {
+        let schedule = {
+            let mut queue = self.shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(failed) = &queue.failed {
+                return Err(failed.clone());
+            }
+            if queue.entries.len() >= SINK_QUEUE {
+                return Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(format!(
+                    "the host stream is not taking its input: {SINK_QUEUE} entries are waiting"
+                ))));
+            }
+            queue.entries.push_back(entry);
+            !std::mem::replace(&mut queue.scheduled, true)
+        };
+        if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
+            let e = captured(e);
+            self.shared.queue.lock().unwrap_or_else(|p| p.into_inner()).failed = Some(e.clone());
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn schedule(&self, py: Python<'_>) -> PyResult<()> {
+        let shared = self.shared.clone();
+        let drain = pyo3::types::PyCFunction::new_closure(py, None, None, move |args, _| {
+            drain(args.py(), &shared);
+            PyResult::Ok(())
+        })?;
+        let s = &self.shared;
+        s.event_loop
+            .bind(py)
+            .call_method1("call_soon_threadsafe", (s.ctx.bind(py).getattr("run")?, drain))?;
+        Ok(())
+    }
+}
+
+/// On the loop, inside the stream's context: everything queued, in order, until the queue is
+/// empty; the first failure stops delivery and is kept for the next push.
+fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
+    loop {
+        let batch: Vec<Entry<I>> = {
+            let mut queue = shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+            if queue.entries.is_empty() {
+                queue.scheduled = false;
+                return;
+            }
+            queue.entries.drain(..).collect()
+        };
+        for entry in batch {
+            let target = shared.target.bind(py);
+            let delivered = match entry {
+                Entry::Item(item) => {
+                    (shared.to_host)(py, item).and_then(|v| target.call_method1("_core_push", (v,)))
+                }
+                Entry::Flush => target.call_method0("_core_flush"),
+                Entry::EndInput => target.call_method0("_core_end_input"),
+            };
+            if let Err(e) = delivered {
+                let mut queue = shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+                queue.failed = Some(lk_agents_abi::python::capture(py, &e));
+                queue.entries.clear();
+                queue.scheduled = false;
+                return;
+            }
+        }
+    }
+}
+
+impl<I: Send + Sync + 'static> StreamSink<I> for HostSink<I> {
+    fn push(&self, item: I) -> Result<(), ProviderError> {
+        self.admit(Entry::Item(item))
+    }
+
+    fn flush(&self) -> Result<(), ProviderError> {
+        self.admit(Entry::Flush)
+    }
+
+    /// A refused end is the failure the source reports.
+    fn end_input(&self) {
+        let _ = self.admit(Entry::EndInput);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Against a live interpreter and a running loop.
@@ -170,6 +322,26 @@ async def scoped():
 async def cancelled():
     yield 1
     raise asyncio.CancelledError()
+
+class Duplex:
+    def __init__(self):
+        self.got = []
+        self.ended = asyncio.Event()
+    def __aiter__(self):
+        var.set('stream')
+        return self.output()
+    async def output(self):
+        await self.ended.wait()
+        yield str(self.got)
+    def _core_push(self, v):
+        if v == 'bad':
+            raise ValueError('refused')
+        self.got.append((v, var.get()))
+    def _core_flush(self):
+        self.got.append(('flush', var.get()))
+    def _core_end_input(self):
+        self.got.append(('end', var.get()))
+        self.ended.set()
 "#;
 
     fn setup(py: Python<'_>) -> (Py<PyDict>, HostRef) {
@@ -239,6 +411,49 @@ async def cancelled():
             let log = g.bind(py).get_item("log").unwrap().unwrap();
             assert_eq!(log.str().unwrap().to_string(), "[('closed in', 'inside')]");
         });
+    }
+
+    fn duplex(g: &Py<PyDict>, context: &HostRef) -> (HostSink<String>, HostStream<String>) {
+        Python::attach(|py| {
+            let obj = g.bind(py).get_item("Duplex").unwrap().unwrap().call0().unwrap();
+            let to_host: ToHost<String> = |py, s| pyo3::IntoPyObjectExt::into_bound_py_any(s, py);
+            let convert: Convert<String> = |o| Ok(o.str()?.to_string());
+            HostStream::duplex(py, &obj, context, to_host, convert, Arc::new(RealClock::new()))
+                .unwrap()
+        })
+    }
+
+    // Catches: input delivered out of order, outside the stream's context, flush or end of input
+    // lost among the items, or ending the input closing the output instead of letting it drain.
+    #[tokio::test]
+    async fn duplex_input_reaches_the_host_in_order_in_the_streams_context() {
+        Python::initialize();
+        let (g, context) = Python::attach(setup);
+        let (sink, mut source) = duplex(&g, &context);
+        sink.push("a".into()).unwrap();
+        sink.flush().unwrap();
+        sink.push("b".into()).unwrap();
+        sink.end_input();
+        assert_eq!(
+            source.next().await.unwrap().as_deref(),
+            Some("[('a', 'stream'), ('flush', 'stream'), ('b', 'stream'), ('end', 'stream')]")
+        );
+    }
+
+    // Catches: a delivery the host refused dropped silently, input still accepted after it.
+    #[tokio::test]
+    async fn a_refused_delivery_refuses_the_next_push() {
+        Python::initialize();
+        let (g, context) = Python::attach(setup);
+        let (sink, _source) = duplex(&g, &context);
+        sink.push("bad".into()).unwrap();
+        for _ in 0..200 {
+            if sink.push("next".into()).is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the refused delivery was never reported");
     }
 
     // Catches: the host's CancelledError read as the end of the stream.

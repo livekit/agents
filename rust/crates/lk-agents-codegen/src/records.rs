@@ -1,6 +1,7 @@
 //! The `#[host(record)]` records: their pyo3 conversions, written into the ABI crate
 //! (`lk-agents-abi/src/python/generated/`, one module per ABI subject), and their models, written
-//! into `_generated/<module>.py` as frozen keyword-only dataclasses.
+//! into `_generated/<module>.py` as frozen keyword-only dataclasses. The declared proxies'
+//! `HostProxy` bridges for the in-place exports go into the same modules.
 //!
 //! A record crosses as an instance of its model, never a dict: a struct is one class; a
 //! data-variant enum one class per variant, the class being the tag, plus a union alias; a
@@ -22,22 +23,33 @@ const HEADER: &str = "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `c
 
 /// The conversions: `mod.rs` and one module per subject.
 pub fn rust(decls: &Declarations) -> Result<Vec<Out>, String> {
-    let mut families: Vec<&str> = decls.records.iter().map(|r| r.family.as_str()).collect();
+    let mut families: Vec<&str> = decls
+        .records
+        .iter()
+        .map(|r| r.family.as_str())
+        .chain(decls.proxies.iter().map(|p| p.family.as_str()))
+        .collect();
     families.sort();
     families.dedup();
-    let mut root = format!("{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n\n");
+    let mut root =
+        format!("{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n\n");
     for family in &families {
         root.push_str(&format!("mod {family};\n"));
     }
     root.push_str("\n/// `obj` is not an instance of the model(s) `expected` names.\nfn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {\n    use ::pyo3::types::{PyAnyMethods as _, PyTypeMethods as _};\n    let got = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();\n    ::pyo3::exceptions::PyTypeError::new_err(format!(\"expected {expected}, got {got}\"))\n}\n");
     let mut out = vec![Out { path: "mod.rs".into(), text: root }];
     for family in families {
-        let mut text = format!(
-            "{HEADER}//!\n//! The `{family}` records.\n\nuse pyo3::prelude::*;\n"
-        );
+        let mut text = format!("{HEADER}//!\n//! The `{family}` records.\n");
+        if decls.records.iter().any(|r| r.family == family) {
+            text.push_str("\nuse pyo3::prelude::*;\n");
+        }
         for r in decls.records.iter().filter(|r| r.family == family) {
             text.push_str(&format!("\n// Declared in {}.\n", r.source));
             text.push_str(&record_rust(r)?);
+        }
+        for p in decls.proxies.iter().filter(|p| p.family == family) {
+            text.push_str(&format!("\n// Declared in {}.\n", p.source));
+            text.push_str(&crate::proxy::legacy_bridge(p));
         }
         out.push(Out { path: format!("{family}.rs"), text });
     }
@@ -58,11 +70,16 @@ fn record_rust(r: &RecordDecl) -> Result<String, String> {
                 "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n        Ok(Self {{\n{reads}        }})\n",
                 name = r.name
             );
-            let (pattern, sets) = struct_emits(fields)?;
-            let emit = format!(
-                "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {class_py}.call((), Some(&kwargs))\n",
-                class_py = class_ref(&module, &r.name)
-            );
+            // An extract-only record may hold what never returns to the host (a proxy).
+            let emit = if r.emit {
+                let (pattern, sets) = struct_emits(fields)?;
+                format!(
+                    "        let Self {{ {pattern} }} = self;\n        let kwargs = ::pyo3::types::PyDict::new(py);\n{sets}        {class_py}.call((), Some(&kwargs))\n",
+                    class_py = class_ref(&module, &r.name)
+                )
+            } else {
+                String::new()
+            };
             (extract, emit)
         }
         RecordBody::Variants(variants) => {
@@ -208,11 +225,7 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
                     sets.push_str(&set(f, &f.rust_name, indent)?);
                 }
             }
-            (
-                format!(" {{ {} }}", reads.join(", ")),
-                format!(" {{ {} }}", pattern.join(", ")),
-                sets,
-            )
+            (format!(" {{ {} }}", reads.join(", ")), format!(" {{ {} }}", pattern.join(", ")), sets)
         }
     })
 }
@@ -221,7 +234,9 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
 fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Bool => format!("{v}.extract::<bool>()"),
-        Ty::Int(i) => format!("::lk_agents_abi::python::number_from_py::<{}>({v}, {path:?})", i.rust()),
+        Ty::Int(i) => {
+            format!("::lk_agents_abi::python::number_from_py::<{}>({v}, {path:?})", i.rust())
+        }
         Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?})"),
         Ty::Str => format!("{v}.extract::<::std::string::String>()"),
         Ty::Json => format!("::lk_agents_abi::python::value_from_py({v}, {path:?})"),
@@ -235,8 +250,20 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
             "{v}.cast::<::pyo3::types::PyList>()?.iter().map(|item| {{ let item = &item; {} }}).collect::<PyResult<Vec<_>>>()",
             read(t, "item", path)?
         ),
+        Ty::Map(k, t) => format!(
+            "{v}.cast::<::pyo3::types::PyDict>()?.iter().map(|(key, item)| {{ let (key, item) = (&key, &item); Ok(({}?, {}?)) }}).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()",
+            read(k, "key", path)?,
+            read(t, "item", path)?
+        ),
+        Ty::Set(t) => format!(
+            "{v}.try_iter()?.map(|item| {{ let item = &item?; {} }}).collect::<PyResult<::std::collections::BTreeSet<_>>>()",
+            read(t, "item", path)?
+        ),
         Ty::Record(r) => {
             format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)
+        }
+        Ty::Proxy { rust, .. } => {
+            format!("<dyn {rust} as crate::python::HostProxy>::from_host({v}, None)")
         }
         other => return Err(format!("{path}: `{}` is not a record field", other.rust())),
     })
@@ -253,6 +280,15 @@ fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         ),
         Ty::List(t) => format!(
             "::pyo3::types::PyList::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
+            emit(t, "x")?
+        ),
+        Ty::Map(k, t) => format!(
+            "{{ let d = ::pyo3::types::PyDict::new(py); for (k, x) in {x} {{ d.set_item({}, {})?; }} d.into_any() }}",
+            emit(k, "k")?,
+            emit(t, "x")?
+        ),
+        Ty::Set(t) => format!(
+            "::pyo3::types::PyFrozenSet::new(py, {x}.into_iter().map(|x| PyResult::Ok({})).collect::<PyResult<Vec<_>>>()?)?.into_any()",
             emit(t, "x")?
         ),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
@@ -279,9 +315,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let own: Vec<String> = records
             .iter()
             .flat_map(|r| match &r.body {
-                RecordBody::Variants(vs) => {
-                    std::iter::once(r.name.clone()).chain(vs.iter().map(|v| v.name.clone())).collect::<Vec<_>>()
-                }
+                RecordBody::Variants(vs) => std::iter::once(r.name.clone())
+                    .chain(vs.iter().map(|v| v.name.clone()))
+                    .collect::<Vec<_>>(),
                 _ => vec![r.name.clone()],
             })
             .collect();
@@ -327,7 +363,8 @@ fn model(
     // An emit-only record's derived models (`#[derive(Host)]`) reach the host as dicts.
     let out = r.emit && !r.extract;
     let mut class = |name: &str, doc: &[String], fields: &[&Field]| {
-        let mut s = format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n");
+        let mut s =
+            format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n");
         s.push_str(&docstring(doc, "    "));
         let fields: Vec<&&Field> = fields.iter().filter(|f| !f.skip).collect();
         if fields.is_empty() {
@@ -404,11 +441,24 @@ fn annotation(ty: &Ty, module: &str, own: &[String], out: bool, typing: &mut Imp
         Ty::JsonObject => "dict[str, object]".into(),
         Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, typing)),
         Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, typing)),
+        Ty::Map(k, t) => format!(
+            "dict[{}, {}]",
+            annotation(k, module, own, out, typing),
+            annotation(t, module, own, out, typing)
+        ),
+        Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, out, typing)),
+        Ty::Proxy { host, .. } => {
+            let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
+            typing.add(m, name);
+            name.to_owned()
+        }
         Ty::Record(r) if out && matches!(r.host, HostForm::Model { .. }) => {
             "dict[str, object]".into()
         }
         Ty::Record(r) => match &r.host {
-            HostForm::Record { module: m, name } if m == module && own.contains(name) => name.clone(),
+            HostForm::Record { module: m, name } if m == module && own.contains(name) => {
+                name.clone()
+            }
             HostForm::Record { module: m, name } | HostForm::Model { module: m, name } => {
                 typing.add(&format!(".{m}"), name);
                 name.clone()
