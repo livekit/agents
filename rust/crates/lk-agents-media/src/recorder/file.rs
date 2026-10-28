@@ -19,6 +19,59 @@ pub enum RecordingCommand {
     Finish(Option<f64>),
 }
 
+impl RecordingCommand {
+    /// Refuses non-finite times, negative playback positions and malformed PCM before the command
+    /// is queued.
+    pub fn validate(&self) -> Result<(), RecordingFailure> {
+        let times = |values: &[f64]| {
+            if values.iter().all(|value| value.is_finite()) {
+                Ok(())
+            } else {
+                Err(RecordingFailure::Invalid("non-finite timestamp"))
+            }
+        };
+        match self {
+            RecordingCommand::Input(now, frame) | RecordingCommand::Capture(now, frame) => {
+                times(&[*now])?;
+                if frame.sample_rate == 0
+                    || frame.num_channels == 0
+                    || frame.data.len()
+                        != frame.samples_per_channel as usize * frame.num_channels as usize * 2
+                {
+                    return Err(RecordingFailure::Invalid("PCM frame shape"));
+                }
+                Ok(())
+            }
+            RecordingCommand::Started(at) | RecordingCommand::Flush(at) => times(&[*at]),
+            RecordingCommand::Progress(started_at, offset, duration) => {
+                times(&[*started_at, *offset, *duration])?;
+                if *offset < 0.0 || *duration < 0.0 {
+                    return Err(RecordingFailure::Invalid("negative playback position"));
+                }
+                Ok(())
+            }
+            RecordingCommand::Finished(now, position) => {
+                times(&[*now, *position])?;
+                if *position < 0.0 {
+                    return Err(RecordingFailure::Invalid("negative playback position"));
+                }
+                Ok(())
+            }
+            RecordingCommand::Finish(now) => now.map_or(Ok(()), |now| times(&[now])),
+        }
+    }
+
+    /// The PCM bytes this command retains while queued.
+    pub fn bytes(&self) -> usize {
+        match self {
+            RecordingCommand::Input(_, frame) | RecordingCommand::Capture(_, frame) => {
+                frame.data.len()
+            }
+            _ => 0,
+        }
+    }
+}
+
 /// The per-file work bounds: retained PCM, one segment's PCM and the block every step works in.
 #[derive(Debug, Clone, Copy)]
 pub struct FileLimits {
@@ -39,6 +92,27 @@ pub struct RecordingFile<E: OggOpusEncoder, W: Write> {
     summary: RecordingSummary,
     sample_rate: u32,
     limits: FileLimits,
+}
+
+#[cfg(feature = "ffmpeg")]
+impl RecordingFile<crate::ffmpeg::OggOpusEncoder, std::fs::File> {
+    /// A stereo Ogg/Opus file at `path`, its directory created.
+    pub fn create(
+        path: &std::path::Path,
+        sample_rate: u32,
+        bitrate: u32,
+        t0: Option<f64>,
+        limits: FileLimits,
+    ) -> Result<Self, RecordingFailure> {
+        let io = |error: std::io::Error| RecordingFailure::Io(error.to_string());
+        if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(io)?;
+        }
+        let file = std::fs::File::create(path).map_err(io)?;
+        let encoder = crate::ffmpeg::OggOpusEncoder::new(sample_rate, 2, bitrate)
+            .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
+        Ok(Self::new(encoder, file, sample_rate, t0, limits))
+    }
 }
 
 impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {

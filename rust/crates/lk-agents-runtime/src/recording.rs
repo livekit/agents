@@ -96,14 +96,8 @@ impl SessionRecorder {
         bitrate: u32,
         limits: RecordingLimits,
     ) -> Result<Self, RecordingFailure> {
-        Self::start_with(workers, sample_rate, t0, limits, move || {
-            if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent).map_err(io_failure)?;
-            }
-            let file = std::fs::File::create(path).map_err(io_failure)?;
-            let encoder = lk_agents_media::OggOpusEncoder::new(sample_rate, 2, bitrate)
-                .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
-            Ok((encoder, file))
+        Self::start_with(workers, sample_rate, t0, limits, move |file| {
+            RecordingFile::create(&path, sample_rate, bitrate, t0, file)
         })
     }
 
@@ -119,7 +113,10 @@ impl SessionRecorder {
         E: OggOpusEncoder + Send + 'static,
         W: Write + Send + 'static,
     {
-        let recorder = Arc::new(Self::start_with(workers, sample_rate, t0, limits, open)?);
+        let recorder = Arc::new(Self::start_with(workers, sample_rate, t0, limits, move |file| {
+            let (encoder, writer) = open()?;
+            Ok(RecordingFile::new(encoder, writer, sample_rate, t0, file))
+        })?);
         recorder.ready().await?;
         Ok(recorder)
     }
@@ -129,7 +126,7 @@ impl SessionRecorder {
         sample_rate: u32,
         t0: Option<f64>,
         limits: RecordingLimits,
-        open: impl FnOnce() -> Result<(E, W), RecordingFailure> + Send + 'static,
+        open: impl FnOnce(FileLimits) -> Result<RecordingFile<E, W>, RecordingFailure> + Send + 'static,
     ) -> Result<Self, RecordingFailure>
     where
         E: OggOpusEncoder + Send + 'static,
@@ -174,15 +171,20 @@ impl SessionRecorder {
         let worker_shared = shared.clone();
         let worker = workers
             .try_spawn(MediaWorkerClass::Recording, move || {
-                let (encoder, writer) = match open() {
-                    Ok(opened) => opened,
+                let file = FileLimits {
+                    retained_bytes: limits.retained_bytes,
+                    segment_bytes: limits.segment_bytes,
+                    block_seconds: limits.block_duration.as_secs_f64(),
+                };
+                let file = match open(file) {
+                    Ok(file) => file,
                     Err(error) => {
                         worker_shared.ready.send_replace(Some(Err(error.clone())));
                         return Err(error);
                     }
                 };
                 worker_shared.ready.send_replace(Some(Ok(())));
-                run(encoder, writer, sample_rate, t0, rx, worker_shared)
+                run(file, rx, worker_shared)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         runtime.spawn(async move {
@@ -304,50 +306,14 @@ impl SessionRecorder {
         Ok(())
     }
 
-    fn try_on_input_frame(&self, now: f64, frame: AudioFrame) -> Result<(), RecordingFailure> {
-        validate_frame(now, &frame).map_err(|error| self.fail(error))?;
-        let bytes = frame.data.len();
-        self.submit(Command::Record(RecordingCommand::Input(now, frame)), bytes)
-    }
-
-    fn try_capture_frame(&self, now: f64, frame: AudioFrame) -> Result<(), RecordingFailure> {
-        validate_frame(now, &frame).map_err(|error| self.fail(error))?;
-        let bytes = frame.data.len();
-        self.submit(Command::Record(RecordingCommand::Capture(now, frame)), bytes)
-    }
-
-    fn try_playback_started(&self, created_at: f64) -> Result<(), RecordingFailure> {
-        validate_times(&[created_at]).map_err(|error| self.fail(error))?;
-        self.submit(Command::Record(RecordingCommand::Started(created_at)), 0)
-    }
-
-    fn try_playback_progressed(
-        &self,
-        started_at: f64,
-        offset: f64,
-        duration: f64,
-    ) -> Result<(), RecordingFailure> {
-        validate_times(&[started_at, offset, duration]).map_err(|error| self.fail(error))?;
-        if offset < 0.0 || duration < 0.0 {
-            return Err(self.fail(RecordingFailure::Invalid("negative playback position")));
-        }
-        self.submit(Command::Record(RecordingCommand::Progress(started_at, offset, duration)), 0)
-    }
-
-    fn try_playback_finished(
-        &self,
-        now: f64,
-        playback_position: f64,
-    ) -> Result<(), RecordingFailure> {
-        validate_times(&[now, playback_position]).map_err(|error| self.fail(error))?;
-        if playback_position < 0.0 {
-            return Err(self.fail(RecordingFailure::Invalid("negative playback position")));
-        }
-        self.submit(Command::Record(RecordingCommand::Finished(now, playback_position)), 0)
+    fn record(&self, command: RecordingCommand) -> Result<(), RecordingFailure> {
+        command.validate().map_err(|error| self.fail(error))?;
+        let bytes = command.bytes();
+        self.submit(Command::Record(command), bytes)
     }
 
     pub async fn flush(&self, now: f64) -> Outcome {
-        validate_times(&[now]).map_err(|error| self.fail(error))?;
+        RecordingCommand::Flush(now).validate().map_err(|error| self.fail(error))?;
         let (reply, outcome) = oneshot::channel();
         self.submit(Command::Flush(now, Some(reply)), 0)?;
         match outcome.await {
@@ -357,9 +323,7 @@ impl SessionRecorder {
     }
 
     fn request_finish(&self, now: Option<f64>) -> Result<(), RecordingFailure> {
-        if let Some(now) = now {
-            validate_times(&[now]).map_err(|error| self.fail(error))?;
-        }
+        RecordingCommand::Finish(now).validate().map_err(|error| self.fail(error))?;
         if !self.shared.finishing.swap(true, Ordering::AcqRel) {
             let shared = self.shared.clone();
             let tx = self.tx.clone();
@@ -440,62 +404,30 @@ impl Drop for SessionRecorder {
 
 impl AudioRecorder for SessionRecorder {
     fn on_input_frame(&self, now: f64, frame: &AudioFrame) {
-        let _ = self.try_on_input_frame(now, frame.clone());
+        let _ = self.record(RecordingCommand::Input(now, frame.clone()));
     }
     fn capture_frame(&self, now: f64, frame: &AudioFrame) {
-        let _ = self.try_capture_frame(now, frame.clone());
+        let _ = self.record(RecordingCommand::Capture(now, frame.clone()));
     }
     fn on_playback_started(&self, created_at: f64) {
-        let _ = self.try_playback_started(created_at);
+        let _ = self.record(RecordingCommand::Started(created_at));
     }
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64) {
-        let _ = self.try_playback_progressed(started_at, offset, duration);
+        let _ = self.record(RecordingCommand::Progress(started_at, offset, duration));
     }
     fn on_playback_finished(&self, now: f64, playback_position: f64) {
-        let _ = self.try_playback_finished(now, playback_position);
+        let _ = self.record(RecordingCommand::Finished(now, playback_position));
     }
     fn flush(&self, now: f64) -> Result<(), RecordingFailure> {
         self.submit(Command::Flush(now, None), 0)
     }
 }
 
-fn validate_times(values: &[f64]) -> Result<(), RecordingFailure> {
-    if values.iter().any(|value| !value.is_finite()) {
-        Err(RecordingFailure::Invalid("non-finite timestamp"))
-    } else {
-        Ok(())
-    }
-}
-
-fn validate_frame(now: f64, frame: &AudioFrame) -> Result<(), RecordingFailure> {
-    validate_times(&[now])?;
-    if frame.sample_rate == 0
-        || frame.num_channels == 0
-        || frame.data.len() != frame.samples_per_channel as usize * frame.num_channels as usize * 2
-    {
-        return Err(RecordingFailure::Invalid("PCM frame shape"));
-    }
-    Ok(())
-}
-
-fn io_failure(error: std::io::Error) -> RecordingFailure {
-    RecordingFailure::Io(error.to_string())
-}
-
 fn run<E: OggOpusEncoder, W: Write>(
-    encoder: E,
-    writer: W,
-    sample_rate: u32,
-    t0: Option<f64>,
+    mut file: RecordingFile<E, W>,
     rx: mpsc::Receiver<Queued>,
     shared: Arc<Shared>,
 ) -> Outcome {
-    let limits = FileLimits {
-        retained_bytes: shared.limits.retained_bytes,
-        segment_bytes: shared.limits.segment_bytes,
-        block_seconds: shared.limits.block_duration.as_secs_f64(),
-    };
-    let mut file = RecordingFile::new(encoder, writer, sample_rate, t0, limits);
     let outcome = process(&mut file, rx, &shared);
     if let Err(error) = &outcome {
         shared.fail(error.clone());

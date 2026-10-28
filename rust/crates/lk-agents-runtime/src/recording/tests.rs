@@ -105,13 +105,13 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(0.1, frame(&[1234])).unwrap();
+    recorder.record(RecordingCommand::Input(0.1, frame(&[1234]))).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
     };
     started.await.unwrap();
-    recorder.try_on_input_frame(0.2, frame(&[2345])).unwrap();
+    recorder.record(RecordingCommand::Input(0.2, frame(&[2345]))).unwrap();
     let finishing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.finish(0.2).await })
@@ -124,7 +124,10 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     flushing.await.unwrap().unwrap();
     let summary = finishing.await.unwrap().unwrap();
     assert_eq!(recorder.finish(0.3).await.unwrap(), summary);
-    assert_eq!(recorder.try_on_input_frame(0.4, frame(&[9999])), Err(RecordingFailure::Closed));
+    assert_eq!(
+        recorder.record(RecordingCommand::Input(0.4, frame(&[9999]))),
+        Err(RecordingFailure::Closed)
+    );
     let mut want = lk_agents_media::pcm_bytes(&[1234, 0, 2345, 0]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
     assert_eq!(*bytes.lock().unwrap(), want);
@@ -145,16 +148,16 @@ async fn recording_overflow_releases_pcm_and_preserves_other_work() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(0.1, frame(&[1])).unwrap();
+    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
     };
     started.await.unwrap();
-    recorder.try_on_input_frame(0.2, frame(&[2])).unwrap();
-    recorder.try_on_input_frame(0.3, frame(&[3])).unwrap();
+    recorder.record(RecordingCommand::Input(0.2, frame(&[2]))).unwrap();
+    recorder.record(RecordingCommand::Input(0.3, frame(&[3]))).unwrap();
     assert_eq!(
-        recorder.try_on_input_frame(0.4, frame(&[4])),
+        recorder.record(RecordingCommand::Input(0.4, frame(&[4]))),
         Err(RecordingFailure::Overflow("staging commands"))
     );
     assert!(matches!(
@@ -184,7 +187,7 @@ async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() 
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(0.1, frame(&[1])).unwrap();
+    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
@@ -214,7 +217,7 @@ async fn recording_write_failure_reaches_flush_and_terminal_outcome_once() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(0.1, frame(&[1])).unwrap();
+    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
     let error = recorder.flush(0.1).await.unwrap_err();
     assert!(matches!(&error, RecordingFailure::Io(detail) if detail == "full disk"));
     assert_eq!(recorder.finish(0.1).await, Err(error));
@@ -232,13 +235,13 @@ async fn sequential_playback_segments_release_previous_pcm() {
     })
     .await
     .unwrap();
-    recorder.try_capture_frame(0.0, frame(&[100, 200])).unwrap();
-    recorder.try_playback_started(0.0).unwrap();
-    recorder.try_playback_progressed(0.0, 0.0, 0.2).unwrap();
-    recorder.try_playback_finished(0.2, 0.2).unwrap();
-    recorder.try_capture_frame(0.2, frame(&[300])).unwrap();
-    recorder.try_playback_started(0.2).unwrap();
-    recorder.try_playback_finished(0.3, 0.1).unwrap();
+    recorder.record(RecordingCommand::Capture(0.0, frame(&[100, 200]))).unwrap();
+    recorder.record(RecordingCommand::Started(0.0)).unwrap();
+    recorder.record(RecordingCommand::Progress(0.0, 0.0, 0.2)).unwrap();
+    recorder.record(RecordingCommand::Finished(0.2, 0.2)).unwrap();
+    recorder.record(RecordingCommand::Capture(0.2, frame(&[300]))).unwrap();
+    recorder.record(RecordingCommand::Started(0.2)).unwrap();
+    recorder.record(RecordingCommand::Finished(0.3, 0.1)).unwrap();
     recorder.finish(0.3).await.unwrap();
     let mut want = lk_agents_media::pcm_bytes(&[0, 100, 0, 200, 0, 300]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
@@ -257,7 +260,7 @@ async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(100.1, frame(&[4444])).unwrap();
+    recorder.record(RecordingCommand::Input(100.1, frame(&[4444]))).unwrap();
     let finishing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.finish(100.1).await })
@@ -290,7 +293,7 @@ async fn segment_pcm_limits_fail_recording_and_release_the_buffer() {
         })
         .await
         .unwrap();
-        recorder.try_capture_frame(0.0, frame(&[1, 2, 3])).unwrap();
+        recorder.record(RecordingCommand::Capture(0.0, frame(&[1, 2, 3]))).unwrap();
         assert_eq!(recorder.finish(0.4).await, Err(RecordingFailure::Overflow(field)));
         assert_eq!(recorder.retained_bytes(), 0);
     }
@@ -317,7 +320,7 @@ async fn finalization_preserves_the_input_resamplers_tail() {
         .await
         .unwrap();
         let input = AudioFrame::new(lk_agents_media::pcm_bytes(&[16000; 160]), 16_000, 1, 160);
-        recorder.try_on_input_frame(0.01, input).unwrap();
+        recorder.record(RecordingCommand::Input(0.01, input)).unwrap();
         if flush_before_finish {
             recorder.flush(0.01).await.unwrap();
         }
@@ -356,7 +359,7 @@ async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(0.1, frame(&[1234])).unwrap();
+    recorder.record(RecordingCommand::Input(0.1, frame(&[1234]))).unwrap();
     // A recent microphone is only settled through its most recent frame; the session closes
     // later. Finalization must still extend the timeline through the requested close time.
     assert_eq!(recorder.flush(0.5).await.unwrap().last_flushed, Some(0.1));
@@ -377,9 +380,9 @@ async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
     })
     .await
     .unwrap();
-    recorder.try_on_input_frame(1., frame(&(1..=10).collect::<Vec<_>>())).unwrap();
-    recorder.try_capture_frame(0., frame(&(100..110).collect::<Vec<_>>())).unwrap();
-    recorder.try_playback_progressed(1., 0.2, 0.6).unwrap();
+    recorder.record(RecordingCommand::Input(1., frame(&(1..=10).collect::<Vec<_>>()))).unwrap();
+    recorder.record(RecordingCommand::Capture(0., frame(&(100..110).collect::<Vec<_>>()))).unwrap();
+    recorder.record(RecordingCommand::Progress(1., 0.2, 0.6)).unwrap();
     recorder.finish(2.).await.unwrap();
 
     let mut expected = Vec::new();
@@ -408,16 +411,16 @@ async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() 
     .unwrap();
 
     // Without a start/progress report, the played endpoint determines the anchor and truncation.
-    recorder.try_capture_frame(0., frame(&(100..110).collect::<Vec<_>>())).unwrap();
-    recorder.try_playback_finished(2., 0.6).unwrap();
+    recorder.record(RecordingCommand::Capture(0., frame(&(100..110).collect::<Vec<_>>()))).unwrap();
+    recorder.record(RecordingCommand::Finished(2., 0.6)).unwrap();
     // The next segment has its own offset and honors an explicit start over the fallback anchor.
-    recorder.try_capture_frame(2., frame(&(200..204).collect::<Vec<_>>())).unwrap();
-    recorder.try_playback_started(2.3).unwrap();
-    recorder.try_playback_finished(3., 0.4).unwrap();
+    recorder.record(RecordingCommand::Capture(2., frame(&(200..204).collect::<Vec<_>>()))).unwrap();
+    recorder.record(RecordingCommand::Started(2.3)).unwrap();
+    recorder.record(RecordingCommand::Finished(3., 0.4)).unwrap();
     // A progress report suppresses endpoint fallback for the remaining unplayed samples.
-    recorder.try_capture_frame(3., frame(&(300..304).collect::<Vec<_>>())).unwrap();
-    recorder.try_playback_progressed(3., 0.1, 0.1).unwrap();
-    recorder.try_playback_finished(3.4, 0.4).unwrap();
+    recorder.record(RecordingCommand::Capture(3., frame(&(300..304).collect::<Vec<_>>()))).unwrap();
+    recorder.record(RecordingCommand::Progress(3., 0.1, 0.1)).unwrap();
+    recorder.record(RecordingCommand::Finished(3.4, 0.4)).unwrap();
     recorder.finish(4.).await.unwrap();
 
     let mut expected = vec![0; 80];
