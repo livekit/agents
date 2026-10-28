@@ -23,7 +23,7 @@ import sphn  # type: ignore[import-untyped]
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
 from .log import logger
 from .models import PersonaplexVoice
@@ -350,7 +350,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 http_session = self._realtime_model._ensure_http_session()
 
                 t0 = time.perf_counter()
-                ws_conn = await http_session.ws_connect(ws_url)
+                ws_conn = await utils.http_context.ws_connect(
+                    http_session, ws_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
+                )
                 self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
                 retry_delay = INITIAL_RETRY_DELAY  # reset on successful connect

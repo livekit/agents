@@ -23,7 +23,7 @@ from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
-from livekit.agents.types import NOT_GIVEN, NotGiven, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGiven, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ..log import logger
@@ -744,8 +744,13 @@ class RealtimeSession(
 
                 # Create call and connect to WebSocket
                 http_session = self._realtime_model._ensure_http_session()
-                async with http_session.post(
-                    create_call_url, json=payload, headers=headers
+                async with utils.http_context.request(
+                    http_session,
+                    "POST",
+                    create_call_url,
+                    json=payload,
+                    headers=headers,
+                    conn_options=DEFAULT_API_CONNECT_OPTIONS,
                 ) as resp:
                     resp.raise_for_status()
                     response_json = await resp.json()
@@ -758,7 +763,9 @@ class RealtimeSession(
                     self._send_client_event(SetOutputMediumEvent(medium="text"))
 
                 t0 = time.perf_counter()
-                ws_conn = await http_session.ws_connect(join_url)
+                ws_conn = await utils.http_context.ws_connect(
+                    http_session, join_url, conn_options=DEFAULT_API_CONNECT_OPTIONS
+                )
                 self._report_connection_acquired(time.perf_counter() - t0)
                 self._closing = False
 
