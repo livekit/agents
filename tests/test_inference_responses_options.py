@@ -364,6 +364,21 @@ async def test_model_swap_prewarms_new_pool_when_prewarmed(
     await model.aclose()
 
 
+async def test_model_swap_after_aclose_skips_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _make_ws_llm()
+    prewarmed: list[object] = []
+    monkeypatch.setattr(utils.ConnectionPool, "prewarm", lambda pool: prewarmed.append(pool))
+    model.prewarm()
+    await asyncio.sleep(0)
+    await model.aclose()
+    prewarmed.clear()
+
+    model.update_options(model="openai/gpt-4.1-mini")
+
+    assert prewarmed == []
+    await model.aclose()
+
+
 async def test_model_swap_skips_prewarm_when_never_prewarmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

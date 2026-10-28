@@ -152,6 +152,7 @@ class LLM(llm.LLM):
         self._ws: ResponsesWebsocket | None = None
         self._retired_ws: set[_GatewayResponsesWebsocket] = set()
         self._ws_close_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
         # the gateway bounds upstream silence, so reads only need to outlast its keepalives
         self._stream_idle_timeout: float | None = None
         self._active_streams: int = 0
@@ -198,6 +199,7 @@ class LLM(llm.LLM):
             await self._client.models.list()
 
     async def aclose(self) -> None:
+        self._closed = True
         await super().aclose()
         if self._ws is not None:
             await self._ws.aclose()
@@ -243,8 +245,9 @@ class LLM(llm.LLM):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
 
     def _prewarm_swapped_ws(self, ws: _GatewayResponsesWebsocket) -> None:
-        # prewarm dials a socket, so only replace a warm pool with a warm one
-        if self._prewarm_task is None:
+        # prewarm dials a socket, so only replace a warm pool with a warm one, and never
+        # after aclose(), which nothing would follow to close it
+        if self._closed or self._prewarm_task is None:
             return
         try:
             asyncio.get_running_loop()
