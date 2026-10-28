@@ -68,6 +68,9 @@ stale=$(comm -13 <(echo "$crates") <(echo "$placed" | sort -u))
 [ -z "$twice" ] || fail "crates placed twice: $twice"
 [ -z "$stale" ] || fail "placed crates that are not in the workspace: $stale"
 
+step "fakes' calibration matches its recordings"
+python3 crates/lk-agents-fuzz/corpus/derive.py --check
+
 step "build"
 cargo check -q --workspace --all-targets
 

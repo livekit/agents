@@ -4,12 +4,19 @@ Every number the fakes and the person draw from is an empirical sample here, in 
 taken from what the providers did: `src/corpus.rs` reads `calibration.json` and draws uniformly
 from each list, so a fake's delays are distributed as the real provider's were.
 
-    python3 rust/crates/lk-agents-fuzz/corpus/derive.py      # rewrites calibration.json
+    python3 rust/crates/lk-agents-fuzz/corpus/derive.py           # rewrites calibration.json
+    python3 rust/crates/lk-agents-fuzz/corpus/derive.py --check   # fails if it is stale; writes nothing
+
+Every family, model and quantity must have data: an empty recordings directory, a family nothing
+recorded, or a quantity with no samples fails before calibration.json is touched, except a
+quantity measured after an event the model was never seen to produce (`CONDITIONAL`).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from collections import Counter
 from itertools import pairwise
 from pathlib import Path
@@ -348,9 +355,50 @@ def llm() -> dict:
     return out
 
 
+# Quantities measured only after an event a model may never produce, by the quantity counting
+# that event: empty exactly when the event was never seen (Flux has no duplicate finals, the
+# others no preflights).
+CONDITIONAL = {
+    "final_after_preflight": lambda q: not any(q.get("preflights_per_utterance", [])),
+    "duplicate_final_after": lambda q: q.get("duplicate_share", [0])[0] == 0,
+}
+
+
+def empty(cal: dict) -> list[str]:
+    """The families, models and quantities with no samples, by path."""
+    out = []
+
+    def walk(node: object, path: str, parent: dict) -> None:
+        name = path.rsplit("/", 1)[-1]
+        if isinstance(node, dict):
+            if not node:
+                out.append(path)
+            for k, v in node.items():
+                walk(v, f"{path}/{k}", node)
+        elif isinstance(node, list) and not node:
+            if not (name in CONDITIONAL and CONDITIONAL[name](parent)):
+                out.append(path)
+
+    for family, node in cal.items():
+        walk(node, family, {})
+    return out
+
+
 def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    p.add_argument("--check", action="store_true", help="compare, write nothing")
+    args = p.parse_args()
     cal = {"realtime": realtime(), "stt": stt(), "tts": tts(), "llm": llm()}
-    (HERE / "calibration.json").write_text(json.dumps(cal, indent=1) + "\n")
+    if missing := empty(cal):
+        sys.exit(f"derive: no samples for {', '.join(missing)}; calibration.json left as it is")
+    text = json.dumps(cal, indent=1) + "\n"
+    target = HERE / "calibration.json"
+    if args.check:
+        if target.read_text() != text:
+            sys.exit("derive: calibration.json is stale; rerun derive.py and commit it")
+        print("calibration.json matches the recordings")
+        return
+    target.write_text(text)
     print(
         json.dumps(
             {
