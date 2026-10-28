@@ -200,11 +200,20 @@ pub struct RunnerCore {
     held: Option<(MediaFrame, Option<f64>)>,
     /// The audio frame being pushed, and its duration: reported once the push returns.
     pushing: Option<f64>,
-    /// `_playback_position`, `_audio_playing`.
+    /// `_playback_position`.
     position: f64,
-    playing: bool,
-    /// Each clear in flight, and whether audio was playing when it arrived.
+    /// The reference's `_audio_playing`, counted: the segments whose audio went into the generator
+    /// and whose end has not come out of it. The generator holds a segment's end while the next
+    /// segment's audio is read, and one flag for both reported the first and lost the second.
+    owed: u32,
+    /// The segment the receiver is handing over has had audio.
+    reading: bool,
+    /// Each clear in flight, and whether a segment was owed a report when it arrived.
     clears: BTreeMap<u64, bool>,
+    /// A clear cut the segment the receiver was handing over: its end, read before any new
+    /// audio, is the cut segment's, whose finish the clear reported. The reference pushes it on to
+    /// the generator, where it reports the next segment finished before it played.
+    stale_end: bool,
     next_clear: u64,
     /// How the loops ended, as `asyncio.gather` sees them: the first failure, else both done.
     finished: u8,
@@ -227,8 +236,10 @@ impl RunnerCore {
             held: None,
             pushing: None,
             position: 0.0,
-            playing: false,
+            owed: 0,
+            reading: false,
             clears: BTreeMap::new(),
+            stale_end: false,
             next_clear: 0,
             finished: 0,
             failed: None,
@@ -277,7 +288,8 @@ impl RunnerCore {
             Event::ClearBuffer if !self.cut() => {
                 let clear = self.next_clear;
                 self.next_clear += 1;
-                self.clears.insert(clear, std::mem::take(&mut self.playing));
+                self.clears.insert(clear, std::mem::take(&mut self.owed) > 0);
+                self.stale_end = std::mem::take(&mut self.reading);
                 out.push(Effect::Io(IoOp::ClearGenerator { clear }));
             }
             Event::GeneratorCleared { clear, result } if !self.cut() => {
@@ -296,14 +308,23 @@ impl RunnerCore {
                 Err(e) => self.loop_ended(true, Err(e), &mut out),
             },
             Event::Audio(result) if !self.cut() => match result {
+                Ok(Some(AvatarFrame::SegmentEnd)) if std::mem::take(&mut self.stale_end) => {
+                    out.push(Effect::Io(IoOp::NextAudio));
+                }
                 Ok(Some(item)) => {
                     let frame = match item {
                         AvatarFrame::Audio(frame) => {
-                            self.playing = true;
+                            if !std::mem::replace(&mut self.reading, true) {
+                                self.owed += 1;
+                            }
+                            self.stale_end = false;
                             Some(MediaFrame::Audio(frame))
                         }
                         AvatarFrame::Video(frame) => Some(MediaFrame::Video(frame)),
-                        AvatarFrame::SegmentEnd => None,
+                        AvatarFrame::SegmentEnd => {
+                            self.reading = false;
+                            None
+                        }
                     };
                     out.push(Effect::Io(IoOp::PushAudio(frame)));
                 }
@@ -321,7 +342,8 @@ impl RunnerCore {
             Event::Frame(result) if !self.cut() => match result {
                 Ok(Some(AvatarFrame::SegmentEnd)) => {
                     // the agent hears the segment finished; the forwarding goes on
-                    if std::mem::take(&mut self.playing) {
+                    if self.owed > 0 {
+                        self.owed -= 1;
                         let position = std::mem::take(&mut self.position);
                         out.push(Effect::Io(IoOp::ReportFinished { position, interrupted: false }));
                     }

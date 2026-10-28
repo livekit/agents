@@ -103,6 +103,44 @@ fn a_clear_reports_the_cut_segment_after_the_generator_cleared() {
     );
 }
 
+// Catches: the cut segment's end, read after a clear, reaching the generator once the next
+// segment's audio set the runner playing: the next segment reported finished before it played
+// (survey seed 7462; the reference has the race).
+#[test]
+fn a_cut_segments_end_after_a_clear_is_not_the_next_segments() {
+    let mut core = running();
+    core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
+    core.handle(Event::ClearBuffer, Ts::ZERO);
+    // the receiver hands over the cut stream's end: it goes no further
+    let stale = core.handle(Event::Audio(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    assert_eq!(ops(&stale), vec![IoOp::NextAudio]);
+    // the next segment's audio and its own end go through
+    let next = core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(2, 0.1))))), Ts::ZERO);
+    assert_eq!(ops(&next), vec![IoOp::PushAudio(Some(MediaFrame::Audio(pcm(2, 0.1))))]);
+    let end = core.handle(Event::Audio(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+    assert_eq!(ops(&end), vec![IoOp::PushAudio(None)]);
+}
+
+// Catches: one playing flag for a generator holding two segments: the first segment's end, out
+// after the second segment's audio was read, took the flag and the second was never reported
+// (survey seed 32394; the reference has the race).
+#[test]
+fn back_to_back_segments_are_each_reported_finished() {
+    let mut core = running();
+    let read = |core: &mut RunnerCore, item| core.handle(Event::Audio(Ok(Some(item))), Ts::ZERO);
+    read(&mut core, AvatarFrame::Audio(pcm(1, 0.1)));
+    read(&mut core, AvatarFrame::SegmentEnd);
+    read(&mut core, AvatarFrame::Audio(pcm(2, 0.1)));
+    read(&mut core, AvatarFrame::SegmentEnd);
+    for _ in 0..2 {
+        let end = core.handle(Event::Frame(Ok(Some(AvatarFrame::SegmentEnd))), Ts::ZERO);
+        assert!(
+            ops(&end).iter().any(|op| matches!(op, IoOp::ReportFinished { interrupted: false, .. })),
+            "{end:?}"
+        );
+    }
+}
+
 // Catches: `wait_for_complete` answered before both loops end, or not at the first failure.
 #[test]
 fn wait_for_complete_is_gather() {
