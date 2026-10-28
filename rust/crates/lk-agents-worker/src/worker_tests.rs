@@ -4,6 +4,7 @@ use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -42,10 +43,13 @@ struct Wire {
 }
 
 struct ScriptedTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     script: Mutex<std::collections::VecDeque<Step>>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     wire: Arc<Mutex<Wire>>,
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct Sink(Arc<Mutex<Wire>>);
 
 #[async_trait]
@@ -94,6 +98,7 @@ impl WorkerTransport for ScriptedTransport {
 #[derive(Default)]
 struct LoadHost {
     user: Option<f32>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     /// How many times `load_fnc` was asked.
     user_calls: Arc<Mutex<u32>>,
 }
@@ -154,10 +159,17 @@ fn register_message(worker_id: &str) -> Result<ServerMessage, TransportError> {
 
 type Scripted = Worker<ScriptedTransport, LoadHost, FrozenClock>;
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn conn(steps: Vec<Step>, max_retry: u32) -> (Scripted, Arc<Mutex<Wire>>, WorkerHandle) {
-    conn_with(steps, max_retry, WorkerConfig { ws_url: "wss://gw".into(), ..Default::default() }, LoadHost::default())
+    conn_with(
+        steps,
+        max_retry,
+        WorkerConfig { ws_url: "wss://gw".into(), ..Default::default() },
+        LoadHost::default(),
+    )
 }
 
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn conn_with(
     steps: Vec<Step>,
     max_retry: u32,
@@ -174,6 +186,7 @@ fn conn_with(
 // The connection itself
 
 // Catches: the register message not being the first thing written to the socket.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn register_is_the_first_message_written_and_the_worker_id_lands() {
     let (mut c, wire, _h) = conn(vec![Step::Serves(vec![register_message("W-7")])], 0);
@@ -201,6 +214,7 @@ async fn max_retry_two_means_three_connect_attempts() {
 }
 
 // Catches: treating a mid-session close as fatal instead of reconnecting.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn a_closed_connection_reconnects_and_the_machine_is_told() {
     let (mut c, wire, _h) = conn(
@@ -221,6 +235,7 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
 // Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
 // reference resets it on each connect): with `max_retry = 1`, an outage after a recovered one
 // still gets its retry.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn a_connection_restores_the_retry_budget() {
     let (mut c, wire, _h) = conn(
@@ -240,6 +255,7 @@ async fn a_connection_restores_the_retry_budget() {
 }
 
 // Catches: `Drain` not reaching the machine while `run()` is in flight.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn drain_reaches_a_running_connection_from_another_task() {
     let (mut c, _wire, h) = conn(vec![Step::Serves(vec![register_message("W-1")])], 0);
@@ -254,6 +270,7 @@ async fn drain_reaches_a_running_connection_from_another_task() {
 }
 
 // Catches: `Close` being ignored during the reconnect backoff.// Catches: `Close` being ignored during the reconnect backoff.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn close_during_the_reconnect_backoff_stops_the_ladder() {
     // enough failures to exhaust patience if Close were ignored
@@ -275,6 +292,7 @@ async fn close_during_the_reconnect_backoff_stops_the_ladder() {
 // Catches: the idle-process target being computed and then dropped before it reaches the handle,
 // a snapshot read stealing it from the next reader, or devmode's infinite threshold ("leave the
 // pool alone") turned into a target of zero.
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn registering_leaves_the_idle_process_target_on_the_handle() {
     let prod = WorkerConfig { ws_url: "wss://gw".into(), ..Default::default() };
@@ -297,7 +315,11 @@ async fn registering_leaves_the_idle_process_target_on_the_handle() {
 
 fn load_conn(host: LoadHost) -> (Scripted, WorkerHandle) {
     // Finite, so `worker_load` is actually compared against something (devmode's is `inf`).
-    let cfg = WorkerConfig { ws_url: "wss://gw".into(), load_threshold: EnvOption::Fixed(0.7), ..Default::default() };
+    let cfg = WorkerConfig {
+        ws_url: "wss://gw".into(),
+        load_threshold: EnvOption::Fixed(0.7),
+        ..Default::default()
+    };
     let (c, _wire, h) = conn_with(vec![], 0, cfg, host);
     (c, h)
 }
@@ -314,6 +336,7 @@ async fn no_user_load_function_means_the_core_samples_for_itself() {
 }
 
 // Catches: the user's `load_fnc` being ignored for the CPU reading, or asked twice per sample.
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn a_user_load_function_wins_and_is_asked_exactly_once() {
     let user_calls = Arc::new(Mutex::new(0));
@@ -329,27 +352,36 @@ async fn a_user_load_function_wins_and_is_asked_exactly_once() {
 struct TestClock(tokio::time::Instant);
 #[async_trait]
 impl Clock for TestClock {
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
     fn now(&self) -> Ts {
         Ts::from_nanos(self.0.elapsed().as_nanos() as u64)
     }
     fn wall(&self) -> SystemTime {
         SystemTime::UNIX_EPOCH
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
     async fn wait_until(&self, at: Ts) {
         tokio::time::sleep(at.saturating_duration_since(self.now())).await;
     }
 }
 
 struct ChannelTransport {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     incoming:
         Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Arc<std::sync::atomic::AtomicUsize>,
 }
 struct ChannelSink {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Arc<std::sync::atomic::AtomicUsize>,
 }
 #[async_trait]
@@ -364,6 +396,7 @@ impl WorkerSink for ChannelSink {
         self.closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
+#[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
 struct ChannelStream(tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>);
 #[async_trait]
 impl WorkerStream for ChannelStream {
@@ -402,11 +435,14 @@ impl WorkerTransport for ChannelTransport {
 
 /// Holds decisions and launches at explicit gates so tests control completion order.
 struct GatedHost {
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     started: tokio::sync::mpsc::UnboundedSender<&'static str>,
     decisions: Arc<tokio::sync::Semaphore>,
     launches: Arc<tokio::sync::Semaphore>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     dropped: Arc<std::sync::atomic::AtomicUsize>,
 }
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 struct OperationGuard(Arc<std::sync::atomic::AtomicUsize>);
 impl Drop for OperationGuard {
     fn drop(&mut self) {
@@ -436,21 +472,29 @@ impl WorkerHost for GatedHost {
 }
 
 struct RuntimeRig {
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     stall_writes: Arc<std::sync::atomic::AtomicBool>,
     runtime: Worker<ChannelTransport, GatedHost, TestClock>,
     handle: WorkerHandle,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     peer: tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     sent: tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     started: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
     decisions: Arc<tokio::sync::Semaphore>,
     launches: Arc<tokio::sync::Semaphore>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     dropped: Arc<std::sync::atomic::AtomicUsize>,
+    #[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
     closed: Arc<std::sync::atomic::AtomicUsize>,
 }
 fn runtime_rig() -> RuntimeRig {
     runtime_rig_with_retry(0)
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
+#[allow(clippy::disallowed_types, reason = "S0: existing test harness live resources")]
 fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
     let stall_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
@@ -510,7 +554,10 @@ fn assignment_message(id: &str) -> ServerMessage {
         })),
     }
 }
+#[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 async fn until_sent(
+    #[allow(clippy::disallowed_types, reason = "S0: test harness runtime resource")]
     sent: &mut tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>,
     predicate: impl Fn(&protocol::WorkerMessage) -> bool,
 ) {
@@ -525,6 +572,7 @@ async fn until_sent(
     .expect("expected worker message");
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn slow_decisions_do_not_block_other_requests_status_timers_or_close() {
     let RuntimeRig { mut runtime, handle, peer, mut sent, mut started, dropped, .. } =
@@ -550,6 +598,7 @@ async fn slow_decisions_do_not_block_other_requests_status_timers_or_close() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn drain_timeout_is_reported_while_a_host_decision_is_pending() {
     let RuntimeRig { mut runtime, handle, peer, mut started, sent: _sent, .. } = runtime_rig();
@@ -569,6 +618,7 @@ async fn drain_timeout_is_reported_while_a_host_decision_is_pending() {
     task.await.unwrap().unwrap();
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn slow_launch_allows_status_updates_and_drain_waits_for_early_job_completion() {
     let RuntimeRig {
@@ -617,6 +667,7 @@ async fn registration_failure_closes_the_transport_and_emits_stopped() {
     assert!(handle.send(WorkerCommand::Close).is_err());
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn close_during_registration_does_not_wait_for_the_peer() {
     let RuntimeRig { mut runtime, handle, peer: _peer, mut sent, closed, .. } = runtime_rig();
@@ -640,6 +691,8 @@ impl WorkerTransport for HangingTransport {
         std::future::pending().await
     }
 }
+#[allow(clippy::disallowed_macros, reason = "S0: existing test harness live resources")]
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn closing_cancels_an_unfinished_dial() {
     let (mut runtime, handle) = Worker::with_components(
@@ -663,6 +716,7 @@ async fn closing_cancels_an_unfinished_dial() {
     assert_eq!(handle.snapshot().finished.as_deref(), Some("closed"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn dropping_command_handles_does_not_starve_registration_deadlines() {
     let RuntimeRig { mut runtime, handle, peer: _peer, sent: _sent, closed, .. } = runtime_rig();
@@ -696,6 +750,7 @@ async fn dropping_runtime_notifies_waiters_and_closes_command_queue() {
     assert!(handle.send(WorkerCommand::Close).is_err());
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn a_stalled_write_after_registration_expires_and_closes_the_connection() {
     let RuntimeRig { mut runtime, handle, peer, sent: _sent, closed, stall_writes, .. } =
@@ -717,6 +772,7 @@ async fn a_stalled_write_after_registration_expires_and_closes_the_connection() 
     assert_eq!(handle.snapshot().finished.as_deref(), Some(error.as_str()));
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: existing test harness live resources")]
 #[tokio::test(start_paused = true)]
 async fn disconnect_cancels_pending_host_decisions_before_reconnect_finishes() {
     let RuntimeRig { mut runtime, handle, peer, mut started, sent: _sent, dropped, .. } =
@@ -740,12 +796,63 @@ async fn disconnect_cancels_pending_host_decisions_before_reconnect_finishes() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_full_command_queue_returns_the_unsent_command() {
-    let RuntimeRig { runtime: _runtime, handle, .. } = runtime_rig();
-    for _ in 0..64 {
-        handle.send(WorkerCommand::Close).unwrap();
+async fn worker_command_saturation_control() {
+    let (mut worker, _, handle) = conn(vec![Step::Serves(vec![register_message("W")])], 0);
+    for index in 0..64 {
+        handle
+            .send(WorkerCommand::JobStatus {
+                job_id: format!("job-{index}"),
+                status: protocol::JobStatus::JsRunning,
+            })
+            .unwrap();
     }
-    let command = WorkerCommand::Drain { timeout: Some(Duration::from_secs(3)) };
-    assert_eq!(handle.send(command.clone()), Err(command));
+    assert!(
+        handle
+            .send(WorkerCommand::JobStatus {
+                job_id: "overflow".into(),
+                status: protocol::JobStatus::JsRunning,
+            })
+            .is_err()
+    );
+    assert!(
+        handle.send(WorkerCommand::Drain { timeout: None }).is_ok(),
+        "drain needs reserved admission"
+    );
+    assert!(handle.send(WorkerCommand::Close).is_ok(), "close needs reserved admission");
+    worker.run().await.unwrap();
+    assert_eq!(handle.snapshot().finished.as_deref(), Some("closed"));
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+#[tokio::test(start_paused = true)]
+async fn worker_sampler_off_loop() {
+    let permit = crate::worker::WORKER_IO_SLOTS.acquire_many(4).await.unwrap();
+    let (mut worker, _, handle) = conn(vec![Step::Serves(vec![register_message("ready")])], 0);
+    let run = worker.run();
+    tokio::pin!(run);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while handle.snapshot().worker_id != "ready" {
+            assert!(futures_util::poll!(&mut run).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("CPU admission must not stall registration");
+    handle.send(WorkerCommand::Drain { timeout: None }).unwrap();
+    handle.send(WorkerCommand::Close).unwrap();
+    tokio::time::timeout(Duration::from_millis(2), run)
+        .await
+        .expect("close must not wait for a sampler admission")
+        .unwrap();
+    assert_eq!(handle.snapshot().drain_outcome.as_deref(), Some("finished"));
+    drop(permit);
+}
+
+#[tokio::test(start_paused = true)]
+async fn accepting_tcp_without_registering_does_not_restore_the_retry_budget() {
+    let (mut worker, wire, _) = conn(vec![Step::Serves(vec![]), Step::Serves(vec![])], 1);
+    let error = worker.run().await.unwrap_err();
+    assert!(matches!(&error, RuntimeError::RetriesExhausted { retries: 1, .. }));
+    assert_eq!(wire.lock().unwrap().attempts, 2, "only registration restores the retry budget");
+    assert!(error.to_string().contains("registration timed out"));
+}

@@ -36,7 +36,6 @@ pub struct CpuMonitor {
     kind: CpuMonitorKind,
     cpus: f32,
     source: Source,
-    primed: bool,
 }
 
 /// A cgroup usage counter differenced against the previous call, or `sysinfo`'s per-CPU counters.
@@ -48,7 +47,7 @@ enum Source {
 /// `utils/hw/cpu.py`'s three monitors as one. Starts no threads, so it is safe before core init.
 #[lk_agents_abi::host(object(pid = false))]
 impl CpuMonitor {
-    #[host(new)]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         let kind = detect();
         let env = cpu_count_from_env(std::env::var(NUM_CPUS_ENV).ok().as_deref());
@@ -79,7 +78,7 @@ impl CpuMonitor {
                 Source::Host { system: sysinfo::System::new(), primed: false },
             ),
         };
-        CpuMonitor { kind, cpus, source, primed: false }
+        CpuMonitor { kind, cpus, source }
     }
 
     /// Which monitor was picked.
@@ -94,6 +93,7 @@ impl CpuMonitor {
         self.cpus
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Busy fraction since the previous call, `0.0..=1.0`, non-blocking. `None` on the first
     /// sample or an unreadable cgroup counter: keep the previous estimate.
     pub fn cpu_percent(&mut self) -> Option<f32> {
@@ -123,19 +123,6 @@ impl CpuMonitor {
             }
         }
     }
-
-    /// `cpu_percent(interval)`: the busy fraction over the next `interval` seconds, sleeping the
-    /// calling thread (the binding releases the GIL); the first call primes the counter. `None`
-    /// means a cgroup file became unreadable: keep the last value rather than reading it as `0.0`.
-    #[host(method(name = "cpu_percent", detach, defaults(interval = 0.5)))]
-    pub fn cpu_percent_over(&mut self, interval: f64) -> Option<f32> {
-        if !self.primed {
-            self.cpu_percent();
-            self.primed = true;
-        }
-        std::thread::sleep(std::time::Duration::from_secs_f64(interval.max(0.0)));
-        self.cpu_percent()
-    }
 }
 
 impl Default for CpuMonitor {
@@ -164,7 +151,8 @@ mod tests {
     // `cpu_count_v2` hiding a fractional limit. The prod default is this rule at an unbounded count.
     #[test]
     fn the_idle_process_target_is_capped_at_four_and_floored_at_one() {
-        for (cpus, want) in [(32.0, 4), (f32::INFINITY, 4), (4.0, 4), (3.0, 3), (0.1, 1), (0.0, 0)] {
+        for (cpus, want) in [(32.0, 4), (f32::INFINITY, 4), (4.0, 4), (3.0, 3), (0.1, 1), (0.0, 0)]
+        {
             assert_eq!(idle_process_target(cpus), want, "{cpus}");
         }
         assert_eq!(idle_process_target(cpu_count_v2(None, "50000 100000", 8.0)), 1);

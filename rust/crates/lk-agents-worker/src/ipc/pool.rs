@@ -1,28 +1,27 @@
-//! The warm process pool (`ipc/proc_pool.py`'s `ProcPool`): how many processes to keep warm, which
-//! one a job takes, and the retries when a spawn or a launch fails. Making an executor, and each
-//! of its steps (start, initialize, launch, close, join), stay with the host.
+//! Async execution for the allocation policy in `pool_state`.
+//!
+//! The adapter owns resources, tasks and notifications. Admission, eligibility, retries and
+//! drain decisions belong exclusively to `PoolState`; this module can move to runtime intact.
 
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{Notify, Semaphore, watch};
+use futures_util::FutureExt;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 use super::lock;
 
-/// At most this many processes initialize at once (`MAX_CONCURRENT_INITIALIZATIONS`): the CPU
-/// count (the cgroup quota's, rounded up), at most 4.
-pub fn max_concurrent_initializations() -> usize {
-    (crate::CpuMonitor::new().cpu_count().ceil() as usize).clamp(1, 4)
-}
+#[path = "pool_state.rs"]
+mod state;
+pub use state::{
+    MAX_ACQUIRE_ATTEMPTS, PoolAdmissionError, PoolCleanupObservation, PoolEffect, PoolFailure,
+    PoolInput, PoolJoinOutcome, PoolLimits, PoolState, ProcessId, ProcessPhase, REFILL_INTERVAL,
+    ReservationId, ReservationState,
+};
 
-const MAX_ACQUIRE_ATTEMPTS: u32 = 3;
-const MAX_LAUNCH_ATTEMPTS: u32 = 3;
-/// How often the pool tops the warm processes up.
-const REFILL_INTERVAL: Duration = Duration::from_millis(100);
-
-/// The pool's events, as `ProcPool` emits them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolEvent {
     Created,
@@ -30,21 +29,26 @@ pub enum PoolEvent {
     Ready,
     Closed,
     JobLaunched,
+    CleanupIncomplete,
+    JoinFailed,
+    ExitFailed,
 }
 
 impl PoolEvent {
     pub fn as_str(self) -> &'static str {
         match self {
-            PoolEvent::Created => "process_created",
-            PoolEvent::Started => "process_started",
-            PoolEvent::Ready => "process_ready",
-            PoolEvent::Closed => "process_closed",
-            PoolEvent::JobLaunched => "process_job_launched",
+            Self::Created => "process_created",
+            Self::Started => "process_started",
+            Self::Ready => "process_ready",
+            Self::Closed => "process_closed",
+            Self::JobLaunched => "process_job_launched",
+            Self::CleanupIncomplete => "process_cleanup_incomplete",
+            Self::JoinFailed => "process_join_failed",
+            Self::ExitFailed => "process_exit_failed",
         }
     }
 }
 
-/// What the pool asks of its host: the executors and their steps.
 #[async_trait::async_trait]
 pub trait PoolHost: Send + Sync + 'static {
     type Proc: Clone + PartialEq + Send + Sync + 'static;
@@ -55,10 +59,19 @@ pub trait PoolHost: Send + Sync + 'static {
     async fn start(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
     async fn initialize(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
     async fn launch(&self, proc: &Self::Proc, job: &Self::Job) -> Result<(), Self::Error>;
-    async fn close(&self, proc: &Self::Proc);
-    async fn join(&self, proc: &Self::Proc);
+    async fn close(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
+    fn close_failed(&self, proc: &Self::Proc, error: Self::Error);
+    fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
+        crate::diagnostics::emit(
+            log::Level::Error,
+            format!("process pool cleanup incomplete: {observation:?}"),
+        );
+    }
+    async fn wait_exit(&self, proc: &Self::Proc) -> Result<(), Self::Error>;
+    fn exit_failed(&self, proc: &Self::Proc, error: Self::Error);
+    async fn join(&self, proc: &Self::Proc) -> Result<PoolJoinOutcome, Self::Error>;
+    fn join_failed(&self, proc: &Self::Proc, error: Self::Error);
     fn emit(&self, event: PoolEvent, proc: &Self::Proc);
-    /// A process failed to start or initialize ("error initializing process").
     fn init_failed(&self, proc: &Self::Proc, error: Self::Error);
 }
 
@@ -66,101 +79,103 @@ pub trait PoolHost: Send + Sync + 'static {
 pub struct PoolOptions {
     pub num_idle_processes: usize,
     pub initialize_timeout: Duration,
+    pub close_timeout: Duration,
 }
 
 struct State<P> {
-    warmed: VecDeque<P>,
-    executors: Vec<P>,
-    /// The processes a job was launched on, until they exited.
-    launched: Vec<P>,
-    /// Spawn tasks still initializing their process.
-    spawning: usize,
-    waiting: usize,
-    target_idle: usize,
-    started: bool,
+    allocation: PoolState,
+    executors: BTreeMap<ProcessId, P>,
     tasks: Vec<JoinHandle<()>>,
+    next_request: u64,
+    now: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Readiness {
+    Pending,
+    Ready,
+    Closed,
 }
 
 struct Inner<H: PoolHost> {
     host: H,
     opts: PoolOptions,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<State<H::Proc>>,
-    /// A process was warmed or a spawn ended: an acquire looks again.
     changed: Notify,
-    idle_ready: watch::Sender<bool>,
+    idle_ready: watch::Sender<Readiness>,
     closed: watch::Sender<bool>,
-    init: Semaphore,
+    close_ready: watch::Sender<bool>,
 }
 
-/// Why `launch_job` raised.
 #[derive(Debug)]
 pub enum LaunchError<E> {
-    /// Every attempt's spawns failed to initialize.
     NoProcess,
-    /// The last attempt's launch failed with the host's error.
+    AcquireExhausted { attempts: u32 },
     Launch(E),
+    Admission(PoolAdmissionError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolStartError {
+    Closed,
+    WarmupTimedOut { ready: usize, required: usize },
+}
+
+impl std::fmt::Display for PoolStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed => f.write_str("process pool closed before becoming ready"),
+            Self::WarmupTimedOut { ready, required } => {
+                write!(f, "process pool warmup timed out: {ready} of {required} processes ready")
+            }
+        }
+    }
 }
 
 pub struct ProcPool<H: PoolHost>(Arc<Inner<H>>);
 
-/// A launch waiting for a process, until it got one or was dropped.
-struct Waiting<'a, H: PoolHost>(&'a ProcPool<H>);
-
-impl<'a, H: PoolHost> Waiting<'a, H> {
-    fn new(pool: &'a ProcPool<H>) -> Self {
-        lock(&pool.0.state).waiting += 1;
-        Self(pool)
-    }
-}
-
-impl<H: PoolHost> Drop for Waiting<'_, H> {
-    fn drop(&mut self) {
-        lock(&self.0.0.state).waiting -= 1;
-    }
-}
-
-/// A process a launch took from the warm ones: closed when the launch is dropped before it ran.
-struct Taken<H: PoolHost> {
+struct Waiting<H: PoolHost> {
     pool: ProcPool<H>,
-    proc: Option<H::Proc>,
+    request: ReservationId,
 }
 
-impl<H: PoolHost> Drop for Taken<H> {
+impl<H: PoolHost> Drop for Waiting<H> {
     fn drop(&mut self) {
-        let (Some(proc), Ok(rt)) = (self.proc.take(), tokio::runtime::Handle::try_current()) else {
-            return;
-        };
-        let pool = self.pool.clone();
-        let close = rt.spawn(async move { pool.0.host.close(&proc).await });
-        self.pool.track(close);
+        self.pool.handle(PoolInput::Cancel(self.request));
     }
 }
 
 impl<H: PoolHost> Clone for ProcPool<H> {
     fn clone(&self) -> Self {
-        ProcPool(self.0.clone())
+        Self(self.0.clone())
     }
 }
 
 impl<H: PoolHost> ProcPool<H> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new(host: H, opts: PoolOptions) -> Self {
-        ProcPool(Arc::new(Inner {
+        // CPU discovery is runtime configuration; constructing a pool performs no filesystem I/O.
+        let limits = PoolLimits {
+            idle_processes: opts.num_idle_processes,
+            concurrent_initializations: 4,
+            pending_jobs: 64,
+            cleanup_timeout: opts.close_timeout * 3 + super::supervisor::KILL_GRACE,
+        };
+        Self(Arc::new(Inner {
             host,
             opts,
             state: Mutex::new(State {
-                warmed: VecDeque::new(),
-                executors: Vec::new(),
-                launched: Vec::new(),
-                spawning: 0,
-                waiting: 0,
-                target_idle: opts.num_idle_processes,
-                started: false,
+                allocation: PoolState::new(limits),
+                executors: BTreeMap::new(),
                 tasks: Vec::new(),
+                next_request: 0,
+                now: Duration::ZERO,
             }),
             changed: Notify::new(),
-            idle_ready: watch::channel(false).0,
+            idle_ready: watch::channel(Readiness::Pending).0,
             closed: watch::channel(false).0,
-            init: Semaphore::new(max_concurrent_initializations()),
+            close_ready: watch::channel(false).0,
         }))
     }
 
@@ -169,45 +184,85 @@ impl<H: PoolHost> ProcPool<H> {
     }
 
     pub fn processes(&self) -> Vec<H::Proc> {
-        lock(&self.0.state).executors.clone()
+        lock(&self.0.state).executors.values().cloned().collect()
     }
 
     pub fn jobs_waiting(&self) -> usize {
-        lock(&self.0.state).waiting
+        lock(&self.0.state).allocation.waiting()
     }
 
     pub fn target_idle(&self) -> usize {
-        lock(&self.0.state).target_idle
+        lock(&self.0.state).allocation.target_idle()
     }
 
     pub fn set_target_idle(&self, n: usize) {
-        lock(&self.0.state).target_idle = n;
+        self.handle(PoolInput::TargetIdle(n));
     }
 
     fn track(&self, task: JoinHandle<()>) {
-        let mut st = lock(&self.0.state);
-        st.tasks.retain(|t| !t.is_finished());
-        st.tasks.push(task);
+        let completed = {
+            let mut state = lock(&self.0.state);
+            let (completed, active) = std::mem::take(&mut state.tasks)
+                .into_iter()
+                .partition::<Vec<_>, _>(|task| task.is_finished());
+            state.tasks = active;
+            state.tasks.push(task);
+            completed
+        };
+        for task in completed {
+            if let Some(Err(error)) = task.now_or_never() {
+                crate::diagnostics::emit(
+                    log::Level::Error,
+                    format!("process pool task failed: {error}"),
+                );
+            }
+        }
     }
 
-    /// Starts topping up the warm processes and waits (bounded by the initialize timeout + 2 s)
-    /// for the first ones.
-    pub async fn start(&self) {
-        {
-            let mut st = lock(&self.0.state);
-            if st.started {
-                return;
+    fn handle(&self, input: PoolInput) {
+        let effects = {
+            let mut state = lock(&self.0.state);
+            let now = state.now;
+            let effects = state.allocation.handle(input, now);
+            if state.allocation.is_closed() {
+                self.0.closed.send_replace(true);
+                self.0.idle_ready.send_replace(Readiness::Closed);
+            } else if state.allocation.ready() >= self.0.opts.num_idle_processes {
+                self.0.idle_ready.send_replace(Readiness::Ready);
             }
-            st.started = true;
+            effects
+        };
+        self.0.changed.notify_waiters();
+        self.spawn(effects);
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    pub async fn start(&self) -> Result<(), PoolStartError> {
+        let (start, effects) = {
+            let mut state = lock(&self.0.state);
+            if state.allocation.is_closed() {
+                return Err(PoolStartError::Closed);
+            }
+            let start = !state.allocation.is_started();
+            let now = state.now;
+            (start, state.allocation.handle(PoolInput::Start, now))
+        };
+        self.spawn(effects);
+        self.handle(PoolInput::Wake);
+        if start {
+            let pool = self.clone();
+            self.track(tokio::spawn(async move { pool.refill().await }));
         }
-        let pool = self.clone();
-        self.track(tokio::spawn(async move { pool.refill().await }));
-        if self.0.opts.num_idle_processes > 0 {
-            let mut ready = self.0.idle_ready.subscribe();
-            let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
-            if tokio::time::timeout(wait, ready.wait_for(|r| *r)).await.is_err() {
-                log::warn!(target: "livekit.agents", "timed out waiting for idle processes to initialize");
-            }
+        let mut ready = self.0.idle_ready.subscribe();
+        let wait = self.0.opts.initialize_timeout + Duration::from_secs(2);
+        match tokio::time::timeout(wait, ready.wait_for(|state| *state != Readiness::Pending)).await
+        {
+            Ok(Ok(readiness)) if *readiness == Readiness::Ready => Ok(()),
+            Ok(_) => Err(PoolStartError::Closed),
+            Err(_) => Err(PoolStartError::WarmupTimedOut {
+                ready: lock(&self.0.state).allocation.ready(),
+                required: self.0.opts.num_idle_processes,
+            }),
         }
     }
 
@@ -215,244 +270,316 @@ impl<H: PoolHost> ProcPool<H> {
         *self.0.closed.borrow()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn refill(&self) {
-        while !self.closed() {
-            let to_spawn = {
-                let st = lock(&self.0.state);
-                let pending = st.warmed.len() + st.spawning;
-                let target = st.target_idle.min(self.0.opts.num_idle_processes).max(st.waiting);
-                target.saturating_sub(pending)
-            };
-            for _ in 0..to_spawn {
-                self.spawn();
-            }
-            tokio::time::sleep(REFILL_INTERVAL).await;
-        }
-    }
-
-    fn spawn(&self) {
-        lock(&self.0.state).spawning += 1;
-        let pool = self.clone();
-        self.track(tokio::spawn(async move { pool.spawn_proc().await }));
-    }
-
-    async fn spawn_proc(&self) {
-        let inner = &self.0;
-        let proc = match inner.host.create().await {
-            Ok(proc) => proc,
-            Err(e) => {
-                log::error!(target: "livekit.agents", "error creating process: {e}");
-                lock(&inner.state).spawning -= 1;
-                inner.changed.notify_waiters();
-                return;
-            }
-        };
-        lock(&inner.state).executors.push(proc.clone());
-        let mut closed = inner.closed.subscribe();
-        let warm = async {
-            let _permit = inner.init.acquire().await.ok()?;
-            if self.closed() {
-                return Some(false);
-            }
-            inner.host.emit(PoolEvent::Created, &proc);
-            let steps = async {
-                inner.host.start(&proc).await?;
-                inner.host.emit(PoolEvent::Started, &proc);
-                inner.host.initialize(&proc).await?;
-                inner.host.emit(PoolEvent::Ready, &proc);
-                Ok::<_, H::Error>(())
-            };
-            match steps.await {
-                Ok(()) => Some(true),
-                Err(e) => {
-                    inner.host.init_failed(&proc, e);
-                    Some(false)
-                }
-            }
-        };
-        // Closing the pool cancels an initializing spawn; its process is still closed.
-        let warmed = tokio::select! {
-            w = warm => w.unwrap_or(false),
-            _ = closed.wait_for(|c| *c) => false,
-        };
-        {
-            let mut st = lock(&inner.state);
-            st.spawning -= 1;
-            if warmed {
-                st.warmed.push_back(proc.clone());
-                if st.warmed.len() >= inner.opts.num_idle_processes {
-                    inner.idle_ready.send_replace(true);
-                }
-            } else {
-                st.executors.retain(|p| p != &proc);
-            }
-        }
-        inner.changed.notify_waiters();
-        if !warmed {
-            inner.host.close(&proc).await;
-            inner.host.emit(PoolEvent::Closed, &proc);
-            return;
-        }
-        let pool = self.clone();
-        self.track(tokio::spawn(async move {
-            pool.0.host.join(&proc).await;
-            pool.0.host.emit(PoolEvent::Closed, &proc);
-            let mut st = lock(&pool.0.state);
-            st.executors.retain(|p| p != &proc);
-            st.launched.retain(|p| p != &proc);
-        }));
-    }
-
-    async fn acquire(&self, job_id: &str) -> Option<H::Proc> {
-        for attempt in 1..=MAX_ACQUIRE_ATTEMPTS {
-            let empty = {
-                let st = lock(&self.0.state);
-                (st.warmed.is_empty(), st.spawning < st.waiting)
-            };
-            if empty.0 && empty.1 {
-                self.spawn();
-            }
-            if empty.0 {
-                log::warn!(target: "livekit.agents", job_id = job_id;
-                    "no warmed process available for job, waiting for one to be created");
-            }
-            loop {
-                let changed = self.0.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                {
-                    let mut st = lock(&self.0.state);
-                    if let Some(proc) = st.warmed.pop_front() {
-                        return Some(proc);
-                    }
-                    // every in-flight spawn ended without a process: try again
-                    if st.spawning == 0 {
-                        break;
-                    }
-                }
-                changed.await;
-            }
-            log::warn!(target: "livekit.agents", job_id = job_id, attempt = attempt;
-                "all in-flight spawns failed to initialize, retrying");
-        }
-        log::error!(target: "livekit.agents", job_id = job_id;
-            "failed to acquire process for job after {MAX_ACQUIRE_ATTEMPTS} attempts");
-        None
-    }
-
-    /// Runs `job` on a warm process, retrying on a fresh one when the launch fails. Cancel-safe:
-    /// a launch dropped while it waits for a process stops counting as waiting, and the process
-    /// it took and did not launch on is closed.
-    pub async fn launch_job(&self, job_id: &str, job: H::Job) -> Result<(), LaunchError<H::Error>> {
-        for attempt in 1..=MAX_LAUNCH_ATTEMPTS {
-            let proc = {
-                let _waiting = Waiting::new(self);
-                self.acquire(job_id).await
-            };
-            let proc = proc.ok_or(LaunchError::NoProcess)?;
-            let mut taken = Taken { pool: self.clone(), proc: Some(proc.clone()) };
-            let launched = self.0.host.launch(&proc, &job).await;
-            taken.proc = None;
-            match launched {
-                Ok(()) => {
-                    lock(&self.0.state).launched.push(proc.clone());
-                    self.0.host.emit(PoolEvent::JobLaunched, &proc);
-                    return Ok(());
-                }
-                Err(e) => {
-                    let pool = self.clone();
-                    let failed = proc.clone();
-                    self.track(tokio::spawn(async move { pool.0.host.close(&failed).await }));
-                    if attempt == MAX_LAUNCH_ATTEMPTS {
-                        log::error!(target: "livekit.agents", job_id = job_id;
-                            "failed to launch job on process after {MAX_LAUNCH_ATTEMPTS} attempts");
-                        return Err(LaunchError::Launch(e));
-                    }
-                    log::warn!(target: "livekit.agents", job_id = job_id, attempt = attempt;
-                        "failed to launch job on process, retrying with a new process");
-                }
-            }
-        }
-        unreachable!("the last attempt returns")
-    }
-
-    /// Waits until every process a job was launched on exited, those launched meanwhile
-    /// included (the drain).
-    pub async fn join_jobs(&self) {
+        let origin = tokio::time::Instant::now();
         loop {
-            let running = lock(&self.0.state).launched.clone();
-            if running.is_empty() {
-                return;
+            if self.closed() && !lock(&self.0.state).allocation.has_processes() {
+                break;
             }
-            let joins: Vec<_> = running
-                .iter()
-                .map(|proc| {
-                    let (pool, proc) = (self.clone(), proc.clone());
-                    tokio::spawn(async move { pool.0.host.join(&proc).await })
-                })
-                .collect();
-            for join in joins {
-                let _ = join.await;
-            }
-            lock(&self.0.state).launched.retain(|p| !running.contains(p));
+            let delay = {
+                let mut state = lock(&self.0.state);
+                state.now = tokio::time::Instant::now().duration_since(origin);
+                state
+                    .allocation
+                    .wake_at()
+                    .map_or(REFILL_INTERVAL, |deadline| deadline.saturating_sub(state.now))
+            };
+            self.handle(PoolInput::Wake);
+            tokio::time::sleep(delay).await;
         }
     }
 
-    /// Stops the refill and the initializing spawns, closes every process and waits for the
-    /// pool's tasks.
-    pub async fn aclose(&self) {
-        if !lock(&self.0.state).started {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    fn spawn(&self, effects: Vec<PoolEffect>) {
+        for effect in effects {
+            match effect {
+                PoolEffect::Create(id) => {
+                    let pool = self.clone();
+                    self.track(tokio::spawn(async move { pool.spawn_proc(id).await }));
+                }
+                PoolEffect::Close(id) => {
+                    let process = lock(&self.0.state).executors.get(&id).cloned();
+                    if let Some(process) = process {
+                        let pool = self.clone();
+                        self.track(tokio::spawn(async move {
+                            if let Err(error) = pool.0.host.close(&process).await {
+                                pool.0.host.emit(PoolEvent::CleanupIncomplete, &process);
+                                pool.0.host.close_failed(&process, error);
+                            }
+                            pool.handle(PoolInput::Closed(id));
+                        }));
+                    }
+                }
+                PoolEffect::WatchExit(id) => {
+                    let process = lock(&self.0.state).executors.get(&id).cloned();
+                    if let Some(process) = process {
+                        let pool = self.clone();
+                        self.track(tokio::spawn(async move {
+                            match pool.0.host.wait_exit(&process).await {
+                                Ok(()) => pool.handle(PoolInput::Exited(id)),
+                                Err(error) => {
+                                    pool.0.host.emit(PoolEvent::ExitFailed, &process);
+                                    pool.0.host.exit_failed(&process, error);
+                                    pool.handle(PoolInput::ExitFailed(id));
+                                }
+                            }
+                        }));
+                    }
+                }
+                PoolEffect::Join(id) => {
+                    let process = lock(&self.0.state).executors.get(&id).cloned();
+                    if let Some(process) = process {
+                        let pool = self.clone();
+                        self.track(tokio::spawn(async move {
+                            match pool.0.host.join(&process).await {
+                                Ok(outcome) => {
+                                    pool.handle(PoolInput::Joined { process: id, outcome })
+                                }
+                                Err(error) => {
+                                    pool.0.host.emit(PoolEvent::JoinFailed, &process);
+                                    pool.0.host.join_failed(&process, error);
+                                    pool.handle(PoolInput::JoinFailed(id));
+                                }
+                            }
+                        }));
+                    }
+                }
+                PoolEffect::Released { process: id, outcome: _ } => {
+                    let process = lock(&self.0.state).executors.remove(&id);
+                    if let Some(process) = process {
+                        self.0.host.emit(PoolEvent::Closed, &process);
+                    }
+                }
+                PoolEffect::Refused { .. } => {}
+                PoolEffect::CleanupIncomplete(observation) => {
+                    self.0.host.cleanup_incomplete(observation);
+                    self.0.close_ready.send_replace(true);
+                }
+                PoolEffect::CloseComplete => {
+                    self.0.close_ready.send_replace(true);
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    async fn spawn_proc(&self, id: ProcessId) {
+        let process = match self.0.host.create().await {
+            Ok(process) => process,
+            Err(error) => {
+                crate::diagnostics::emit(
+                    log::Level::Error,
+                    format!("error creating process: {error}"),
+                );
+                self.handle(PoolInput::SpawnFailed(id));
+                self.handle(PoolInput::Cleaned(id));
+                return;
+            }
+        };
+        lock(&self.0.state).executors.insert(id, process.clone());
+        self.handle(PoolInput::Created(id));
+        if lock(&self.0.state).allocation.phase(id) != ProcessPhase::Initializing {
             return;
         }
-        self.0.closed.send_replace(true);
-        // the initializing spawns close their own process first
+        let mut closed = self.0.closed.subscribe();
+        self.0.host.emit(PoolEvent::Created, &process);
+        let steps = async {
+            self.0.host.start(&process).await?;
+            self.0.host.emit(PoolEvent::Started, &process);
+            self.0.host.initialize(&process).await?;
+            Ok::<_, H::Error>(())
+        };
+        let initialized = tokio::select! {
+            biased;
+            _ = closed.wait_for(|closed| *closed) => false,
+            result = steps => match result {
+                Ok(()) => true,
+                Err(error) => {
+                    self.0.host.init_failed(&process, error);
+                    false
+                }
+            },
+        };
+        if !initialized {
+            self.handle(PoolInput::SpawnFailed(id));
+            return;
+        }
+        self.0.host.emit(PoolEvent::Ready, &process);
+        self.handle(PoolInput::Ready(id));
+    }
+
+    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, H::Proc), PoolFailure> {
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if lock(&self.0.state).spawning == 0 {
-                break;
+            {
+                let state = lock(&self.0.state);
+                match state.allocation.reservation(request) {
+                    Some(ReservationState::Reserved(id)) => {
+                        if let Some(process) = state.executors.get(&id) {
+                            return Ok((id, process.clone()));
+                        }
+                    }
+                    Some(ReservationState::Failed(error)) => return Err(error),
+                    None => return Err(PoolFailure::Closed),
+                    _ => {}
+                }
             }
             changed.await;
         }
-        let closing: Vec<_> = self
-            .processes()
-            .into_iter()
-            .map(|p| {
-                let pool = self.clone();
-                tokio::spawn(async move { pool.0.host.close(&p).await })
-            })
-            .collect();
-        for task in closing {
-            let _ = task.await;
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    pub async fn launch_job(&self, job_id: &str, job: H::Job) -> Result<(), LaunchError<H::Error>> {
+        let (request, effects) = {
+            let mut state = lock(&self.0.state);
+            let request = ReservationId(state.next_request);
+            state.next_request += 1;
+            let now = state.now;
+            let effects = state
+                .allocation
+                .handle(PoolInput::Admit { request, job_id: job_id.to_owned() }, now);
+            (request, effects)
+        };
+        if let Some(reason) = effects.iter().find_map(|effect| match effect {
+            PoolEffect::Refused { reason, .. } => Some(*reason),
+            _ => None,
+        }) {
+            return Err(LaunchError::Admission(reason));
         }
+        let _waiting = Waiting { pool: self.clone(), request };
+        self.spawn(effects);
+        self.0.changed.notify_waiters();
+        let mut last_error = None;
         loop {
-            let tasks: Vec<_> = std::mem::take(&mut lock(&self.0.state).tasks);
-            if tasks.is_empty() {
-                break;
-            }
-            for task in tasks {
-                let _ = task.await;
+            let (id, process) = self.acquire(request).await.map_err(|error| match error {
+                PoolFailure::AcquireExhausted { attempts } => {
+                    LaunchError::AcquireExhausted { attempts }
+                }
+                PoolFailure::LaunchExhausted { .. } => {
+                    last_error.take().map_or(LaunchError::NoProcess, LaunchError::Launch)
+                }
+                PoolFailure::Closed => LaunchError::Admission(PoolAdmissionError::Closed),
+            })?;
+            match self.0.host.launch(&process, &job).await {
+                Ok(()) => {
+                    self.handle(PoolInput::LaunchSucceeded { request, process: id });
+                    if lock(&self.0.state).allocation.reservation(request)
+                        == Some(ReservationState::Completed)
+                    {
+                        self.0.host.emit(PoolEvent::JobLaunched, &process);
+                        self.handle(PoolInput::Forget(request));
+                        return Ok(());
+                    }
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    self.handle(PoolInput::LaunchFailed { request, process: id });
+                }
             }
         }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    pub async fn join_jobs(&self) {
+        self.handle(PoolInput::Drain);
+        loop {
+            let changed = self.0.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if !lock(&self.0.state).allocation.has_jobs() {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    pub async fn aclose(&self) {
+        let (first, effects, deadline) = {
+            let mut state = lock(&self.0.state);
+            let first = !state.allocation.is_closed();
+            let now = state.now;
+            let effects = state.allocation.handle(PoolInput::Close, now);
+            (first, effects, state.allocation.close_deadline())
+        };
+        self.spawn(effects);
+        self.handle(PoolInput::Wake);
+        if first {
+            let pool = self.clone();
+            // A caller's cancellation cannot discard the join obligations.
+            tokio::spawn(async move {
+                let cleanup = async {
+                    loop {
+                        let changed = pool.0.changed.notified();
+                        tokio::pin!(changed);
+                        changed.as_mut().enable();
+                        let tasks = std::mem::take(&mut lock(&pool.0.state).tasks);
+                        if tasks.is_empty() {
+                            if !lock(&pool.0.state).allocation.has_processes() {
+                                break;
+                            }
+                            changed.await;
+                            continue;
+                        }
+                        for task in tasks {
+                            if let Err(error) = task.await {
+                                crate::diagnostics::emit(
+                                    log::Level::Error,
+                                    format!("process pool task failed: {error}"),
+                                );
+                            }
+                        }
+                    }
+                };
+                tokio::pin!(cleanup);
+                // Refill can finish before other owned tasks; keep the core deadline serviceable.
+                let deadline = deadline.expect("first close owns a deadline");
+                let timeout = deadline.saturating_sub(lock(&pool.0.state).now);
+                if tokio::time::timeout(timeout, &mut cleanup).await.is_err() {
+                    {
+                        let mut state = lock(&pool.0.state);
+                        state.now = state.now.max(deadline);
+                    }
+                    pool.handle(PoolInput::Wake);
+                    cleanup.await;
+                }
+                pool.handle(PoolInput::CleanupComplete);
+            });
+        }
+        let _ = self.0.close_ready.subscribe().wait_for(|done| *done).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Processes are numbers; `fail_init` makes every initialize fail, `fail_launch` the first n
     /// launches.
     #[derive(Default)]
     struct Host {
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         next: AtomicUsize,
         fail_init: bool,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         fail_launch: AtomicUsize,
         /// A launch never completes (to cancel it mid-way).
         slow_launch: bool,
+        slow_initialize: bool,
+        close_gate: Option<watch::Sender<bool>>,
+        join_receipt: Option<watch::Sender<bool>>,
+        reap_gate: Option<watch::Sender<bool>>,
+        fail_close: bool,
+        cleanup_observed: Option<watch::Sender<Option<PoolCleanupObservation>>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         events: Mutex<Vec<(PoolEvent, usize)>>,
+        #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
         closed: Mutex<Vec<usize>>,
         exits: Notify,
     }
@@ -470,6 +597,9 @@ mod tests {
             Ok(())
         }
         async fn initialize(&self, _: &usize) -> Result<(), String> {
+            if self.slow_initialize {
+                std::future::pending::<()>().await;
+            }
             if self.fail_init { Err("init failed".into()) } else { Ok(()) }
         }
         async fn launch(&self, _: &usize, _: &()) -> Result<(), String> {
@@ -483,18 +613,57 @@ mod tests {
             }
             Ok(())
         }
-        async fn close(&self, p: &usize) {
+        async fn close(&self, p: &usize) -> Result<(), String> {
+            if let Some(gate) = &self.close_gate {
+                let _ = gate.subscribe().wait_for(|released| *released).await;
+            }
             self.closed.lock().unwrap().push(*p);
             self.exits.notify_waiters();
+            if self.fail_close { Err("close failed".into()) } else { Ok(()) }
         }
-        async fn join(&self, p: &usize) {
+        fn close_failed(&self, _: &usize, error: String) {
+            assert!(self.fail_close);
+            assert_eq!(error, "close failed", "cleanup must preserve its cause");
+        }
+        fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
+            self.cleanup_observed
+                .as_ref()
+                .expect("unexpected cleanup deadline miss")
+                .send_replace(Some(observation));
+        }
+        async fn wait_exit(&self, p: &usize) -> Result<(), String> {
             loop {
                 let exited = self.exits.notified();
+                tokio::pin!(exited);
+                exited.as_mut().enable();
                 if self.closed.lock().unwrap().contains(p) {
-                    return;
+                    return Ok(());
                 }
                 exited.await;
             }
+        }
+        fn exit_failed(&self, _: &usize, error: String) {
+            panic!("unexpected exit observation failure: {error}");
+        }
+        async fn join(&self, p: &usize) -> Result<PoolJoinOutcome, String> {
+            loop {
+                let exited = self.exits.notified();
+                tokio::pin!(exited);
+                exited.as_mut().enable();
+                if self.closed.lock().unwrap().contains(p) {
+                    if self.join_receipt.as_ref().is_some_and(|receipt| !*receipt.borrow()) {
+                        return Err("join failed".into());
+                    }
+                    if let Some(gate) = &self.reap_gate {
+                        let _ = gate.subscribe().wait_for(|reaped| *reaped).await;
+                    }
+                    return Ok(PoolJoinOutcome::Reaped);
+                }
+                exited.await;
+            }
+        }
+        fn join_failed(&self, _: &usize, error: String) {
+            assert_eq!(error, "join failed", "join must preserve its cause");
         }
         fn emit(&self, event: PoolEvent, p: &usize) {
             self.events.lock().unwrap().push((event, *p));
@@ -503,7 +672,11 @@ mod tests {
     }
 
     fn pool(host: &Arc<Host>, idle: usize) -> ProcPool<Arc<Host>> {
-        let opts = PoolOptions { num_idle_processes: idle, initialize_timeout: Duration::from_secs(1) };
+        let opts = PoolOptions {
+            num_idle_processes: idle,
+            initialize_timeout: Duration::from_secs(1),
+            close_timeout: Duration::from_secs(1),
+        };
         ProcPool::new(host.clone(), opts)
     }
 
@@ -513,11 +686,12 @@ mod tests {
 
     // Catches: start() returning before the idle processes are warm, a launch that does not
     // replace the process it took, or a close that leaves a process open.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
         let host = Arc::new(Host::default());
         let pool = pool(&host, 2);
-        pool.start().await;
+        pool.start().await.unwrap();
         assert_eq!(count(&host, PoolEvent::Ready), 2);
         pool.launch_job("j1", ()).await.unwrap();
         assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
@@ -531,13 +705,42 @@ mod tests {
         assert!(pool.processes().is_empty());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
+    #[tokio::test]
+    async fn exited_warm_process_is_never_assigned_to_a_job() {
+        let host = Arc::new(Host::default());
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        host.close(&0).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while pool.processes().contains(&0) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        pool.launch_job("after-exit", ()).await.unwrap();
+        assert!(
+            host.events
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(event, process)| *event != PoolEvent::JobLaunched || *process != 0),
+            "an exited warmed process was assigned to a new job"
+        );
+        pool.aclose().await;
+    }
+
     // Catches: #5868, a launch hanging on an empty warm queue when every spawn fails.
     #[tokio::test]
     async fn a_launch_raises_when_every_spawn_fails() {
         let host = Arc::new(Host { fail_init: true, ..Host::default() });
         let pool = pool(&host, 0);
-        pool.start().await;
-        assert!(matches!(pool.launch_job("j1", ()).await, Err(LaunchError::NoProcess)));
+        pool.start().await.unwrap();
+        assert!(matches!(
+            pool.launch_job("j1", ()).await,
+            Err(LaunchError::AcquireExhausted { attempts: MAX_ACQUIRE_ATTEMPTS })
+        ));
         assert_eq!(pool.jobs_waiting(), 0);
         assert!(pool.processes().is_empty());
         pool.aclose().await;
@@ -545,11 +748,12 @@ mod tests {
 
     // Catches: a cancelled launch leaving `waiting` raised (the pool kept that many extra processes
     // warm) or the process it took open, neither warm nor running.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_cancelled_launch_releases_its_wait_and_its_process() {
         let host = Arc::new(Host::default());
         let pool = pool(&host, 0);
-        pool.start().await;
+        pool.start().await.unwrap();
         let waiting = tokio::spawn({
             let pool = pool.clone();
             async move { pool.launch_job("j1", ()).await }
@@ -561,7 +765,7 @@ mod tests {
 
         let slow = Arc::new(Host { slow_launch: true, ..Host::default() });
         let pool = self::pool(&slow, 1);
-        pool.start().await;
+        pool.start().await.unwrap();
         let launching = tokio::spawn({
             let pool = pool.clone();
             async move { pool.launch_job("j1", ()).await }
@@ -575,12 +779,12 @@ mod tests {
     }
 
     // Catches: the drain returning while a job's process still runs, or waiting on the idle ones.
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn join_jobs_waits_for_the_processes_running_a_job() {
         let host = Arc::new(Host::default());
         let pool = pool(&host, 1);
-        pool.start().await;
-        pool.join_jobs().await;
+        pool.start().await.unwrap();
         pool.launch_job("j1", ()).await.unwrap();
         let joining = tokio::spawn({
             let pool = pool.clone();
@@ -588,20 +792,168 @@ mod tests {
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!joining.is_finished(), "the job's process still runs");
-        host.close(&0).await;
+        host.close(&0).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), joining).await.unwrap().unwrap();
         pool.aclose().await;
     }
 
     // Catches: a failed launch not retried on a fresh process, or the failed one left open.
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test]
     async fn a_failed_launch_is_retried_on_a_fresh_process() {
         let host = Arc::new(Host { fail_launch: AtomicUsize::new(1), ..Host::default() });
         let pool = pool(&host, 1);
-        pool.start().await;
+        pool.start().await.unwrap();
         pool.launch_job("j1", ()).await.unwrap();
         assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
         assert!(host.closed.lock().unwrap().contains(&0), "the process that failed is closed");
         pool.aclose().await;
+    }
+
+    #[tokio::test]
+    async fn direct_launch_is_refused_after_drain_and_close() {
+        let host = Arc::new(Host::default());
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        pool.join_jobs().await;
+        assert!(matches!(
+            pool.launch_job("after-drain", ()).await,
+            Err(LaunchError::Admission(PoolAdmissionError::Draining))
+        ));
+        assert_eq!(host.next.load(Ordering::SeqCst), 1);
+        pool.aclose().await;
+        assert!(matches!(
+            pool.launch_job("after-close", ()).await,
+            Err(LaunchError::Admission(PoolAdmissionError::Closed))
+        ));
+        assert_eq!(host.next.load(Ordering::SeqCst), 1);
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
+    #[tokio::test]
+    async fn close_callers_join_cleanup_even_when_first_caller_is_cancelled() {
+        let gate = watch::channel(false).0;
+        let host = Arc::new(Host { close_gate: Some(gate.clone()), ..Host::default() });
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        let first = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.aclose().await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.receiver_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        first.abort();
+        let _ = first.await;
+        let second = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.aclose().await }
+        });
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!second.is_finished(), "a repeated close must join the owned cleanup");
+        gate.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(1), second).await.unwrap().unwrap();
+        assert!(pool.processes().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn warmup_timeout_never_reports_ready() {
+        let host = Arc::new(Host { slow_initialize: true, ..Host::default() });
+        let pool = pool(&host, 1);
+        assert_eq!(
+            pool.start().await,
+            Err(PoolStartError::WarmupTimedOut { ready: 0, required: 1 })
+        );
+        assert_eq!(count(&host, PoolEvent::Ready), 0);
+        pool.aclose().await;
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_is_observed_without_failing_public_close() {
+        let host = Arc::new(Host { fail_close: true, ..Host::default() });
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        pool.aclose().await;
+        assert_eq!(count(&host, PoolEvent::CleanupIncomplete), 1);
+        assert!(pool.processes().is_empty());
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: test harness runtime resource")]
+    #[tokio::test(start_paused = true)]
+    async fn close_deadline_returns_normally_and_retains_cleanup_ownership() {
+        let gate = watch::channel(false).0;
+        let observed = watch::channel(None).0;
+        let host = Arc::new(Host {
+            close_gate: Some(gate.clone()),
+            cleanup_observed: Some(observed.clone()),
+            ..Host::default()
+        });
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        pool.aclose().await;
+        assert_eq!(observed.borrow().as_ref().unwrap().processes, [ProcessId(0)]);
+        assert_eq!(pool.processes(), [0], "the resource stays owned after public close returns");
+        gate.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !pool.processes().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(count(&host, PoolEvent::Closed), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_join_cannot_report_cleaned_or_release_the_resource_owner() {
+        let receipt = watch::channel(false).0;
+        let observed = watch::channel(None).0;
+        let host = Arc::new(Host {
+            join_receipt: Some(receipt.clone()),
+            cleanup_observed: Some(observed.clone()),
+            ..Host::default()
+        });
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        pool.aclose().await;
+        assert_eq!(pool.processes(), [0], "failed join cannot release process ownership");
+        assert_eq!(count(&host, PoolEvent::Closed), 0, "failed join is not cleaned");
+        assert_eq!(observed.borrow().as_ref().unwrap().processes, [ProcessId(0)]);
+        receipt.send_replace(true);
+        tokio::time::timeout(REFILL_INTERVAL * 3, async {
+            while !pool.processes().is_empty() {
+                tokio::time::sleep(REFILL_INTERVAL).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(count(&host, PoolEvent::Closed), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
+        let reaped = watch::channel(false).0;
+        let host = Arc::new(Host { reap_gate: Some(reaped.clone()), ..Host::default() });
+        let pool = pool(&host, 1);
+        pool.start().await.unwrap();
+        host.close(&0).await.unwrap();
+        tokio::time::sleep(REFILL_INTERVAL).await;
+        assert!(pool.processes().contains(&0), "ownership must remain until reaping");
+        pool.launch_job("after-os-exit", ()).await.unwrap();
+        let dead_process_was_launched = host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(event, process)| *event == PoolEvent::JobLaunched && *process == 0);
+        reaped.send_replace(true);
+        pool.aclose().await;
+        assert!(!dead_process_was_launched, "OS-exited warm process was assigned before reaping");
     }
 }

@@ -20,13 +20,16 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
-import functools
 import logging
 import os
 import socket
+import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from types import FrameType
 from typing import Any, TypeVar, cast
 from unittest.mock import AsyncMock, create_autospec
 
@@ -394,8 +397,11 @@ def serve_parent(mp_cch: socket.socket, host: Any) -> None:
     (``host.initialize(http_proxy)``), then a loop of its own on which ``_core.IpcClient.serve``
     hands the parent's messages to ``host`` until the parent goes or the child is done. A failed
     initialization returns at once (the parent was told)."""
+    _initialize_stack_dump_worker()
     try:
-        client = _core.IpcClient(mp_cch.detach(), host.initialize)
+        client = _core.IpcClient(
+            mp_cch.detach(), host.initialize, process=host._executor_type == JobExecutorType.PROCESS
+        )
     except Exception:
         return
     host._client = client
@@ -438,114 +444,86 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
         await client.aclose()
 
 
+_stack_dump_worker: ThreadPoolExecutor | None = None
+_stack_dump_busy = threading.Lock()
+
+
+def _initialize_stack_dump_worker() -> None:
+    global _stack_dump_worker
+    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
+        return
+    if _stack_dump_worker is None:
+        # Warm the single writer before the job event loop exists.
+        _stack_dump_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stack-dump")
+        _stack_dump_worker.submit(lambda: None).result()
+
+
 def _dump_stack_traces() -> None:
-    """The process's threads and asyncio tasks, and its memory, in a file under
-    ``LK_DUMP_DIR`` (the temp dir), when ``LK_DUMP_STACK_TRACES`` is set."""
-    import asyncio
-    import faulthandler
-    import os
+    """Take loop-affine references; the bounded writer does all rendering and filesystem I/O."""
+    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
+        return
+    worker = _stack_dump_worker
+    if worker is None or not _stack_dump_busy.acquire(blocking=False):
+        return
+    try:
+        frames = tuple(sys._current_frames().items())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            tasks: tuple[tuple[str, bool, bool, tuple[FrameType, ...]], ...] = ()
+        else:
+            tasks = tuple(
+                (task.get_name(), task.done(), task.cancelled(), tuple(task.get_stack(limit=64)))
+                for task in asyncio.all_tasks(loop)
+            )
+        worker.submit(_write_stack_dump, frames, tasks)
+    except BaseException:
+        _stack_dump_busy.release()
+        raise
+
+
+def _write_stack_dump(
+    frames: tuple[tuple[int, FrameType], ...],
+    tasks: tuple[tuple[str, bool, bool, tuple[FrameType, ...]], ...],
+) -> None:
     import tempfile
-    import time
     import traceback
-    from multiprocessing import current_process
     from pathlib import Path
 
     import psutil
 
-    if os.getenv("LK_DUMP_STACK_TRACES", "0").lower() in ("0", "false", "no"):
-        return
-
-    dir: str = os.getenv("LK_DUMP_DIR", tempfile.gettempdir())
-    Path(dir).mkdir(parents=True, exist_ok=True)
-
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=dir,
-        delete=False,
-        prefix=f"livekit-agents-pid-{current_process().pid}-{time.time_ns()}-",
-        suffix=".stacktrace",
-    ) as f:
-        print(f"\n{'=' * 60}", file=f)
-        print(
-            f"Process {current_process().name} (pid {current_process().pid}) stack trace dump",
-            file=f,
-        )
-        print(f"{'=' * 60}\n", file=f)
-
-        faulthandler.dump_traceback(file=f, all_threads=True)
-        print("\n", file=f)
-
-        try:
+    try:
+        directory = os.getenv("LK_DUMP_DIR", tempfile.gettempdir())
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=directory,
+            delete=False,
+            prefix=f"livekit-agents-pid-{os.getpid()}-{time.time_ns()}-",
+            suffix=".stacktrace",
+        ) as output:
+            print(f"Process {current_process().name} (pid {os.getpid()})", file=output)
+            for thread_id, frame in frames:
+                print(f"\nThread {thread_id}", file=output)
+                traceback.print_stack(frame, limit=64, file=output)
+            print(f"\nASYNCIO TASKS ({len(tasks)})", file=output)
+            for name, done, cancelled, stack in tasks:
+                print(f"\nTask {name}: done={done}, cancelled={cancelled}", file=output)
+                for frame in stack:
+                    traceback.print_stack(frame, limit=1, file=output)
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None:
-                print("=" * 60, file=f)
-                print("ASYNCIO TASKS", file=f)
-                print("=" * 60, file=f)
-
-                tasks = asyncio.all_tasks(loop)
-                print(f"Total tasks: {len(tasks)}\n", file=f)
-
-                for i, task in enumerate(tasks, 1):
-                    print(f"\n--- Task {i}/{len(tasks)} ---", file=f)
-                    print(f"Name: {task.get_name()}", file=f)
-                    print(f"Done: {task.done()}", file=f)
-
-                    if not task.done():
-                        print(f"Cancelled: {task.cancelled()}", file=f)
-
-                        try:
-                            stack = task.get_stack()
-                            print(f"Stack frames: {len(stack)}", file=f)
-                            print("Stack trace:", file=f)
-                            for frame in stack:
-                                traceback.print_stack(frame, limit=1, file=f)
-                        except Exception as e:
-                            print(f"Could not get stack: {e}", file=f)
-
-                        try:
-                            coro = task.get_coro()
-                            print(f"Coroutine: {coro}", file=f)
-                            if cr_frame := getattr(coro, "cr_frame", None):
-                                print("Coroutine frame:", file=f)
-                                traceback.print_stack(cr_frame, file=f)
-                        except Exception as e:
-                            print(f"Could not get coroutine: {e}", file=f)
-                    else:
-                        try:
-                            exc = task.exception()
-                            if exc:
-                                print(f"Exception: {exc}", file=f)
-                                print("Exception traceback:", file=f)
-                                traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
-                        except Exception as e:
-                            print(f"Could not get exception: {e}", file=f)
-
-                    print("", file=f)
-            else:
-                print("No asyncio event loop running", file=f)
-        except Exception as e:
-            print(f"Error dumping asyncio tasks: {e}", file=f)
-            traceback.print_exc(file=f)
-
-        try:
-            process = psutil.Process()
-            memory_info = process.memory_info()
-            memory_mb = memory_info.rss / (1024 * 1024)
-
-            print("\n" + "=" * 60, file=f)
-            print("MEMORY USAGE", file=f)
-            print("=" * 60, file=f)
-            print(f"RSS: {memory_mb:.2f} MB", file=f)
-            print(f"VMS: {memory_info.vms / (1024 * 1024):.2f} MB", file=f)
-        except Exception:
-            pass
+                process = psutil.Process()
+                print(f"\nMemory: {process.memory_info()}", file=output)
+                print(f"Threads: {process.num_threads()}", file=output)
+            except psutil.Error as error:
+                print(f"Memory sample unavailable: {error}", file=output)
+        logger.info("wrote stack trace dump", extra={"path": output.name})
+    except Exception:
+        logger.exception("could not write stack trace dump")
+    finally:
+        _stack_dump_busy.release()
 
 
-@functools.cache
 def _mock_room() -> Any:
     MockRoom = create_autospec(rtc.Room, instance=True)
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)

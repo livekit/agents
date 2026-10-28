@@ -2,13 +2,13 @@
 //! are cancelled when it stops; writes are ordered, bounded and per-connection, and a reconnect
 //! regenerates state rather than replaying.
 
-use crate::LOG;
 use crate::Slot;
 use crate::hw::cpu::CpuMonitor;
 use crate::protocol::{self, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage};
+use crate::state::ConnectionRetry;
 use crate::transport::{
-    Connected, EndpointStream, HttpStreamResetCode, StreamPreamble, TransportError,
-    TransportEvent, WorkerSink, WorkerTransport,
+    Connected, EndpointStream, HttpStreamResetCode, StreamPreamble, TransportError, TransportEvent,
+    WorkerSink, WorkerTransport,
 };
 use crate::{DefaultLoadCalc, WorkerState, WorkerStateEffect, WorkerStateInput};
 use crate::{JobDecision, JobRequest, RunningJobInfo};
@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use futures_util::future::{AbortHandle, Abortable};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use lk_agents_abi::{Clock, RealClock, WallAnchor};
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +26,8 @@ use tokio::time::Instant;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 const MAX_PENDING_WRITES: usize = 64;
-
+// A cancelled waiter does not release a running sampler's admission.
+pub(crate) static WORKER_IO_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -39,11 +41,7 @@ pub enum RuntimeError {
     RetriesExhausted { retries: u32, source: Box<RuntimeError> },
 }
 
-/// `min(retry_count * 2, 10)` s before the increment: 0, 2, 4, ... The leading zero is deliberate:
-/// a single drop reconnects without a visible gap.
-pub fn retry_delay(retry_count: u32) -> Duration {
-    Duration::from_secs((retry_count as u64 * 2).min(10))
-}
+pub use crate::state::retry_delay;
 
 /// Connection events and host-operation completions are [`WorkerStateInput`]s instead.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +68,8 @@ pub use lk_agents_abi::worker::worker::{
 #[derive(Clone)]
 pub struct WorkerHandle {
     tx: tokio::sync::mpsc::Sender<WorkerCommand>,
+    control: tokio::sync::watch::Sender<WorkerControl>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     snapshot: Arc<std::sync::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
 }
@@ -77,7 +77,32 @@ pub struct WorkerHandle {
 impl WorkerHandle {
     /// Fails when the worker has stopped or its queue is full; the command is handed back.
     pub fn send(&self, cmd: WorkerCommand) -> Result<(), WorkerCommand> {
-        self.tx.try_send(cmd).map_err(|e| e.into_inner())
+        if self.tx.is_closed() || self.control.is_closed() {
+            return Err(cmd);
+        }
+        match cmd {
+            WorkerCommand::Close => {
+                self.control.send_if_modified(|control| {
+                    if control.close {
+                        return false;
+                    }
+                    control.close = true;
+                    true
+                });
+                Ok(())
+            }
+            WorkerCommand::Drain { timeout } => {
+                self.control.send_if_modified(|control| {
+                    if control.drain.is_some() {
+                        return false;
+                    }
+                    control.drain = Some(timeout);
+                    true
+                });
+                Ok(())
+            }
+            command => self.tx.try_send(command).map_err(|e| e.into_inner()),
+        }
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -107,6 +132,11 @@ impl WorkerHandle {
     }
 }
 
+#[derive(Clone, Default)]
+struct WorkerControl {
+    close: bool,
+    drain: Option<Option<Duration>>,
+}
 
 pub struct RuntimeConfig {
     pub server_url: String,
@@ -128,17 +158,23 @@ pub struct Worker<T: WorkerTransport, P: WorkerHost, C: Clock> {
     host: Arc<P>,
     clock: C,
     default_load: DefaultLoadCalc,
-    cpu: CpuMonitor,
+    cpu: Option<CpuMonitor>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
+    control: tokio::sync::watch::Receiver<WorkerControl>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     snapshot: Arc<std::sync::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
     send_failure: Option<TransportError>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     requests: HashMap<Slot, AbortHandle>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     endpoints: HashMap<u64, AbortHandle>,
     next_endpoint: u64,
     closing: bool,
+    generation: u64,
+    rollover_requested: bool,
 }
 
 impl<T: WorkerTransport, P: WorkerHost, C: Clock> Drop for Worker<T, P, C> {
@@ -167,6 +203,7 @@ impl Outbox {
     fn new(timeout: Duration) -> Self {
         Self { pending: VecDeque::new(), timeout }
     }
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn push(&mut self, message: WorkerMessage) -> Result<(), TransportError> {
         use livekit_protocol::worker_message::Message as M;
         use prost::Message;
@@ -232,6 +269,7 @@ struct ActiveConnection {
 }
 
 impl ConnectionIo {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn new(timeout: Duration) -> Self {
         Self {
             state: ConnectionState::Waiting(Instant::now()),
@@ -241,10 +279,16 @@ impl ConnectionIo {
         }
     }
 
+    fn can_rollover(&self) -> bool {
+        self.outbox.pending.is_empty()
+            && matches!(&self.state, ConnectionState::Active(active) if active.writing.is_none())
+    }
+
     fn is_connected(&self) -> bool {
         matches!(self.state, ConnectionState::Active(_))
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event<T: WorkerTransport + 'static>(
         &mut self,
         transport: Arc<T>,
@@ -256,6 +300,7 @@ impl ConnectionIo {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn disconnect(&mut self) {
         let previous = std::mem::replace(&mut self.state, ConnectionState::Waiting(Instant::now()));
         self.outbox.clear();
@@ -272,6 +317,7 @@ impl ConnectionIo {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     fn retry_after(&mut self, delay: Duration) {
         debug_assert!(matches!(self.state, ConnectionState::Waiting(_)));
         self.state = ConnectionState::Waiting(Instant::now() + delay);
@@ -284,6 +330,7 @@ impl ConnectionIo {
 }
 
 impl ConnectionState {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event<T: WorkerTransport + 'static>(
         &mut self,
         outbox: &mut Outbox,
@@ -310,6 +357,7 @@ impl ConnectionState {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 fn dial<T: WorkerTransport + 'static>(
     transport: Arc<T>,
     config: &RuntimeConfig,
@@ -332,6 +380,7 @@ fn dial<T: WorkerTransport + 'static>(
 }
 
 impl ActiveConnection {
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     async fn next_event(&mut self, outbox: &mut Outbox) -> Result<ConnectionEvent, RuntimeError> {
         if self.writing.is_none()
             && let Some(pending) = outbox.pop_front()
@@ -383,6 +432,7 @@ async fn await_write(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 async fn wait_for_deadline(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -391,6 +441,7 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 }
 
 impl PendingWrite {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn send(self, sink: Arc<dyn WorkerSink>) -> Result<Option<String>, TransportError> {
         let accepted = match &self.message.message {
             Some(livekit_protocol::worker_message::Message::Availability(a)) if a.available => {
@@ -412,6 +463,7 @@ impl PendingWrite {
 enum Completion {
     Input(WorkerStateInput),
     Load(Option<f32>),
+    CpuSample(Result<(CpuMonitor, Option<f32>), tokio::task::JoinError>),
     Done,
     EndpointDone(u64),
 }
@@ -432,6 +484,7 @@ impl<P: WorkerHost + 'static> Worker<Box<dyn WorkerTransport>, P, RealClock> {
 }
 
 impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, P, C> {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Explicit runtime components, for custom drivers and tests.
     pub fn with_components(
         transport: T,
@@ -441,10 +494,15 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         clock: C,
     ) -> (Self, WorkerHandle) {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let (control_tx, control) = tokio::sync::watch::channel(WorkerControl::default());
         let (notifications, _) = tokio::sync::broadcast::channel(128);
         let snapshot = Arc::new(std::sync::Mutex::new(Snapshot::default()));
-        let handle =
-            WorkerHandle { tx, snapshot: snapshot.clone(), notifications: notifications.clone() };
+        let handle = WorkerHandle {
+            tx,
+            control: control_tx,
+            snapshot: snapshot.clone(),
+            notifications: notifications.clone(),
+        };
         (
             Self {
                 transport: Arc::new(transport),
@@ -453,8 +511,9 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 host: Arc::new(host),
                 clock,
                 default_load: DefaultLoadCalc::new(),
-                cpu: CpuMonitor::new(),
+                cpu: None,
                 rx,
+                control,
                 snapshot,
                 notifications,
                 operations: FuturesUnordered::new(),
@@ -464,6 +523,8 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 endpoints: HashMap::new(),
                 next_endpoint: 0,
                 closing: false,
+                generation: 0,
+                rollover_requested: false,
             },
             handle,
         )
@@ -508,16 +569,36 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         result
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     async fn run_loop(&mut self, connection: &mut ConnectionIo) -> Result<(), RuntimeError> {
         let mut commands_open = true;
-        let mut retries = 0;
+        let mut retries = ConnectionRetry::new(self.cfg.max_retry);
+        let mut control_open = true;
         while !self.closing {
+            let effects = self.state.tick(self.clock.now());
+            self.execute(effects, &mut connection.outbox);
+            self.maybe_rollover(connection);
+            if self.control.has_changed().unwrap_or(false) {
+                self.handle_control(&mut connection.outbox);
+                if self.closing {
+                    break;
+                }
+            }
             let timer = self
                 .state
                 .next_deadline()
                 .map(|at| at.saturating_duration_since(self.clock.now()))
                 .unwrap_or(Duration::from_secs(3600));
             let result = tokio::select! {
+                changed = self.control.changed(), if control_open => {
+                    if changed.is_ok() {
+                        self.handle_control(&mut connection.outbox);
+                    } else {
+                        control_open = false;
+                    }
+                    Ok(())
+                }
                 command = self.rx.recv(), if commands_open => {
                     match command {
                         Some(command) => self.handle_command(command, &mut connection.outbox),
@@ -533,9 +614,8 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 }
                 event = connection.next_event(self.transport.clone(), &self.cfg) => {
                     event.map(|event| {
-                        // the retry budget is per outage: a connection that opened restores it
-                        if matches!(event, ConnectionEvent::Connected) {
-                            retries = 0;
+                        if matches!(event, ConnectionEvent::Registered(_)) {
+                            retries.registered();
                         }
                         self.handle_connection_event(event, &mut connection.outbox)
                     })
@@ -556,11 +636,25 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
             if let Err(error) = result {
                 self.reconnect(connection, error, &mut retries)?;
             }
+            self.maybe_rollover(connection);
         }
         Ok(())
     }
 
+    fn handle_control(&mut self, outbox: &mut Outbox) {
+        let effects = self.state.tick(self.clock.now());
+        self.execute(effects, outbox);
+        let control = self.control.borrow_and_update().clone();
+        if let Some(timeout) = control.drain {
+            let effects = self.state.drain(self.clock.now(), timeout);
+            self.execute(effects, outbox);
+        }
+        self.closing |= control.close;
+    }
+
     fn handle_command(&mut self, command: WorkerCommand, outbox: &mut Outbox) {
+        let effects = self.state.tick(self.clock.now());
+        self.execute(effects, outbox);
         match command {
             WorkerCommand::Close => self.closing = true,
             WorkerCommand::Drain { timeout } => {
@@ -575,16 +669,23 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
 
     fn handle_connection_event(&mut self, event: ConnectionEvent, outbox: &mut Outbox) {
         match event {
-            ConnectionEvent::Connected => self.feed(WorkerStateInput::Connecting, outbox),
+            ConnectionEvent::Connected => {
+                self.generation += 1;
+                self.feed(WorkerStateInput::Connecting { generation: self.generation }, outbox);
+            }
             ConnectionEvent::Registered(response) => {
-                self.feed(WorkerStateInput::Registered(response), outbox);
+                self.feed(
+                    WorkerStateInput::Registered { generation: self.generation, response },
+                    outbox,
+                );
             }
             ConnectionEvent::ServerMessage(message) => {
-                self.feed(WorkerStateInput::Server(message), outbox)
+                self.feed(WorkerStateInput::Server { generation: self.generation, message }, outbox)
             }
-            ConnectionEvent::AvailabilitySent(job_id) => {
-                self.feed(WorkerStateInput::AvailabilitySent { job_id }, outbox)
-            }
+            ConnectionEvent::AvailabilitySent(job_id) => self.feed(
+                WorkerStateInput::AvailabilitySent { generation: self.generation, job_id },
+                outbox,
+            ),
             ConnectionEvent::EndpointRequest(stream) => self.serve_endpoint(stream),
             ConnectionEvent::Progress => {}
         }
@@ -611,11 +712,25 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         &mut self,
         connection: &mut ConnectionIo,
         error: RuntimeError,
-        retries: &mut u32,
+        retries: &mut ConnectionRetry,
     ) -> Result<(), RuntimeError> {
         if matches!(error, RuntimeError::Configuration(_)) {
             return Err(error);
         }
+        self.disconnect(connection);
+        let now = self.clock.now();
+        let at = retries.disconnected(now).map_err(|attempts| RuntimeError::RetriesExhausted {
+            retries: attempts,
+            source: Box::new(error),
+        })?;
+        let delay = at.saturating_duration_since(now);
+        debug_assert_eq!(retries.wake_at(), Some(at));
+        connection.retry_after(delay);
+        Ok(())
+    }
+
+    fn disconnect(&mut self, connection: &mut ConnectionIo) {
+        self.rollover_requested = false;
         connection.disconnect();
         for (_, request) in self.requests.drain() {
             request.abort();
@@ -623,22 +738,20 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         for (_, endpoint) in self.endpoints.drain() {
             endpoint.abort();
         }
-        self.feed(WorkerStateInput::Disconnected, &mut connection.outbox);
+        self.feed(
+            WorkerStateInput::Disconnected { generation: self.generation },
+            &mut connection.outbox,
+        );
         connection.outbox.clear();
         self.send_failure = None;
-        if *retries >= self.cfg.max_retry {
-            log::error!(target: LOG, error = error.to_string().as_str(); "failed to connect to livekit after {retries} retries");
-            return Err(RuntimeError::RetriesExhausted {
-                retries: *retries,
-                source: Box::new(error),
-            });
+    }
+
+    fn maybe_rollover(&mut self, connection: &mut ConnectionIo) {
+        if self.rollover_requested && connection.can_rollover() {
+            self.rollover_requested = false;
+            self.disconnect(connection);
+            connection.retry_after(Duration::ZERO);
         }
-        let delay = retry_delay(*retries);
-        *retries += 1;
-        log::warn!(target: LOG, retry_count = *retries, max_retry = self.cfg.max_retry, error = error.to_string().as_str();
-            "failed to connect to livekit, retrying in {}s", delay.as_secs_f64());
-        connection.retry_after(delay);
-        Ok(())
     }
 
     fn feed(&mut self, input: WorkerStateInput, outbox: &mut Outbox) {
@@ -646,6 +759,7 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         self.execute(effects, outbox);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     fn complete(&mut self, completion: Completion, outbox: &mut Outbox) {
         match completion {
             Completion::Input(input) => {
@@ -654,15 +768,43 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                 }
                 self.feed(input, outbox);
             }
-            Completion::Load(load) => {
+            Completion::Load(Some(load)) => {
                 self.load_pending = false;
-                let load = load.unwrap_or_else(|| {
-                    if let Some(sample) = self.cpu.cpu_percent() {
-                        self.default_load.add_sample(sample);
-                    }
-                    self.default_load.get()
-                });
                 self.feed(WorkerStateInput::LoadSampled(load), outbox);
+            }
+            Completion::Load(None) => {
+                let cpu = self.cpu.take();
+                self.operations.push(
+                    async move {
+                        let permit = WORKER_IO_SLOTS.acquire().await.expect("sampler stays open");
+                        Completion::CpuSample(
+                            tokio::task::spawn_blocking(move || {
+                                let _permit = permit;
+                                let mut cpu = cpu.unwrap_or_default();
+                                let sample = cpu.cpu_percent();
+                                (cpu, sample)
+                            })
+                            .await,
+                        )
+                    }
+                    .boxed(),
+                );
+            }
+            Completion::CpuSample(result) => {
+                self.load_pending = false;
+                match result {
+                    Ok((cpu, sample)) => {
+                        self.cpu = Some(cpu);
+                        if let Some(sample) = sample {
+                            self.default_load.add_sample(sample);
+                        }
+                    }
+                    Err(error) => crate::diagnostics::emit(
+                        log::Level::Error,
+                        format!("worker CPU sampler failed error={error}"),
+                    ),
+                }
+                self.feed(WorkerStateInput::LoadSampled(self.default_load.get()), outbox);
             }
             Completion::Done => {}
             Completion::EndpointDone(id) => {
@@ -675,40 +817,60 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
         for effect in effects {
             let host = self.host.clone();
             match effect {
+                WorkerStateEffect::RolloverConnection => self.rollover_requested = true,
+                WorkerStateEffect::Diagnostic { level, message } => {
+                    crate::diagnostics::emit(level, message)
+                }
                 WorkerStateEffect::Send(message) => {
                     if let Err(error) = outbox.push(message) {
                         self.send_failure = Some(error);
                     }
                 }
                 WorkerStateEffect::AskUser { slot, request } => {
+                    let generation = self.generation;
                     let (abort, registration) = AbortHandle::new_pair();
                     self.requests.insert(slot, abort);
                     self.operations.push(
                         async move {
                             match Abortable::new(host.on_job_request(request), registration).await {
-                                Ok(decision) => Completion::Input(WorkerStateInput::RequestDecision {
-                                    slot,
-                                    decision,
-                                }),
+                                Ok(decision) => {
+                                    Completion::Input(WorkerStateInput::RequestDecision {
+                                        generation,
+                                        slot,
+                                        decision,
+                                    })
+                                }
                                 Err(_) => Completion::Done,
                             }
                         }
                         .boxed(),
                     );
                 }
-                WorkerStateEffect::LaunchJob { slot, info } => self.operations.push(
-                    async move {
-                        Completion::Input(WorkerStateInput::JobLaunched {
-                            slot,
-                            result: host.launch_job(*info).await,
-                        })
+                WorkerStateEffect::CancelRequest { slot } => {
+                    if let Some(request) = self.requests.remove(&slot) {
+                        request.abort();
                     }
-                    .boxed(),
-                ),
+                }
+                WorkerStateEffect::LaunchJob { slot, info } => {
+                    let generation = self.generation;
+                    self.operations.push(
+                        async move {
+                            Completion::Input(WorkerStateInput::JobLaunched {
+                                generation,
+                                slot,
+                                result: host.launch_job(*info).await,
+                            })
+                        }
+                        .boxed(),
+                    );
+                }
                 WorkerStateEffect::TerminateJob(id) => self.operations.push(
                     async move {
                         if let Err(error) = host.terminate_job(id.clone()).await {
-                            log::error!(target: LOG, job_id = id.as_str(), error = error.to_string().as_str(); "failed to terminate job");
+                            crate::diagnostics::emit(
+                                log::Level::Error,
+                                format!("failed to terminate job job_id={id} error={error}"),
+                            );
                         }
                         Completion::Done
                     }
@@ -720,7 +882,13 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
                         .push(async move { Completion::Load(host.user_load().await) }.boxed());
                 }
                 WorkerStateEffect::SampleLoad => {}
-                WorkerStateEffect::Registered { worker_id, region, protocol, deployment, agent_name } => {
+                WorkerStateEffect::Registered {
+                    worker_id,
+                    region,
+                    protocol,
+                    deployment,
+                    agent_name,
+                } => {
                     self.notify(WorkerNotification::Registered(WorkerRegistered {
                         worker_id,
                         region,
@@ -749,21 +917,27 @@ impl<T: WorkerTransport + 'static, P: WorkerHost + 'static, C: Clock> Worker<T, 
     }
 }
 
-
 /// `wire.MaxPreambleSize` is small, so a peer that opens a stream and sends nothing is the only
 /// way to wait here; the node writes the preamble in the same call as the request head.
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 async fn serve_endpoint<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: EndpointStream) {
     let preamble = match tokio::time::timeout(PREAMBLE_TIMEOUT, stream.read_preamble()).await {
         Ok(Ok(preamble)) => preamble,
         Ok(Err(error)) => {
-            log::warn!(target: LOG, error = error.to_string().as_str(); "endpoint stream without a valid preamble");
+            crate::diagnostics::emit(
+                log::Level::Warn,
+                format!("endpoint stream without a valid preamble error={error}"),
+            );
             stream.reset(HttpStreamResetCode::HsrProtocol);
             return;
         }
         Err(_) => {
-            log::warn!(target: LOG, "endpoint stream sent no preamble in time");
+            crate::diagnostics::emit(
+                log::Level::Warn,
+                "endpoint stream sent no preamble in time".into(),
+            );
             stream.reset(HttpStreamResetCode::HsrProtocol);
             return;
         }
@@ -838,6 +1012,7 @@ mod write_tests {
         assert!(queue.pop_front().is_none());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[tokio::test(start_paused = true)]
     async fn queue_capacity_and_write_age_are_bounded() {
         let mut queue = Outbox::new(Duration::from_secs(1));

@@ -31,6 +31,7 @@ pub(crate) const LOG: &str = "livekit.agents";
 pub mod auth;
 pub mod cli;
 mod config;
+mod diagnostics;
 pub mod endpoint;
 pub mod hw;
 pub mod ipc;
@@ -38,14 +39,17 @@ mod load;
 #[cfg(test)]
 mod load_tests;
 pub mod protocol;
+#[cfg(feature = "python")]
+pub mod python;
 pub mod server;
+#[cfg(any(feature = "python", test))]
+mod server_driver;
+mod server_lifecycle;
 mod state;
 pub mod transport;
 mod worker;
 #[cfg(test)]
 mod worker_tests;
-#[cfg(feature = "python")]
-pub mod python;
 
 #[cfg(test)]
 mod state_tests;
@@ -68,7 +72,6 @@ pub use transport::{
     WorkerSink, WorkerStream, WorkerTransport, WsTransport, WtTransport, agent_url,
 };
 pub use worker::{
-    EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig,
-    RuntimeError, Snapshot, Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification,
-    retry_delay,
+    EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,
+    Snapshot, Worker, WorkerCommand, WorkerHandle, WorkerHost, WorkerNotification, retry_delay,
 };

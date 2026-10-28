@@ -9,8 +9,10 @@ import asyncio
 import contextlib
 import logging
 import multiprocessing as mp
+import os
 import signal
 import socket
+import sys
 import threading
 from collections.abc import Awaitable, Callable, Generator
 from enum import Enum
@@ -18,14 +20,13 @@ from multiprocessing.context import BaseContext
 from types import FrameType
 from typing import Any, Literal
 
-import psutil
-
 from .. import _core, utils
 from ..job import JobContext, JobExecutorType, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..utils import shortuuid
 from . import child
+from .launch import ProcessReceipt, start_process
 
 __all__ = ["JobExecutor", "JobStatus", "ProcPool"]
 
@@ -72,26 +73,24 @@ class _JobThread:
     exitcode = 0
 
     def __init__(self, args: child.JobArgs) -> None:
-        self._thread = threading.Thread(
-            target=child.thread_main, args=(args,), name="job_thread_runner"
-        )
+        self._sentinel, done = socket.socketpair()
+
+        def run() -> None:
+            try:
+                child.thread_main(args)
+            finally:
+                done.close()
+
+        self._thread = threading.Thread(target=run, name="job_thread_runner")
         self.native_id: int | None = None
+
+    @property
+    def sentinel(self) -> int:
+        return self._sentinel.fileno()
 
     def start(self) -> None:
         self._thread.start()
         self.native_id = self._thread.native_id
-
-    def join(self) -> None:
-        self._thread.join()
-
-    def is_alive(self) -> bool:
-        return self._thread.is_alive()
-
-    def kill(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
 
 
 class JobExecutor:
@@ -122,8 +121,20 @@ class JobExecutor:
         mp_ctx: BaseContext | None = None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
+        if thread and os.name == "nt":
+            raise ValueError("the thread executor is not supported on Windows; use a spawn process")
         self._loop = loop
-        self._mp_ctx = mp_ctx or mp.get_context()
+        self._mp_ctx = mp_ctx or mp.get_context(
+            "forkserver" if sys.platform == "linux" else "spawn"
+        )
+        if not thread and self._mp_ctx.get_start_method() not in ("spawn", "forkserver"):
+            raise ValueError("job processes support the spawn and Linux forkserver start methods")
+        if (
+            not thread
+            and self._mp_ctx.get_start_method() == "forkserver"
+            and sys.platform != "linux"
+        ):
+            raise ValueError("the forkserver start method is supported on Linux only")
         self._thread = thread
         self._killable = not thread
         # the core's supervision of the process; a thread has no pong deadline (it cannot be
@@ -140,10 +151,10 @@ class JobExecutor:
         self._http_proxy = http_proxy
         self._exitcode: int | None = None
         self._pid: int | None = None
-        self._psutil_process: psutil.Process | None = None
         self._start_atask: asyncio.Task[None] | None = None
+        self._launched: asyncio.Future[None] = loop.create_future()
         # the core's run of the process, from its initialization to its exit
-        self._supervise_atask: asyncio.Future[None] | None = None
+        self._supervise_atask: asyncio.Future[bool] | None = None
         self._closing = False
         self.user_arguments: Any | None = None
         self._job_status: JobStatus | None = None
@@ -196,35 +207,65 @@ class JobExecutor:
         self._start_atask = asyncio.create_task(self._start())
         await asyncio.shield(self._start_atask)
 
+    async def _core_start(self) -> _core.ProcSupervisor:
+        await self.start()
+        return self._pch
+
     async def _start(self) -> None:
-        # the control socket: the child's end goes to the process, the parent's to the core
+        if self._closing:
+            raise RuntimeError("process is closed")
         pch, cch = _core.ipc_pair()
         child_end = socket.socket(fileno=cch)
+        self._pch = _core.ProcSupervisor(pch, self, pid=0, killable=self._killable, **self._opts)
+        # The Rust owner exists before the host invokes multiprocessing and survives caller loss.
+        self._supervise_atask = self._pch.run(self._core_launch(child_end), self)
+        await asyncio.shield(self._launched)
+
+    async def _core_launch(self, child_end: socket.socket) -> None:
+        self._proc = self._create_process(child_end)
+
+        def launch() -> None:
+            method = "thread" if self._thread else self._mp_ctx.get_start_method()
+
+            def register(receipt: ProcessReceipt) -> None:
+                self._pid = receipt.pid or None
+                self._pch._core_launched_process(
+                    receipt.pid, receipt.sentinel, method, receipt.owned_handles
+                )
+
+            if self._thread:
+                self._proc.start()
+                register(ProcessReceipt(0, self._proc._sentinel.detach(), []))
+            else:
+                start_process(self._proc, method, register)
+
         try:
-            self._proc = self._create_process(child_end)
-            # SIG_IGN set process-wide before the fork is inherited (and kept across exec), so
-            # no KeyboardInterrupt lands in the child before it installs its own handlers
             with _mask_ctrl_c():
-                await self._loop.run_in_executor(None, self._proc.start)
-        except BaseException:
-            socket.socket(fileno=pch).close()
-            raise
+                return await self._loop.run_in_executor(None, launch)
         finally:
             child_end.close()
 
-        self._pid = self._proc.pid
-        self._pch = _core.ProcSupervisor(
-            pch, self, pid=self._pid or 0, killable=self._killable, **self._opts
-        )
-        joined = asyncio.Future[None]()
+    async def _core_launched(self) -> None:
+        if not self._launched.done():
+            self._launched.set_result(None)
 
-        def _sync_run() -> None:
-            self._proc.join()
-            with contextlib.suppress(RuntimeError):
-                self._loop.call_soon_threadsafe(joined.set_result, None)
+    async def _core_launch_failed(self, cause: str) -> None:
+        if not self._launched.done():
+            self._launched.set_exception(RuntimeError(cause))
 
-        threading.Thread(target=_sync_run, name="proc_join_thread").start()
-        self._supervise_atask = self._pch.run(joined, self)
+    async def _core_completed(self, exitcode: int, pid: int) -> None:
+        self._pid = pid or None
+        self._exitcode = exitcode
+        if self._thread:
+            self._proc._sentinel.close()
+        else:
+            # Start-method bookkeeping only: the native owner has already reaped the child.
+            self._proc._popen.pid = pid
+            self._proc._popen.returncode = exitcode
+            self._proc._popen.finalizer()
+        if self._running_job and self._killable:
+            metrics.job_ended()
+        self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
 
     def _create_process(self, cch: socket.socket) -> Any:
         from ..cli import _log_config
@@ -241,13 +282,25 @@ class JobExecutor:
         self._args.mp_cch = cch
         self._args.log_config = _log_config
         self._args.logger_levels = levels
-        return self._mp_ctx.Process(target=child.job_main, args=(self._args,), name="job_proc")
+        return self._mp_ctx.Process(  # type: ignore[attr-defined]
+            target=child.job_main, args=(self._args,), name="job_proc"
+        )
 
     async def join(self) -> None:
         """wait for the process to finish"""
         if self._supervise_atask is None:
             raise RuntimeError("process not started")
-        await asyncio.shield(self._supervise_atask)
+        await self._pch._core_join()
+
+    async def _core_wait_exit(self) -> bool:
+        if self._supervise_atask is None:
+            return False
+        return await self._pch._core_wait_exit()
+
+    async def _core_join(self) -> bool:
+        if self._supervise_atask is None:
+            return False
+        return await self._pch._core_join()
 
     async def initialize(self) -> None:
         """initialize the process: the core sends it its ``Hello`` and waits for it to be ready,
@@ -273,12 +326,9 @@ class JobExecutor:
     async def aclose(self) -> None:
         """attempt to gracefully close the process: an initialized one is asked to shut down
         (and killed when late), any other is killed"""
-        if self._start_atask is not None and not self._start_atask.done():
-            # start() may have been cancelled mid-shield; wait so the started check can't race
-            await asyncio.wait([self._start_atask])
+        self._closing = True
         if self._supervise_atask is None:
             return
-        self._closing = True
         await self._pch.aclose()
 
     async def kill(self) -> None:
@@ -292,43 +342,6 @@ class JobExecutor:
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
     ) -> None:
         logger.log(level, msg, extra={**extra, **self.logging_extra()}, exc_info=exc)
-
-    def _core_is_alive(self) -> bool:
-        try:
-            return bool(self._proc.is_alive())
-        except ValueError:
-            # the process object is closed once it was reaped
-            return False
-
-    def _core_kill(self) -> None:
-        with contextlib.suppress(ValueError):
-            # a terminate on Windows
-            self._proc.kill()
-
-    def _core_reap(self) -> int | None:
-        self._exitcode = self._proc.exitcode
-        self._proc.close()
-        if self._running_job and self._killable:
-            metrics.job_ended()
-        self._job_status = JobStatus.SUCCESS if self._exitcode == 0 else JobStatus.FAILED
-        return self._exitcode
-
-    def _sample_memory_mb(self) -> tuple[float, str]:
-        """The process's real footprint, preferring the metrics that don't double-count shared
-        pages: PSS (Linux) divides the pages shared with the forkserver among their sharers, USS
-        (elsewhere) counts the private ones, RSS (all of them) is the last resort. Blocking (the
-        kernel walks the process's page tables): the core calls it off its runtime every 5 s."""
-        process = self._psutil_process
-        if process is None:
-            process = self._psutil_process = psutil.Process(self._pid)
-        try:
-            memory_info: Any = process.memory_full_info()
-        except (psutil.AccessDenied, NotImplementedError):
-            memory_info = process.memory_info()
-        for metric in "pss", "uss", "rss":
-            if memory_bytes := getattr(memory_info, metric, 0):
-                return memory_bytes / (1024 * 1024), metric
-        return 0, "unknown"
 
     def logging_extra(self) -> dict[str, Any]:
         if self._thread:
@@ -392,7 +405,10 @@ class ProcPool(
             "loop": loop,
         }
         self._pool = _core.ProcPool(
-            self, num_idle_processes=num_idle_processes, initialize_timeout=initialize_timeout
+            self,
+            num_idle_processes=num_idle_processes,
+            initialize_timeout=initialize_timeout,
+            close_timeout=close_timeout,
         )
 
     @property
@@ -434,3 +450,6 @@ class ProcPool(
 
     def _core_init_failed(self, proc: JobExecutor, error: BaseException) -> None:
         logger.error("error initializing process", extra=proc.logging_extra(), exc_info=error)
+
+    def _core_close_failed(self, proc: JobExecutor, error: BaseException) -> None:
+        logger.error("error closing process", extra=proc.logging_extra(), exc_info=error)

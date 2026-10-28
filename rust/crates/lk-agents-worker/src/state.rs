@@ -1,6 +1,5 @@
 //! Worker registration, job lifecycle and drain: sans-IO, inputs in, effects out.
 
-use crate::LOG;
 use crate::config::*;
 use crate::load::{LoadInputs, WorkerStatus};
 use crate::protocol::{
@@ -10,7 +9,7 @@ use crate::protocol::{
 use crate::worker::{HostError, JobId};
 use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo};
 use lk_agents_abi::{TimerSet, Ts, WallAnchor};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 /// Interned because [`TimerId`](lk_agents_abi::TimerId) requires `Copy` and `Job.id` is a `String`.
@@ -33,12 +32,26 @@ pub enum WorkerTimer {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerStateEffect {
+    RolloverConnection,
+    Diagnostic {
+        level: log::Level,
+        message: String,
+    },
     Send(WorkerMessage),
     /// Call `WorkerHost::on_job_request`, then feed the answer back as
     /// [`WorkerStateInput::RequestDecision`] with the same slot.
-    AskUser { slot: Slot, request: crate::JobRequest },
+    AskUser {
+        slot: Slot,
+        request: crate::JobRequest,
+    },
+    CancelRequest {
+        slot: Slot,
+    },
     /// Call `WorkerHost::launch_job`, then feed [`WorkerStateInput::JobLaunched`] back.
-    LaunchJob { slot: Slot, info: Box<RunningJobInfo> },
+    LaunchJob {
+        slot: Slot,
+        info: Box<RunningJobInfo>,
+    },
     TerminateJob(JobId),
     /// Sample the load (user `load_fnc`, else cgroup CPU) and feed [`WorkerStateInput::LoadSampled`].
     SampleLoad,
@@ -62,19 +75,43 @@ pub enum WorkerStateEffect {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerStateInput {
     /// The driver has a socket and is about to send `register`. Gates `update_worker`/`ping`.
-    Connecting,
+    Connecting {
+        generation: u64,
+    },
     /// The first `ServerMessage` came back and it was a `register`.
-    Registered(RegisterWorkerResponse),
-    Server(ServerMessage),
-    RequestDecision { slot: Slot, decision: JobDecision },
+    Registered {
+        generation: u64,
+        response: RegisterWorkerResponse,
+    },
+    Server {
+        generation: u64,
+        message: ServerMessage,
+    },
+    RequestDecision {
+        generation: u64,
+        slot: Slot,
+        decision: JobDecision,
+    },
     /// The transport finished writing an acceptance; start waiting for its assignment.
-    AvailabilitySent { job_id: JobId },
-    JobLaunched { slot: Slot, result: Result<JobId, HostError> },
+    AvailabilitySent {
+        generation: u64,
+        job_id: JobId,
+    },
+    JobLaunched {
+        generation: u64,
+        slot: Slot,
+        result: Result<JobId, HostError>,
+    },
     /// A launched job changed state. `JsSuccess`/`JsFailed` remove it from `active_jobs`.
-    JobStatus { job_id: JobId, status: JobStatus },
+    JobStatus {
+        job_id: JobId,
+        status: JobStatus,
+    },
     LoadSampled(f32),
     /// The socket closed. Per-connection timers stop; assignment timers keep running.
-    Disconnected,
+    Disconnected {
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +135,7 @@ enum PendingState {
 #[derive(Debug, Clone, PartialEq)]
 struct Pending {
     slot: Slot,
+    generation: u64,
     /// The job from the **`AvailabilityRequest`**. See [`WorkerState::on_assignment`].
     job: Job,
     resuming: bool,
@@ -108,14 +146,21 @@ struct Pending {
     accepted: Ts,
 }
 
+// Provisional worker-wide admission/history bound; calibrated by the shared budget manifest.
+const DEFAULT_ASSIGNMENT_CAPACITY: usize = 4096;
+
 #[derive(Debug)]
 pub struct WorkerState {
     cfg: WorkerConfig,
     timers: TimerSet<WorkerTimer>,
     conn: ConnState,
+    generation: u64,
     worker_id: String,
     worker_load: f32,
     pending: Vec<Pending>,
+    dispositions: BTreeMap<JobId, JobStatus>,
+    assignment_capacity: usize,
+    rollover_requested: bool,
     /// Requests parked until the next load sample, in arrival order.
     awaiting_load: VecDeque<Slot>,
     active: Vec<RunningJobInfo>,
@@ -130,13 +175,22 @@ pub struct WorkerState {
 
 impl WorkerState {
     pub fn new(cfg: WorkerConfig) -> Self {
+        Self::with_assignment_capacity(cfg, DEFAULT_ASSIGNMENT_CAPACITY)
+    }
+
+    pub(crate) fn with_assignment_capacity(cfg: WorkerConfig, assignment_capacity: usize) -> Self {
+        assert!(assignment_capacity > 0, "assignment capacity must be positive");
         WorkerState {
             cfg,
             timers: TimerSet::new(),
             conn: ConnState::Disconnected,
+            generation: 0,
             worker_id: String::new(),
             worker_load: 0.0,
             pending: Vec::new(),
+            dispositions: BTreeMap::new(),
+            assignment_capacity,
+            rollover_requested: false,
             awaiting_load: VecDeque::new(),
             active: Vec::new(),
             next_slot: 0,
@@ -154,6 +208,9 @@ impl WorkerState {
         self
     }
 
+    pub fn connection_generation(&self) -> u64 {
+        self.generation
+    }
 
     pub fn config(&self) -> &WorkerConfig {
         &self.cfg
@@ -196,7 +253,6 @@ impl WorkerState {
         }
     }
 
-
     /// Arms the 0.5 s load timer, which lives outside any connection.
     pub fn start(&mut self, now: Ts) -> Vec<WorkerStateEffect> {
         self.timers.arm(WorkerTimer::LoadSample, now.saturating_add(UPDATE_LOAD_INTERVAL));
@@ -210,8 +266,10 @@ impl WorkerState {
             return Vec::new();
         }
         self.draining = true;
-        log::info!(target: LOG, agent_name = self.cfg.agent_name.as_str(), id = self.worker_id.as_str(),
-            timeout = timeout.map(|d| d.as_secs_f64()); "draining worker");
+        self.diagnostic(
+            log::Level::Info,
+            format!("draining worker id={} timeout={timeout:?}", self.worker_id),
+        );
         // The draining status goes out immediately, before the wait.
         let msg = protocol::update_worker_draining(self.active.len() as u32);
         self.queue(msg);
@@ -242,12 +300,22 @@ impl WorkerState {
                 WorkerTimer::Assignment(slot) => self.on_assignment_timeout(slot),
             }
         }
+        self.check_rollover();
         self.take()
     }
 
     pub fn handle(&mut self, now: Ts, ev: WorkerStateInput) -> Vec<WorkerStateEffect> {
+        let mut due = self.tick(now);
         match ev {
-            WorkerStateInput::Connecting => {
+            WorkerStateInput::Connecting { generation } => {
+                if generation < self.generation {
+                    return due;
+                }
+                if generation > self.generation {
+                    self.dispositions.clear();
+                    self.rollover_requested = false;
+                }
+                self.generation = generation;
                 self.conn = ConnState::Connecting;
                 let msg = protocol::register(
                     self.cfg.server_type,
@@ -261,12 +329,24 @@ impl WorkerState {
                 // Sent directly, not queued: `register` must bypass the connecting-state drop.
                 self.push(WorkerStateEffect::Send(msg));
             }
-            WorkerStateInput::Registered(resp) => self.on_registered(now, resp),
-            WorkerStateInput::Server(msg) => self.on_server(now, msg),
-            WorkerStateInput::RequestDecision { slot, decision } => {
+            WorkerStateInput::Registered { generation, response }
+                if generation == self.generation && self.conn == ConnState::Connecting =>
+            {
+                self.on_registered(now, response);
+            }
+            WorkerStateInput::Server { generation, message }
+                if generation == self.generation && self.conn == ConnState::Registered =>
+            {
+                self.on_server(now, message);
+            }
+            WorkerStateInput::RequestDecision { generation, slot, decision }
+                if generation == self.generation =>
+            {
                 self.on_decision(now, slot, decision)
             }
-            WorkerStateInput::AvailabilitySent { job_id } => {
+            WorkerStateInput::AvailabilitySent { generation, job_id }
+                if generation == self.generation =>
+            {
                 if let Some(p) = self.pending.iter().find(|p| {
                     p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_))
                 }) {
@@ -276,10 +356,14 @@ impl WorkerState {
                     );
                 }
             }
-            WorkerStateInput::JobLaunched { slot, result } => self.on_launched(slot, result),
+            WorkerStateInput::JobLaunched { generation, slot, result } => {
+                if self.pending.iter().any(|p| p.slot == slot && p.generation == generation) {
+                    self.on_launched(slot, result);
+                }
+            }
             WorkerStateInput::JobStatus { job_id, status } => self.on_job_status(job_id, status),
             WorkerStateInput::LoadSampled(load) => self.on_load(now, load),
-            WorkerStateInput::Disconnected => {
+            WorkerStateInput::Disconnected { generation } if generation == self.generation => {
                 self.conn = ConnState::Disconnected;
                 self.timers.cancel(WorkerTimer::StatusUpdate);
                 // Decisions and assignments belong to the lost connection. Launches already
@@ -294,20 +378,26 @@ impl WorkerState {
                     self.drop_pending(slot);
                 }
             }
+            _ => {}
         }
         self.check_drain_complete();
-        self.take()
+        self.check_rollover();
+        due.extend(self.take());
+        due
     }
-
 
     fn on_registered(&mut self, now: Ts, resp: RegisterWorkerResponse) {
         self.worker_id = resp.worker_id.clone();
         self.conn = ConnState::Registered;
         let (region, protocol) =
             resp.server_info.map_or((String::new(), 0), |s| (s.region, s.protocol));
-        log::info!(target: LOG, agent_name = self.cfg.agent_name.as_str(), deployment = self.cfg.deployment.as_str(),
-            id = resp.worker_id.as_str(), url = self.cfg.ws_url.as_str(), region = region.as_str(), protocol;
-            "registered worker");
+        self.diagnostic(
+            log::Level::Info,
+            format!(
+                "registered worker id={} deployment={} url={} region={region} protocol={protocol}",
+                resp.worker_id, self.cfg.deployment, self.cfg.ws_url
+            ),
+        );
         self.push(WorkerStateEffect::Registered {
             worker_id: resp.worker_id,
             region,
@@ -316,7 +406,7 @@ impl WorkerState {
             agent_name: self.cfg.agent_name.clone(),
         });
         self.timers.arm(WorkerTimer::StatusUpdate, now.saturating_add(UPDATE_STATUS_INTERVAL));
-    // Report running jobs after registration so the server can migrate their ownership.
+        // Report running jobs after registration so the server can migrate their ownership.
         if !self.active.is_empty() {
             let ids = self.active.iter().map(|j| j.job.id.clone()).collect();
             self.queue(protocol::migrate_jobs(ids));
@@ -335,7 +425,7 @@ impl WorkerState {
                     self.push(WorkerStateEffect::TerminateJob(t.job_id));
                 }
             }
-            Some(M::Register(r)) => self.on_registered(now, r),
+            Some(M::Register(_)) => {}
             // The server is draining; reconnecting is the transport's job, so nothing to decide.
             Some(M::GoAway(_)) => {}
             Some(M::Pong(_)) | None => {}
@@ -345,9 +435,20 @@ impl WorkerState {
     /// Parked until a fresh load sample ([`Self::on_load`]), so a burst is not judged on stale load.
     fn on_availability(&mut self, now: Ts, req: AvailabilityRequest) {
         let Some(job) = req.job else { return };
+        if self.pending.iter().any(|pending| pending.job.id == job.id)
+            || self.active.iter().any(|active| active.job.id == job.id)
+            || self.dispositions.contains_key(&job.id)
+        {
+            return;
+        }
+        if self.rollover_requested || self.assignment_usage() >= self.assignment_capacity {
+            self.queue(protocol::availability_reject(&job.id, false));
+            return;
+        }
         let slot = self.alloc_slot();
         self.pending.push(Pending {
             slot,
+            generation: self.generation,
             job,
             resuming: req.resuming,
             state: PendingState::AwaitingLoad,
@@ -384,14 +485,24 @@ impl WorkerState {
         }
         p.state = PendingState::AwaitingUser;
         let request = JobRequest { job: protocol::job_info(&p.job), resuming: p.resuming };
-        log::info!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = request.job.id.as_str(),
-            dispatch_id = request.job.dispatch_id.as_str(), room = request.room_name(), resuming = request.resuming;
-            "received job request");
+        self.diagnostic(
+            log::Level::Info,
+            format!(
+                "received job request job_id={} dispatch_id={} room={} resuming={}",
+                request.job.id,
+                request.job.dispatch_id,
+                request.room_name(),
+                request.resuming
+            ),
+        );
         self.push(WorkerStateEffect::AskUser { slot, request });
     }
 
     fn on_decision(&mut self, now: Ts, slot: Slot, decision: JobDecision) {
         let Some(p) = self.pending.iter().find(|p| p.slot == slot) else { return };
+        if p.state != PendingState::AwaitingUser {
+            return;
+        }
         let job_id = p.job.id.clone();
         match decision {
             JobDecision::Accept(args) => {
@@ -409,14 +520,17 @@ impl WorkerState {
             // Both are the "not answered" path: reject with `terminate=false`, unlike an explicit
             // `reject()`.
             JobDecision::Failed(err) => {
-                log::error!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = job_id.as_str(),
-                    error = err.to_string().as_str(); "job_request_fnc failed, rejecting the job");
+                self.diagnostic(
+                    log::Level::Error,
+                    format!(
+                        "job_request_fnc failed, rejecting the job job_id={job_id} error={err}"
+                    ),
+                );
                 self.drop_pending(slot);
                 self.queue(protocol::availability_reject(&job_id, false));
             }
             JobDecision::Unanswered => {
-                log::warn!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = job_id.as_str();
-                    "no answer was given inside the job_request_fnc, automatically rejecting the job");
+                self.diagnostic(log::Level::Warn, format!("no answer was given inside the job_request_fnc, automatically rejecting the job job_id={job_id}"));
                 self.drop_pending(slot);
                 self.queue(protocol::availability_reject(&job_id, false));
             }
@@ -426,12 +540,39 @@ impl WorkerState {
     /// An unset or empty assignment URL falls back to the worker URL.
     fn on_assignment(&mut self, now: Ts, a: JobAssignment) {
         let job_id = a.job.as_ref().map_or(String::new(), |j| j.id.clone());
+        if let Some(status) = self.dispositions.get(&job_id).copied() {
+            self.queue(protocol::update_job(&job_id, status));
+            return;
+        }
         let found = self.pending.iter().position(|p| {
             p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_))
         });
         let Some(idx) = found else {
-            log::warn!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = job_id.as_str();
-                "received assignment for an unknown job");
+            if self
+                .pending
+                .iter()
+                .any(|p| p.job.id == job_id && matches!(p.state, PendingState::Launching(_)))
+                || self.active.iter().any(|active| active.job.id == job_id)
+            {
+                return;
+            }
+            if let Some(slot) = self
+                .pending
+                .iter()
+                .find(|pending| pending.job.id == job_id)
+                .map(|pending| pending.slot)
+            {
+                self.drop_pending(slot);
+                self.push(WorkerStateEffect::CancelRequest { slot });
+            }
+            if self.assignment_usage() < self.assignment_capacity {
+                self.dispositions.insert(job_id.clone(), JobStatus::JsFailed);
+            }
+            self.queue(protocol::update_job(&job_id, JobStatus::JsFailed));
+            self.diagnostic(
+                log::Level::Warn,
+                format!("received assignment for an unknown job job_id={job_id}"),
+            );
             return;
         };
         let slot = self.pending[idx].slot;
@@ -466,7 +607,7 @@ impl WorkerState {
         let Some(p) = self.pending.iter().find(|p| p.slot == slot) else { return };
         let job_id = p.job.id.clone();
         self.drop_pending(slot);
-        log::warn!(target: LOG, agent_name = self.cfg.agent_name.as_str(); "assignment for job {job_id} timed out");
+        self.diagnostic(log::Level::Warn, format!("assignment for job {job_id} timed out"));
     }
 
     fn on_launched(&mut self, slot: Slot, result: Result<JobId, HostError>) {
@@ -475,6 +616,7 @@ impl WorkerState {
         self.timers.cancel(WorkerTimer::Assignment(slot));
         match result {
             Ok(_) => {
+                self.dispositions.insert(p.job.id.clone(), JobStatus::JsRunning);
                 if let PendingState::Launching(info) = p.state {
                     let job_id = info.job.id.clone();
                     if info.worker_id != self.worker_id && self.conn == ConnState::Registered {
@@ -487,8 +629,12 @@ impl WorkerState {
                 }
             }
             Err(e) => {
-                log::error!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = p.job.id.as_str(),
-                error = e.to_string().as_str(); "failed to launch job")
+                self.dispositions.insert(p.job.id.clone(), JobStatus::JsFailed);
+                self.queue(protocol::update_job(&p.job.id, JobStatus::JsFailed));
+                self.diagnostic(
+                    log::Level::Error,
+                    format!("failed to launch job job_id={} error={e}", p.job.id),
+                );
             }
         }
     }
@@ -504,12 +650,15 @@ impl WorkerState {
             return;
         }
         if !self.active.iter().any(|j| j.job.id == job_id) {
-            log::warn!(target: LOG, agent_name = self.cfg.agent_name.as_str(), job_id = job_id.as_str();
-                "job status for a job this worker does not have");
+            self.diagnostic(
+                log::Level::Warn,
+                format!("job status for a job this worker does not have job_id={job_id}"),
+            );
             return;
         }
         self.queue(protocol::update_job(&job_id, status));
         if matches!(status, JobStatus::JsSuccess | JobStatus::JsFailed) {
+            self.dispositions.insert(job_id.clone(), status);
             self.active.retain(|j| j.job.id != job_id);
         }
     }
@@ -525,13 +674,22 @@ impl WorkerState {
         if self.previous_status != Some(status) {
             self.previous_status = Some(status);
             let full = status == WorkerStatus::Full;
-            log::info!(target: LOG, agent_name = self.cfg.agent_name.as_str(), load = inputs.effective_load(),
-                threshold = inputs.load_threshold;
-                "{}", if full { "worker is at full capacity, marking as unavailable" } else { "worker is below capacity, marking as available" });
+            self.diagnostic(
+                log::Level::Info,
+                format!(
+                    "{} load={} threshold={}",
+                    if full {
+                        "worker is at full capacity, marking as unavailable"
+                    } else {
+                        "worker is below capacity, marking as available"
+                    },
+                    inputs.effective_load(),
+                    inputs.load_threshold
+                ),
+            );
         }
         self.queue(protocol::update_worker(status, self.worker_load, job_cnt));
     }
-
 
     fn alloc_slot(&mut self) -> Slot {
         let s = Slot(self.next_slot);
@@ -540,9 +698,42 @@ impl WorkerState {
     }
 
     fn drop_pending(&mut self, slot: Slot) {
+        if let Some(pending) = self.pending.iter().find(|pending| pending.slot == slot) {
+            self.dispositions.entry(pending.job.id.clone()).or_insert(JobStatus::JsFailed);
+        }
         self.pending.retain(|p| p.slot != slot);
         self.awaiting_load.retain(|s| *s != slot);
         self.timers.cancel(WorkerTimer::Assignment(slot));
+    }
+
+    fn assignment_usage(&self) -> usize {
+        self.dispositions.len()
+            + self.pending.len()
+            + self
+                .active
+                .iter()
+                .filter(|active| !self.dispositions.contains_key(&active.job.id))
+                .count()
+    }
+
+    fn check_rollover(&mut self) {
+        if !self.draining
+            && !self.rollover_requested
+            && self.conn == ConnState::Registered
+            && self.pending.is_empty()
+            && !self.dispositions.is_empty()
+            && self.assignment_usage() >= self.assignment_capacity
+        {
+            self.rollover_requested = true;
+            self.push(WorkerStateEffect::RolloverConnection);
+        }
+    }
+
+    fn diagnostic(&mut self, level: log::Level, message: String) {
+        self.push(WorkerStateEffect::Diagnostic {
+            level,
+            message: format!("{message} agent_name={}", self.cfg.agent_name),
+        });
     }
 
     fn push(&mut self, a: WorkerStateEffect) {
@@ -576,3 +767,41 @@ impl WorkerState {
     }
 }
 
+/// Reconnect budget and wake-up policy; the adapter only waits for the supplied deadline.
+#[derive(Debug)]
+pub(crate) struct ConnectionRetry {
+    max_retry: u32,
+    retries: u32,
+    wake_at: Option<Ts>,
+}
+
+/// Linear backoff with an immediate first retry, capped at ten seconds.
+pub fn retry_delay(retry_count: u32) -> Duration {
+    Duration::from_secs((u64::from(retry_count) * 2).min(10))
+}
+
+impl ConnectionRetry {
+    pub(crate) fn new(max_retry: u32) -> Self {
+        Self { max_retry, retries: 0, wake_at: None }
+    }
+
+    pub(crate) fn registered(&mut self) {
+        self.retries = 0;
+        self.wake_at = None;
+    }
+
+    pub(crate) fn disconnected(&mut self, now: Ts) -> Result<Ts, u32> {
+        if self.retries >= self.max_retry {
+            self.wake_at = None;
+            return Err(self.retries);
+        }
+        let at = now.saturating_add(retry_delay(self.retries));
+        self.retries += 1;
+        self.wake_at = Some(at);
+        Ok(at)
+    }
+
+    pub(crate) fn wake_at(&self) -> Option<Ts> {
+        self.wake_at
+    }
+}

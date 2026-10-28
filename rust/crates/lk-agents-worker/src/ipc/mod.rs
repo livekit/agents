@@ -8,6 +8,7 @@
 //!   from its own event loop, so a pong still measures that loop's responsiveness.
 //! - [`pool`]: the warm processes. Spawning them stays with the host language.
 
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -17,18 +18,21 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub mod pool;
+mod process;
 #[cfg(feature = "python")]
 pub mod python;
 pub mod supervisor;
+mod supervisor_driver;
 #[cfg(test)]
 mod tests;
 pub mod wire;
 
-pub use supervisor::{
-    Extra, ExtraValue, InitError, Level, MemoryError, ProcHost, ProcSupervisor, SupervisorOptions,
-};
 #[cfg(feature = "python")]
 pub(crate) use supervisor::secs;
+pub use supervisor::{
+    Extra, ExtraValue, InitError, Level, MemoryError, ProcHost, SupervisorOptions,
+};
+pub use supervisor_driver::ProcSupervisor;
 pub use wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
 
 use lk_agents_abi::lock;
@@ -50,18 +54,38 @@ pub struct Closed;
 /// queued, in order. With a health timeout, it prints to stderr and stops reading when the parent
 /// sends nothing for that long, whatever the state of the child's event loop.
 pub struct IpcClient {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     outbox: Mutex<Option<mpsc::Sender<ToParent>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     writer: Mutex<Option<JoinHandle<()>>>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     inbox: tokio::sync::Mutex<mpsc::Receiver<ToChild>>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     reader: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl IpcClient {
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The parent's `Hello`, then the client. On a version this side does not speak, it answers
     /// `Ready` with the error and fails. Needs a runtime context.
     pub async fn connect<S>(stream: S) -> Result<(Self, Hello), WireError>
     where
         S: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        Self::connect_with_health_action(stream, || {}).await
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    /// A process bootstrap supplies native orphan termination; no host loop is needed.
+    pub async fn connect_with_health_action<S, F>(
+        stream: S,
+        on_orphan: F,
+    ) -> Result<(Self, Hello), WireError>
+    where
+        S: AsyncRead + AsyncWrite + Send + 'static,
+        F: FnOnce() + Send + 'static,
     {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let hello = match wire::read::<ToChild, _>(&mut reader).await? {
@@ -70,7 +94,8 @@ impl IpcClient {
         };
         if hello.version != PROTOCOL_VERSION {
             let error = WireError::Version { theirs: hello.version };
-            let ready = ToParent::Ready { version: PROTOCOL_VERSION, error: Some(error.to_string()) };
+            let ready =
+                ToParent::Ready { version: PROTOCOL_VERSION, error: Some(error.to_string()) };
             let _ = wire::write(&mut writer, &ready).await;
             return Err(error);
         }
@@ -85,7 +110,7 @@ impl IpcClient {
         });
         let (inbox_tx, inbox) = mpsc::channel(QUEUE);
         let health_timeout = hello.health_timeout_ms.map(Duration::from_millis);
-        let reader = tokio::spawn(read_parent(reader, inbox_tx, health_timeout));
+        let reader = tokio::spawn(read_parent(reader, inbox_tx, health_timeout, on_orphan));
         let client = Self {
             outbox: Mutex::new(Some(outbox)),
             writer: Mutex::new(Some(writer)),
@@ -106,10 +131,13 @@ impl IpcClient {
         self.inbox.lock().await.recv().await
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// Stops reading, writes what is queued (for up to [`FLUSH_TIMEOUT`]) and closes the socket.
     pub async fn close(&self) {
-        if let Some(reader) = lock(&self.reader).take() {
+        let reader = lock(&self.reader).take();
+        if let Some(reader) = reader {
             reader.abort();
+            let _ = reader.await;
         }
         lock(&self.outbox).take();
         let writer = lock(&self.writer).take();
@@ -117,37 +145,46 @@ impl IpcClient {
             && tokio::time::timeout(FLUSH_TIMEOUT, &mut writer).await.is_err()
         {
             writer.abort();
+            let _ = writer.await;
         }
     }
 }
 
+#[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
+#[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// The parent's messages, until it closes the socket, sends what cannot be read (logged), or goes
 /// quiet past `health_timeout`.
-async fn read_parent<R: AsyncRead + Unpin>(
+async fn read_parent<R: AsyncRead + Unpin, F: FnOnce()>(
     mut reader: R,
     inbox: mpsc::Sender<ToChild>,
     health_timeout: Option<Duration>,
+    on_orphan: F,
 ) {
     let far = Duration::from_secs(1 << 30);
+    let timeout = health_timeout.map(|t| t.min(far));
+    let mut deadline = Instant::now() + timeout.unwrap_or(far);
+    let mut pending = None;
     loop {
-        let deadline = Instant::now() + health_timeout.map_or(far, |t| t.min(far));
         tokio::select! {
-            msg = wire::read::<ToChild, _>(&mut reader) => match msg {
+            biased;
+            () = tokio::time::sleep_until(deadline), if timeout.is_some() => {
+                on_orphan();
+                return;
+            }
+            permit = inbox.reserve(), if pending.is_some() => {
+                let Ok(permit) = permit else { return; };
+                permit.send(pending.take().unwrap());
+            }
+            msg = wire::read::<ToChild, _>(&mut reader), if pending.is_none() => match msg {
                 Ok(msg) => {
-                    if inbox.send(msg).await.is_err() {
-                        return;
-                    }
+                    if let Some(timeout) = timeout { deadline = Instant::now() + timeout; }
+                    pending = Some(msg);
                 }
-                Err(WireError::Io(_)) => return,
-                Err(e) => {
-                    log::error!(target: "livekit.agents", "invalid IPC message from the worker: {e}");
+                Err(_) => {
+                    on_orphan();
                     return;
                 }
             },
-            () = tokio::time::sleep_until(deadline), if health_timeout.is_some() => {
-                eprintln!("worker process is not responding.. worker crashed?");
-                return;
-            }
         }
     }
 }

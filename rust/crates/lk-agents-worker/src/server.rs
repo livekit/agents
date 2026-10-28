@@ -11,7 +11,7 @@ use livekit_protocol as proto;
 use prost::Message as _;
 
 use crate::{
-    AcceptArguments, EnvOption, JobDecision, JobRequest, LOG, RunningJobInfo, ServerType,
+    AcceptArguments, EnvOption, JobDecision, JobRequest, RunningJobInfo, ServerType,
     WORKER_PROTOCOL_VERSION, WorkerPermissions,
 };
 
@@ -36,7 +36,7 @@ pub struct ServerSettings {
     pub host: String,
     pub port: EnvOption<u16>,
     pub load_threshold: EnvOption<f32>,
-    pub num_idle_processes: EnvOption<u32>,
+    pub num_idle_processes: Option<EnvOption<u32>>,
     /// `drain()`'s deadline in seconds; zero waits for every job.
     pub drain_timeout: f64,
     pub max_retry: u32,
@@ -71,10 +71,7 @@ impl Default for ServerSettings {
             host: String::new(),
             port: EnvOption::Split { dev: 0, prod: 8081 },
             load_threshold: DEFAULT_LOAD_THRESHOLD,
-            num_idle_processes: EnvOption::Split {
-                dev: 0,
-                prod: crate::CpuMonitor::new().cpu_count().ceil() as u32,
-            },
+            num_idle_processes: None,
             drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
             max_retry: 16,
             permissions: WorkerPermissions::default(),
@@ -83,8 +80,7 @@ impl Default for ServerSettings {
             prometheus_multiproc_dir: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
-            // a thread on Windows: some Pythons there get a BrokenPipeError spawning a process
-            job_executor_type: if cfg!(windows) { "thread" } else { "process" }.into(),
+            job_executor_type: "process".into(),
             multiprocessing_context: if cfg!(target_os = "linux") { "forkserver" } else { "spawn" }
                 .into(),
             job_memory_warn_mb: 1000.0,
@@ -143,9 +139,11 @@ impl ServerSettings {
             );
         }
         if has_routes && self.agent_name.is_empty() {
-            return Err("server.http routes are served at /agents/{agent_name}/..., so they require \
+            return Err(
+                "server.http routes are served at /agents/{agent_name}/..., so they require \
                  an agent_name (AgentServer(agent_name=) or LIVEKIT_AGENT_NAME)"
-                .into());
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -193,7 +191,7 @@ impl ServerSettings {
             permissions: self.permissions.clone(),
             endpoints,
             load_threshold: EnvOption::Fixed(self.load_threshold.get(devmode)),
-            num_idle_processes: Some(EnvOption::Fixed(self.num_idle_processes.get(devmode))),
+            num_idle_processes: self.num_idle_processes,
             devmode,
             simulation: self.simulation,
             drain_timeout: std::time::Duration::try_from_secs_f64(self.drain_timeout).ok(),
@@ -212,14 +210,23 @@ pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
         .map(str::to_owned)
         .or_else(|| std::env::var("PROMETHEUS_MULTIPROC_DIR").ok().filter(|d| !d.is_empty()))?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!(target: LOG, path = dir.as_str(); "failed to create the prometheus directory: {e}");
+        crate::diagnostics::emit(
+            log::Level::Warn,
+            format!("failed to create the prometheus directory path={dir} error={e}"),
+        );
         return Some(dir);
     }
-    log::debug!(target: LOG, path = dir.as_str(); "cleaning prometheus multiprocess directory");
+    crate::diagnostics::emit(
+        log::Level::Debug,
+        format!("cleaning prometheus multiprocess directory path={dir}"),
+    );
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
             if let Err(e) = std::fs::remove_file(&path) {
-                log::warn!(target: LOG, "failed to remove {}: {e}", path.display());
+                crate::diagnostics::emit(
+                    log::Level::Warn,
+                    format!("failed to remove {}: {e}", path.display()),
+                );
             }
         }
     }
@@ -287,10 +294,8 @@ pub fn simulated_job(
         None if fake_job && (settings.api_key.is_empty() || settings.api_secret.is_empty()) => {
             String::new()
         }
-        None => {
-            crate::agent_join_token(&settings.api_key, &settings.api_secret, &identity, room)
-                .map_err(|e| e.to_string())?
-        }
+        None => crate::agent_join_token(&settings.api_key, &settings.api_secret, &identity, room)
+            .map_err(|e| e.to_string())?,
     };
     Ok(RunningJobInfo {
         accept_arguments: AcceptArguments {
@@ -317,8 +322,14 @@ pub fn simulated_job(
 /// has no `on_request` accepts it as `JobRequest.accept()` does. `None`: ask the host.
 pub fn own_decision(req: &JobRequest, has_rtc: bool, has_on_request: bool) -> Option<JobDecision> {
     if !has_rtc {
-        log::warn!(target: LOG, job_id = req.job.id.as_str(), room = req.room_name();
-            "a job reached a server with no rtc_session; rejecting it");
+        crate::diagnostics::emit(
+            log::Level::Warn,
+            format!(
+                "a job reached a server with no rtc_session; rejecting it job_id={} room={}",
+                req.job.id,
+                req.room_name()
+            ),
+        );
         return Some(JobDecision::Reject { terminate: false });
     }
     (!has_on_request).then(|| {
@@ -346,13 +357,24 @@ pub trait HealthProbe: Send + Sync {
 }
 
 /// The server state the listener and `/worker` read.
-#[derive(Default)]
 pub struct ServerStatus {
+    pub ready: tokio::sync::watch::Sender<bool>,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub connection_failed: AtomicBool,
     #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `f32` bits.
     pub worker_load: AtomicU32,
+}
+
+impl Default for ServerStatus {
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
+    fn default() -> Self {
+        Self {
+            ready: tokio::sync::watch::channel(false).0,
+            connection_failed: AtomicBool::new(false),
+            worker_load: AtomicU32::new(0),
+        }
+    }
 }
 
 impl ServerStatus {
@@ -409,6 +431,9 @@ async fn health_route(
         return text(405, "Method Not Allowed", "405: Method Not Allowed");
     }
     if path == "/" {
+        if !*status.ready.borrow() {
+            return text(503, "Service Unavailable", "worker startup incomplete");
+        }
         if status.connection_failed.load(Ordering::Relaxed) {
             return text(503, "Service Unavailable", "failed to connect to livekit");
         }
@@ -450,8 +475,9 @@ pub async fn serve_health(
     server_type: ServerType,
     status: Arc<ServerStatus>,
     probe: Arc<dyn HealthProbe>,
-) {
-    serve(listener, move |method, path| {
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), String> {
+    serve(listener, stop, move |method, path| {
         let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
         async move { health_route(&method, &path, &settings, server_type, &status, &*probe).await }
     })
@@ -459,8 +485,12 @@ pub async fn serve_health(
 }
 
 /// The Prometheus listener (`prometheus_port`) on `listener` until dropped.
-pub async fn serve_metrics(listener: tokio::net::TcpListener, probe: Arc<dyn HealthProbe>) {
-    serve(listener, move |method, path| {
+pub async fn serve_metrics(
+    listener: tokio::net::TcpListener,
+    probe: Arc<dyn HealthProbe>,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), String> {
+    serve(listener, stop, move |method, path| {
         let probe = probe.clone();
         async move { metrics_route(&method, &path, &*probe).await }
     })
@@ -470,54 +500,96 @@ pub async fn serve_metrics(listener: tokio::net::TcpListener, probe: Arc<dyn Hea
 #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
 /// Serves `listener` until dropped: one request per connection, answered by
 /// `respond(method, path)`, then closed.
-async fn serve<F, R>(listener: tokio::net::TcpListener, respond: F)
+async fn serve<F, R>(
+    listener: tokio::net::TcpListener,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    respond: F,
+) -> Result<(), String>
+where
+    F: Fn(String, String) -> R + Send + Sync + 'static,
+    R: std::future::Future<Output = Response> + Send + 'static,
+{
+    let respond = Arc::new(respond);
+    let mut connections = tokio::task::JoinSet::new();
+    let mut result = Ok(());
+    loop {
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow_and_update() { break; }
+            }
+            joined = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    result = Err(format!("health/metrics connection: {error}"));
+                    break;
+                }
+            }
+            accepted = listener.accept(), if connections.len() < 64 => {
+                match accepted {
+                    Ok((socket, _)) => {
+                        connections.spawn(serve_connection(socket, respond.clone()));
+                    }
+                    Err(error) => { result = Err(error.to_string()); break; }
+                }
+            }
+        }
+    }
+    connections.abort_all();
+    while let Some(joined) = connections.join_next().await {
+        if let Err(error) = joined {
+            if !error.is_cancelled() {
+                result = Err(format!("health/metrics connection: {error}"));
+            }
+        }
+    }
+    result
+}
+
+async fn serve_connection<F, R>(mut socket: tokio::net::TcpStream, respond: Arc<F>)
 where
     F: Fn(String, String) -> R + Send + Sync + 'static,
     R: std::future::Future<Output = Response> + Send + 'static,
 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let respond = Arc::new(respond);
-    while let Ok((mut socket, _)) = listener.accept().await {
-        let respond = respond.clone();
-        tokio::spawn(async move {
-            let mut buf = Vec::with_capacity(1024);
-            let mut chunk = [0u8; 1024];
-            let (method, path) = loop {
-                let Ok(n) = socket.read(&mut chunk).await else { return };
-                if n == 0 || buf.len() > 16 * 1024 {
-                    return;
-                }
-                buf.extend_from_slice(&chunk[..n]);
-                let mut headers = [httparse::EMPTY_HEADER; 64];
-                let mut req = httparse::Request::new(&mut headers);
-                match req.parse(&buf) {
-                    Ok(httparse::Status::Complete(_)) => {
-                        break (
-                            req.method.unwrap_or_default().to_owned(),
-                            req.path.unwrap_or_default().to_owned(),
-                        );
-                    }
-                    Ok(httparse::Status::Partial) => continue,
-                    Err(_) => return,
-                }
-            };
-            let (code, reason, content_type, body) = respond(method.clone(), path).await;
-            let head = format!(
-                "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
-                 Connection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = socket.write_all(head.as_bytes()).await;
-            if method != "HEAD" {
-                let _ = socket.write_all(body.as_bytes()).await;
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    let (method, path) = loop {
+        let Ok(n) = socket.read(&mut chunk).await else { return };
+        if n == 0 || buf.len() > 16 * 1024 {
+            return;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let mut headers = [httparse::EMPTY_HEADER; 64];
+        let mut req = httparse::Request::new(&mut headers);
+        match req.parse(&buf) {
+            Ok(httparse::Status::Complete(_)) => {
+                break (
+                    req.method.unwrap_or_default().to_owned(),
+                    req.path.unwrap_or_default().to_owned(),
+                );
             }
-            let _ = socket.shutdown().await;
-        });
+            Ok(httparse::Status::Partial) => continue,
+            Err(_) => return,
+        }
+    };
+    let (code, reason, content_type, body) = respond(method.clone(), path).await;
+    let head = format!(
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = socket.write_all(head.as_bytes()).await;
+    if method != "HEAD" {
+        let _ = socket.write_all(body.as_bytes()).await;
     }
+    let _ = socket.shutdown().await;
 }
 
 /// A listener's socket on `host:port` (`host` empty: every interface) and the port it got.
-pub async fn bind_listener(host: &str, port: u16) -> std::io::Result<(tokio::net::TcpListener, u16)> {
+pub async fn bind_listener(
+    host: &str,
+    port: u16,
+) -> std::io::Result<(tokio::net::TcpListener, u16)> {
     let host = if host.is_empty() { "0.0.0.0" } else { host };
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     let port = listener.local_addr()?.port();
@@ -633,8 +705,9 @@ mod tests {
     #[test]
     fn a_simulated_job_names_its_agent_and_room() {
         let s = settings();
-        let fake = simulated_job(&s, "W1", "console-room", true, Some("console".into()), None, None)
-            .unwrap();
+        let fake =
+            simulated_job(&s, "W1", "console-room", true, Some("console".into()), None, None)
+                .unwrap();
         assert!(fake.job.id.starts_with("mock-job-"));
         assert_eq!(fake.job.room.as_deref(), Some("console-room"));
         assert_eq!((fake.accept_arguments.identity.as_str(), fake.token.as_str()), ("console", ""));
@@ -646,8 +719,45 @@ mod tests {
         creds.api_secret = "thiskeyistotallyunsafe".into();
         let minted = simulated_job(&creds, "W", "r", true, None, None, None).unwrap();
         assert!(minted.accept_arguments.identity.starts_with("fake-agent-"));
-        let named = simulated_job(&creds, "W", "r", true, Some("x".into()), None, Some(minted.token))
-            .unwrap();
+        let named =
+            simulated_job(&creds, "W", "r", true, Some("x".into()), None, Some(minted.token))
+                .unwrap();
         assert_eq!(named.accept_arguments.identity, minted.accept_arguments.identity);
+    }
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+    #[tokio::test]
+    async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for count in [1, 8, 32, 64] {
+            let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
+            let (stop, stopped) = tokio::sync::watch::channel(false);
+            let serving = serve_metrics(listener, Arc::new(Probe), stopped);
+            tokio::pin!(serving);
+            let mut peers = Vec::new();
+            for _ in 0..count {
+                let mut peer = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                peer.write_all(b"GET /metrics HTTP/1.1\r\n").await.unwrap();
+                peers.push(peer);
+                assert!(futures_util::poll!(&mut serving).is_pending());
+            }
+            tokio::task::yield_now().await;
+            stop.send_replace(true);
+            tokio::time::timeout(std::time::Duration::from_secs(1), serving)
+                .await
+                .unwrap()
+                .unwrap();
+            for mut peer in peers {
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    peer.read(&mut [0_u8; 1]),
+                )
+                .await
+                .unwrap();
+                assert!(
+                    matches!(result, Ok(0)) || result.is_err(),
+                    "every accepted connection must be closed"
+                );
+            }
+        }
     }
 }

@@ -2,18 +2,13 @@
 //!
 //! [`Supervision`] is the decisions, sans I/O: it takes the [`Input`]s (what the host asked, what
 //! the child sent, a sample, the exit) at an instant, says what to do as [`Effect`]s, and keeps
-//! every timeout as a deadline ([`Supervision::next_deadline`], acted on by
-//! [`Supervision::tick`]). [`ProcSupervisor`] is the thin async driver around it: one task owning
-//! the socket's writing half, the state, and a reader task's messages.
+//! every timeout as a deadline ([`Supervision::wake_at`], acted on by
+//! [`Supervision::tick`]). Socket, timer and process execution live in `supervisor_driver`.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::Instant;
-
-use super::wire::{self, Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent, WireError};
+use super::wire::{Hello, PROTOCOL_VERSION, StartJob, ToChild, ToParent};
 
 /// How often the memory monitor samples the process.
 pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
@@ -23,8 +18,6 @@ pub const MEMORY_WARN_COOLDOWN: Duration = Duration::from_secs(120);
 pub const MEMORY_WARN_RESET_DELTA_MB: f64 = 50.0;
 /// Between SIGUSR1 (the child dumps its stacks) and SIGKILL.
 pub const KILL_GRACE: Duration = Duration::from_millis(500);
-/// The bound of the driver's queues.
-const QUEUE: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -66,12 +59,17 @@ pub trait ProcHost: Send + Sync + 'static {
     fn log_exception(&self, msg: &str, err: Self::Error);
     fn is_alive(&self) -> bool;
     /// SIGKILL (`Process.kill`; a terminate on Windows).
-    fn kill(&self);
+    fn kill(&self) -> Result<(), String>;
+    fn request_stack_dump(&self) -> Result<bool, String> {
+        Ok(false)
+    }
     /// The process's footprint in MB and the metric it reflects (pss, uss or rss). Blocking: the
     /// supervisor calls it off the runtime.
     fn sample_memory(&self) -> Result<(f64, String), MemoryError<Self::Error>>;
     /// The process exited and was reaped: the host's handle can go.
     fn release(&self) {}
+    fn incomplete_cleanup(&self, _: CleanupObservation) {}
+    fn signal_failed(&self, _: SignalFailure) {}
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +96,8 @@ impl SupervisorOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {
+    #[error("initialization already requested")]
+    AlreadyInitializing,
     #[error("duplex closed")]
     Closed,
     #[error("first message must be Ready")]
@@ -118,15 +118,19 @@ fn round(x: f64, digits: usize) -> f64 {
     format!("{x:.digits$}").parse().unwrap_or(x)
 }
 
-/// `utils.time_ms()`: wall-clock milliseconds, rounded.
-pub fn time_ms() -> i64 {
-    (lk_agents_abi::unix_now() * 1000.0 + 0.5) as i64
-}
-
 // ------------------------------------------------------------------------------- the decisions
 
 #[derive(Debug)]
 pub enum Input {
+    Launched(u32),
+    LaunchFailed(String),
+    LaunchRejected(String),
+    Reaped(i64),
+    KillFinished(Result<(), String>),
+    Written {
+        id: u64,
+        result: Result<(), String>,
+    },
     /// Send `Hello` and wait for `Ready`, within the initialize timeout.
     Initialize(Hello),
     /// The initialization settled: pings, the pong deadline and the memory monitor start.
@@ -157,7 +161,12 @@ pub enum Sample {
 
 #[derive(Debug)]
 pub enum Effect {
-    Send(ToChild),
+    Send {
+        id: u64,
+        message: ToChild,
+    },
+    IncompleteCleanup(CleanupObservation),
+    SignalFailed(SignalFailure),
     Log(Level, String, Extra),
     /// The kill sequence's first step: unless dead, SIGUSR1 (the child dumps its stacks; on
     /// Windows a `DumpStacks`), then `KillBegun`.
@@ -169,28 +178,43 @@ pub enum Effect {
     Initialized(Result<Option<Duration>, InitError>),
 }
 
+/// A native termination request failed; exit/reaping ownership remains unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalFailure {
+    pub pid: u32,
+    pub cause: String,
+}
+
+/// Cleanup missed its deadline; ownership stays with the driver until a reaping receipt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CleanupObservation {
+    pub pid: u32,
+    pub exited: bool,
+    pub reaped: bool,
+}
+
 /// Where a graceful close is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Close {
     None,
-    Ack(Instant),
-    ShuttingDown,
-    Exit(Instant),
+    Ack(Duration),
+    ShuttingDown(Duration),
+    Exit(Duration),
     Waiting,
 }
 
 /// Rate-limits the high memory warning: once per cooldown, or sooner when usage grew.
 #[derive(Default)]
 pub(crate) struct WarnGate {
-    last: Option<(Instant, f64)>,
+    last: Option<(Duration, f64)>,
 }
 
 impl WarnGate {
-    pub(crate) fn should_warn(&mut self, memory_mb: f64, now: Instant) -> bool {
+    pub(crate) fn should_warn(&mut self, memory_mb: f64, now: Duration) -> bool {
         let emit = match self.last {
             None => true,
             Some((at, mb)) => {
-                now.duration_since(at) >= MEMORY_WARN_COOLDOWN
+                now.saturating_sub(at) >= MEMORY_WARN_COOLDOWN
                     || memory_mb - mb >= MEMORY_WARN_RESET_DELTA_MB
             }
         };
@@ -204,19 +228,21 @@ impl WarnGate {
 /// One process's supervision, sans I/O.
 pub struct Supervision {
     opts: SupervisorOptions,
-    spawned: Instant,
+    spawned: Duration,
     /// Waiting for `Ready`: since when, and until when.
-    init: Option<(Instant, Instant)>,
+    init: Option<(Duration, Duration)>,
+    initialized_requested: bool,
+    startup_at: Option<Duration>,
     supervising: bool,
-    next_ping: Option<Instant>,
-    pong_deadline: Option<Instant>,
-    next_sample: Option<Instant>,
+    next_ping: Option<Duration>,
+    pong_deadline: Option<Duration>,
+    next_sample: Option<Duration>,
     sampling: bool,
     baseline_mb: Option<f64>,
     gate: WarnGate,
     close: Close,
     killing: bool,
-    kill_at: Option<Instant>,
+    kill_at: Option<Duration>,
     acked: bool,
     shutting_down: bool,
     closing: bool,
@@ -225,14 +251,23 @@ pub struct Supervision {
     exited: bool,
     running_job: bool,
     reader_closed: bool,
+    reaped: bool,
+    launch_rejected: bool,
+    exitcode: Option<i64>,
+    cleanup_at: Option<Duration>,
+    next_write: u64,
+    pending_writes: BTreeSet<u64>,
+    protocol_failure: Option<String>,
 }
 
 impl Supervision {
-    pub fn new(opts: SupervisorOptions, now: Instant) -> Self {
+    pub fn new(opts: SupervisorOptions, now: Duration) -> Self {
         Self {
             opts,
             spawned: now,
             init: None,
+            initialized_requested: false,
+            startup_at: None,
             supervising: false,
             next_ping: None,
             pong_deadline: None,
@@ -251,6 +286,13 @@ impl Supervision {
             exited: false,
             running_job: false,
             reader_closed: false,
+            reaped: false,
+            launch_rejected: false,
+            exitcode: None,
+            cleanup_at: None,
+            next_write: 0,
+            pending_writes: BTreeSet::new(),
+            protocol_failure: None,
         }
     }
 
@@ -265,42 +307,132 @@ impl Supervision {
 
     /// Closing or killed: the memory monitor's failures are no longer worth a log.
     pub fn stopping(&self) -> bool {
-        self.closing || self.killed
+        self.closing || self.killing || self.killed || self.exited
     }
 
     /// When [`tick`](Self::tick) has something to do.
-    pub fn next_deadline(&self) -> Option<Instant> {
+    pub fn wake_at(&self) -> Option<Duration> {
+        if self.cleaned() {
+            return None;
+        }
+        if self.exited {
+            return self.cleanup_at;
+        }
         let close = match self.close {
-            Close::Ack(at) | Close::Exit(at) => Some(at),
+            Close::Ack(at) | Close::ShuttingDown(at) | Close::Exit(at) => Some(at),
             _ => None,
         };
         let sample = self.next_sample.filter(|_| !self.sampling && !self.stopping());
         [
+            self.startup_at,
             self.init.map(|(_, at)| at),
             self.next_ping,
             self.pong_deadline,
             sample,
             close,
             self.kill_at,
+            self.cleanup_at,
         ]
         .into_iter()
         .flatten()
         .min()
     }
 
-    pub fn handle(&mut self, now: Instant, input: Input) -> Vec<Effect> {
+    pub fn handle(&mut self, now: Duration, wall_ms: i64, input: Input) -> Vec<Effect> {
         let mut out = Vec::new();
-        if self.exited && !matches!(input, Input::KillBegun(_)) {
+        if self.cleaned() {
+            return out;
+        }
+        // A reply received at a deadline cannot revive an expired phase.
+        let mut due = self.tick(now, wall_ms);
+        out.append(&mut due);
+        if self.exited && !matches!(input, Input::Reaped(_) | Input::LaunchFailed(_)) {
             return out;
         }
         match input {
+            Input::Launched(pid) => {
+                self.opts.pid = pid;
+                if !self.initialized_requested && !self.closing {
+                    self.startup_at = Some(now + secs(self.opts.initialize_timeout));
+                }
+                if self.closing && !self.exited {
+                    self.kill_ended = false;
+                    self.begin_kill(&mut out);
+                }
+            }
+            Input::LaunchRejected(cause) => {
+                self.launch_rejected = true;
+                self.startup_at = None;
+                self.init = None;
+                self.cleanup_at = None;
+                out.push(Effect::Initialized(Err(InitError::Failed(cause.clone()))));
+                out.push(Effect::Log(
+                    Level::Error,
+                    format!("process launch failed before creating a process: {cause}"),
+                    Vec::new(),
+                ));
+            }
+            Input::LaunchFailed(cause) => {
+                self.startup_at = None;
+                self.closing = true;
+                if self.init.take().is_some() {
+                    out.push(Effect::Initialized(Err(InitError::Failed(cause.clone()))));
+                }
+                out.push(Effect::Log(
+                    Level::Error,
+                    format!("process launch failed: {cause}"),
+                    Vec::new(),
+                ));
+                self.begin_kill(&mut out);
+                if !self.reaped() {
+                    self.cleanup_at.get_or_insert(now + self.termination_timeout());
+                }
+            }
+            Input::Reaped(code) => {
+                self.observe_exitcode(Some(code), &mut out);
+                self.reaped = true;
+                if self.exited {
+                    self.cleanup_at = None;
+                }
+            }
+            Input::KillFinished(result) => {
+                self.killing = false;
+                match result {
+                    Ok(()) => {
+                        self.killed = true;
+                        self.kill_ended = true;
+                    }
+                    Err(cause) => {
+                        out.push(Effect::SignalFailed(SignalFailure { pid: self.opts.pid, cause }))
+                    }
+                }
+            }
+            Input::Written { id, result } => {
+                if self.pending_writes.remove(&id)
+                    && let Err(reason) = result
+                {
+                    out.extend(self.handle(now, wall_ms, Input::ReaderClosed(Some(reason))));
+                }
+            }
             Input::Initialize(hello) => {
+                if self.initialized_requested || self.closing || self.exited {
+                    out.push(Effect::Initialized(Err(InitError::AlreadyInitializing)));
+                    return out;
+                }
+                self.initialized_requested = true;
                 let msg = format!("initializing {}", self.opts.runner());
                 out.push(Effect::Log(Level::Info, msg, Vec::new()));
-                out.push(Effect::Send(ToChild::Hello(hello)));
+                self.send(ToChild::Hello(hello), &mut out);
                 match self.reader_closed {
                     true => out.push(Effect::Initialized(Err(InitError::Closed))),
-                    false => self.init = Some((now, now + secs(self.opts.initialize_timeout))),
+                    false => {
+                        self.init = Some((
+                            now,
+                            self.startup_at
+                                .take()
+                                .unwrap_or(now + secs(self.opts.initialize_timeout)),
+                        ))
+                    }
                 }
             }
             Input::Supervise => {
@@ -318,12 +450,18 @@ impl Supervision {
             }
             Input::StartJob(job) => {
                 self.running_job = true;
-                out.push(Effect::Send(ToChild::StartJob(job)));
+                self.send(ToChild::StartJob(job), &mut out);
             }
-            Input::Message(msg) => self.on_message(now, msg, &mut out),
+            Input::Message(msg) => self.on_message(now, wall_ms, msg, &mut out),
             Input::ReaderClosed(reason) => {
+                if self.reader_closed {
+                    return out;
+                }
+                let orderly_close = self.closing && self.shutting_down;
                 self.reader_closed = true;
-                if let Some(reason) = reason {
+                self.next_ping = None;
+                self.protocol_failure = reason.clone();
+                if let Some(reason) = reason.filter(|_| !self.closing || !self.shutting_down) {
                     out.push(Effect::Log(
                         Level::Error,
                         format!("invalid IPC message: {reason}"),
@@ -337,15 +475,27 @@ impl Supervision {
                 self.acked = true;
                 self.shutting_down = true;
                 self.advance_close(now);
+                if !self.exited && !orderly_close {
+                    self.closing = true;
+                    self.begin_kill(&mut out);
+                    self.cleanup_at.get_or_insert(now + self.termination_timeout());
+                }
             }
             Input::Shutdown => self.shutdown(now, &mut out),
             Input::Kill if !self.opts.killable => self.shutdown(now, &mut out),
             Input::Kill => {
                 self.closing = true;
                 self.begin_kill(&mut out);
+                self.cleanup_at.get_or_insert(now + self.termination_timeout());
             }
-            Input::KillBegun(Some(true)) => self.kill_at = Some(now + KILL_GRACE),
-            Input::KillBegun(Some(false)) => self.finish_kill(&mut out),
+            Input::KillBegun(Some(true)) => {
+                self.kill_at = Some(now + KILL_GRACE);
+                self.cleanup_at.get_or_insert(now + self.termination_timeout());
+            }
+            Input::KillBegun(Some(false)) => {
+                self.finish_kill(&mut out);
+                self.cleanup_at.get_or_insert(now + self.termination_timeout());
+            }
             Input::KillBegun(None) => {
                 self.killing = false;
                 self.kill_ended = true;
@@ -353,27 +503,52 @@ impl Supervision {
             Input::Sampled(sample) => self.on_sample(now, sample, &mut out),
             Input::Exited(code) => {
                 self.exited = true;
-                self.init = None;
+                self.startup_at = None;
+                self.cleanup_at.get_or_insert(now + secs(self.opts.close_timeout));
+                if self.init.take().is_some() {
+                    out.push(Effect::Initialized(Err(InitError::Closed)));
+                }
+                if self.reaped {
+                    self.cleanup_at = None;
+                }
                 (self.next_ping, self.pong_deadline, self.next_sample, self.kill_at) =
                     (None, None, None, None);
                 self.close = Close::None;
                 self.acked = true;
                 self.shutting_down = true;
-                if code != Some(0) && !self.killed {
-                    let code = code.map_or("None".to_owned(), |c| c.to_string());
-                    let msg = format!("process exited with non-zero exit code {code}");
-                    out.push(Effect::Log(Level::Error, msg, Vec::new()));
-                }
+                self.observe_exitcode(code, &mut out);
             }
         }
         out
     }
 
     /// What is due at `now`.
-    pub fn tick(&mut self, now: Instant) -> Vec<Effect> {
+    pub fn tick(&mut self, now: Duration, wall_ms: i64) -> Vec<Effect> {
         let mut out = Vec::new();
+        if self.cleaned() {
+            return out;
+        }
+        if self.cleanup_at.is_some_and(|at| at <= now) {
+            self.cleanup_at = None;
+            out.push(Effect::IncompleteCleanup(CleanupObservation {
+                pid: self.opts.pid,
+                exited: self.exited,
+                reaped: self.reaped,
+            }));
+        }
         if self.exited {
             return out;
+        }
+        if self.startup_at.is_some_and(|at| at <= now) {
+            self.startup_at = None;
+            self.closing = true;
+            self.cleanup_at.get_or_insert(now + self.termination_timeout());
+            out.push(Effect::Log(
+                Level::Error,
+                "process launch did not enter initialization before its deadline".into(),
+                Vec::new(),
+            ));
+            self.begin_kill(&mut out);
         }
         if let Some((_, at)) = self.init
             && at <= now
@@ -387,7 +562,7 @@ impl Supervision {
         if let Some(at) = self.next_ping
             && at <= now
         {
-            out.push(Effect::Send(ToChild::Ping { sent_ms: time_ms().max(0) as u64 }));
+            self.send(ToChild::Ping { sent_ms: wall_ms.max(0) as u64 }, &mut out);
             self.next_ping =
                 Some(now + secs(self.opts.ping_interval).max(Duration::from_millis(1)));
         }
@@ -421,10 +596,10 @@ impl Supervision {
                         Vec::new(),
                     ));
                 }
-                self.close = Close::ShuttingDown;
+                self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
                 self.advance_close(now);
             }
-            Close::Exit(at) if at <= now => {
+            Close::ShuttingDown(at) | Close::Exit(at) if at <= now => {
                 if self.opts.killable {
                     let msg = "process did not exit in time, killing process".to_owned();
                     out.push(Effect::Log(Level::Error, msg, Vec::new()));
@@ -452,7 +627,7 @@ impl Supervision {
         self.exited || self.kill_ended
     }
 
-    fn on_message(&mut self, now: Instant, msg: ToParent, out: &mut Vec<Effect>) {
+    fn on_message(&mut self, now: Duration, wall_ms: i64, msg: ToParent, out: &mut Vec<Effect>) {
         if let Some((started, _)) = self.init.take() {
             let result = match msg {
                 ToParent::Ready { version, .. } if version != PROTOCOL_VERSION => {
@@ -460,7 +635,7 @@ impl Supervision {
                 }
                 ToParent::Ready { error: Some(error), .. } => Err(InitError::Failed(error)),
                 ToParent::Ready { error: None, .. } => {
-                    let elapsed = now.duration_since(started);
+                    let elapsed = now.saturating_sub(started);
                     let extra =
                         vec![("elapsed_time", ExtraValue::Float(round(elapsed.as_secs_f64(), 2)))];
                     out.push(Effect::Log(
@@ -477,7 +652,7 @@ impl Supervision {
         }
         match msg {
             ToParent::Pong { sent_ms } => {
-                let delay = time_ms() - sent_ms as i64;
+                let delay = wall_ms.saturating_sub(sent_ms as i64);
                 if delay as f64 > self.opts.high_ping_threshold * 1000.0 {
                     let msg = if self.opts.killable {
                         "process is unresponsive"
@@ -514,27 +689,28 @@ impl Supervision {
         }
     }
 
-    fn shutdown(&mut self, now: Instant, out: &mut Vec<Effect>) {
+    fn shutdown(&mut self, now: Duration, out: &mut Vec<Effect>) {
         if self.close != Close::None {
             return;
         }
         self.closing = true;
-        out.push(Effect::Send(ToChild::Shutdown { reason: String::new() }));
+        self.send(ToChild::Shutdown { reason: String::new() }, out);
+        self.cleanup_at = Some(now + secs(self.opts.close_timeout) * 3 + self.kill_grace());
         self.close = Close::Ack(now + secs(self.opts.close_timeout));
         self.advance_close(now);
     }
 
-    fn advance_close(&mut self, now: Instant) {
+    fn advance_close(&mut self, now: Duration) {
         if matches!(self.close, Close::Ack(_)) && self.acked {
-            self.close = Close::ShuttingDown;
+            self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
         }
-        if self.close == Close::ShuttingDown && self.shutting_down {
+        if matches!(self.close, Close::ShuttingDown(_)) && self.shutting_down {
             self.close = Close::Exit(now + secs(self.opts.close_timeout));
         }
     }
 
     fn begin_kill(&mut self, out: &mut Vec<Effect>) {
-        if !self.killing {
+        if self.opts.killable && !self.killing && !self.killed && !self.exited {
             self.killing = true;
             out.push(Effect::BeginKill);
         }
@@ -542,12 +718,58 @@ impl Supervision {
 
     fn finish_kill(&mut self, out: &mut Vec<Effect>) {
         out.push(Effect::Kill);
-        self.killing = false;
-        self.killed = true;
-        self.kill_ended = true;
     }
 
-    fn on_sample(&mut self, now: Instant, sample: Sample, out: &mut Vec<Effect>) {
+    fn observe_exitcode(&mut self, code: Option<i64>, out: &mut Vec<Effect>) {
+        if self.exitcode.is_none()
+            && let Some(code) = code
+        {
+            self.exitcode = Some(code);
+            if code != 0 && !self.killed {
+                out.push(Effect::Log(
+                    Level::Error,
+                    format!("process exited with non-zero exit code {code}"),
+                    Vec::new(),
+                ));
+            }
+        }
+    }
+
+    fn kill_grace(&self) -> Duration {
+        if self.opts.killable { KILL_GRACE } else { Duration::ZERO }
+    }
+
+    fn termination_timeout(&self) -> Duration {
+        self.kill_grace() + secs(self.opts.close_timeout)
+    }
+
+    pub fn cleaned(&self) -> bool {
+        self.launch_rejected || self.reaped()
+    }
+
+    pub fn reaped(&self) -> bool {
+        self.exited && self.reaped
+    }
+
+    pub(crate) fn close_timeout(&self) -> f64 {
+        self.opts.close_timeout
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.opts.pid
+    }
+
+    fn send(&mut self, message: ToChild, out: &mut Vec<Effect>) {
+        if self.reader_closed || self.exited {
+            return;
+        }
+        self.next_write += 1;
+        let id = self.next_write;
+        self.pending_writes.insert(id);
+        out.push(Effect::Send { id, message });
+    }
+
+    fn on_sample(&mut self, now: Duration, sample: Sample, out: &mut Vec<Effect>) {
         self.sampling = false;
         match sample {
             Sample::Mb(memory_mb, metric) => {
@@ -589,13 +811,13 @@ impl Supervision {
         }
     }
 
-    fn memory_extra(&self, now: Instant, memory_mb: f64, metric: &str, baseline_mb: f64) -> Extra {
+    fn memory_extra(&self, now: Duration, memory_mb: f64, metric: &str, baseline_mb: f64) -> Extra {
         vec![
             ("memory_usage_mb", ExtraValue::Float(round(memory_mb, 1))),
             ("memory_metric", ExtraValue::Str(metric.to_owned())),
             ("memory_warn_mb", ExtraValue::Float(self.opts.memory_warn_mb)),
             ("memory_limit_mb", ExtraValue::Float(self.opts.memory_limit_mb)),
-            ("uptime", ExtraValue::Float(round(now.duration_since(self.spawned).as_secs_f64(), 1))),
+            ("uptime", ExtraValue::Float(round(now.saturating_sub(self.spawned).as_secs_f64(), 1))),
             ("has_running_job", ExtraValue::Bool(self.running_job)),
             ("baseline_memory_mb", ExtraValue::Float(round(baseline_mb, 1))),
             ("growth_memory_mb", ExtraValue::Float(round(memory_mb - baseline_mb, 1))),
@@ -603,300 +825,6 @@ impl Supervision {
     }
 }
 
-// ---------------------------------------------------------------------------------- the driver
-
-enum Command {
-    Input(Input),
-    Initialize(Hello, oneshot::Sender<Result<Option<Duration>, InitError>>),
-}
-
-/// What the driver publishes.
-#[derive(Clone, Copy, Default)]
-struct Status {
-    killed: bool,
-    kill_settled: bool,
-    exited: bool,
-}
-
-/// The worker's side of one job process. The host spawns the process, hands over its end of the
-/// socket, calls [`initialize`](Self::initialize) then [`supervise`](Self::supervise), and reports
-/// the exit with [`exited`](Self::exited). Needs a runtime context to be made.
-pub struct ProcSupervisor {
-    commands: mpsc::Sender<Command>,
-    status: watch::Receiver<Status>,
-}
-
-impl Clone for ProcSupervisor {
-    fn clone(&self) -> Self {
-        Self { commands: self.commands.clone(), status: self.status.clone() }
-    }
-}
-
-impl ProcSupervisor {
-    pub fn new<S, H>(stream: S, host: H, opts: SupervisorOptions) -> Self
-    where
-        S: AsyncRead + AsyncWrite + Send + 'static,
-        H: ProcHost,
-    {
-        let (mut reader, writer) = tokio::io::split(stream);
-        let (messages_tx, messages) = mpsc::channel(QUEUE);
-        let reading = tokio::spawn(async move {
-            loop {
-                let read = wire::read::<ToParent, _>(&mut reader).await;
-                // the socket's end closes the reader quietly; a frame it cannot read, with why
-                let end = match read {
-                    Ok(msg) => {
-                        if messages_tx.send(Ok(msg)).await.is_err() {
-                            return;
-                        }
-                        continue;
-                    }
-                    Err(WireError::Io(_)) => return,
-                    Err(e) => e,
-                };
-                let _ = messages_tx.send(Err(end)).await;
-                return;
-            }
-        });
-        let (commands, commands_rx) = mpsc::channel(QUEUE);
-        let (status_tx, status) = watch::channel(Status::default());
-        let state = Supervision::new(opts.clone(), Instant::now());
-        let driver = Driver {
-            state,
-            opts,
-            host: Arc::new(host),
-            writer: Some(Box::new(writer)),
-            init: None,
-            status: status_tx,
-        };
-        tokio::spawn(driver.run(commands_rx, messages, reading));
-        Self { commands, status }
-    }
-
-    /// The kill sequence ran on a live process.
-    pub fn killed(&self) -> bool {
-        self.status.borrow().killed
-    }
-
-    async fn input(&self, input: Input) {
-        let _ = self.commands.send(Command::Input(input)).await;
-    }
-
-    async fn until(&self, done: impl Fn(&Status) -> bool) {
-        let mut status = self.status.clone();
-        let _ = status.wait_for(|s| s.exited || done(s)).await;
-    }
-
-    /// Sends `hello` and waits for the process's `Ready`: how long it took, `None` when it timed
-    /// out (a process is then killed).
-    pub async fn initialize(&self, hello: Hello) -> Result<Option<Duration>, InitError> {
-        let (tx, rx) = oneshot::channel();
-        if self.commands.send(Command::Initialize(hello, tx)).await.is_err() {
-            return Err(InitError::Closed);
-        }
-        rx.await.unwrap_or(Err(InitError::Closed))
-    }
-
-    /// Starts the pings and (with a memory threshold) the memory monitor. Called once the
-    /// initialization settled, whatever its outcome.
-    pub async fn supervise(&self) {
-        self.input(Input::Supervise).await;
-    }
-
-    /// Hands the process its job.
-    pub async fn start_job(&self, job: StartJob) {
-        self.input(Input::StartJob(Box::new(job))).await;
-    }
-
-    /// The graceful close: `Shutdown`, then the ack and the exit within the close timeout each,
-    /// killing the process when either is late. Returns once it exited or was killed.
-    pub async fn shutdown(&self) {
-        self.input(Input::Shutdown).await;
-        self.until(|s| s.killed).await;
-    }
-
-    /// The kill sequence; a runner that cannot be killed is asked to shut down instead. Returns
-    /// once it is over.
-    pub async fn kill(&self) {
-        self.input(Input::Kill).await;
-        self.until(|s| s.kill_settled).await;
-    }
-
-    /// The process exited and was reaped with `exitcode`: the supervision ends and the socket
-    /// closes.
-    pub async fn exited(&self, exitcode: Option<i64>) {
-        self.input(Input::Exited(exitcode)).await;
-        self.until(|_| false).await;
-    }
-}
-
-struct Driver<H: ProcHost> {
-    state: Supervision,
-    opts: SupervisorOptions,
-    host: Arc<H>,
-    writer: Option<Box<dyn AsyncWrite + Send + Unpin>>,
-    init: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
-    status: watch::Sender<Status>,
-}
-
-type Messages = mpsc::Receiver<Result<ToParent, WireError>>;
-
-impl<H: ProcHost> Driver<H> {
-    async fn run(
-        mut self,
-        mut commands: mpsc::Receiver<Command>,
-        mut messages: Messages,
-        reading: tokio::task::JoinHandle<()>,
-    ) {
-        let mut reader_open = true;
-        let mut sampling: Option<
-            tokio::task::JoinHandle<Result<(f64, String), MemoryError<H::Error>>>,
-        > = None;
-        let far = || Instant::now() + Duration::from_secs(1 << 30);
-        while !self.state.exited() {
-            let deadline = self.state.next_deadline();
-            let input = tokio::select! {
-                command = commands.recv() => match command {
-                    Some(Command::Input(input)) => input,
-                    Some(Command::Initialize(hello, reply)) => {
-                        self.init = Some(reply);
-                        Input::Initialize(hello)
-                    }
-                    None => break,
-                },
-                msg = messages.recv(), if reader_open => match msg {
-                    Some(Ok(msg)) => Input::Message(msg),
-                    Some(Err(e)) => {
-                        reader_open = false;
-                        Input::ReaderClosed(Some(e.to_string()))
-                    }
-                    None => {
-                        reader_open = false;
-                        Input::ReaderClosed(None)
-                    }
-                },
-                sample = async { sampling.as_mut().expect("sampling").await }, if sampling.is_some() => {
-                    sampling = None;
-                    Input::Sampled(match sample {
-                        Ok(Ok((mb, metric))) => Sample::Mb(mb, metric),
-                        Ok(Err(MemoryError::Unavailable(e))) => Sample::Unavailable(e),
-                        Ok(Err(MemoryError::Failed(e))) => {
-                            if !self.state.stopping() {
-                                self.host.log_exception("Error in memory monitoring task", e);
-                            }
-                            Sample::Failed
-                        }
-                        Ok(Err(MemoryError::Interrupted)) | Err(_) => Sample::Interrupted,
-                    })
-                }
-                () = tokio::time::sleep_until(deadline.unwrap_or_else(far)), if deadline.is_some() => {
-                    let effects = self.state.tick(Instant::now());
-                    self.execute(effects, &mut sampling).await;
-                    self.publish();
-                    continue;
-                }
-            };
-            let effects = self.state.handle(Instant::now(), input);
-            self.execute(effects, &mut sampling).await;
-            self.publish();
-        }
-        reading.abort();
-        if let Some(sampling) = sampling {
-            sampling.abort();
-        }
-        if let Some(mut writer) = self.writer.take() {
-            let _ = writer.shutdown().await;
-        }
-        if let Some(init) = self.init.take() {
-            let _ = init.send(Err(InitError::Closed));
-        }
-        self.host.release();
-        self.status.send_modify(|s| s.exited = true);
-    }
-
-    fn publish(&self) {
-        let status = Status {
-            killed: self.state.killed(),
-            kill_settled: self.state.kill_settled(),
-            exited: false,
-        };
-        self.status.send_if_modified(|s| {
-            let changed = (s.killed, s.kill_settled) != (status.killed, status.kill_settled);
-            (s.killed, s.kill_settled) = (status.killed, status.kill_settled);
-            changed
-        });
-    }
-
-    async fn execute(
-        &mut self,
-        effects: Vec<Effect>,
-        sampling: &mut Option<
-            tokio::task::JoinHandle<Result<(f64, String), MemoryError<H::Error>>>,
-        >,
-    ) {
-        let mut queue = std::collections::VecDeque::from(effects);
-        while let Some(effect) = queue.pop_front() {
-            match effect {
-                Effect::Send(msg) => self.send(&msg).await,
-                Effect::Log(level, msg, extra) => self.host.log(level, &msg, extra),
-                Effect::BeginKill => {
-                    let begun = self.begin_kill().await;
-                    queue.extend(self.state.handle(Instant::now(), Input::KillBegun(begun)));
-                }
-                Effect::Kill => {
-                    if self.host.is_alive() {
-                        self.host.kill();
-                    }
-                }
-                Effect::SampleMemory => {
-                    let host = self.host.clone();
-                    *sampling = Some(tokio::task::spawn_blocking(move || host.sample_memory()));
-                }
-                Effect::Initialized(result) => {
-                    if let Some(init) = self.init.take() {
-                        let _ = init.send(result);
-                    }
-                }
-            }
-        }
-    }
-
-    async fn send(&mut self, msg: &ToChild) {
-        if let Some(writer) = self.writer.as_mut()
-            && wire::write(writer, msg).await.is_err()
-        {
-            self.writer = None;
-        }
-    }
-
-    /// The kill sequence's first step: whether a signal went out, `None` when the process was
-    /// already dead.
-    async fn begin_kill(&mut self) -> Option<bool> {
-        let mut signalled = false;
-        // where SIGUSR1 does not exist, the child is asked over the socket
-        let dump = std::env::var("LK_DUMP_STACK_TRACES")
-            .is_ok_and(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no"));
-        if cfg!(windows) && dump {
-            self.host.log(
-                Level::Info,
-                "sending DumpStackTraceRequest message to process",
-                Vec::new(),
-            );
-            self.send(&ToChild::DumpStacks).await;
-            signalled = self.writer.is_some();
-        }
-        if !self.host.is_alive() {
-            return None;
-        }
-        self.host.log(Level::Info, "killing process", Vec::new());
-        #[cfg(unix)]
-        if let Ok(pid) = libc::pid_t::try_from(self.opts.pid)
-            && pid > 0
-        {
-            self.host.log(Level::Info, "sending SIGUSR1 signal to process", Vec::new());
-            // SAFETY: kill(2) takes plain integers.
-            signalled |= unsafe { libc::kill(pid, libc::SIGUSR1) } == 0;
-        }
-        Some(signalled)
-    }
-}
+#[cfg(test)]
+#[path = "supervisor_tests.rs"]
+mod tests;

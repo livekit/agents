@@ -3,140 +3,41 @@
 //! (a process's) drive them.
 //!
 //! `ProcSupervisor(fd, host, ...)` takes over the parent's socket. `host` is the `JobExecutor`:
-//! Rust calls its `_core_log(level, msg, extra, exc)`, `_core_is_alive()`, `_core_kill()` and
-//! `_sample_memory_mb()`, and drops it once the process exited.
+//! Rust owns launch completion, native signals, exit observation and the start-method reaping
+//! receipt. The host supplies bootstrap and receives queued diagnostics and completion callbacks.
 
-use std::borrow::Cow;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::sync::Mutex;
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use tokio::sync::watch;
 
-use lk_agents_abi::python::{CancellingHandle, HostBridge, HostHandle, check_pid, pyo3_async_runtimes};
-use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
+use lk_agents_abi::python::{CancellingHandle, HostBridge, check_pid, pyo3_async_runtimes};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
+
+mod host;
+use host::*;
 
 use super::pool::{LaunchError, PoolEvent, PoolHost, PoolOptions, ProcPool};
+use super::process::{ProcessControl, ProcessLaunch, ProcessResource, StartMethod};
 
 use super::{
     Closed, Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, IpcClient, Level, MemoryError,
-    PROTOCOL_VERSION, ProcHost, ProcSupervisor, StartJob, SupervisorOptions, ToChild, ToParent, lock,
-    secs,
+    PROTOCOL_VERSION, ProcHost, ProcSupervisor, StartJob, SupervisorOptions, ToChild, ToParent,
+    lock, secs,
 };
 
-/// The socket to the other process closed.
-fn closed(_: Closed) -> PyErr {
-    pyo3::exceptions::PyConnectionError::new_err("the IPC socket is closed")
-}
-
-// ------------------------------------------------------------------------------- supervisor
-
 /// The `SupervisedProc` as the supervisor's host, until the process exited.
-struct PyProcHost(Mutex<Option<Py<PyAny>>>);
-
-impl PyProcHost {
-    /// Calls the host; an error is printed (the callbacks are the host's own and never raise).
-    fn call<R>(&self, f: impl FnOnce(&Bound<'_, PyAny>) -> PyResult<R>) -> Option<R> {
-        Python::attach(|py| {
-            let host = lock(&self.0).as_ref()?.clone_ref(py);
-            f(host.bind(py)).inspect_err(|e| e.print(py)).ok()
-        })
-    }
-
-    fn emit(&self, level: Level, msg: &str, extra: Extra, exc: Option<PyErr>) {
-        self.call(|host| {
-            let py = host.py();
-            let fields = extra_dict(py, extra)?;
-            let exc = exc.map(|e| e.into_value(py));
-            host.call_method1("_core_log", (level as i32, msg, fields, exc)).map(drop)
-        });
-    }
-}
-
-impl ProcHost for PyProcHost {
-    type Error = PyErr;
-
-    fn log(&self, level: Level, msg: &str, extra: Extra) {
-        self.emit(level, msg, extra, None);
-    }
-
-    fn log_exception(&self, msg: &str, err: PyErr) {
-        self.emit(Level::Error, msg, Vec::new(), Some(err));
-    }
-
-    fn is_alive(&self) -> bool {
-        self.call(|host| host.call_method0("_core_is_alive")?.extract()).unwrap_or(false)
-    }
-
-    fn kill(&self) {
-        self.call(|host| host.call_method0("_core_kill").map(drop));
-    }
-
-    fn sample_memory(&self) -> Result<(f64, String), MemoryError<PyErr>> {
-        Python::attach(|py| {
-            let Some(host) = lock(&self.0).as_ref().map(|h| h.clone_ref(py)) else {
-                return Err(MemoryError::Unavailable("process exited".into()));
-            };
-            let err =
-                match host.bind(py).call_method0("_sample_memory_mb").and_then(|r| r.extract()) {
-                    Ok(sample) => return Ok(sample),
-                    Err(err) => err,
-                };
-            if !err.is_instance_of::<PyException>(py) {
-                return Err(MemoryError::Interrupted);
-            }
-            let unavailable = py.import("psutil").is_ok_and(|psutil| {
-                ["NoSuchProcess", "AccessDenied"].iter().any(|name| {
-                    psutil
-                        .getattr(*name)
-                        .is_ok_and(|cls| err.value(py).is_instance(&cls).unwrap_or(false))
-                })
-            });
-            match unavailable {
-                true => Err(MemoryError::Unavailable(err.value(py).to_string())),
-                false => Err(MemoryError::Failed(err)),
-            }
-        })
-    }
-
-
-    fn release(&self) {
-        let host = lock(&self.0).take();
-        Python::attach(|_| drop(host));
-    }
-}
-
-#[cfg(unix)]
-type Socket = tokio::net::UnixStream;
-#[cfg(windows)]
-type Socket = tokio::net::TcpStream;
-#[cfg(unix)]
-type StdSocket = std::os::unix::net::UnixStream;
-#[cfg(windows)]
-type StdSocket = std::net::TcpStream;
-
-/// Takes ownership of a connected socket (an fd of `ipc_pair`'s, or `socket.detach()`). Needs a
-/// runtime context.
-fn socket(fd: i64) -> PyResult<Socket> {
-    #[cfg(unix)]
-    let std = {
-        use std::os::fd::FromRawFd;
-        let fd = i32::try_from(fd).map_err(|_| PyValueError::new_err("bad socket fd"))?;
-        // SAFETY: the caller hands the descriptor's ownership over.
-        unsafe { StdSocket::from_raw_fd(fd) }
-    };
-    #[cfg(windows)]
-    let std = {
-        use std::os::windows::io::FromRawSocket;
-        // SAFETY: the caller hands the socket's ownership over.
-        unsafe { StdSocket::from_raw_socket(fd as u64) }
-    };
-    std.set_nonblocking(true)?;
-    Ok(Socket::from_std(std)?)
+#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+struct PyProcHost {
+    object: Mutex<Option<Arc<Py<PyAny>>>>,
+    process: watch::Receiver<Option<Arc<ProcessControl>>>,
 }
 
 /// The control socket of one process: the parent's end and the child's, as descriptors the caller
@@ -166,14 +67,16 @@ lk_agents_abi::register_host!(fn ipc_pair);
 /// and close, from the spawn the host made to the exit.
 #[pyclass(name = "ProcSupervisor", module = "livekit.agents._core", frozen)]
 pub struct PyProcSupervisor {
+    launch: watch::Sender<ProcessLaunch>,
     sup: ProcSupervisor,
     /// The child's health timeout, from the supervision's ping settings.
     health_timeout_ms: Option<u64>,
     /// Whether the process initialized, once that settled (answered, failed, timed out, killed).
     initialized: watch::Sender<Option<bool>>,
-    /// Set once `run` ended: the process exited and was reaped.
-    ran: watch::Sender<bool>,
+    /// Completed launch: false without an OS child, true only with its reaping receipt.
+    ran: watch::Sender<Option<bool>>,
     killable: bool,
+    process: watch::Sender<Option<Arc<ProcessControl>>>,
 }
 
 impl PyProcSupervisor {
@@ -184,6 +87,7 @@ impl PyProcSupervisor {
 
 #[pymethods]
 impl PyProcSupervisor {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     #[new]
     #[pyo3(signature = (
         fd, host, *, pid, initialize_timeout, close_timeout, memory_warn_mb,
@@ -220,12 +124,19 @@ impl PyProcSupervisor {
         // a job thread's parent has none
         let health_timeout_ms = (ping_interval > 0.0 && ping_timeout > 0.0)
             .then(|| secs(ping_timeout + HEALTH_CHECK_GRACE).as_millis() as u64);
+        let (process, native) = watch::channel(None);
         Ok(Self {
-            sup: ProcSupervisor::new(socket(fd)?, PyProcHost(Mutex::new(Some(host))), opts),
+            launch: watch::channel(ProcessLaunch::Pending).0,
+            sup: ProcSupervisor::new(
+                socket(fd)?,
+                PyProcHost { object: Mutex::new(Some(Arc::new(host))), process: native },
+                opts,
+            ),
             health_timeout_ms,
             initialized: watch::channel(None).0,
-            ran: watch::channel(false).0,
+            ran: watch::channel(None).0,
             killable,
+            process,
         })
     }
 
@@ -233,7 +144,11 @@ impl PyProcSupervisor {
     /// and returns the seconds it took to be ready; raises `TimeoutError` when it was not in time
     /// (a process is then killed).
     #[pyo3(signature = (*, asyncio_debug, http_proxy))]
-    fn initialize<'py>(slf: Bound<'py, Self>, asyncio_debug: bool, http_proxy: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+    fn initialize<'py>(
+        slf: Bound<'py, Self>,
+        asyncio_debug: bool,
+        http_proxy: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let this = slf.clone().unbind();
         let sup = slf.get().sup.clone();
         let hello = Hello {
@@ -250,7 +165,9 @@ impl PyProcSupervisor {
                 Ok(Some(elapsed)) => Ok(elapsed.as_secs_f64()),
                 Ok(None) => Err(Python::attach(|py| -> PyResult<PyErr> {
                     let timeout = py.import("asyncio")?.getattr("TimeoutError")?;
-                    Ok(PyErr::from_value(timeout.call1((format!("{runner} initialization timed out"),))?))
+                    Ok(PyErr::from_value(
+                        timeout.call1((format!("{runner} initialization timed out"),))?,
+                    ))
                 })
                 .unwrap_or_else(|e| e)),
                 Err(InitError::Closed) => Err(closed(Closed)),
@@ -265,31 +182,41 @@ impl PyProcSupervisor {
         *self.initialized.borrow() == Some(true)
     }
 
-    /// The process from its initialization to its exit: once the initialization settled, the
-    /// pings and the memory monitor; then `joined` (the process was reaped), `host._core_reap()`
-    /// (its exit code) and the end of the supervision.
-    fn run<'py>(slf: Bound<'py, Self>, joined: Py<PyAny>, host: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        let host = Arc::new(CancellingHandle::new(py, host)?);
-        let this = slf.get();
-        let sup = this.sup.clone();
-        let mut initialized = this.initialized.subscribe();
-        let ran = this.ran.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let _ = initialized.wait_for(Option::is_some).await;
-            sup.supervise().await;
-            let joined = host.await_call(|h| Ok(joined.bind(h.py()).clone())).await;
-            let exitcode = joined.and_then(|_| {
-                Python::attach(|py| host.object().bind(py).call_method0("_core_reap")?.extract::<Option<i64>>())
-            });
-            let exitcode = exitcode.unwrap_or_else(|e| {
-                Python::attach(|py| e.print(py));
-                None
-            });
-            sup.exited(exitcode).await;
-            ran.send_replace(true);
-            Ok(())
-        })
+    /// Called on the launch worker immediately after multiprocessing creates the child.
+    fn _core_launched_process(
+        &self,
+        pid: u32,
+        sentinel: i64,
+        method: &str,
+        owned: Vec<i64>,
+    ) -> PyResult<()> {
+        if !matches!(*self.launch.borrow(), ProcessLaunch::Pending) {
+            return Err(PyRuntimeError::new_err("launch already reported"));
+        }
+        let resource = ProcessResource::new(pid, sentinel, StartMethod::parse(method)?, owned)?;
+        self.launch.send_replace(ProcessLaunch::Started(resource));
+        let _ = crate::diagnostics::initialize();
+        Ok(())
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
+    /// Own launch/bootstrap before invoking multiprocessing; native exit and reaping continue
+    /// even if the Python caller cancels this future or its event loop stops responding.
+    fn run<'py>(
+        slf: Bound<'py, Self>,
+        joined: Py<PyAny>,
+        host: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        run_process_owner(slf, joined, host)
+    }
+
+    fn _core_wait_exit<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let sup = self.sup.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(sup.wait_exit().await) })
+    }
+
+    fn _core_join<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        wait_process_completion(py, self.ran.subscribe())
     }
 
     /// A graceful close: an initialized process is asked to shut down (killed when late), any
@@ -298,14 +225,13 @@ impl PyProcSupervisor {
         let initialized = self.initialized();
         self.settle(false);
         let sup = self.sup.clone();
-        let mut ran = self.ran.subscribe();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             if initialized {
                 sup.shutdown().await;
             } else {
                 sup.kill().await;
+                sup.wait_cleanup().await;
             }
-            let _ = ran.wait_for(|ran| *ran).await;
             Ok(())
         })
     }
@@ -314,16 +240,19 @@ impl PyProcSupervisor {
     fn kill<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.settle(false);
         let sup = self.sup.clone();
-        let mut ran = self.ran.subscribe();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             sup.kill().await;
-            let _ = ran.wait_for(|ran| *ran).await;
+            sup.wait_cleanup().await;
             Ok(())
         })
     }
 
     /// Hands the process its job, `fields` as `RunningJobInfo._to_wire()` gives them.
-    fn start_job<'py>(&self, py: Python<'py>, fields: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
+    fn start_job<'py>(
+        &self,
+        py: Python<'py>,
+        fields: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let job = start_job_of(fields)?;
         let sup = self.sup.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -340,53 +269,6 @@ impl PyProcSupervisor {
 
 lk_agents_abi::register_host!(class PyProcSupervisor);
 
-/// A job from its fields by name.
-fn start_job_of(fields: &Bound<'_, PyDict>) -> PyResult<StartJob> {
-    let get = |name: &str| -> PyResult<Bound<'_, PyAny>> {
-        fields.get_item(name)?.ok_or_else(|| PyValueError::new_err(format!("the job's {name} is missing")))
-    };
-    Ok(StartJob {
-        job: get("job")?.extract::<Cow<[u8]>>()?.into_owned(),
-        name: get("name")?.extract()?,
-        identity: get("identity")?.extract()?,
-        metadata: get("metadata")?.extract()?,
-        url: get("url")?.extract()?,
-        token: get("token")?.extract()?,
-        worker_id: get("worker_id")?.extract()?,
-        fake_job: get("fake_job")?.extract()?,
-        received_at: get("received_at")?.extract()?,
-        accepted_at: get("accepted_at")?.extract()?,
-        assigned_at: get("assigned_at")?.extract()?,
-        launched_at: get("launched_at")?.extract()?,
-    })
-}
-
-/// A job's fields by name, for `RunningJobInfo._from_wire`.
-fn fields_of_job<'py>(py: Python<'py>, job: &StartJob) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("job", PyBytes::new(py, &job.job))?;
-    for (name, value) in [
-        ("name", &job.name),
-        ("identity", &job.identity),
-        ("metadata", &job.metadata),
-        ("url", &job.url),
-        ("token", &job.token),
-        ("worker_id", &job.worker_id),
-    ] {
-        d.set_item(name, value)?;
-    }
-    d.set_item("fake_job", job.fake_job)?;
-    for (name, value) in [
-        ("received_at", job.received_at),
-        ("accepted_at", job.accepted_at),
-        ("assigned_at", job.assigned_at),
-        ("launched_at", job.launched_at),
-    ] {
-        d.set_item(name, value)?;
-    }
-    Ok(d)
-}
-
 // ----------------------------------------------------------------------------------- client
 
 /// The child's side of the parent's socket (`ipc/child.py`): the initialize handshake, then it
@@ -399,87 +281,48 @@ struct Child {
     client: IpcClient,
     /// `stop()`: `serve` returns.
     stop: watch::Sender<bool>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The job the parent started, once it did.
     run: Mutex<Option<Py<PyJobRun>>>,
     asyncio_debug: bool,
 }
 
-impl Child {
-    async fn send(&self, msg: ToParent) -> Result<(), Closed> {
-        self.client.send(msg).await
-    }
-
-    /// One message from the parent; `false` ends the serving.
-    async fn on_message(
-        self: &Arc<Self>,
-        host: &CancellingHandle,
-        msg: ToChild,
-    ) -> PyResult<bool> {
-        match msg {
-            // answered once the loop ran a callback: the pong measures the loop's responsiveness
-            ToChild::Ping { sent_ms } => {
-                let loop_ran = HostHandle::from_parts(
-                    Python::attach(|py| host.object().clone_ref(py)),
-                    host.task_locals().clone(),
-                );
-                if loop_ran.run_on_loop(|_| Ok(())).await.is_err() {
-                    return Ok(false);
-                }
-                Ok(self.send(ToParent::Pong { sent_ms }).await.is_ok())
-            }
-            // the job starts once: its run ends with the parent's shutdown
-            ToChild::StartJob(job) => {
-                if lock(&self.run).is_some() {
-                    py_log(Level::Warning, "trying to start a new job while one is already running", None);
-                    return Ok(true);
-                }
-                let run = host
-                    .await_call(|h| h.call_method1("_core_start_job", (fields_of_job(h.py(), &job)?,)))
-                    .await?;
-                let run: Py<PyJobRun> = Python::attach(|py| -> PyResult<_> { Ok(run.bind(py).cast::<PyJobRun>()?.clone().unbind()) })?;
-                let _ = run.get().0.parent.set(Arc::clone(self));
-                *lock(&self.run) = Some(run);
-                Ok(true)
-            }
-            // acked, then the process ends with its job (at once without one)
-            ToChild::Shutdown { reason } => {
-                if self.send(ToParent::ShutdownAck).await.is_err() {
-                    return Ok(false);
-                }
-                let run = Python::attach(|py| lock(&self.run).as_ref().map(|r| r.clone_ref(py)));
-                let Some(run) = run else {
-                    let _ = self.send(ToParent::ShuttingDown).await;
-                    return Ok(false);
-                };
-                let reason = if reason.is_empty() { "parent process shutdown".into() } else { reason };
-                run.get().0.end(reason, false);
-                Ok(true)
-            }
-            ToChild::DumpStacks => {
-                host.await_call(|h| h.call_method0("_core_dump_stacks")).await?;
-                Ok(true)
-            }
-            ToChild::Hello(_) => Ok(true),
-        }
-    }
-}
-
 #[pymethods]
 impl PyIpcClient {
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The handshake on the parent's socket `fd`, blocking: the parent's `Hello`, then
     /// `initialize(http_proxy)` and `Ready` (with the error it raised, re-raised here). Once
     /// initialized, the child calls itself orphaned when the parent goes quiet past the health
     /// timeout the `Hello` gave.
     #[new]
-    fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (fd, initialize, *, process = false))]
+    fn new(py: Python<'_>, fd: i64, initialize: Bound<'_, PyAny>, process: bool) -> PyResult<Self> {
         check_pid()?;
+        match py.import("asyncio")?.call_method0("get_running_loop") {
+            Ok(_) => {
+                return Err(PyRuntimeError::new_err(
+                    "IpcClient handshake must precede the event loop",
+                ));
+            }
+            Err(error) if error.is_instance_of::<PyRuntimeError>(py) => {}
+            Err(error) => return Err(error),
+        }
         let rt = pyo3_async_runtimes::tokio::get_runtime();
         let sock = {
             let _rt = rt.enter();
             socket(fd)?
         };
-        let failed = |e: super::WireError| PyRuntimeError::new_err(format!("failed to initialize: {e}"));
-        let (client, hello) = py.detach(|| rt.block_on(IpcClient::connect(sock))).map_err(failed)?;
+        let failed =
+            |e: super::WireError| PyRuntimeError::new_err(format!("failed to initialize: {e}"));
+        let (client, hello) = py
+            .detach(|| {
+                rt.block_on(IpcClient::connect_with_health_action(sock, move || {
+                    if process {
+                        super::process::terminate_current_process();
+                    }
+                }))
+            })
+            .map_err(failed)?;
         let initialized = initialize.call1((hello.http_proxy.clone(),));
         let error = initialized.as_ref().err().map(|e| e.value(py).to_string());
         let ready = ToParent::Ready { version: PROTOCOL_VERSION, error };
@@ -503,6 +346,7 @@ impl PyIpcClient {
         self.0.asyncio_debug
     }
 
+    #[allow(clippy::disallowed_macros, reason = "S0: migrate live execution/state to runtime")]
     /// Serve the parent's messages until the channel closes, the shutdown ends the process, or
     /// `stop()`. `host` (on the running loop) runs `_core_start_job(fields)` (returning the job's
     /// `JobRun`) and `_core_dump_stacks()`, each a coroutine.
@@ -547,87 +391,11 @@ lk_agents_abi::register_host!(class PyIpcClient);
 
 /// An executor, compared by identity.
 #[derive(Clone)]
-pub struct PyProc(Arc<Py<PyAny>>);
+pub struct PyProc(Arc<Py<PyAny>>, Arc<std::sync::OnceLock<ProcSupervisor>>);
 
 impl PartialEq for PyProc {
     fn eq(&self, other: &Self) -> bool {
         self.0.as_ptr() == other.0.as_ptr()
-    }
-}
-
-/// The Python `ProcPool`: it makes the executors (`_core_create`), reports a failed
-/// initialization (`_core_init_failed`) and emits the events; the executors run their own steps.
-struct PyPoolHost(CancellingHandle);
-
-impl PyPoolHost {
-    async fn step(&self, proc: &PyProc, method: &'static str) -> PyResult<()> {
-        let proc = Python::attach(|py| self.0.child(proc.0.clone_ref(py)));
-        proc.await_call(|p| p.call_method0(method)).await.map(drop)
-    }
-
-    fn soon(&self, method: &'static str, args: impl for<'py> FnOnce(Python<'py>) -> PyResult<Bound<'py, PyTuple>>) {
-        if let Err(e) = self.0.call_soon(method, args) {
-            Python::attach(|py| e.print(py));
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl PoolHost for PyPoolHost {
-    type Proc = PyProc;
-    type Job = Arc<Py<PyAny>>;
-    type Error = PyErr;
-
-    async fn create(&self) -> PyResult<PyProc> {
-        let pool = Python::attach(|py| self.0.object().clone_ref(py));
-        let handle = Python::attach(|py| HostHandle::from_parts(pool.clone_ref(py), self.0.task_locals().clone()));
-        handle
-            .run_on_loop(move |py| Ok(pool.bind(py).call_method0("_core_create")?.unbind()))
-            .await
-            .map(|p| PyProc(Arc::new(p)))
-            .map_err(|e| Python::attach(|py| lk_agents_abi::python::raise_provider(py, e)))
-    }
-
-    async fn start(&self, proc: &PyProc) -> PyResult<()> {
-        self.step(proc, "start").await
-    }
-
-    async fn initialize(&self, proc: &PyProc) -> PyResult<()> {
-        self.step(proc, "initialize").await
-    }
-
-    /// The dispatch timeline: a warm process is now handling the job (`launched_at`).
-    async fn launch(&self, proc: &PyProc, job: &Self::Job) -> PyResult<()> {
-        let (proc, job) = Python::attach(|py| -> PyResult<_> {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or_default();
-            job.bind(py).setattr("launched_at", now)?;
-            Ok((self.0.child(proc.0.clone_ref(py)), job.clone_ref(py)))
-        })?;
-        proc.await_call(|p| p.call_method1("launch_job", (job,))).await.map(drop)
-    }
-
-    async fn close(&self, proc: &PyProc) {
-        if let Err(e) = self.step(proc, "aclose").await {
-            Python::attach(|py| e.print(py));
-        }
-    }
-
-    async fn join(&self, proc: &PyProc) {
-        if let Err(e) = self.step(proc, "join").await {
-            Python::attach(|py| e.print(py));
-        }
-    }
-
-    fn emit(&self, event: PoolEvent, proc: &PyProc) {
-        let proc = proc.0.clone();
-        self.soon("emit", move |py| PyTuple::new(py, [event.as_str().into_pyobject(py)?.into_any(), proc.bind(py).clone()]));
-    }
-
-    fn init_failed(&self, proc: &PyProc, error: PyErr) {
-        let proc = proc.0.clone();
-        self.soon("_core_init_failed", move |py| {
-            PyTuple::new(py, [proc.bind(py).clone(), error.into_value(py).into_bound(py).into_any()])
-        });
     }
 }
 
@@ -639,10 +407,20 @@ pub struct PyProcPool(ProcPool<PyPoolHost>);
 impl PyProcPool {
     /// `host` is the Python `ProcPool`; must be called inside its running loop.
     #[new]
-    #[pyo3(signature = (host, *, num_idle_processes, initialize_timeout))]
-    fn new(py: Python<'_>, host: Py<PyAny>, num_idle_processes: usize, initialize_timeout: f64) -> PyResult<Self> {
+    #[pyo3(signature = (host, *, num_idle_processes, initialize_timeout, close_timeout))]
+    fn new(
+        py: Python<'_>,
+        host: Py<PyAny>,
+        num_idle_processes: usize,
+        initialize_timeout: f64,
+        close_timeout: f64,
+    ) -> PyResult<Self> {
         check_pid()?;
-        let opts = PoolOptions { num_idle_processes, initialize_timeout: super::secs(initialize_timeout) };
+        let opts = PoolOptions {
+            num_idle_processes,
+            initialize_timeout: super::secs(initialize_timeout),
+            close_timeout: super::secs(close_timeout),
+        };
         Ok(Self(ProcPool::new(PyPoolHost(CancellingHandle::new(py, host)?), opts)))
     }
 
@@ -669,8 +447,7 @@ impl PyProcPool {
     fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let pool = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            pool.start().await;
-            Ok(())
+            pool.start().await.map_err(|error| PyRuntimeError::new_err(error.to_string()))
         })
     }
 
@@ -679,9 +456,13 @@ impl PyProcPool {
         let pool = self.0.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             pool.launch_job(&job_id, Arc::new(info)).await.map_err(|e| match e {
-                LaunchError::NoProcess => PyRuntimeError::new_err(
-                    "no process became available after 3 attempts",
-                ),
+                LaunchError::Admission(reason) => PyRuntimeError::new_err(reason.to_string()),
+                LaunchError::AcquireExhausted { attempts } => PyRuntimeError::new_err(format!(
+                    "no process became available after {attempts} attempts"
+                )),
+                LaunchError::NoProcess => {
+                    PyRuntimeError::new_err("no process became available after 3 attempts")
+                }
                 LaunchError::Launch(e) => e,
             })
         })
@@ -706,8 +487,6 @@ impl PyProcPool {
 }
 
 lk_agents_abi::register_host!(class PyProcPool);
-
-// ------------------------------------------------------------------------------------ job run
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
 const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -735,7 +514,8 @@ fn job_timeline(
         ("process_assigned", launched_at),
         ("entrypoint_started", entrypoint_started_at),
     ];
-    let mut events: Vec<_> = stages.iter().filter(|(_, ts)| *ts != 0.0).map(|(name, ts)| (*name, ns(*ts))).collect();
+    let mut events: Vec<_> =
+        stages.iter().filter(|(_, ts)| *ts != 0.0).map(|(name, ts)| (*name, ns(*ts))).collect();
     let gaps = [
         ("lk.job.accept_latency", received_at, accepted_at),
         ("lk.job.assignment_latency", accepted_at, assigned_at),
@@ -750,7 +530,13 @@ fn job_timeline(
         .collect();
     if server_started_at > 0 {
         let v = server_started_at as f64;
-        let started = if v > 1e17 { v / 1e9 } else if v > 1e11 { v / 1e3 } else { v };
+        let started = if v > 1e17 {
+            v / 1e9
+        } else if v > 1e11 {
+            v / 1e3
+        } else {
+            v
+        };
         events.push(("job_started_on_server", ns(started)));
     }
     (events, attributes)
@@ -776,6 +562,7 @@ struct JobRunState {
     user_shutdown: bool,
     /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
     entrypoints: Vec<(Py<PyAny>, Vec<i32>)>,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// The participant entrypoints running, by participant and entrypoint, each its run's number.
     participant_runs: HashMap<(String, usize), u64>,
     runs: u64,
@@ -797,14 +584,6 @@ struct ShutdownCallback {
     takes_reason: bool,
     framework: bool,
     name: String,
-}
-
-/// A callable's name, as the shutdown spans label it.
-fn callable_name(callable: &Bound<'_, PyAny>) -> String {
-    ["__qualname__", "__name__"]
-        .iter()
-        .find_map(|attr| callable.getattr(*attr).ok().and_then(|n| n.extract::<String>().ok()))
-        .unwrap_or_else(|| callable.repr().map(|r| r.to_string()).unwrap_or_default())
 }
 
 /// A job's run, for `JobContext` and `job_proc_lazy_main.py`'s `_JobProc`: what ends the job (the
@@ -829,61 +608,14 @@ struct JobRunInner {
     observability_url: Option<String>,
     /// The server asked for the job's recording.
     recording: bool,
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     state: Mutex<JobRunState>,
     ended: watch::Sender<bool>,
+    #[allow(clippy::disallowed_types, reason = "S0: runtime migration")]
     /// Held while the room connects, so a second `connect()` waits for the first.
     connecting: tokio::sync::Mutex<()>,
     /// Set once the job ends: the API calls still running are cancelled.
     tasks_closed: watch::Sender<bool>,
-}
-
-/// `msg` on the `livekit.agents` logger, with `exc`'s traceback.
-fn py_log(level: Level, msg: &str, exc: Option<PyErr>) {
-    py_log_extra(level, msg, exc, Vec::new());
-}
-
-/// A log record's `extra`.
-fn extra_dict(py: Python<'_>, extra: Extra) -> PyResult<Bound<'_, PyDict>> {
-    let fields = PyDict::new(py);
-    for (key, value) in extra {
-        match value {
-            ExtraValue::Int(v) => fields.set_item(key, v)?,
-            ExtraValue::Float(v) => fields.set_item(key, v)?,
-            ExtraValue::Str(v) => fields.set_item(key, v)?,
-            ExtraValue::Bool(v) => fields.set_item(key, v)?,
-        }
-    }
-    Ok(fields)
-}
-
-/// `msg` on the `livekit.agents` logger, with `exc`'s traceback and the `extra` fields.
-fn py_log_extra(level: Level, msg: &str, exc: Option<PyErr>, extra: Extra) {
-    Python::attach(|py| {
-        let logged = (|| -> PyResult<()> {
-            let logger = py.import("logging")?.call_method1("getLogger", ("livekit.agents",))?;
-            let kwargs = PyDict::new(py);
-            if let Some(exc) = exc {
-                kwargs.set_item("exc_info", exc.into_value(py))?;
-            }
-            if !extra.is_empty() {
-                kwargs.set_item("extra", extra_dict(py, extra)?)?;
-            }
-            logger.call_method("log", (level as i32, msg), Some(&kwargs))?;
-            Ok(())
-        })();
-        if let Err(e) = logged {
-            e.print(py);
-        }
-    })
-}
-
-/// `CancelledError`, what a cancelled call raises.
-fn cancelled() -> PyErr {
-    pyo3::exceptions::asyncio::CancelledError::new_err(())
-}
-
-fn is_cancelled(e: &PyErr) -> bool {
-    Python::attach(|py| e.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py))
 }
 
 impl JobRunInner {
@@ -900,7 +632,10 @@ impl JobRunInner {
         }
     }
 
-    async fn call(&self, f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>) -> PyResult<Py<PyAny>> {
+    async fn call(
+        &self,
+        f: impl for<'py> FnOnce(&Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
         self.host().await_call(f).await
     }
 
@@ -908,6 +643,7 @@ impl JobRunInner {
         py_log(level, msg, exc);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: runtime migration")]
     /// The entrypoints of `kind` start for the participant, each in the caller's context; one
     /// still running for an earlier participant of the same identity is warned about.
     fn participant_joined(
@@ -941,7 +677,8 @@ impl JobRunInner {
             self.log(Level::Warning, &format!("a participant has joined before a prior participant task matching the same identity has finished: '{identity}'"), None);
         }
         for (key, run, entry) in starts {
-            let name: String = entry.bind(py).getattr("__name__").and_then(|n| n.extract()).unwrap_or_default();
+            let name: String =
+                entry.bind(py).getattr("__name__").and_then(|n| n.extract()).unwrap_or_default();
             let handle = CancellingHandle::new(py, entry)?;
             let (ctx, participant) = (ctx.clone_ref(py), participant.clone_ref(py));
             let inner = Arc::clone(self);
@@ -966,13 +703,18 @@ impl JobRunInner {
 
     /// A span of the shutdown's, named `name`, labelled with the callback it runs.
     fn span(&self, name: &str, callback: Option<&str>) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| Ok(self.host().object().bind(py).call_method1("_core_span", (name, callback))?.unbind()))
+        Python::attach(|py| {
+            Ok(self.host().object().bind(py).call_method1("_core_span", (name, callback))?.unbind())
+        })
     }
 
     fn span_end(&self, span: Py<PyAny>, error: Option<PyErr>, timed_out: bool) {
         let r = Python::attach(|py| -> PyResult<()> {
             let error = error.map(|e| e.into_value(py).into_any());
-            self.host().object().bind(py).call_method1("_core_span_end", (span, error, timed_out))?;
+            self.host()
+                .object()
+                .bind(py)
+                .call_method1("_core_span_end", (span, error, timed_out))?;
             Ok(())
         });
         if let Err(e) = r {
@@ -980,8 +722,16 @@ impl JobRunInner {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     /// One step run inside a span of its own: `error_msg` is logged with a failure.
-    async fn spanned(&self, name: &str, callback: Option<&str>, method: &'static str, timeout: Option<f64>, error_msg: &str) {
+    async fn spanned(
+        &self,
+        name: &str,
+        callback: Option<&str>,
+        method: &'static str,
+        timeout: Option<f64>,
+        error_msg: &str,
+    ) {
         let span = match self.span(name, callback) {
             Ok(span) => span,
             Err(e) => return Python::attach(|py| e.print(py)),
@@ -1000,12 +750,16 @@ impl JobRunInner {
             }
             Err(()) => {
                 self.span_end(span, None, true);
-                let msg = format!("on_session_end timed out after {}s", timeout.unwrap_or_default() as i64);
+                let msg = format!(
+                    "on_session_end timed out after {}s",
+                    timeout.unwrap_or_default() as i64
+                );
                 self.log(Level::Error, &msg, None);
             }
         }
     }
 
+    #[allow(clippy::disallowed_macros, clippy::disallowed_methods, reason = "S0: move to runtime")]
     async fn run(self: Arc<Self>) -> PyResult<()> {
         let entry = self.call(|h| h.call_method0("_core_start_entrypoint")).await?;
         let wait_entry = {
@@ -1049,10 +803,13 @@ impl JobRunInner {
             }
         }
         let (reason, user_initiated) = lock(&self.state).shutdown.clone().unwrap_or_default();
-        self.call(|h| h.call_method1("_core_shutdown_began", (reason.as_str(), user_initiated))).await?;
+        self.call(|h| h.call_method1("_core_shutdown_began", (reason.as_str(), user_initiated)))
+            .await?;
 
         // the entrypoint returns, or is cancelled
-        if !entry_done && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err() {
+        if !entry_done
+            && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err()
+        {
             self.log(Level::Warning, "entrypoint did not exit in time, cancelling", None);
             let entry = Python::attach(|py| entry.clone_ref(py));
             let _ = self.call(move |h| h.call_method1("_core_cancel", (entry,))).await;
@@ -1083,12 +840,22 @@ impl JobRunInner {
             )
             .await;
         }
-        self.spanned("session_end_upload", None, "_core_upload", None, "error in job_ctx._on_session_end").await;
+        self.spanned(
+            "session_end_upload",
+            None,
+            "_core_upload",
+            None,
+            "error in job_ctx._on_session_end",
+        )
+        .await;
         // the parent learns the job is ending, then why
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::ShuttingDown).await;
         }
-        let extra = vec![("reason", ExtraValue::Str(reason.clone())), ("user_initiated", ExtraValue::Bool(user_initiated))];
+        let extra = vec![
+            ("reason", ExtraValue::Str(reason.clone())),
+            ("user_initiated", ExtraValue::Bool(user_initiated)),
+        ];
         py_log_extra(Level::Debug, "shutting down job task", None, extra);
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: reason.clone() }).await;
@@ -1107,7 +874,11 @@ impl JobRunInner {
             let inner = self.clone();
             let reason = reason.clone();
             runs.push(tokio::spawn(async move {
-                let span = if framework { None } else { Some(inner.span("shutdown_callback", Some(&name))?) };
+                let span = if framework {
+                    None
+                } else {
+                    Some(inner.span("shutdown_callback", Some(&name))?)
+                };
                 let r = inner
                     .call(|h| {
                         let py = h.py();
@@ -1137,6 +908,7 @@ impl JobRunInner {
 
 #[pymethods]
 impl PyJobRun {
+    #[allow(clippy::disallowed_methods, clippy::disallowed_types, reason = "S0: move to runtime")]
     /// `redaction` and `recording` are the job's own (`Job.enable_redaction`,
     /// `Job.enable_recording`), `url` the server's; `session_end` is the door's `on_session_end`.
     #[new]
@@ -1174,9 +946,11 @@ impl PyJobRun {
     /// `ctx.add_shutdown_callback`: `callback(reason)`, or `callback()` when it takes no argument,
     /// runs as the job shuts down.
     fn add_shutdown_callback(&self, callback: Bound<'_, PyAny>) -> PyResult<()> {
-        let bound_method = callback.py().import("inspect")?.call_method1("ismethod", (&callback,))?.is_truthy()?;
+        let bound_method =
+            callback.py().import("inspect")?.call_method1("ismethod", (&callback,))?.is_truthy()?;
         let argcount: usize = callback.getattr("__code__")?.getattr("co_argcount")?.extract()?;
-        let module: String = callback.getattr("__module__").and_then(|m| m.extract()).unwrap_or_default();
+        let module: String =
+            callback.getattr("__module__").and_then(|m| m.extract()).unwrap_or_default();
         lock(&self.0.state).shutdown_callbacks.push(ShutdownCallback {
             takes_reason: argcount > usize::from(bound_method),
             framework: module == "livekit.agents" || module.starts_with("livekit.agents."),
@@ -1228,7 +1002,12 @@ impl PyJobRun {
 
     /// `ctx.add_participant_entrypoint`: `entrypoint(ctx, participant)` runs for each participant
     /// of one of `kinds` that joins.
-    fn add_participant_entrypoint(&self, py: Python<'_>, entrypoint: Py<PyAny>, kinds: Vec<i32>) -> PyResult<()> {
+    fn add_participant_entrypoint(
+        &self,
+        py: Python<'_>,
+        entrypoint: Py<PyAny>,
+        kinds: Vec<i32>,
+    ) -> PyResult<()> {
         let mut st = lock(&self.0.state);
         for (known, _) in &st.entrypoints {
             if known.bind(py).eq(entrypoint.bind(py))? {
@@ -1240,10 +1019,18 @@ impl PyJobRun {
     }
 
     /// A participant joined, or was in the room when it connected; `ctx` is the `JobContext`.
-    fn participant_joined(&self, py: Python<'_>, ctx: Py<PyAny>, participant: Py<PyAny>, identity: String, kind: i32) -> PyResult<()> {
+    fn participant_joined(
+        &self,
+        py: Python<'_>,
+        ctx: Py<PyAny>,
+        participant: Py<PyAny>,
+        identity: String,
+        kind: i32,
+    ) -> PyResult<()> {
         self.0.participant_joined(py, &ctx, &participant, &identity, kind)
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// A participant left: a simulator leaving ends the job.
     fn participant_left(&self, attributes: HashMap<String, String>) {
         if attributes.contains_key(ATTRIBUTE_SIMULATOR) {
@@ -1252,6 +1039,7 @@ impl PyJobRun {
         }
     }
 
+    #[allow(clippy::disallowed_methods, clippy::disallowed_macros, reason = "S0: move to runtime")]
     /// `ctx.<name>()`, an API call of the job's (`delete_room`, ...): `call()`'s awaitable, awaited
     /// on the caller's loop, as a future. A failure is logged whether or not the caller awaits
     /// it, and it is cancelled once the job ends (`close_tasks`). A console job makes no call: its
@@ -1264,8 +1052,15 @@ impl PyJobRun {
         console_result: Py<PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if self.0.fake {
-            self.0.log(Level::Warning, &format!("job_ctx.{name}() is not executed while in console mode"), None);
-            return pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(console_result) });
+            self.0.log(
+                Level::Warning,
+                &format!("job_ctx.{name}() is not executed while in console mode"),
+                None,
+            );
+            return pyo3_async_runtimes::tokio::future_into_py(
+                py,
+                async move { Ok(console_result) },
+            );
         }
         let handle = CancellingHandle::new(py, call.bind(py).call0()?.unbind())?;
         let (tx, rx) = tokio::sync::oneshot::channel::<PyResult<Py<PyAny>>>();
@@ -1287,7 +1082,9 @@ impl PyJobRun {
         st.tasks.retain(|t| !t.is_finished());
         st.tasks.push(task);
         drop(st);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move { rx.await.unwrap_or_else(|_| Err(cancelled())) })
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            rx.await.unwrap_or_else(|_| Err(cancelled()))
+        })
     }
 
     /// Cancels the API calls still running and waits for them.
@@ -1302,6 +1099,7 @@ impl PyJobRun {
         })
     }
 
+    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// `ctx.init_recording(options)`: the redaction to record with when the cloud upload is to be
     /// set up now, `None` when not (set up already, nothing to upload, or no observability
     /// endpoint). Audio without its transcript under redaction is refused.
@@ -1311,7 +1109,9 @@ impl PyJobRun {
         let mut st = lock(&self.0.state);
         let redaction = st.redaction || get("redaction", false);
         if redaction && get("audio", true) && !get("transcript", true) {
-            return Err(PyValueError::new_err("audio upload requires transcript upload when redaction is enabled"));
+            return Err(PyValueError::new_err(
+                "audio upload requires transcript upload when redaction is enabled",
+            ));
         }
         if st.recording_initialized {
             return Ok(None);
