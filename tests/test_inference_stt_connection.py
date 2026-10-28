@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -13,7 +14,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError
 from livekit.agents.inference import STT
 from livekit.agents.inference.stt import SpeechStream
 from livekit.agents.stt import RecognizeStream, SpeechEventType
@@ -54,6 +55,15 @@ async def _final_transcripts(stream: RecognizeStream) -> list[str]:
         async for event in stream
         if event.type == SpeechEventType.FINAL_TRANSCRIPT
     ]
+
+
+async def _wait_until_stream_is_live(stream: RecognizeStream, *, timeout: float = 5.0) -> None:
+    """Block until the stream's session is connected."""
+    for _ in range(int(timeout / 0.02)):
+        if stream._ws is not None and not stream._ws.closed:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("stream did not connect in time")
 
 
 async def test_input_end_preserves_delayed_final_after_session_finalized() -> None:
@@ -110,6 +120,395 @@ async def test_input_end_preserves_delayed_final_after_session_finalized() -> No
     assert message_types == ["session.create", "session.finalize", "session.close"]
     assert transcripts == ["final words"]
     assert not close_before_transcript
+
+
+async def test_flux_language_hint_reaches_session_create() -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/flux-general-multi",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+
+
+async def test_flux_language_hint_is_not_language_gated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Flux takes a hint in any language: the gateway gates a hint on the model
+    (flux-general-multi), not on the session language."""
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/flux-general-multi",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                stream.end_input()
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+            finally:
+                await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+    assert "removed `language_hint`" not in caplog.text
+
+
+async def test_nova3_language_hint_reaches_session_create() -> None:
+    extra: dict[str, Any] = {}
+    session_language = ""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal session_language
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+                session_language = event["settings"]["language"]
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/nova-3",
+            language="multi",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+    assert session_language == "multi"
+
+
+async def test_nova3_language_hint_is_not_sent_outside_multi_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                stream.end_input()
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+            finally:
+                await stream.aclose()
+
+    # the gateway forwards a hint only in multi mode, so sending it would be dead weight
+    assert "language_hint" not in extra
+    assert "removed `language_hint`" in caplog.text
+    assert "model 'deepgram/nova-3'" in caplog.text
+    assert "language is 'en'" in caplog.text
+    # the suppressed send lives on the payload, never on the stored options
+    assert stream._opts.extra_kwargs["language_hint"] == ["en", "es"]
+    assert stt._opts.extra_kwargs["language_hint"] == ["en", "es"]
+
+
+async def test_a_later_multi_mode_sends_the_hint_again(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A hint this connection could not carry stays on the stream, so the next connection
+    under a language that can use it sends it again."""
+    created: list[dict[str, Any]] = []
+    sockets: list[web.WebSocketResponse] = []
+    updated = asyncio.Event()
+    reconnected = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        sockets.append(ws)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                created.append(event)
+                if len(created) == 2:
+                    reconnected.set()
+            elif event["type"] == "session.update":
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+                extra_kwargs={"language_hint": ["en", "es"]},
+            )
+            stream = stt.stream(
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+            )
+            try:
+                await _wait_until_stream_is_live(stream)
+                stt.update_options(language="multi")
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+                # a drop of the socket rebuilds the connection on the new language
+                await sockets[0].close()
+                await asyncio.wait_for(reconnected.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    assert len(created) == 2
+    assert "language_hint" not in created[0]["settings"]["extra"]
+    assert created[1]["settings"]["language"] == "multi"
+    assert created[1]["settings"]["extra"]["language_hint"] == ["en", "es"]
+    # the caller's hint survived the suppressed send, on both copies
+    assert stream._opts.extra_kwargs["language_hint"] == ["en", "es"]
+    assert stt._opts.extra_kwargs["language_hint"] == ["en", "es"]
+    assert caplog.text.count("removed `language_hint`") == 1
+
+
+async def test_a_stream_language_keeps_the_hint_the_parent_would_drop() -> None:
+    """The guard reads the stream's effective language: `stream(language=...)` can put a
+    session in multi mode that the STT was not built in."""
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hola", "language": "es"}
+                )
+                await ws.close()
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="deepgram/nova-3",
+            language="en",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"language_hint": ["en", "es"]},
+        )
+        stream = stt.stream(
+            language="multi", conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        )
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert extra["language_hint"] == ["en", "es"]
+
+
+async def test_a_live_update_drops_a_hint_outside_multi_mode(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    updates: list[dict[str, Any]] = []
+    updated = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                stt.update_options(extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+                updated.clear()
+                # a hint arriving again is dropped silently: the stream already reported it
+                stt.update_options(extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    # the update path builds its own extra, so it needs the guard as much as session.create
+    assert len(updates) == 2
+    assert all("language_hint" not in frame["settings"]["extra"] for frame in updates)
+    assert caplog.text.count("removed `language_hint`") == 1
+
+
+async def test_a_live_update_into_multi_mode_keeps_the_hint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    updates: list[dict[str, Any]] = []
+    updated = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+                updated.set()
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = STT(
+                model="deepgram/nova-3",
+                language="en",
+                api_key="test-key",
+                api_secret="test-secret",
+                base_url=base_url,
+                http_session=session,
+            )
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                # switching into multi mode and adding hints in one call is legitimate
+                stt.update_options(language="multi", extra={"language_hint": ["en", "es"]})
+                await asyncio.wait_for(updated.wait(), timeout=1.0)
+            finally:
+                await stream.aclose()
+
+    assert len(updates) == 1
+    assert updates[0]["settings"]["language"] == "multi"
+    assert updates[0]["settings"]["extra"]["language_hint"] == ["en", "es"]
+    assert "removed `language_hint`" not in caplog.text
+
+
+async def test_linden_session_keyterms_reach_session_create() -> None:
+    extra: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                extra.update(event["settings"]["extra"])
+            elif event["type"] == "session.finalize":
+                await ws.send_json({"type": "final_transcript", "transcript": "hi"})
+                await ws.close()
+        return ws
+
+    user_entry = {"content": "gnocchi", "sounds_like": ["nyohki"]}
+    async with _gateway(handler) as (base_url, session):
+        stt = STT(
+            model="speechmatics/linden-1",
+            api_key="test-key",
+            api_secret="test-secret",
+            base_url=base_url,
+            http_session=session,
+            extra_kwargs={"additional_vocab": [user_entry]},
+        )
+        assert stt.capabilities.keyterms is True
+        stt._update_session_keyterms(["gnocchi", "LiveKit"])
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        try:
+            stream.end_input()
+            await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    # the user's entry keeps its sounds_like; a session term it already covers is not duplicated
+    assert extra["additional_vocab"] == [user_entry, {"content": "LiveKit"}]
 
 
 @pytest.mark.parametrize("close_code", [1000, 1011])
@@ -288,6 +687,9 @@ class _Socket:
     async def receive(self) -> aiohttp.WSMessage:
         return await self.messages.get()
 
+    async def ping(self) -> None:
+        self.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+
     async def close(self) -> None:
         self.closed = True
 
@@ -299,6 +701,66 @@ class _Socket:
                 "",
             )
         )
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("message", "progress"),
+    [
+        ("start_of_speech", True),
+        ("interim_transcript", True),
+        ("preflight_transcript", True),
+        ("final_transcript", True),
+        ("session.finalized", True),
+        ("session.created", False),
+        ("unknown", False),
+        ("pong", False),
+    ],
+)
+async def test_provider_events_reset_retries_but_setup_and_pongs_do_not(
+    monkeypatch: pytest.MonkeyPatch, message: str, progress: bool
+) -> None:
+    processed = asyncio.Event()
+
+    class Socket(_Socket):
+        async def receive(self) -> aiohttp.WSMessage:
+            if self.messages.empty():
+                processed.set()
+            return await super().receive()
+
+    socket = Socket()
+    if message == "pong":
+        socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+    else:
+        socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 2
+        try:
+            await asyncio.wait_for(processed.wait(), 1)
+            assert stream._num_retries == (0 if progress else 2)
+        finally:
+            await stream.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("message", ["error", "session.closed"])
+async def test_provider_failure_events_do_not_reset_retries(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    socket = _Socket()
+    socket.send_event(message)
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream()
+        stream._num_retries = 3
+        try:
+            with pytest.raises(APIError):
+                await asyncio.wait_for(stream._task, 1)
+            assert stream._num_retries == 3
+        finally:
+            await stream.aclose()
 
 
 @pytest.mark.virtual_time
@@ -487,3 +949,27 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+
+async def test_half_open_socket_raises_retryable_error() -> None:
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        # accepts the session, then never sends anything or answers a ping
+        ws = web.WebSocketResponse(autoping=False)
+        await ws.prepare(request)
+        async for _ in ws:
+            pass
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stream = _make_stt(base_url, session).stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=1.0, liveness_timeout=0.15)
+        )
+        try:
+            with pytest.raises(APIConnectionError) as exc_info:
+                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+        finally:
+            await stream.aclose()
+
+    assert exc_info.value.retryable is True
+    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
