@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
 use crate::utils::stream::{StreamSink, StreamSource};
-use crate::vad::vad::Vad;
 use crate::{AudioFrame, VadEvent};
 
 /// The host's model factory (`livekit.local_inference.VAD`): called once per stream, as each
@@ -29,7 +28,7 @@ pub trait VadModel: Send + Sync {
 }
 
 /// The Silero VAD behind `inference.VAD`.
-#[crate::host(class(name = "InferenceVad", native = Vad))]
+#[crate::host(class(name = "InferenceVad", native = crate::vad::vad::Vad))]
 pub trait InferenceVad: Send + Sync + Sized + 'static {
     #[host(sink(item = AudioFrame, class = "InferenceVadStream"))]
     type Audio: StreamSink<AudioFrame> + 'static;

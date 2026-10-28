@@ -1,9 +1,8 @@
 //! `Vad`: `VAD.stream()` is abstract (`vad.py:94`), so it returns `Result`, not `Option<Result>`.
 
 use crate::VadEvent;
-use lk_agents_host_derive::Host;
-use async_trait::async_trait;
 use crate::errors::ProviderError;
+use lk_agents_host_derive::Host;
 
 use crate::AudioFrame;
 use crate::utils::stream::{StreamSink, StreamSource};
@@ -29,7 +28,6 @@ pub type VadSource = Box<dyn StreamSource<VadEvent>>;
 /// audio into `VADEvent`s.
 #[crate::host(proxy(host = "livekit.agents.VAD"))]
 #[python(provider(module = "vad", path = "livekit.agents", events = "metrics_collected"))]
-#[async_trait]
 pub trait Vad: Send + Sync {
     /// The name logs and metrics give this instance: its class path.
     #[python(label)]
@@ -65,5 +63,5 @@ pub trait Vad: Send + Sync {
         )
     )]
     #[host(await, name = "_core_stream")]
-    async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError>;
+    fn stream(&self) -> crate::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>>;
 }

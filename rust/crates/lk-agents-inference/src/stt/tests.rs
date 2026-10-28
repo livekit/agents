@@ -371,7 +371,6 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
     use lk_agents_abi::{VadEvent, VadEventType};
 
     struct ScriptedVad(Vec<VadEventType>);
-    #[async_trait]
     impl Vad for ScriptedVad {
         fn label(&self) -> String {
             "test".into()
@@ -379,9 +378,13 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
         fn capabilities(&self) -> VadCapabilities {
             VadCapabilities::default()
         }
-        async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
-            let kinds = self.0.clone();
-            Ok((Box::new(NullSink), Box::new(ScriptedSource(kinds.into_iter().collect()))))
+        fn stream(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>> {
+            let source = ScriptedSource(self.0.clone().into_iter().collect());
+            Box::pin(
+                async move { Ok((Box::new(NullSink) as VadSink, Box::new(source) as VadSource)) },
+            )
         }
     }
     struct NullSink;

@@ -7,7 +7,6 @@ pub mod machine;
 mod stream;
 
 use crate::abi::{AudioFrame, StreamSink, StreamSource};
-use async_trait::async_trait;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::vad::inference::VadModels;
@@ -162,7 +161,6 @@ impl VadModel for HostModel {
     }
 }
 
-#[async_trait]
 impl<E: Env> Vad for NativeVad<E> {
     fn label(&self) -> String {
         "livekit.agents.inference.vad.VAD".into()
@@ -182,9 +180,11 @@ impl<E: Env> Vad for NativeVad<E> {
         }
     }
 
-    async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
-        let (sink, source) = self.stream_native()?;
-        Ok((Box::new(sink), Box::new(VadEventSource(source))))
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>> {
+        let opened = self.stream_native().map(|(sink, source)| {
+            (Box::new(sink) as VadSink, Box::new(VadEventSource(source)) as VadSource)
+        });
+        Box::pin(async move { opened })
     }
 }
 

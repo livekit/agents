@@ -259,7 +259,6 @@ mod tests {
 
     struct ScriptedVad(Vec<VadEventType>);
 
-    #[async_trait]
     impl Vad for ScriptedVad {
         fn label(&self) -> String {
             "vad".into()
@@ -267,8 +266,14 @@ mod tests {
         fn capabilities(&self) -> VadCapabilities {
             VadCapabilities { update_interval: 0.032 }
         }
-        async fn stream(&self) -> Result<(lk_agents_abi::VadSink, VadSource), ProviderError> {
-            Ok((Box::new(Ignore), Box::new(Events(self.0.iter().copied().collect()))))
+        fn stream(
+            &self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(lk_agents_abi::VadSink, VadSource), ProviderError>>
+        {
+            let events = Events(self.0.iter().copied().collect());
+            Box::pin(async move {
+                Ok((Box::new(Ignore) as lk_agents_abi::VadSink, Box::new(events) as VadSource))
+            })
         }
     }
 

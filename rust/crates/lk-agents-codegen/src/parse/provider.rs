@@ -175,9 +175,12 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
             attr: has(&pm, "attr"),
         });
     }
-    let ret = match &f.sig.output {
-        syn::ReturnType::Default => None,
-        syn::ReturnType::Type(_, t) => Some(span_text(text, t.span())),
+    // An awaited call is an `async fn`, or a `fn` returning a boxed future of its output.
+    let boxed = crate::decl::resolve::boxed_future(&f.sig.output);
+    let ret = match (&boxed, &f.sig.output) {
+        (Some((_, output)), _) => Some(span_text(text, output.span())),
+        (None, syn::ReturnType::Default) => None,
+        (None, syn::ReturnType::Type(_, t)) => Some(span_text(text, t.span())),
     };
     let stream = match meta_str(&m, "stream.name") {
         None => None,
@@ -198,7 +201,7 @@ fn method(at: &str, f: &syn::TraitItemFn, text: &str) -> Res<ProviderMethod> {
         role,
         params,
         ret,
-        is_async: f.sig.asyncness.is_some(),
+        is_async: f.sig.asyncness.is_some() || boxed.is_some(),
         has_default: f.default.is_some(),
         when: meta_str(&m, "when"),
         stream,

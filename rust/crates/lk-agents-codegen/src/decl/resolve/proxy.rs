@@ -368,7 +368,7 @@ fn boxed_self(r: &syn::Receiver) -> bool {
 }
 
 /// `BoxFuture<'lt, T>` (any path ending in `BoxFuture`): its lifetime and output type.
-fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)> {
+pub(crate) fn boxed_future(out: &syn::ReturnType) -> Option<(String, syn::Type)> {
     let syn::ReturnType::Type(_, t) = out else { return None };
     let syn::Type::Path(p) = &**t else { return None };
     let last = p.path.segments.last().filter(|s| s.ident == "BoxFuture")?;

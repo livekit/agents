@@ -11,6 +11,7 @@ mod class;
 mod native;
 mod proxy;
 mod record;
+pub(crate) use proxy::boxed_future;
 use record::{record_entry, record_target};
 
 /// Every `#[host(class)]` of the crate, in module order.

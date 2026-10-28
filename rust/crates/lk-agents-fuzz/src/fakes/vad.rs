@@ -36,7 +36,6 @@ struct Detection {
     ended: Arc<Notify>,
 }
 
-#[async_trait::async_trait]
 impl Vad for FakeVad {
     fn label(&self) -> String {
         "fake::vad".into()
@@ -46,14 +45,15 @@ impl Vad for FakeVad {
         VadCapabilities { update_interval: UPDATE_INTERVAL }
     }
 
-    async fn stream(&self) -> Result<(VadSink, VadSource), ProviderError> {
+    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>> {
         let (sender, events) = mpsc::unbounded_channel();
         let ended = Arc::new(Notify::new());
         let slot = self.registry.register(Kind::Vad, Detail::None, Control::Vad(sender));
-        Ok((
+        let opened: (VadSink, VadSource) = (
             Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
             Box::new(Detection { slot, registry: self.registry.clone(), events, ended }),
-        ))
+        );
+        Box::pin(async move { Ok(opened) })
     }
 }
 
