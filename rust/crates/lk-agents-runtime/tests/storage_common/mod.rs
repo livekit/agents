@@ -26,6 +26,7 @@ pub enum Backend {
 pub struct Fixture {
     pub storage: Arc<dyn Storage>,
     pub thread_id: String,
+    lease: LeaseTiming,
     dir: Option<PathBuf>,
 }
 
@@ -53,7 +54,7 @@ impl Backend {
             }
         };
         let thread = storage.create_thread(CreateRequest::default()).await.unwrap();
-        Fixture { storage, thread_id: thread.thread_id, dir }
+        Fixture { storage, thread_id: thread.thread_id, lease, dir }
     }
 }
 
@@ -97,4 +98,105 @@ macro_rules! contract {
             )*
         }
     };
+}
+
+/// How the next commit batch fails: its acknowledgment lost before or after it applied, or
+/// refused outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitFault {
+    LoseAckBefore,
+    LoseAckAfter,
+    Refuse,
+}
+
+/// A thread database connection with faults a real connection shows: a commit's answer lost
+/// (`Uncertain`, applied or not), a refused commit, and an unreachable database for a while.
+pub struct Faulty {
+    inner: Box<dyn lk_agents_runtime::storage::SqliteConnection>,
+    commit: std::sync::Mutex<Option<CommitFault>>,
+    unreachable_for: std::sync::Mutex<Option<Duration>>,
+    unreachable_until: std::sync::Mutex<Option<tokio::time::Instant>>,
+}
+
+impl Faulty {
+    pub fn fail_next_commit(&self, fault: CommitFault) {
+        *self.commit.lock().unwrap() = Some(fault);
+    }
+
+    /// Every request after the next faulted commit fails `Unavailable` for `d`.
+    pub fn unreachable_after_commit_for(&self, d: Duration) {
+        *self.unreachable_for.lock().unwrap() = Some(d);
+    }
+
+    fn reachable(&self) -> Result<(), lk_agents_storage::StorageError> {
+        match *self.unreachable_until.lock().unwrap() {
+            Some(until) if tokio::time::Instant::now() < until => {
+                Err(lk_agents_storage::StorageError::Unavailable("unreachable".into()))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl lk_agents_runtime::storage::SqliteConnection for Faulty {
+    async fn query(
+        &self,
+        statement: lk_agents_storage::sql::Statement,
+    ) -> Result<Vec<lk_agents_storage::sql::Row>, lk_agents_storage::StorageError> {
+        self.reachable()?;
+        self.inner.query(statement).await
+    }
+
+    async fn batch(
+        &self,
+        statements: Vec<lk_agents_storage::sql::Statement>,
+    ) -> Result<lk_agents_storage::sql::BatchResult, lk_agents_storage::StorageError> {
+        use lk_agents_storage::StorageError;
+        self.reachable()?;
+        let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
+        let fault = if is_commit { self.commit.lock().unwrap().take() } else { None };
+        if fault.is_some()
+            && let Some(d) = self.unreachable_for.lock().unwrap().take()
+        {
+            *self.unreachable_until.lock().unwrap() = Some(tokio::time::Instant::now() + d);
+        }
+        match fault {
+            None => self.inner.batch(statements).await,
+            Some(CommitFault::LoseAckBefore) => Err(StorageError::Uncertain("lost before".into())),
+            Some(CommitFault::LoseAckAfter) => {
+                self.inner.batch(statements).await?;
+                Err(StorageError::Uncertain("lost after".into()))
+            }
+            Some(CommitFault::Refuse) => Err(StorageError::Server {
+                code: "sqlite".into(),
+                message: "disk I/O error".into(),
+            }),
+        }
+    }
+
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+impl Fixture {
+    /// A handle over a SQLite thread whose connection takes injected faults.
+    pub async fn faulty_thread(&self, holder: &str) -> (Thread, Arc<Faulty>) {
+        use lk_agents_runtime::storage::ThreadDb;
+        use lk_agents_runtime::storage::engine::SchemaCell;
+        use lk_agents_runtime::storage::sqlite::FileConnection;
+        let dir = self.dir.as_ref().expect("faults are injected on the SQLite backend");
+        let file = dir.join("threads").join(format!("{}.sqlite", self.thread_id));
+        let faulty = Arc::new(Faulty {
+            inner: Box::new(FileConnection::open(file, false).await.unwrap()),
+            commit: std::sync::Mutex::new(None),
+            unreachable_for: std::sync::Mutex::new(None),
+            unreachable_until: std::sync::Mutex::new(None),
+        });
+        let db = ThreadDb::new(faulty.clone(), &self.thread_id, self.lease, SchemaCell::default())
+            .await
+            .unwrap();
+        (Thread::new(db, holder), faulty)
+    }
 }

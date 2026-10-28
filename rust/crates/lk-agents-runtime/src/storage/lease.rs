@@ -31,7 +31,9 @@ struct Held {
 impl Lease {
     pub(crate) fn new(db: ThreadDb, fence: Fence) -> Self {
         let (lost, _) = watch::channel(None);
-        Self { inner: Arc::new(Held { db, fence, lost: Arc::new(lost), renewal: Mutex::new(None) }) }
+        Self {
+            inner: Arc::new(Held { db, fence, lost: Arc::new(lost), renewal: Mutex::new(None) }),
+        }
     }
 
     pub fn fence(&self) -> &Fence {

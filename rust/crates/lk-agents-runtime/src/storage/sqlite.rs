@@ -142,7 +142,10 @@ fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection, StorageErr
 fn sqlite_error(e: rusqlite::Error) -> StorageError {
     match &e {
         rusqlite::Error::SqliteFailure(f, _)
-            if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
+            if matches!(
+                f.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            ) =>
         {
             StorageError::Unavailable(e.to_string())
         }
@@ -255,7 +258,10 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     /// Opens the directory, creating it and its registry when missing. A relative path resolves
     /// against the working directory, once.
-    pub async fn open(directory: impl AsRef<Path>, lease: LeaseTiming) -> Result<Self, StorageError> {
+    pub async fn open(
+        directory: impl AsRef<Path>,
+        lease: LeaseTiming,
+    ) -> Result<Self, StorageError> {
         let directory = std::path::absolute(directory.as_ref())
             .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
         let threads = directory.join("threads");
@@ -346,8 +352,10 @@ impl Storage for SqliteStorage {
         let attributes: HashMap<&String, &String> =
             request.attributes.iter().filter(|(_, v)| !v.is_empty()).collect();
         let insert = Statement {
-            sql: format!("INSERT INTO threads ({THREAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)")
-                .into(),
+            sql: format!(
+                "INSERT INTO threads ({THREAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)"
+            )
+            .into(),
             params: vec![
                 thread_id.as_str().into(),
                 request.scope.as_str().into(),
@@ -462,7 +470,8 @@ impl Storage for SqliteStorage {
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
         self.live(thread_id).await?;
         let conn = FileConnection::open(self.file(thread_id)?, false).await?;
-        let db = ThreadDb::new(Arc::new(conn), thread_id, self.lease, SchemaCell::default()).await?;
+        let db =
+            ThreadDb::new(Arc::new(conn), thread_id, self.lease, SchemaCell::default()).await?;
         Ok(Thread::new(db, holder))
     }
 

@@ -42,6 +42,10 @@ pub enum StorageError {
     /// Retryable: a connection lost mid-request, a severed database, a lease that lapsed.
     #[error("agent-store unavailable: {0}")]
     Unavailable(String),
+    /// A write sent and never answered: it may or may not have committed. Resolved by the run's
+    /// identity before anything is reported or retried; never proof of a rollback.
+    #[error("write outcome unknown: {0}")]
+    Uncertain(String),
     /// `Lane::open` with `wait: false` found the lease held.
     #[error("lease held: {0}")]
     LeaseHeld(String),
@@ -108,5 +112,4 @@ mod tests {
         assert_eq!(t.seconds as f64 + f64::from(t.nanos) / 1e9, 1791760302.4035509);
         assert_eq!(timestamp(0.9999999999), pbjson_types::Timestamp { seconds: 1, nanos: 0 });
     }
-
 }

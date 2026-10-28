@@ -178,4 +178,3 @@ pub fn resolve_debounce(debounce: &DebounceSpec, channel: &str, policy: Policy) 
     }
     if policy == Policy::Batch { defaults["sms"] } else { Duration::ZERO }
 }
-

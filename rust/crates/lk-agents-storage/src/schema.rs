@@ -7,8 +7,8 @@ use lk_agents_host_derive::Host;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::sql::SqlValue;
 use crate::run::{RunOutcome, TaskState};
+use crate::sql::SqlValue;
 use crate::sql::{FromCell, json_cell, statement};
 
 /// One history item of a lane.
@@ -392,6 +392,11 @@ SELECT :ts_ms, :lane, :run_id, 'run_ended', jsonb(:payload)
 FROM lanes
 WHERE lane = :lane AND lease_token = :token
 "#
+}
+
+statement! {
+    /// The lane's fence as it stands: its version and lease token.
+    SelectFence<'a> { lane: &'a str } => "SELECT version, lease_token FROM lanes WHERE lane = :lane"
 }
 
 statement! {
@@ -841,8 +846,8 @@ WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) OR
 mod tests {
     use super::*;
     use crate::StorageError;
-    use crate::sql::Row;
     use crate::sql::Bind;
+    use crate::sql::Row;
 
     #[test]
     fn a_row_decodes_and_a_bad_cell_names_its_column() {

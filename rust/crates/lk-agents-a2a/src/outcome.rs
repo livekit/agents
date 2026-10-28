@@ -14,7 +14,9 @@ use lk_agents_storage::run::{
 use lk_agents_storage::schema::TaskData;
 use lk_agents_storage::{StorageError, timestamp};
 
-use crate::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message, channel_of};
+use crate::{
+    HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, channel_of, chat_message,
+};
 
 /// The metadata of a `canceled` row the server interrupted, as the turn writes it.
 pub fn interrupted_metadata() -> Map<String, Value> {
@@ -127,10 +129,7 @@ pub fn answer_pending(
         out.transitions.push(TaskTransition {
             task_id: pending.task_id.clone(),
             status: TaskState::Completed,
-            patch: TaskPatch {
-                metadata: Some(merged_into(received_task)),
-                ..TaskPatch::default()
-            },
+            patch: TaskPatch { metadata: Some(merged_into(received_task)), ..TaskPatch::default() },
         });
     }
     out
@@ -206,7 +205,12 @@ pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, S
             && out.error.is_none()
             && !out.interrupted
         {
-            let item = chat_message(ChatRole::Assistant, vec![text.to_owned()], s.now + 1e-6, s.ids.assistant_item);
+            let item = chat_message(
+                ChatRole::Assistant,
+                vec![text.to_owned()],
+                s.now + 1e-6,
+                s.ids.assistant_item,
+            );
             insert_by_created_at(history, item);
         }
     }
@@ -280,7 +284,10 @@ pub fn settle(history: &mut Vec<ItemRow>, s: Settle<'_>) -> Result<Settlement, S
         settled.transitions.push(TaskTransition {
             task_id: answer,
             status: TaskState::InputRequired,
-            patch: TaskPatch { metadata, ..TaskPatch { ask: asked.ask, status_message: asked.status_message, ..base } },
+            patch: TaskPatch {
+                metadata,
+                ..TaskPatch { ask: asked.ask, status_message: asked.status_message, ..base }
+            },
         });
         settled.outcome = RunOutcome::InputRequired;
         settled.output = out.output.clone();
@@ -426,4 +433,3 @@ pub fn python_reason(e: &StorageError) -> String {
         other => format!("StorageError: {other}"),
     }
 }
-

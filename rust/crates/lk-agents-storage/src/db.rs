@@ -252,7 +252,9 @@ pub struct Acquired {
 pub enum AcquireOutcome {
     Acquired(Box<Acquired>),
     /// Not taken; `submitted` says whether this attempt's `submit` inserted its row.
-    Held { submitted: Option<bool> },
+    Held {
+        submitted: Option<bool>,
+    },
 }
 
 pub struct AcquireDecode {
@@ -383,8 +385,7 @@ pub fn receive(
     b.add(InsertLane { lane });
     let inbox = b.add(InsertInbox { lane, task_id, message_id, message: SqlValue::json(message) });
     b.add(InsertSubmittedTaskForMessage { lane, task_id, message_id, data: SqlValue::json(data) });
-    let take =
-        b.add(TakeLeaseForMessage { lane, holder, token, lease_secs, message_id, task_id });
+    let take = b.add(TakeLeaseForMessage { lane, holder, token, lease_secs, message_id, task_id });
     let existing = b.add(SelectInboxTask { lane, message_id });
     b.plan(ReceiveDecode { inbox, take, existing })
 }
@@ -419,8 +420,7 @@ pub fn set_waiter(lane: &str, holder: &str) -> Statement {
 
 /// Pushes the lease out while its token is still this one.
 pub fn extend(fence: &Fence, lease_secs: i64) -> Statement {
-    ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }
-        .bind()
+    ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }.bind()
 }
 
 /// Releases without writing anything else but, when given, the `run_ended` event of `run_id`:
@@ -640,14 +640,9 @@ pub fn commit(
             let state = SqlValue::opt_json(c.state.as_ref());
             let drained_id = c.drained_id;
             match *keep {
-                Some(lease_secs) => b.add(CommitAndExtend {
-                    lane,
-                    version,
-                    token,
-                    state,
-                    drained_id,
-                    lease_secs,
-                }),
+                Some(lease_secs) => {
+                    b.add(CommitAndExtend { lane, version, token, state, drained_id, lease_secs })
+                }
                 None => b.add(CommitAndRelease { lane, version, token, state, drained_id }),
             }
         }
@@ -684,6 +679,64 @@ impl Decode for CommitDecode {
             }
             (None, None) => Err(StorageError::Decode("commit: no lane row".into())),
         }
+    }
+}
+
+/// What a commit whose acknowledgment was lost turned out to be.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Resolution {
+    /// The run's `run_ended` is there: it committed, at `version`, with `task` read back.
+    Committed(Committed),
+    /// Not committed, and the fence still holds: sending the same commit again is safe.
+    NotApplied,
+    /// Not committed, and the lane moved on without it: its staged writes are absent.
+    Rejected,
+}
+
+pub struct ResolveDecode {
+    fence: Option<Fence>,
+    committed: usize,
+    lane: usize,
+    task: Option<usize>,
+}
+
+/// Looks up the authoritative record of `run_id` after a lost acknowledgment, one batch: its
+/// `run_ended`, the lane's fence, and the answer task.
+pub fn resolve_commit(
+    lane: &str,
+    run_id: &str,
+    fence: Option<&Fence>,
+    read_task: Option<&str>,
+) -> Plan<ResolveDecode> {
+    let mut b = Batch::default();
+    let committed = b.add(SelectCommittedRun { lane, run_id });
+    let lane_fence = b.add(SelectFence { lane });
+    let task = read_task.map(|task_id| b.add(SelectTask { lane, task_id }));
+    b.plan(ResolveDecode { fence: fence.cloned(), committed, lane: lane_fence, task })
+}
+
+impl Decode for ResolveDecode {
+    type Output = Resolution;
+
+    fn decode(self, out: &BatchResult) -> Result<Resolution, StorageError> {
+        let row = out.at(self.lane)?.rows().first();
+        let version = row.and_then(|r| r.first()).and_then(SqlValue::as_i64).unwrap_or(0);
+        let token = row.and_then(|r| r.get(1)).and_then(SqlValue::as_str);
+        if !out.at(self.committed)?.rows().is_empty() {
+            let task = match self.task {
+                Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+                None => None,
+            };
+            return Ok(Resolution::Committed(Committed { version, task }));
+        }
+        Ok(match self.fence {
+            // an append-only batch that did not land can be sent again
+            None => Resolution::NotApplied,
+            Some(f) if f.version == version && token == Some(f.token.as_str()) => {
+                Resolution::NotApplied
+            }
+            Some(_) => Resolution::Rejected,
+        })
     }
 }
 

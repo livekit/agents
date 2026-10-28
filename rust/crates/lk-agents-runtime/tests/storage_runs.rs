@@ -9,7 +9,7 @@ use lk_agents_storage::TaskWrite;
 use lk_agents_storage::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
 use lk_agents_storage::schema::TaskData;
 mod storage_common;
-use storage_common::Backend;
+use storage_common::{Backend, Fixture};
 
 use livekit_protocol::agent::chat_context::chat_item;
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
@@ -32,7 +32,9 @@ fn message(id: &str, role: ChatRole, text: &str) -> ItemRow {
 
 const LANE: &str = "front-desk";
 
-async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit(backend: Backend) {
+async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit(
+    backend: Backend,
+) {
     let fx = backend.fixture(None).await;
     let s1 = fx.thread("w1").await;
     assert!(s1.holder().starts_with("w1/"));
@@ -354,7 +356,24 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     fx.cleanup(&[&s1, &s2]).await;
 }
 
+/// I-5: a run dropped without commit or abandon stops renewing: its lease lapses within the TTL
+/// and another holder takes the lane.
+async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
+    let fx = backend.fixture(Some((Duration::from_secs(1), Duration::from_millis(300)))).await;
+    let s1 = fx.thread("w1").await;
+    let s2 = fx.thread("w2").await;
+    let run = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    drop(run);
+    tokio::time::sleep(Duration::from_millis(2600)).await;
+    let lane2 = s2.lane(LANE);
+    let next = lane2.open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") }).await;
+    let next = next.expect("the dropped run's lease lapsed");
+    drop(next);
+    fx.cleanup(&[&s1, &s2]).await;
+}
+
 contract!(
+    a_dropped_run_stops_renewing_and_its_lease_lapses,
     a_cancel_never_overwrites_a_terminal_task,
     a_commit_never_overwrites_a_canceled_task,
     the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commit,
@@ -363,3 +382,61 @@ contract!(
     a_stale_commit_is_a_version_conflict,
     concurrent_runs_take_no_lease_and_append,
 );
+
+// -- I-7: a lost commit acknowledgment resolves to the original run (SQLite, injected faults) --
+
+/// A run that writes one item and completes `AST_1`, committed over a faulty connection.
+async fn commit_through(
+    fault: storage_common::CommitFault,
+) -> (Fixture, Thread, Result<i64, StorageError>) {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let (s, faults) = fx.faulty_thread("w1").await;
+    let lane = s.lane(LANE);
+    let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    run.history.push(message("i1", ChatRole::User, "hi"));
+    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    faults.fail_next_commit(fault);
+    let committed = run.commit(CommitOptions::default()).await.map(|c| c.version);
+    (fx, s, committed)
+}
+
+async fn run_ended_count(s: &Thread) -> usize {
+    s.events(0, 100).await.unwrap().iter().filter(|e| e.r#type == "run_ended").count()
+}
+
+#[tokio::test]
+async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() {
+    let (fx, s, committed) = commit_through(storage_common::CommitFault::LoseAckAfter).await;
+    assert_eq!(committed.unwrap(), 1, "the original run's commit, not a failure");
+    assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
+    assert_eq!(s.lane(LANE).task("AST_1").await.unwrap().unwrap().status, TaskState::Completed);
+    assert_eq!(run_ended_count(&s).await, 1, "written once");
+    fx.cleanup(&[&s]).await;
+}
+
+#[tokio::test]
+async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
+    let (fx, s, committed) = commit_through(storage_common::CommitFault::LoseAckBefore).await;
+    assert_eq!(committed.unwrap(), 1);
+    assert_eq!(s.lane(LANE).history().await.unwrap().len(), 1);
+    assert_eq!(run_ended_count(&s).await, 1);
+    fx.cleanup(&[&s]).await;
+}
+
+#[tokio::test]
+async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written() {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let (s1, faults) = fx.faulty_thread("w1").await;
+    let s2 = fx.thread("w2").await;
+    let mut stale = s1.lane(LANE).open(RunOptions::new("r1", "AST_1")).await.unwrap();
+    stale.lease().unwrap().release(None).await.unwrap();
+    let mut fresh = s2.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
+    fresh.commit(CommitOptions::default()).await.unwrap();
+
+    stale.history.push(message("i9", ChatRole::Assistant, "late"));
+    faults.fail_next_commit(storage_common::CommitFault::LoseAckBefore);
+    let err = stale.commit(CommitOptions::default()).await.err().expect("rejected");
+    assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
+    assert!(s1.lane(LANE).history().await.unwrap().is_empty());
+    fx.cleanup(&[&s1, &s2]).await;
+}

@@ -42,7 +42,11 @@ fn to_wire(v: &SqlValue) -> wire::Value {
 
 /// A statement as the wire carries it.
 pub fn statement(s: &Statement) -> wire::Statement {
-    wire::Statement { sql: s.sql.to_string(), params: s.params.iter().map(to_wire).collect(), lang: 0 }
+    wire::Statement {
+        sql: s.sql.to_string(),
+        params: s.params.iter().map(to_wire).collect(),
+        lang: 0,
+    }
 }
 
 /// A batch's rows. Values are typed per row: walk `types` and take the next entry from the

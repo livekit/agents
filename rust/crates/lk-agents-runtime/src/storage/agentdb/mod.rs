@@ -24,9 +24,9 @@ use super::{SqliteConnection, Storage};
 pub use conn::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
 pub use streams::{StreamReader, Streams};
 
-/// The data plane's errors: a drop mid-request, a severed database, a write of unknown outcome
-/// (`outcome_unknown`), a request still refused after its resends (`retry`) and a closed
-/// connection are `Unavailable`, retryable; `not_found` at `Hello` is `ThreadNotFound`; a refused
+/// The data plane's errors: a drop mid-request, a severed database, a request still refused after
+/// its resends (`retry`) and a closed connection are `Unavailable`, retryable (a batch's lost
+/// answer is `Uncertain`, see [`Pooled`]); `not_found` at `Hello` is `ThreadNotFound`; a refused
 /// token is `Unauthorized`; the rest keep agent-db's code.
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
@@ -35,9 +35,10 @@ impl From<WsdbError> for StorageError {
                 StorageError::Unavailable(e.to_string())
             }
             WsdbError::Server { code, message } => match code.as_str() {
-                "unavailable" | "resource_exhausted" | "retry" | "outcome_unknown" => {
+                "unavailable" | "resource_exhausted" | "retry" => {
                     StorageError::Unavailable(message)
                 }
+                "outcome_unknown" => StorageError::Uncertain(message),
                 "not_found" => StorageError::ThreadNotFound(message),
                 "unauthenticated" | "permission_denied" => StorageError::Unauthorized(message),
                 _ => StorageError::Server { code, message },
@@ -259,9 +260,14 @@ impl SqliteConnection for Pooled {
         Ok(self.conn.query_all(&statement).await?)
     }
 
+    /// A batch whose socket dropped or timed out after it was sent may have committed:
+    /// `Uncertain`, never `Unavailable`.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
-        Ok(self.conn.batch(&statements).await?)
+        self.conn.batch(&statements).await.map_err(|e| match e {
+            WsdbError::Disconnected | WsdbError::Timeout => StorageError::Uncertain(e.to_string()),
+            e => e.into(),
+        })
     }
 
     async fn close(&self) {

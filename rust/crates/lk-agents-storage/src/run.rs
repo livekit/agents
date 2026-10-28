@@ -82,13 +82,13 @@ pub fn run_commit(w: RunWrites<'_>) -> Commit {
         };
         events.push(EventWrite::run_started(w.now_ms, &started));
     }
-    events.extend(
-        items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.id)).map(|i| EventWrite {
+    events.extend(items.iter().filter(|i| !w.loaded.iter().any(|(id, _)| *id == i.id)).map(|i| {
+        EventWrite {
             ts_ms: w.now_ms,
             r#type: "conversation_item_added".into(),
             payload: json!({"item": &i.payload}),
-        }),
-    );
+        }
+    }));
     events.extend(w.events.iter().cloned());
     if w.usage.requests != 0 || w.usage.tool_calls != 0 {
         let payload = serde_json::to_value(w.usage).unwrap_or(Value::Null);
@@ -116,8 +116,7 @@ pub fn item_changes(
     history: &[ItemRow],
     loaded: &[(String, ChatItem)],
 ) -> (Vec<ItemRow>, Vec<String>) {
-    let by_id: BTreeMap<&str, &ChatItem> =
-        loaded.iter().map(|(id, i)| (id.as_str(), i)).collect();
+    let by_id: BTreeMap<&str, &ChatItem> = loaded.iter().map(|(id, i)| (id.as_str(), i)).collect();
     let stored: Vec<&ItemRow> = history.iter().filter(|i| i.stored()).collect();
     let changed = stored
         .iter()
@@ -297,7 +296,12 @@ pub struct WaitOptions {
 
 /// `input-required`'s patch: the question is the status message (`message_id`), `ask` the
 /// pending transition, the tool's schema a data part when given.
-pub fn wait_patch(task_id: &str, question: &str, opts: WaitOptions, message_id: String) -> TaskPatch {
+pub fn wait_patch(
+    task_id: &str,
+    question: &str,
+    opts: WaitOptions,
+    message_id: String,
+) -> TaskPatch {
     let ask = Ask {
         question: question.to_owned(),
         tool: opts.tool,

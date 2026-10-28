@@ -3,26 +3,31 @@
 //! (`lk_agents_a2a::outcome`) to the run. The turn writes the message's task row: `submitted`,
 //! `working`, then its end state.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::task::JoinSet;
+
 use lk_agents_a2a::{
-    HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost,
-    TurnIds, TurnOptions, TurnResult, Verdict, answer_pending, batch_to_chat_message,
-    caller_history_of, channel_of, channel_of_record, checkpoint_stop, failed_message, host_error,
-    python_reason, resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,
+    HandlerOutput, Message, Policy, Settle, Stop, TurnContext, TurnEvent, TurnHost, TurnIds,
+    TurnOptions, TurnResult, Verdict, answer_pending, batch_to_chat_message, caller_history_of,
+    channel_of, channel_of_record, checkpoint_stop, failed_message, host_error, python_reason,
+    resolve_debounce, resolve_policy, result_for, settle, unpersisted_failed,
 };
-use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_storage::StorageError;
 use lk_agents_storage::db::{Committed, TaskWrite};
 use lk_agents_storage::lease::LanePoll;
 use lk_agents_storage::run::{
-    ItemRow, REASON_LEASE_TIMEOUT, REASON_WORKER_LOST, RunOutcome, TaskRow, TaskState,
+    ItemRow, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST, RunOutcome,
+    TaskRow, TaskState,
 };
 use lk_agents_storage::schema::TaskData;
-use lk_agents_storage::StorageError;
 use serde_json::Value;
 
-use crate::storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid};
+use crate::storage::{
+    CommitOptions, Lane, Lease, Run, RunOptions, Thread, now_ms, now_secs, shortuuid,
+};
 
 /// How many task rows the handler's context carries.
 const TASKS_IN_CONTEXT: i64 = 50;
@@ -45,6 +50,8 @@ pub struct Turn {
     /// The host stream's clock, for the bound on closing it.
     clock: Arc<dyn Clock>,
     opts: TurnOptions,
+    /// The resolvers of commits left uncertain, owned by the door.
+    resolvers: Mutex<JoinSet<()>>,
 }
 
 /// A turn's row data: the message it came from.
@@ -71,12 +78,9 @@ struct Outcome {
 }
 
 /// The commit of a turn that ran: its answer task read back with the writes.
-fn answers(outcome: &Outcome) -> CommitOptions {
-    CommitOptions { answer_task: Some(outcome.task_id.clone()), ..CommitOptions::default() }
-}
-
 fn answering(outcome: &Option<Outcome>) -> CommitOptions {
-    outcome.as_ref().map(answers).unwrap_or_default()
+    let answer_task = outcome.as_ref().map(|o| o.task_id.clone());
+    CommitOptions { answer_task, ..CommitOptions::default() }
 }
 
 fn failed(task_id: &str, reason: &str) -> a2a::Message {
@@ -91,7 +95,14 @@ impl Turn {
         clock: Arc<dyn Clock>,
         options: TurnOptions,
     ) -> Self {
-        Self { thread, lane: lane.to_owned(), host, clock, opts: options }
+        Self {
+            thread,
+            lane: lane.to_owned(),
+            host,
+            clock,
+            opts: options,
+            resolvers: Mutex::new(JoinSet::new()),
+        }
     }
 
     pub fn lane(&self) -> &str {
@@ -111,7 +122,13 @@ impl Turn {
     }
 
     /// A record this worker has, or the failed one it could not write.
-    fn record_or_failed(&self, record: Option<TaskRow>, task_id: &str, msg: Option<&Message>, reason: &str) -> TaskRow {
+    fn record_or_failed(
+        &self,
+        record: Option<TaskRow>,
+        task_id: &str,
+        msg: Option<&Message>,
+        reason: &str,
+    ) -> TaskRow {
         record.unwrap_or_else(|| {
             unpersisted_failed(task_id, &self.lane, msg, reason, now_ms(), shortuuid("msg_"))
         })
@@ -179,7 +196,8 @@ impl Turn {
                     db.fail_orphan(task_id, &failed(task_id, REASON_LEASE_TIMEOUT)).await?;
                 }
                 let record = call.lane.task(task_id).await?;
-                let record = self.record_or_failed(record, task_id, Some(msg), REASON_LEASE_TIMEOUT);
+                let record =
+                    self.record_or_failed(record, task_id, Some(msg), REASON_LEASE_TIMEOUT);
                 return Ok(TurnResult {
                     task: record,
                     output: None,
@@ -214,14 +232,87 @@ impl Turn {
                 .map(Some)
         }
         .await;
-        match self.close_run(&mut run, body, answering).await? {
-            (Some(outcome), committed) => Ok(self.finish(outcome, task_id, &run, committed)),
-            (None, _) => {
-                let record = call.lane.task(task_id).await?;
-                let record = self.record_or_failed(record, task_id, None, "not-written");
+        self.end_answered(call, run, msg, task_id, body).await
+    }
+
+    /// Ends a run that may have answered `task_id`'s message: the commit and the task as
+    /// committed. A lost acknowledgment nobody could resolve in the wait answers the task as it
+    /// stands (still `working`) and keeps resolving in the background; a rejected save fails the
+    /// task `storage-unavailable`, its staged changes absent. Never a failure it did not observe.
+    async fn end_answered(
+        &self,
+        call: &Call,
+        mut run: Run,
+        msg: &Message,
+        task_id: &str,
+        body: Result<Option<Outcome>, StorageError>,
+    ) -> Result<TurnResult, StorageError> {
+        let body = match body {
+            Ok(body) => body,
+            Err(e) => {
+                let outcome = match e {
+                    StorageError::Cancelled(_) => RunOutcome::Canceled,
+                    _ => RunOutcome::Failed,
+                };
+                run.abandon(outcome, python_reason(&e)).await?;
+                return Err(e);
+            }
+        };
+        let answer = body.as_ref().map_or(task_id, |o| o.task_id.as_str()).to_owned();
+        match run.commit(answering(&body)).await {
+            Ok(committed) => match body {
+                Some(outcome) => Ok(self.finish(outcome, task_id, &run, committed)),
+                None => {
+                    let record = call.lane.task(task_id).await?;
+                    let record = self.record_or_failed(record, task_id, None, "not-written");
+                    Ok(result_for(record, self.thread.id(), None))
+                }
+            },
+            Err(StorageError::Uncertain(why)) => {
+                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = answer.as_str(); "the commit is unresolved; the task stays working while it resolves: {why}");
+                self.resolve_later(call, run, answer.clone());
+                let current = match call.lane.task(&answer).await {
+                    Ok(Some(row)) => row,
+                    // unreadable: the row as this worker left it, picked up
+                    _ => TaskRow {
+                        status: TaskState::Working,
+                        ..submitted_task(msg, &answer).row(&self.lane)
+                    },
+                };
+                Ok(result_for(current, self.thread.id(), None))
+            }
+            Err(e) => {
+                log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = answer.as_str(); "the commit was rejected; the task fails storage-unavailable: {e}");
+                let db = call.lane.db();
+                db.fail_orphan(&answer, &failed(&answer, REASON_STORAGE_UNAVAILABLE)).await?;
+                let record = call.lane.task(&answer).await?;
+                let record =
+                    self.record_or_failed(record, &answer, Some(msg), REASON_STORAGE_UNAVAILABLE);
                 Ok(result_for(record, self.thread.id(), None))
             }
         }
+    }
+
+    /// Hands a run whose commit stayed uncertain to a background resolver: an authoritative
+    /// rejection fails its task `storage-unavailable`; a commit found committed needs nothing.
+    fn resolve_later(&self, call: &Call, run: Run, answer: String) {
+        let lane = call.lane.clone();
+        let mut resolvers = self.resolvers.lock().expect("resolvers");
+        while resolvers.try_join_next().is_some() {}
+        resolvers.spawn(async move {
+            match run.resolve_later().await {
+                Some(Err(StorageError::VersionConflict { .. })) => {
+                    let failed = failed(&answer, REASON_STORAGE_UNAVAILABLE);
+                    if let Err(e) = lane.db().fail_orphan(&answer, &failed).await {
+                        log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
+                    }
+                }
+                Some(Err(e)) => {
+                    log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a commit stayed unresolved: {e}");
+                }
+                Some(Ok(_)) | None => {}
+            }
+        });
     }
 
     /// Ends a run: the commit on success, with the options the body's value asks for, else
@@ -411,7 +502,7 @@ impl Turn {
             let keep = |_: &()| CommitOptions {
                 keep_lease: true,
                 drained_id: Some(last_id),
-                answer_task: None,
+                ..CommitOptions::default()
             };
             self.close_run(&mut run, body, keep).await?;
             call.last_run_id = Some(run.run_id.clone());
@@ -457,8 +548,7 @@ impl Turn {
         let body = self
             .turn(call, &mut run, std::slice::from_ref(msg), &[task_id.to_owned()], false)
             .await;
-        let (outcome, committed) = self.close_run(&mut run, body, answers).await?;
-        Ok(self.finish(outcome, task_id, &run, committed))
+        self.end_answered(call, run, msg, task_id, body.map(Some)).await
     }
 
     async fn reject(
@@ -505,14 +595,7 @@ impl Turn {
                     .map(Some)
             }
             .await;
-            match self.close_run(&mut run, body, answering).await? {
-                (Some(outcome), committed) => Ok(self.finish(outcome, task_id, &run, committed)),
-                (None, _) => {
-                    let record = call.lane.task(task_id).await?;
-                    let record = self.record_or_failed(record, task_id, None, "not-written");
-                    Ok(result_for(record, self.thread.id(), None))
-                }
-            }
+            self.end_answered(call, run, msg, task_id, body).await
         }
         .await;
         match result {
@@ -530,7 +613,10 @@ impl Turn {
             if skip.contains(&row.task_id) {
                 continue;
             }
-            run.tasks.lane().fail_orphan(&row.task_id, &failed(&row.task_id, REASON_WORKER_LOST)).await?;
+            run.tasks
+                .lane()
+                .fail_orphan(&row.task_id, &failed(&row.task_id, REASON_WORKER_LOST))
+                .await?;
             log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = row.task_id.as_str(); "a task whose worker died fails worker-lost");
         }
         Ok(())
@@ -649,10 +735,15 @@ impl Turn {
                         // a lost lease cannot commit anyway: nothing yields to anyone
                         if stop.is_none() && !run.lease().is_some_and(Lease::is_lost) {
                             let (waiter, status) = lane.db().checkpoint(task_id).await?;
-                            stop = checkpoint_stop(interrupt, waiter.as_deref(), &run.holder, status);
+                            stop =
+                                checkpoint_stop(interrupt, waiter.as_deref(), &run.holder, status);
                             match stop {
-                                Some(Stop::Interrupted) => log::info!(target: "livekit.agents", lane = self.lane.as_str(); "yielding the lane to a newer message"),
-                                Some(Stop::ClientCanceled) => log::info!(target: "livekit.agents", lane = self.lane.as_str(); "the task was canceled by a client; yielding"),
+                                Some(Stop::Interrupted) => {
+                                    log::info!(target: "livekit.agents", lane = self.lane.as_str(); "yielding the lane to a newer message")
+                                }
+                                Some(Stop::ClientCanceled) => {
+                                    log::info!(target: "livekit.agents", lane = self.lane.as_str(); "the task was canceled by a client; yielding")
+                                }
                                 None => {}
                             }
                         }
@@ -680,7 +771,10 @@ impl Turn {
             },
             None => read.await,
         };
-        events.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        if events.close(deadline).await == Closed::TimedOut {
+            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id; "the handler's stream did not close within its deadline; its host task is still running");
+        }
         out.map(|out| (out, stop))
     }
 

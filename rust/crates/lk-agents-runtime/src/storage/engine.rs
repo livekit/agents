@@ -10,7 +10,7 @@ use std::time::Duration;
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_storage::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, Decode, EventWrite, Fenced, Plan,
-    Read, Receive, TaskPage, TaskQuery, TaskWrite,
+    Read, Receive, Resolution, TaskPage, TaskQuery, TaskWrite,
 };
 use lk_agents_storage::lease::{LanePoll, lease_secs};
 use lk_agents_storage::run::{
@@ -18,8 +18,8 @@ use lk_agents_storage::run::{
     RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
 use lk_agents_storage::schema::{
-    EventRow, InboxRow, ItemRow, LaneRow, NO_SCHEMA, RunEnded, RunStarted, TaskData, TaskRow,
-    THREAD_SCHEMA_VERSION,
+    EventRow, InboxRow, ItemRow, LaneRow, NO_SCHEMA, RunEnded, RunStarted, THREAD_SCHEMA_VERSION,
+    TaskData, TaskRow,
 };
 use lk_agents_storage::sql::Statement;
 use lk_agents_storage::{Fence, StorageError};
@@ -145,7 +145,7 @@ impl ThreadDb {
     }
 
     /// Applies the DDL when the schema is missing.
-    async fn ensure_schema(&self) -> Result<(), StorageError> {
+    pub(crate) async fn ensure_schema(&self) -> Result<(), StorageError> {
         if self.refresh_schema().await? {
             return Ok(());
         }
@@ -168,7 +168,10 @@ impl ThreadDb {
     }
 
     /// One plan's batch and its decoding.
-    pub(crate) async fn execute<D: Decode>(&self, plan: Plan<D>) -> Result<D::Output, StorageError> {
+    pub(crate) async fn execute<D: Decode>(
+        &self,
+        plan: Plan<D>,
+    ) -> Result<D::Output, StorageError> {
         let out = self.conn.batch(plan.statements).await?;
         plan.decoder.decode(&out)
     }
@@ -526,7 +529,15 @@ impl Lane {
                 }
                 let a = *acquired;
                 let tasks = Tasks::loaded(self.db.clone(), a.tasks);
-                (Some(lease), a.already_committed, a.lane.state, a.items, tasks, a.submitted, a.picked_up)
+                (
+                    Some(lease),
+                    a.already_committed,
+                    a.lane.state,
+                    a.items,
+                    tasks,
+                    a.submitted,
+                    a.picked_up,
+                )
             }
             false => {
                 let items = self.db.history().await?;
@@ -553,6 +564,7 @@ impl Lane {
             outcome: RunOutcome::Completed,
             reason: None,
             finished: false,
+            unresolved: None,
         })
     }
 
@@ -633,8 +645,13 @@ impl EventLog {
     }
 }
 
+/// How long a commit whose acknowledgment was lost is resolved before the caller is answered.
+pub const RESOLVE_WAIT: Duration = Duration::from_secs(10);
+/// How long a resolver keeps checking a commit nobody could resolve in the caller's wait.
+pub const RESOLVE_LATER: Duration = Duration::from_secs(3600);
+
 /// What [`Run::commit`] does besides writing the run.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CommitOptions {
     /// Extend the lease instead of releasing it: the runner continues with pending inbox rows.
     pub keep_lease: bool,
@@ -642,6 +659,15 @@ pub struct CommitOptions {
     pub drained_id: Option<i64>,
     /// The task the turn answers, read back with the commit.
     pub answer_task: Option<String>,
+    /// How long a lost acknowledgment is resolved before [`StorageError::Uncertain`] is
+    /// returned; the run then still holds the commit for [`Run::resolve_later`].
+    pub resolve_wait: Duration,
+}
+
+impl Default for CommitOptions {
+    fn default() -> Self {
+        Self { keep_lease: false, drained_id: None, answer_task: None, resolve_wait: RESOLVE_WAIT }
+    }
 }
 
 /// Everything a run reads and writes, committed together.
@@ -673,6 +699,8 @@ pub struct Run {
     pub outcome: RunOutcome,
     pub reason: Option<String>,
     finished: bool,
+    /// The commit [`Run::commit`] could not resolve in its wait, and whether it kept the lease.
+    unresolved: Option<(Commit, bool)>,
 }
 
 impl Run {
@@ -732,14 +760,95 @@ impl Run {
                 lease.release(None).await?;
                 Ok(Committed { version, task: None })
             }
-            Some(lease) => {
-                let keep = opts.keep_lease.then(|| self.db.db.timing.secs());
+            _ => {
+                if self.lease.is_none() {
+                    self.db.db.ensure_schema().await?;
+                }
+                let keep = opts.keep_lease;
+                let wait = opts.resolve_wait;
                 let commit = self.writes(opts);
-                let fenced = Fenced { fence: lease.fence(), keep };
-                self.db.db.execute(db::commit(self.db.name(), &commit, Some(fenced), Vec::new())?).await
+                match self.db.db.execute(self.commit_plan(&commit, keep)?).await {
+                    Err(StorageError::Uncertain(why)) => {
+                        log::warn!(target: "livekit.agents", lane = self.db.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+                        let resolved = self.resolve(&commit, keep, wait).await;
+                        if matches!(resolved, Err(StorageError::Uncertain(_))) {
+                            self.unresolved = Some((commit, keep));
+                        }
+                        resolved
+                    }
+                    out => out,
+                }
             }
-            None => self.db.append(&self.writes(opts)).await,
         }
+    }
+
+    fn commit_plan(
+        &self,
+        commit: &Commit,
+        keep: bool,
+    ) -> Result<Plan<db::CommitDecode>, StorageError> {
+        let fenced = self.lease.as_ref().map(|lease| Fenced {
+            fence: lease.fence(),
+            keep: keep.then(|| self.db.db.timing.secs()),
+        });
+        db::commit(self.db.name(), commit, fenced, Vec::new())
+    }
+
+    /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
+    /// record), not applied while the fence holds (sent again: the fence and the run id make it
+    /// safe), or rejected (`VersionConflict`: the lane moved on without it). `Uncertain` once
+    /// `wait` passes with no authoritative answer.
+    async fn resolve(
+        &self,
+        commit: &Commit,
+        keep: bool,
+        wait: Duration,
+    ) -> Result<Committed, StorageError> {
+        let fence = self.lease.as_ref().map(Lease::fence);
+        let epoch = tokio::time::Instant::now();
+        let mut poll = LanePoll::new(epoch.elapsed(), wait);
+        let mut last = String::from("no answer");
+        loop {
+            let lookup = db::resolve_commit(
+                self.db.name(),
+                &self.run_id,
+                fence,
+                commit.read_task.as_deref(),
+            );
+            match self.db.db.execute(lookup).await {
+                Ok(Resolution::Committed(committed)) => return Ok(committed),
+                Ok(Resolution::Rejected) => {
+                    return Err(StorageError::VersionConflict {
+                        lane: self.db.name().to_owned(),
+                        expected: fence.map_or(0, |f| f.version),
+                    });
+                }
+                Ok(Resolution::NotApplied) => {
+                    match self.db.db.execute(self.commit_plan(commit, keep)?).await {
+                        Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
+                            last = why
+                        }
+                        out => return out,
+                    }
+                }
+                Err(e) => last = e.to_string(),
+            }
+            let Some(at) = poll.next(epoch.elapsed()) else {
+                return Err(StorageError::Uncertain(format!(
+                    "run {} unresolved after {}s: {last}",
+                    self.run_id,
+                    wait.as_secs_f64()
+                )));
+            };
+            tokio::time::sleep_until(epoch + at).await;
+        }
+    }
+
+    /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
+    /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
+    pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
+        let (commit, keep) = self.unresolved.take()?;
+        Some(self.resolve(&commit, keep, RESOLVE_LATER).await)
     }
 
     /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing

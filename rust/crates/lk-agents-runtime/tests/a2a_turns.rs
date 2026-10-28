@@ -12,16 +12,16 @@ use lk_agents_a2a::{
     Checkpoint, DebounceSpec, HandlerOutput, Output, PendingCall, Policy, PolicySpec, TurnContext,
     TurnEvent, TurnHost, TurnOptions, TurnResult, Verdict,
 };
-use lk_agents_runtime::a2a::Turn;
-use lk_agents_runtime::storage::{RunOptions, Thread, shortuuid};
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::{Clock, Closed, RealClock, StreamSink, StreamSource, Ts};
+use lk_agents_runtime::a2a::Turn;
+use lk_agents_runtime::storage::{RunOptions, Thread, shortuuid};
 use lk_agents_storage::db::{Receive, TaskWrite};
 use lk_agents_storage::run::{
     INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState,
 };
-use lk_agents_storage::timestamp;
 use lk_agents_storage::schema::{Ask, TaskData};
+use lk_agents_storage::timestamp;
 mod storage_common;
 use storage_common::Backend;
 
@@ -443,11 +443,7 @@ async fn two_workers_share_one_session(backend: Backend) {
     assert_eq!(runs[0].task_id.as_deref(), Some(second.task.task_id.as_str()));
     assert_eq!(b.lane(LANE).info().await.unwrap().unwrap().version, 2);
     // The state was written at the first commit and loaded by the second worker.
-    let run = b
-        .lane(LANE)
-        .open(RunOptions::new("peek", "AST_peek"))
-        .await
-        .unwrap();
+    let run = b.lane(LANE).open(RunOptions::new("peek", "AST_peek")).await.unwrap();
     assert_eq!(run.state, Some(json!({"verified": 2})));
     drop(run);
     fx.cleanup(&[&a, &b]).await;
@@ -989,3 +985,58 @@ contract!(
     a_lease_timeout_fails_the_early_row,
     a_rejected_message_leaves_no_submitted_row,
 );
+
+// -- I-7: commit outcomes reach the caller as they are (SQLite, injected faults) --
+
+/// A refused save fails the original task `storage-unavailable`, its staged changes absent: no
+/// new task, no answer in the history.
+#[tokio::test]
+async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let (s, faults) = fx.faulty_thread("worker-a").await;
+    faults.fail_next_commit(storage_common::CommitFault::Refuse);
+    let host = Fake::new(Behavior::Echo);
+    let r = turn(&s, host, Some(Policy::Queue))
+        .run(a2a("hello", "m1", None, None), Some("AST_1".into()))
+        .await
+        .unwrap();
+    assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Failed));
+    assert_eq!(
+        json_of(&r.task.data.status_message)["metadata"]["livekit/reason"],
+        json!("storage-unavailable")
+    );
+    assert!(history_texts(&s).await.is_empty(), "the staged turn was not committed");
+    assert_eq!(s.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
+    fx.cleanup(&[&s]).await;
+}
+
+/// Decision 39: an acknowledgment lost with the database unreachable through the whole wait
+/// answers the original task still `working`, never a failure; the resolver later finds the
+/// commit and the task reads completed.
+#[tokio::test]
+async fn an_unresolved_commit_answers_working_and_resolves_to_the_original_run() {
+    let fx = Backend::Sqlite.fixture(None).await;
+    let (s, faults) = fx.faulty_thread("worker-a").await;
+    faults.fail_next_commit(storage_common::CommitFault::LoseAckAfter);
+    faults.unreachable_after_commit_for(Duration::from_secs(12));
+    let host = Fake::new(Behavior::Echo);
+    let r = turn(&s, host, Some(Policy::Queue))
+        .run(a2a("hello", "m1", None, None), Some("AST_1".into()))
+        .await
+        .unwrap();
+    assert_eq!((r.task.task_id.as_str(), r.task.status), ("AST_1", TaskState::Working));
+
+    let reader = fx.thread("reader").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let row = loop {
+        let row = reader.lane(LANE).task("AST_1").await.unwrap().unwrap();
+        if row.status != TaskState::Working || tokio::time::Instant::now() > deadline {
+            break row;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(row.status, TaskState::Completed, "the original run's commit");
+    assert_eq!(history_texts(&reader).await, vec!["hello", "reply to: hello"]);
+    assert_eq!(reader.lane(LANE).tasks(None, 10).await.unwrap().len(), 1, "no second task");
+    fx.cleanup(&[&s, &reader]).await;
+}
