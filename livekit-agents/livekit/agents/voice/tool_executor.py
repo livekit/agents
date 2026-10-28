@@ -359,9 +359,9 @@ class _ToolExecutor:
             try:
                 arguments = raw_arguments
                 if (activity := self._owning_activity) is not None:
-                    # a call that answers a relayed question carries the person's words,
+                    # a call that answers a claimed question carries the person's words,
                     # and the history shows the call as it ran
-                    arguments = await activity._answer_arguments(tool, raw_arguments)
+                    arguments = await activity._answer_arguments(tool, raw_arguments, run_ctx)
                     if arguments is not raw_arguments:
                         run_ctx.function_call.arguments = json.dumps(arguments)
                 fnc_args, fnc_kwargs = prepare_function_arguments(

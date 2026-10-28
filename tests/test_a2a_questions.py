@@ -489,9 +489,6 @@ async def test_a_nested_experts_question_is_answered_through_each_task(
 
 
 @pytest.mark.rule("R32", "R40")
-@pytest.mark.xfail(
-    strict=True, reason="R32: on a call the answer reaches the expert with no task id, a new task"
-)
 async def test_on_a_call_the_answer_to_an_experts_question_continues_its_task(
     experts: Callable[..., Expert],
 ) -> None:

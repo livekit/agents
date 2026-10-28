@@ -24,7 +24,6 @@ from pydantic import JsonValue
 
 from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
-    ANSWERS_KEY,
     FunctionTool,
     InputRequired,
     Tool,
@@ -41,7 +40,6 @@ from ..voice.run_result import RunUsage
 from .delegate import (
     CONTEXT_ID_KEY,
     ENDPOINT_KEY,
-    TASK_ID_KEY,
     Delegate,
     DelegationFailed,
     DelegationResult,
@@ -150,12 +148,10 @@ class A2ADelegate(Delegate, Toolset):
             # the run logs a failed setup and keeps the tools as they are: offer this one first
             if self._tool is None:
                 label = self._tool_name or self.id
-                self._tool = _relaying(
-                    function_tool(
-                        self._ask,
-                        name=self._tool_name or "ask",
-                        description=f"{label}\n\n{UNREAD}\n\n{ASK}",
-                    )
+                self._tool = function_tool(
+                    self._ask,
+                    name=self._tool_name or "ask",
+                    description=f"{label}\n\n{UNREAD}\n\n{ASK}",
                 )
                 self._unread = True
             raise
@@ -169,8 +165,8 @@ class A2ADelegate(Delegate, Toolset):
         self._id = card.name if card is not None else self.id
         about = card.description.strip() if card is not None and card.description else ""
         description = f"{about}\n\n{ASK}" if about else ASK
-        self._tool = _relaying(
-            function_tool(self._ask, name=self._tool_name or "ask", description=description)
+        self._tool = function_tool(
+            self._ask, name=self._tool_name or "ask", description=description
         )
         if self._unread:
             self._unread = False
@@ -189,7 +185,8 @@ class A2ADelegate(Delegate, Toolset):
         else:
             assert ctx._run is not None
             history = ctx._run.chat_ctx
-        asked = _asking_call(ctx)
+        # the person's answer to the expert's question: it continues the expert's task
+        asked = ctx._answer_ref
         if session is not None and self._announce and asked is None:
             await ctx.update(DISPATCHED)
         try:
@@ -209,9 +206,11 @@ class A2ADelegate(Delegate, Toolset):
         record_delegation(ctx.function_call, result)
         if result.input_required:
             # the expert asked the person something: asked as it wrote it when it said so, and
-            # what they say next continues its task, as they said it
+            # what they say next comes back here, as they said it, to continue its task
             verbatim = result.verbatim is not None
-            return InputRequired(result.input_required, verbatim=verbatim)
+            return InputRequired(
+                result.input_required, verbatim=verbatim, _answer_ref=result.task_id or None
+            )
         if result.verbatim is not None:
             # the person gets the answer as written, and the model does not word it
             return ToolResult(result.verbatim, verbatim=True, reply_required=False)
@@ -395,26 +394,6 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
-
-
-def _relaying(tool: FunctionTool) -> FunctionTool:
-    """The delegate's tool: the person's answer to the expert's question comes back to it as
-    said, and the expert's own model reads it."""
-    tool._relays_answer = True  # type: ignore[attr-defined]
-    return tool
-
-
-def _asking_call(ctx: RunContext) -> str | None:
-    """The expert's task whose question this call answers, when the framework made the call
-    with the person's answer: the task the asking call reached."""
-    asked_by = ctx.function_call.extra.get(ANSWERS_KEY)
-    if not asked_by or ctx._run is None:
-        return None
-    for item in reversed(ctx._run.chat_ctx.items):
-        if isinstance(item, FunctionCall) and item.call_id == asked_by:
-            task_id = item.extra.get(TASK_ID_KEY)
-            return task_id if isinstance(task_id, str) and task_id else None
-    return None
 
 
 def _conversation(

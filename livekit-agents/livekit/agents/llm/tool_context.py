@@ -241,6 +241,8 @@ class InputRequired:
 
     question: str
     verbatim: bool = False
+    # set, the person's answer goes back to the tool that asked, which continues this with it
+    _answer_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -350,10 +352,6 @@ class _ApprovalScope:
     asked: bool = False
 
 
-ANSWERS_KEY = "lk.answers"
-"""``FunctionCall.extra`` of a call the framework made with the person's answer: the call whose
-question it answers."""
-
 TASK_KEY = "lk.task"
 """``extra`` key on a message or a call a run recorded in a lane: the task it belongs to. A call's
 output belongs to its call's task."""
@@ -394,13 +392,6 @@ APPROVAL_ANSWERED = (
 )
 """What the model reads as the output of a call that asked for approval, once answered: the
 answer alone reads like a call that ran."""
-
-
-def relays_answer(tool: Any) -> bool:
-    """Whether ``tool`` hands the person's answer to its question on to whoever asked, whose own
-    model reads it, as a delegate does: the answer goes to the tool as said, with no model step.
-    Private to the delegate; any other question's answer goes to the task's model."""
-    return bool(getattr(tool, "_relays_answer", False))
 
 
 def _answered_read_backs(items: Sequence[Any]) -> dict[str, str]:

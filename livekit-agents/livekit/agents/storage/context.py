@@ -179,6 +179,7 @@ class TurnHost(Generic[S]):
             agent_stack=ctx.agent_stack,
             rebuild=self._agents.rebuild,
             answer_tool=ctx.answer_tool,
+            answer_ref=ctx.answer_ref,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
             task_id=ctx.task_id,
@@ -248,7 +249,10 @@ class TurnHost(Generic[S]):
         pending = None
         if asked is not None and (call := asked.pending_call) is not None:
             pending = PendingCall(
-                name=call.name, call_id=call.call_id, answer_tool=asked._answer_tool
+                name=call.name,
+                call_id=call.call_id,
+                answer_tool=asked._answer_tool,
+                answer_ref=asked._answer_ref,
             )
         return HandlerOutput(
             output=output,
