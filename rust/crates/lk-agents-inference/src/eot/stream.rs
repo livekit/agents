@@ -13,8 +13,8 @@ use lk_agents_abi::{AudioFrame, EotPrediction, ProviderId};
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
-    CancelReason, EotAction, EotRequestId, EotSession, EotWarning, SinkEvent, TransportPrediction,
-    TransportShell,
+    AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
+    EotWarning, SinkEvent, TransportPrediction, TransportShell,
 };
 
 /// Mounts the transport for a model: the gateway for `turn-detector-v1`, the mini model otherwise.
@@ -62,7 +62,11 @@ fn sentence(warning: &EotWarning) -> String {
 
 struct Inner {
     session: EotSession,
-    shell: Arc<TransportShell>,
+    shell: Option<Arc<TransportShell>>,
+    /// While the local model loads, retain only its trailing prediction window.
+    replacement_audio: AudioRingBuffer,
+    replacement_request: Option<(EotRequestId, Vec<i16>)>,
+    retired: Option<Arc<TransportShell>>,
     waiters: HashMap<String, oneshot::Sender<EotPrediction>>,
     resampler: Option<Box<dyn Resampler>>,
     input_format: Option<(u32, u16)>,
@@ -77,7 +81,7 @@ pub struct EotStream {
     on_metrics: Option<MetricsCallback>,
     /// Bumped by each swap, so the run loop remounts.
     swaps: watch::Sender<u64>,
-    task: Mutex<Option<lk_agents_abi::AbortHandle>>,
+    settled: watch::Sender<bool>,
     id: ProviderId,
 }
 
@@ -90,7 +94,7 @@ impl EotStream {
         on_metrics: Option<MetricsCallback>,
         spawner: &dyn lk_agents_abi::Spawner,
     ) -> Arc<Self> {
-        let shell = make(session.model());
+        let shell = (session.model() == TurnDetectorModel::V1).then(|| make(session.model()));
         let id = ProviderId {
             label: "livekit.agents.inference.eot.TurnDetector".into(),
             model: session.model().as_str().into(),
@@ -100,6 +104,9 @@ impl EotStream {
             inner: Mutex::new(Inner {
                 session,
                 shell,
+                replacement_audio: AudioRingBuffer::new(CLIENT_BUFFER_SAMPLES),
+                replacement_request: None,
+                retired: None,
                 waiters: HashMap::new(),
                 resampler: None,
                 input_format: None,
@@ -109,12 +116,17 @@ impl EotStream {
             make,
             on_metrics,
             swaps: watch::channel(0).0,
-            task: Mutex::new(None),
+            settled: watch::channel(false).0,
             id,
         });
-        let run = Arc::clone(&stream).run();
-        let abort = lk_agents_abi::SpawnerExt::spawn_unboxed(spawner, run);
-        *stream.task.lock().unwrap_or_else(|p| p.into_inner()) = Some(abort);
+        let owner = Arc::clone(&stream);
+        let settled = stream.settled.clone();
+        let run = async move {
+            owner.run().await;
+            settled.send_replace(true);
+        };
+        // The owner must outlive close if model construction is still settling.
+        lk_agents_abi::SpawnerExt::spawn_unboxed(spawner, run);
         stream
     }
 
@@ -137,7 +149,7 @@ impl EotStream {
     /// Ask for a prediction over the audio so far; supersedes any in flight.
     pub fn predict(&self) -> oneshot::Receiver<EotPrediction> {
         let mut inner = self.lock();
-        let prefix = match inner.shell.transport.session_id() {
+        let prefix = match inner.shell.as_ref().and_then(|s| s.transport.session_id()) {
             Some(sid) => format!("{sid}_eot_"),
             None => "turn_request_".to_owned(),
         };
@@ -145,7 +157,9 @@ impl EotStream {
         let (tx, rx) = oneshot::channel();
         inner.waiters.insert(request_id.clone(), tx);
         let actions = inner.session.start(now(), EotRequestId::from_string(request_id));
-        self.apply(&mut inner, actions);
+        let warnings = self.apply(&mut inner, actions);
+        drop(inner);
+        Self::warn(warnings);
         rx
     }
 
@@ -153,7 +167,9 @@ impl EotStream {
         let reason = if timed_out { CancelReason::TimedOut } else { CancelReason::Superseded };
         let mut inner = self.lock();
         let actions = inner.session.cancel(now(), None, reason);
-        self.apply(&mut inner, actions);
+        let warnings = self.apply(&mut inner, actions);
+        drop(inner);
+        Self::warn(warnings);
     }
 
     pub fn flush(&self) {
@@ -162,12 +178,14 @@ impl EotStream {
             let tail = r.flush().map(<[i16]>::to_vec).unwrap_or_default();
             if !tail.is_empty() {
                 let ch = inner.input_format.map_or(1, |(_, c)| c);
-                Self::push(&inner, pcm_frame(tail, self.rate, ch));
+                Self::push(&mut inner, pcm_frame(tail, self.rate, ch));
             }
         }
         inner.input_format = None;
         let actions = inner.session.flush(now());
-        self.apply(&mut inner, actions);
+        let warnings = self.apply(&mut inner, actions);
+        drop(inner);
+        Self::warn(warnings);
     }
 
     pub fn push_audio(&self, frame: AudioFrame) {
@@ -187,6 +205,7 @@ impl EotStream {
                 }
             }
             Some(f) if f != format => {
+                drop(inner);
                 log::error!(target: LOG, "a frame with a different audio format was already pushed");
                 return;
             }
@@ -202,36 +221,54 @@ impl EotStream {
             None => Some(frame),
         };
         if let Some(out) = out {
-            Self::push(&inner, out);
+            Self::push(&mut inner, out);
         }
     }
 
-    fn push(inner: &Inner, frame: AudioFrame) {
-        if !inner.degraded {
-            inner.shell.transport.push_frame(&frame);
+    fn push(inner: &mut Inner, frame: AudioFrame) {
+        if !inner.degraded && !inner.session.is_closed() {
+            if let Some(shell) = &inner.shell {
+                shell.transport.push_frame(&frame);
+            } else {
+                inner.replacement_audio.push(&samples(&frame));
+            }
         }
     }
 
     pub fn end_input(&self) {
         let mut inner = self.lock();
         let actions = inner.session.end_input(now());
-        self.apply(&mut inner, actions);
-        inner.shell.transport.end_input();
+        let warnings = self.apply(&mut inner, actions);
+        if let Some(shell) = &inner.shell {
+            shell.transport.end_input();
+        }
+        self.swaps.send_modify(|n| *n += 1);
+        drop(inner);
+        Self::warn(warnings);
     }
 
     pub fn aclose(&self) {
-        self.lock().shell.detach();
         self.end_input();
-        if let Some(task) = self.task.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            task.abort();
+        let shell = self.lock().shell.clone();
+        if let Some(shell) = shell {
+            shell.detach();
         }
         self.cancel_inference(false);
     }
 
-    fn apply(&self, inner: &mut Inner, actions: Vec<EotAction>) {
+    pub async fn wait_closed(&self) {
+        let mut settled = self.settled.subscribe();
+        let _ = settled.wait_for(|done| *done).await;
+    }
+
+    fn apply(&self, inner: &mut Inner, actions: Vec<EotAction>) -> Vec<EotWarning> {
+        let mut warnings = Vec::new();
         for action in actions {
             match action {
                 EotAction::Resolve(r) => {
+                    if inner.replacement_request.as_ref().is_some_and(|(id, _)| id == &r.id) {
+                        inner.replacement_request = None;
+                    }
                     if let Some(tx) = inner.waiters.remove(r.id.as_str()) {
                         let _ = tx.send(EotPrediction {
                             end_of_turn_probability: r.end_of_turn_probability,
@@ -242,23 +279,45 @@ impl EotStream {
                         });
                     }
                 }
-                EotAction::StartInference(s) => inner.shell.transport.run_inference(&s.id),
-                EotAction::Flush(_) => inner.shell.transport.flush(),
+                EotAction::StartInference(s) => {
+                    if let Some(shell) = &inner.shell {
+                        shell.transport.run_inference(&s.id);
+                    } else {
+                        inner.replacement_request = Some((s.id, inner.replacement_audio.read()));
+                    }
+                }
+                EotAction::Flush(_) => {
+                    inner.replacement_audio.clear();
+                    if let Some(shell) = &inner.shell {
+                        shell.transport.flush();
+                    }
+                }
                 EotAction::SwapToLocal(_) => {
-                    inner.shell.detach();
-                    inner.shell = (self.make)(inner.session.model());
+                    // Keep the old shell alive in the run loop until after this lock is released.
+                    // Its replacement is constructed there, never on the host's calling thread.
+                    inner.retired = inner.shell.take();
                     self.swaps.send_modify(|n| *n += 1);
                 }
                 EotAction::Degrade(_) => inner.degraded = true,
-                EotAction::Warn(w) => log::warn!(target: LOG, "{}", sentence(&w)),
+                EotAction::Warn(w) => warnings.push(w),
             }
+        }
+        warnings
+    }
+
+    fn warn(warnings: Vec<EotWarning>) {
+        for warning in warnings {
+            log::warn!(target: LOG, "{}", sentence(&warning));
         }
     }
 
-    fn on_event(&self, event: SinkEvent) {
+    fn on_event(&self, shell: &Arc<TransportShell>, event: SinkEvent) {
         match event {
             SinkEvent::Prediction(p) => {
                 let mut inner = self.lock();
+                if !inner.shell.as_ref().is_some_and(|current| Arc::ptr_eq(current, shell)) {
+                    return;
+                }
                 let prediction = TransportPrediction {
                     probability: p.probability,
                     detection_delay: p.detection_delay,
@@ -266,7 +325,9 @@ impl EotStream {
                     backchannel_probability: p.backchannel_probability,
                 };
                 let actions = inner.session.resolve(now(), &p.id, prediction);
-                self.apply(&mut inner, actions);
+                let warnings = self.apply(&mut inner, actions);
+                drop(inner);
+                Self::warn(warnings);
             }
             SinkEvent::Metrics(m) => {
                 if let Some(cb) = &self.on_metrics {
@@ -282,17 +343,70 @@ impl EotStream {
     async fn run(self: Arc<Self>) {
         let mut swaps = self.swaps.subscribe();
         loop {
-            let shell = {
-                let inner = self.lock();
-                if inner.degraded {
-                    return;
-                }
-                Arc::clone(&inner.shell)
+            swaps.borrow_and_update();
+            let (shell, retired, closed, model) = {
+                let mut inner = self.lock();
+                (
+                    inner.shell.clone(),
+                    inner.retired.take(),
+                    inner.degraded || inner.session.is_closed(),
+                    inner.session.model(),
+                )
             };
-            swaps.mark_unchanged();
+            if let Some(retired) = retired {
+                retired.detach();
+            }
+            if closed {
+                return;
+            }
+            let Some(shell) = shell else {
+                // Admission precedes spawn_blocking: simultaneous cloud failures cannot fill
+                // Tokio's blocking queue with model constructors waiting for the GIL.
+                static CONSTRUCTION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+                let permit = tokio::select! {
+                    permit = CONSTRUCTION.acquire() => permit.expect("construction semaphore"),
+                    _ = swaps.changed() => continue,
+                };
+                let make = self.make.clone();
+                let replacement = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    make(model)
+                })
+                .await;
+                match replacement {
+                    Ok(shell) => {
+                        let mut inner = self.lock();
+                        if inner.session.is_closed() {
+                            drop(inner);
+                            shell.detach();
+                            return;
+                        }
+                        if let Some((id, audio)) = inner.replacement_request.take() {
+                            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
+                            shell.transport.run_inference(&id);
+                            shell.transport.flush();
+                        }
+                        let audio = inner.replacement_audio.read();
+                        inner.replacement_audio.clear();
+                        if !audio.is_empty() {
+                            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
+                        }
+                        inner.shell = Some(shell);
+                    }
+                    Err(error) => {
+                        let mut inner = self.lock();
+                        let actions = inner.session.transport_failed(now(), &error.to_string());
+                        let warnings = self.apply(&mut inner, actions);
+                        drop(inner);
+                        Self::warn(warnings);
+                        return;
+                    }
+                }
+                continue;
+            };
             let events = async {
                 while let Some(ev) = shell.next_event().await {
-                    self.on_event(ev);
+                    self.on_event(&shell, ev);
                 }
                 std::future::pending::<()>().await
             };
@@ -303,7 +417,10 @@ impl EotStream {
             };
             match outcome {
                 // swapped: remount
-                None => continue,
+                None => {
+                    shell.detach();
+                    continue;
+                }
                 Some(Ok(())) => {
                     if swaps.has_changed().unwrap_or(false) {
                         continue;
@@ -312,9 +429,18 @@ impl EotStream {
                 }
                 Some(Err(ApiError { message, .. })) => {
                     let mut inner = self.lock();
+                    if !inner.shell.as_ref().is_some_and(|current| Arc::ptr_eq(current, &shell)) {
+                        drop(inner);
+                        shell.detach();
+                        continue;
+                    }
                     let actions = inner.session.transport_failed(now(), &message);
-                    self.apply(&mut inner, actions);
-                    if Arc::ptr_eq(&inner.shell, &shell) {
+                    let warnings = self.apply(&mut inner, actions);
+                    let replaced = inner.shell.is_none();
+                    drop(inner);
+                    Self::warn(warnings);
+                    shell.detach();
+                    if !replaced {
                         return;
                     }
                 }
@@ -354,5 +480,6 @@ impl lk_agents_abi::EotDetector for EotStream {
 
     async fn aclose(&self) {
         EotStream::aclose(self);
+        self.wait_closed().await;
     }
 }

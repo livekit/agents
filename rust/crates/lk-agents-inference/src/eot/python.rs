@@ -93,12 +93,14 @@ impl PyEotThresholdOptions {
     /// `None` is `NOT_GIVEN`; the host re-wraps it.
     #[getter]
     fn overrides<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        override_to_py(py, self.table()?.overrides())
+        let overrides = self.table()?.overrides().cloned();
+        override_to_py(py, overrides.as_ref())
     }
 
     #[getter]
     fn backchannel_overrides<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        override_to_py(py, self.table()?.backchannel_overrides())
+        let overrides = self.table()?.backchannel_overrides().cloned();
+        override_to_py(py, overrides.as_ref())
     }
 
     #[getter]
@@ -159,9 +161,13 @@ impl PyEotThresholdOptions {
     ) -> PyResult<()> {
         let server = map_from_py(Some(server_thresholds))?.unwrap_or_default();
         let bc = map_from_py(backchannel_thresholds)?;
-        self.table()?
-            .update_defaults(&server, server_default, bc.as_ref(), backchannel_default)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+        let result = self.table()?.update_defaults(
+            &server,
+            server_default,
+            bc.as_ref(),
+            backchannel_default,
+        );
+        result.map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// One-way and sticky: already-mini is a no-op, so a second cloud failure cannot reset the
@@ -365,7 +371,11 @@ impl PyEotStream {
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.inner.aclose();
-        lk_agents_abi::python::future_into_py(py, async { Ok(()) })
+        let stream = self.inner.clone();
+        lk_agents_abi::python::future_into_py(py, async move {
+            stream.wait_closed().await;
+            Ok(())
+        })
     }
 }
 

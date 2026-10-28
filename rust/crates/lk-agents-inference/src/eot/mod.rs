@@ -14,15 +14,17 @@ pub mod options;
 #[cfg(feature = "python")]
 mod python;
 mod session;
-/// The stream driver a session and the host's `TurnDetector.stream()` use.
-mod stream;
 /// The channel sink and the mounted-transport shell a binding's `run()`/`recv_event()` drive.
 mod shell;
+/// The stream driver a session and the host's `TurnDetector.stream()` use.
+mod stream;
 mod transport;
 
 // `ClientMessage`/`ServerMessage` from the shared protocol crate, aliased as `proto`.
 use livekit_protocol::agent as proto;
 
+#[cfg(test)]
+mod deadlock_tests;
 #[cfg(test)]
 mod tests;
 
