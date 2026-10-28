@@ -217,6 +217,11 @@ pub struct RunnerCore {
     /// the generator, where it reports the next segment finished before it played.
     stale_end: bool,
     next_clear: u64,
+    /// An audio frame is on its way into the generator. A clear waits for it:
+    /// issued alongside, the push could land after the clear and play the cut audio.
+    audio_pushing: bool,
+    /// The clears waiting for that push to return.
+    clears_waiting: Vec<u64>,
     /// How the loops ended, as `asyncio.gather` sees them: the first failure, else both done.
     finished: u8,
     failed: Option<RunnerError>,
@@ -243,6 +248,8 @@ impl RunnerCore {
             clears: BTreeMap::new(),
             stale_end: false,
             next_clear: 0,
+            audio_pushing: false,
+            clears_waiting: Vec::new(),
             finished: 0,
             failed: None,
             waiting: Vec::new(),
@@ -292,7 +299,11 @@ impl RunnerCore {
                 self.next_clear += 1;
                 self.clears.insert(clear, std::mem::take(&mut self.owed) > 0);
                 self.stale_end = std::mem::take(&mut self.reading);
-                out.push(Effect::Io(IoOp::ClearGenerator { clear }));
+                if self.audio_pushing {
+                    self.clears_waiting.push(clear);
+                } else {
+                    out.push(Effect::Io(IoOp::ClearGenerator { clear }));
+                }
             }
             Event::GeneratorCleared { clear, result } if !self.cut() => {
                 let playing = self.clears.remove(&clear).unwrap_or(false);
@@ -328,15 +339,22 @@ impl RunnerCore {
                             None
                         }
                     };
+                    self.audio_pushing = true;
                     out.push(Effect::Io(IoOp::PushAudio(frame)));
                 }
                 Ok(None) => self.loop_ended(true, Ok(()), &mut out),
                 Err(e) => self.loop_ended(true, Err(e), &mut out),
             },
-            Event::AudioPushed(result) if !self.cut() => match result {
-                Ok(()) => out.push(Effect::Io(IoOp::NextAudio)),
-                Err(e) => self.loop_ended(true, Err(e), &mut out),
-            },
+            Event::AudioPushed(result) if !self.cut() => {
+                self.audio_pushing = false;
+                for clear in std::mem::take(&mut self.clears_waiting) {
+                    out.push(Effect::Io(IoOp::ClearGenerator { clear }));
+                }
+                match result {
+                    Ok(()) => out.push(Effect::Io(IoOp::NextAudio)),
+                    Err(e) => self.loop_ended(true, Err(e), &mut out),
+                }
+            }
             Event::FramesOpened(result) if !self.cut() => match result {
                 Ok(()) => out.push(Effect::Io(IoOp::NextFrame)),
                 Err(e) => self.loop_ended(false, Err(e), &mut out),
@@ -433,6 +451,7 @@ impl RunnerCore {
                     self.held = None;
                     self.pushing = None;
                     self.clears.clear();
+                    self.clears_waiting.clear();
                     for pump in [&mut self.read, &mut self.forward] {
                         if *pump != Pump::Done {
                             *pump = Pump::Done;

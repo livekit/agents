@@ -86,6 +86,7 @@ fn a_clear_reports_the_cut_segment_after_the_generator_cleared() {
     );
     core.handle(audio(2, 0.04), Ts::ZERO);
     core.handle(Event::Pushed(Ok(())), Ts::ZERO);
+    core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
     let clear = core.handle(Event::ClearBuffer, Ts::ZERO);
     assert_eq!(ops(&clear), vec![IoOp::ClearGenerator { clear: 0 }]);
     core.handle(audio(3, 0.04), Ts::ZERO);
@@ -181,4 +182,18 @@ fn close_goes_receiver_then_loops_then_media() {
         vec![Effect::Answer { call: 7, result: Ok(()) }]
     );
     assert!(core.held.is_none());
+}
+
+// Catches: the generator cleared while a frame of the cut audio was still on its way into it: the
+// push landed after the clear and the avatar spoke the cut audio on (survey seed 1353: two frames
+// 60 ms after the clear, against one frame period).
+#[test]
+fn a_clear_waits_for_the_audio_on_its_way_into_the_generator() {
+    let mut core = running();
+    let push = core.handle(Event::Audio(Ok(Some(AvatarFrame::Audio(pcm(1, 0.1))))), Ts::ZERO);
+    assert_eq!(ops(&push), vec![IoOp::PushAudio(Some(MediaFrame::Audio(pcm(1, 0.1))))]);
+    let clear = core.handle(Event::ClearBuffer, Ts::ZERO);
+    assert!(ops(&clear).is_empty(), "cleared with the cut audio still on its way: {clear:?}");
+    let pushed = core.handle(Event::AudioPushed(Ok(())), Ts::ZERO);
+    assert_eq!(ops(&pushed), vec![IoOp::ClearGenerator { clear: 0 }, IoOp::NextAudio]);
 }
