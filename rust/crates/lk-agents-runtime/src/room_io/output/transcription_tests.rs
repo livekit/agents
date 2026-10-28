@@ -161,7 +161,7 @@ enum Saturation {
 
 #[tokio::test(start_paused = true)]
 async fn saturated_transcription_refuses_the_whole_capture_and_closes_the_stalled_sdk_writer() {
-    use lk_agents_abi::voice::rtc::ports::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
+    use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 
     for saturation in [Saturation::TextBytes, Saturation::Streams, Saturation::Batches] {
         let (rtc, clock) = FakeRtc::with_virtual_clock();

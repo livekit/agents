@@ -18,3 +18,14 @@ pub use lk_agents_abi::voice::rtc::*;
 pub use traits::RtcHost;
 
 pub type Result<T> = std::result::Result<T, RtcError>;
+
+/// A text stream's whole text; ingress admission already bounds its bytes.
+pub async fn read_text(
+    chunks: &mut Receiver<String>,
+) -> std::result::Result<String, lk_agents_abi::errors::ProviderError> {
+    let mut text = String::new();
+    while let Some(chunk) = chunks.next().await? {
+        text.push_str(&chunk);
+    }
+    Ok(text)
+}

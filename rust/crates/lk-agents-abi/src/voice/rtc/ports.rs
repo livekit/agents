@@ -1,14 +1,11 @@
-//! Incoming SDK streams use the shared pull/close primitive; runtime owns admission.
+//! Incoming SDK streams use the shared pull/close primitive; runtime admits them within voice's
+//! bounds.
 
-use super::{ParticipantIdentity, RtcError, StreamInfo};
+use super::{ParticipantIdentity, StreamInfo};
 use crate::{Closed, StreamSource, Ts};
 use std::sync::Arc;
 
 pub type Receiver<T> = Box<dyn StreamSource<T>>;
-
-pub const MAX_INCOMING_STREAMS: usize = 4;
-pub const MAX_STREAM_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 
 pub struct ByteStream {
     pub info: StreamInfo,
@@ -29,20 +26,6 @@ pub struct TextStream {
 }
 
 impl TextStream {
-    pub async fn read_all(&mut self) -> Result<String, RtcError> {
-        let mut text = String::new();
-        while let Some(chunk) = self.chunks.next().await? {
-            if chunk.len() > MAX_STREAM_BYTES.saturating_sub(text.len()) {
-                return Err(RtcError::StreamLimit {
-                    resource: "text bytes",
-                    limit: MAX_STREAM_BYTES,
-                });
-            }
-            text.push_str(&chunk);
-        }
-        Ok(text)
-    }
-
     pub async fn close(self, deadline: Ts) -> Closed {
         self.chunks.close(deadline).await
     }

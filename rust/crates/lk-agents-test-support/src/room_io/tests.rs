@@ -127,7 +127,7 @@ async fn closing_before_a_participant_joins_keeps_unowned_chat_handlers() {
     )
     .unwrap();
     let mut message = application_chat.next().await.unwrap().unwrap();
-    assert_eq!(message.read_all().await.unwrap(), "application message");
+    assert_eq!(crate::rtc::read_text(&mut message.chunks).await.unwrap(), "application message");
     message.close(lk_agents_abi::Ts::ZERO).await;
     application_chat.close(lk_agents_abi::Ts::ZERO).await;
 }
@@ -153,7 +153,9 @@ async fn chat_registration_failure_settles_readiness_without_stealing_the_topic(
     )
     .unwrap();
     assert_eq!(
-        application_chat.next().await.unwrap().unwrap().read_all().await.unwrap(),
+        crate::rtc::read_text(&mut application_chat.next().await.unwrap().unwrap().chunks)
+            .await
+            .unwrap(),
         "still owned"
     );
     application_chat.close(lk_agents_abi::Ts::ZERO).await;

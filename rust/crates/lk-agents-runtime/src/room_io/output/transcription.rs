@@ -5,7 +5,7 @@ use lk_agents_abi::AbortHandle;
 
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::voice::io::{IoError, Result};
-use lk_agents_abi::voice::rtc::ports::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
+use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, MAX_STREAM_BYTES};
 use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RtcRoom, StreamTextOptions, TextStreamWriter, TrackSid,
     TrackSource, Transcription, TranscriptionSegment,

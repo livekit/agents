@@ -370,7 +370,7 @@ impl RoomIo {
     async fn read_chat(&self, attachment: u64, mut stream: lk_agents_abi::voice::rtc::TextStream) {
         let sender = stream.sender.clone();
         let result = {
-            let read = stream.read_all();
+            let read = crate::rtc::read_text(&mut stream.chunks);
             tokio::pin!(read);
             loop {
                 let changed = self.changed.notified();

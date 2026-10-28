@@ -625,7 +625,7 @@ async fn registering_a_topic_twice_is_refused_not_replaced() {
     let info = StreamInfo { topic: "lk.chat".into(), ..StreamInfo::default() };
     room.send_text_stream("user", info, ["hello ", "world"]).unwrap();
     let mut stream = eventually(first.recv()).await.expect("delivered to the original handler");
-    assert_eq!(eventually(stream.read_all()).await.unwrap(), "hello world");
+    assert_eq!(eventually(crate::rtc::read_text(&mut stream.chunks)).await.unwrap(), "hello world");
 
     room.unregister_text_stream_handler("lk.chat").unwrap();
     room.unregister_text_stream_handler("lk.chat").unwrap(); // idempotent: aclose runs unconditionally

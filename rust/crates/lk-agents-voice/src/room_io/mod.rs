@@ -1,5 +1,6 @@
 pub mod coordinator;
 pub mod detached;
+pub mod ingress;
 pub mod input_state;
 pub(crate) mod options;
 pub mod output;

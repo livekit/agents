@@ -666,7 +666,7 @@ impl RoomIo {
             tokio::select! {
                 biased;
                 () = &mut stopped => None,
-                text = stream.read_all() => Some(text),
+                text = read_text(&mut stream.chunks) => Some(text),
             }
         };
         let sender = stream.sender.clone();
@@ -904,6 +904,17 @@ impl RoomIo {
         }
         outcome
     }
+}
+
+/// A chat message's whole text; ingress admission already bounds its bytes.
+async fn read_text(
+    chunks: &mut lk_agents_abi::voice::rtc::Receiver<String>,
+) -> std::result::Result<String, lk_agents_abi::errors::ProviderError> {
+    let mut text = String::new();
+    while let Some(chunk) = chunks.next().await? {
+        text.push_str(&chunk);
+    }
+    Ok(text)
 }
 
 #[cfg(test)]

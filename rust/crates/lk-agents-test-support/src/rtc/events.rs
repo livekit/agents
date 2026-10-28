@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::voice::rtc::capabilities::{RemoteParticipant, TrackPublication};
 use lk_agents_abi::voice::rtc::ports::{
-    self, ByteStream, ByteStreamIngress, MAX_INCOMING_STREAMS, MAX_STREAM_BYTES,
-    MAX_STREAM_CHUNK_BYTES, Receiver, TextStream, TextStreamIngress,
+    self, ByteStream, ByteStreamIngress, Receiver, TextStream, TextStreamIngress,
 };
+use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
 use lk_agents_abi::voice::rtc::{
     ConnectionState, DisconnectReason, ParticipantIdentity, RoomEvent, RoomEventSink, StreamInfo,
 };
@@ -114,7 +114,7 @@ impl RoomEventSink for RoomEventBus {
 
 struct AdmittedSource<T> {
     source: Receiver<T>,
-    bytes: usize,
+    budget: StreamBudget,
     ended: bool,
     size: fn(&T) -> usize,
     _admission: OwnedSemaphorePermit,
@@ -137,16 +137,10 @@ impl<T: Send + 'static> StreamSource<T> for AdmittedSource<T> {
                     return Err(error);
                 }
             };
-            let bytes = (self.size)(&chunk);
-            if bytes > MAX_STREAM_CHUNK_BYTES {
+            if let Err(error) = self.budget.admit((self.size)(&chunk)) {
                 self.ended = true;
-                return Err(capacity("stream chunk bytes", MAX_STREAM_CHUNK_BYTES));
+                return Err(ProviderError::Local(ApiError::new(error.to_string())));
             }
-            if bytes > MAX_STREAM_BYTES.saturating_sub(self.bytes) {
-                self.ended = true;
-                return Err(capacity("stream bytes", MAX_STREAM_BYTES));
-            }
-            self.bytes += bytes;
             Ok(Some(chunk))
         })
     }
@@ -231,7 +225,7 @@ impl ByteStreamIngress for ByteStreamSender {
             sender,
             chunks: Box::new(AdmittedSource {
                 source: chunks,
-                bytes: 0,
+                budget: StreamBudget::default(),
                 ended: false,
                 size: Vec::len,
                 _admission: admission,
@@ -268,7 +262,7 @@ impl TextStreamIngress for TextStreamSender {
             sender,
             chunks: Box::new(AdmittedSource {
                 source: chunks,
-                bytes: 0,
+                budget: StreamBudget::default(),
                 ended: false,
                 size: String::len,
                 _admission: admission,
